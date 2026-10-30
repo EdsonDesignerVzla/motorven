@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>SIGNUM MOTORVEN</title>
+    <script>
+      (function() {
+        const saved = localStorage.getItem('signum_theme') || 'light';
+        document.documentElement.setAttribute('data-theme', saved);
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-DK2_tZVK.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-QTnfLwEv.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-BYYBu5oQ.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-charts-C9S0Qh6G.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-react-D1XJUk3y.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-icons-CKu2SB9x.js">
+    <link rel="modulepreload" crossorigin href="./assets/real-data-dump-rPN60rnK.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-pdf-aCPJmZbo.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-CzFMTw0r.css">
+  </head>
+  <body>
+    <div id="root">
+      <noscript>
+        <div style="padding: 2rem; text-align: center; font-family: sans-serif; color: #fff; background: #0f172a;">
+          Se requiere JavaScript para ejecutar SIGNUM MOTORVEN.
+        </div>
+      </noscript>
+      <script>
+        if (window.location.protocol === 'file:') {
+          document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+              var r = document.getElementById('root');
+              if (r && r.children.length <= 1) {
+                r.innerHTML = '<div style="font-family: system-ui, -apple-system, sans-serif; max-width: 620px; margin: 12vh auto; padding: 2.2rem; background: #1e293b; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); text-align: center; border: 1px solid rgba(255, 255, 255, 0.1);">' +
+                  '<div style="font-size: 2.8rem; margin-bottom: 0.8rem;">⚠️</div>' +
+                  '<h2 style="margin-bottom: 0.75rem; font-size: 1.4rem; font-weight: 700;">Aviso de Protocolo Local (file://)</h2>' +
+                  '<p style="color: #94a3b8; font-size: 0.92rem; line-height: 1.6; margin-bottom: 1.4rem;">' +
+                  'Has abierto este archivo haciendo doble clic directo en el explorador de Windows. Los navegadores modernos bloquean la carga de paquetes web (ES Modules) bajo <code>file:///</code> por políticas de seguridad.' +
+                  '</p>' +
+                  '<div style="text-align: left; background: #0f172a; padding: 1.1rem; border-radius: 10px; font-size: 0.86rem; color: #cbd5e1; margin-bottom: 1.25rem; line-height: 1.7; border-left: 4px solid #e60012;">' +
+                  '🚀 <b>En GitHub Pages:</b> Al subir la carpeta a GitHub funcionará de inmediato y al 100% de forma nativa (vía HTTPS).<br/>' +
+                  '💻 <b>Para probarlo en tu PC:</b> Ejecuta en tu terminal <code>npx vite preview</code> o abre con cualquier servidor local.' +
+                  '</div>' +
+                  '</div>';
+              }
+            }, 600);
+          });
+        }
+      </script>
+    </div>
+  </body>
+</html>
