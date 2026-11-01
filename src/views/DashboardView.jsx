@@ -60,7 +60,6 @@ import ExecutiveSummaryModal from '../components/ExecutiveSummaryModal';
 import ClientsDirectoryModal from '../components/ClientsDirectoryModal';
 import CreditScoreEngineModal from '../components/CreditScoreEngineModal';
 import NotificationsCenterModal from '../components/NotificationsCenterModal';
-import ProfitDatabaseManagerModal from '../components/ProfitDatabaseManagerModal';
 import { isMasterOrGerencia, isMasterAdmin } from '../services/authService';
 import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { generateDashboardPDF, generateNotificationsPDF } from '../services/pdfReportService';
@@ -120,15 +119,12 @@ export default function DashboardView({
   onSaveClient,
   onDeleteClient,
   onOpenOrdersSalesModal,
-  onOpenServerExplorer,
-  onOpenDatabaseComparator
 }) {
   // Estados de Modales
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showClientsModal, setShowClientsModal] = useState(false);
   const [showCreditScoreModal, setShowCreditScoreModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
-  const [showProfitDbManagerModal, setShowProfitDbManagerModal] = useState(false);
   const [notificationsList, setNotificationsList] = useState([]);
   const [syncFeedback, setSyncFeedback] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -186,7 +182,7 @@ export default function DashboardView({
     { id: '12', label: `Diciembre ${anioActivo}`, short: 'Dic' }
   ], [anioActivo, fechaInicioEfectiva, fechaFinEfectiva]);
 
-  // Lista efectiva de vendedores (de Supabase/Profit deduplicada priorizando códigos reales de Profit)
+  // Lista efectiva de vendedores (de Supabase/Profit deduplicada priorizando códigos reales de Supabase)
   const effectiveSellersList = useMemo(() => {
     if (Array.isArray(profitSellers) && profitSellers.length > 0) {
       const byName = new Map();
@@ -287,7 +283,7 @@ export default function DashboardView({
         return false;
       };
 
-      // Facturas Profit Plus asignadas
+      // Facturas Supabase asignadas
       const sInvoices = (filteredProfitInvoices || []).filter(f => matchesSeller(f?.vendedorId || f?.co_ven || f?.vendedor || f?.asesor));
       const sInvoicesLitros = sInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros ?? f?.total_litros) || 0), 0);
 
@@ -424,7 +420,7 @@ export default function DashboardView({
     let alDia = 0;
     let vencida = 0;
 
-    // Facturas Profit Plus
+    // Facturas Supabase
     if (Array.isArray(profitInvoices)) {
       profitInvoices.forEach(f => {
         if (f.anulada) return;
@@ -1048,7 +1044,7 @@ export default function DashboardView({
     try {
       setIsSyncing(true);
       await onSyncProfit();
-      setSyncFeedback('¡Sincronización con Profit Plus completada con éxito!');
+      setSyncFeedback('¡Sincronización con Supabase completada con éxito!');
       setTimeout(() => setSyncFeedback(null), 3500);
     } catch (err) {
       setSyncFeedback('Error sincronizando: ' + (err.message || 'Error de red'));
@@ -1218,176 +1214,6 @@ export default function DashboardView({
       </div>
 
       {/* ========================================================================= */}
-      {/* 1.95 BARRA DE AUDITORÍA: COMPARADOR DE BASES DE DATOS (PROFIT PLUS ↔ SUPABASE ↔ APP) */}
-      {/* ========================================================================= */}
-      <div
-        className="card"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '0.85rem',
-          padding: '0.85rem 1.25rem',
-          borderRadius: '12px',
-          background: 'linear-gradient(135deg, rgba(0, 43, 122, 0.22) 0%, rgba(230, 0, 18, 0.1) 50%, rgba(0, 242, 254, 0.15) 100%)',
-          border: '1px solid rgba(0, 242, 254, 0.4)',
-          boxShadow: '0 4px 18px rgba(0, 0, 0, 0.2)'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #002b7a 0%, #00f2fe 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              boxShadow: '0 2px 10px rgba(0, 242, 254, 0.4)'
-            }}
-          >
-            <Database size={20} />
-          </div>
-          <div>
-            <div style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <span>COMPARADOR DE BASES DE DATOS: PROFIT PLUS ⟷ SUPABASE ⟷ APP UI</span>
-              <span style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(0, 242, 254, 0.2)', color: '#00f2fe', border: '1px solid rgba(0, 242, 254, 0.4)', fontWeight: 800 }}>
-                AUDITORÍA RENGLÓN POR RENGLÓN
-              </span>
-            </div>
-            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-              Compara en vivo tabla por tabla y renglón por renglón el estado exacto de sincronización, divergencias y paridad entre Profit Plus 2K8, Supabase y la interfaz visual de la App.
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          {onOpenDatabaseComparator && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onOpenDatabaseComparator}
-              title="Abrir el comparador en una ventana modal emergente dentro del sistema"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '0.8rem',
-                fontWeight: 700,
-                padding: '0.55rem 0.95rem',
-                borderRadius: '8px',
-                cursor: 'pointer'
-              }}
-            >
-              <Layers size={14} /> ABRIR EN MODAL AQUÍ
-            </button>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              const url = `${window.location.origin}${window.location.pathname}?view=database-comparator`;
-              window.open(url, '_blank', 'noopener,noreferrer');
-            }}
-            title="Abrir el comparador tripartito de bases de datos en una nueva pestaña del navegador"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              fontSize: '0.82rem',
-              fontWeight: 800,
-              padding: '0.55rem 1.15rem',
-              background: 'linear-gradient(135deg, #002b7a 0%, #00f2fe 100%)',
-              border: 'none',
-              color: '#fff',
-              borderRadius: '8px',
-              boxShadow: '0 2px 10px rgba(0, 242, 254, 0.35)',
-              cursor: 'pointer'
-            }}
-          >
-            <ExternalLink size={15} /> ABRIR COMPARADOR EN PANTALLA NUEVA
-          </button>
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* 1.96 BARRA DE CONTROL: GESTOR DE BASE DE DATOS PROFIT PLUS (CREAR, MODIFICAR, GUARDAR, ELIMINAR, BACKUP) */}
-      {/* ========================================================================= */}
-      <div
-        className="card"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '0.85rem',
-          padding: '0.85rem 1.25rem',
-          borderRadius: '12px',
-          background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.22) 0%, rgba(217, 119, 6, 0.18) 50%, rgba(16, 185, 129, 0.18) 100%)',
-          border: '1px solid rgba(245, 158, 11, 0.45)',
-          boxShadow: '0 4px 18px rgba(0, 0, 0, 0.25)'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #d97706 0%, #0284c7 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              boxShadow: '0 2px 10px rgba(217, 119, 6, 0.45)'
-            }}
-          >
-            <Database size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <span>BASE DE DATOS PROFIT PLUS: ACCESO TOTAL, CRUD Y COPIA DE SEGURIDAD</span>
-              <span style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.4)', fontWeight: 800 }}>
-                CREAR · MODIFICAR · GUARDAR · ELIMINAR · BACKUP
-              </span>
-            </div>
-            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-              Acceso en vivo a la base de datos Profit Plus (GRUMOTOR), creación y modificación de registros con guardado directo, eliminación con doble seguridad y generación de copias de seguridad (.bak / .json).
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowProfitDbManagerModal(true)}
-            title="Abrir modal para gestionar la base de datos de Profit Plus (CRUD y Copia de Seguridad)"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              fontSize: '0.82rem',
-              fontWeight: 800,
-              padding: '0.55rem 1.25rem',
-              background: 'linear-gradient(135deg, #d97706 0%, #0284c7 100%)',
-              border: 'none',
-              color: '#fff',
-              borderRadius: '8px',
-              boxShadow: '0 2px 10px rgba(217, 119, 6, 0.4)',
-              cursor: 'pointer'
-            }}
-          >
-            <Database size={15} /> GESTIONAR BASE DE DATOS PROFIT
-          </button>
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
       {/* 2.1 BARRA DE FILTRO MENSUAL / CIERRE ANUAL DE METAS (2026) */}
       {/* ========================================================================= */}
       <div
@@ -1479,7 +1305,7 @@ export default function DashboardView({
         >
           <Calendar size={16} />
           <span>
-            <strong>Información de Ejercicio 2026:</strong> En Enero de 2026 no hubo facturación registrada en Profit Plus (las primeras ventas del ejercicio 2026 iniciaron el <strong>10 de Febrero de 2026</strong> con la Factura N° 12).
+            <strong>Información de Ejercicio 2026:</strong> En Enero de 2026 no hubo facturación registrada en Supabase (las primeras ventas del ejercicio 2026 iniciaron el <strong>10 de Febrero de 2026</strong> con la Factura N° 12).
           </span>
         </div>
       )}
@@ -3150,7 +2976,7 @@ export default function DashboardView({
               Centro de Notificaciones & Alertas Operacionales
             </h3>
             <div className="notif-widget-desc" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Monitoreo centralizado de inventario crítico ROP, mora de cobranzas CxC, libros SENIAT y conectividad SQL Server Profit Plus 2K8.
+              Monitoreo centralizado de inventario crítico ROP, mora de cobranzas CxC, libros SENIAT y conectividad Supabase.
             </div>
           </div>
         </div>
@@ -3221,7 +3047,7 @@ export default function DashboardView({
         objetivosData={objetivosData}
       />
 
-      {/* Modal 2: Directorio de 610+ Clientes de Profit Plus */}
+      {/* Modal 2: Directorio de 610+ Clientes de Supabase */}
       <ClientsDirectoryModal
         isOpen={showClientsModal}
         onClose={() => setShowClientsModal(false)}
@@ -3272,14 +3098,6 @@ export default function DashboardView({
         onNavigate={onNavigate}
       />
 
-      {/* Modal 5: Gestor Integral de Base de Datos Profit Plus (CRUD & Copia de Seguridad) */}
-      {showProfitDbManagerModal && (
-        <ProfitDatabaseManagerModal
-          isOpen={showProfitDbManagerModal}
-          onClose={() => setShowProfitDbManagerModal(false)}
-          currentUser={currentUser}
-        />
-      )}
 
     </div>
   );

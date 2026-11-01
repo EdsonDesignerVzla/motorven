@@ -419,7 +419,7 @@ export default function SellerDetailModal({
 
             {zoneSaveSuccess && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--semaforo-verde)', fontWeight: 700 }}>
-                <CheckCircle2 size={15} /> ¡Zona actualizada con éxito y sincronizada con Profit Plus / Supabase!
+                <CheckCircle2 size={15} /> ¡Zona actualizada con éxito y sincronizada con Supabase!
               </div>
             )}
           </div>

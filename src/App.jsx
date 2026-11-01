@@ -14,14 +14,10 @@ import TaxReportsView from './views/TaxReportsView';
 import AuditLedgerView from './views/AuditLedgerView';
 import UsersManagementView from './views/UsersManagementView';
 import SupabaseTablesView from './views/SupabaseTablesView';
-import MultiDatabaseExplorerView from './views/MultiDatabaseExplorerView';
 import DeviceSimulatorView from './views/DeviceSimulatorView';
-import DatabaseComparatorView from './views/DatabaseComparatorView';
 import SellerOrderPOSView from './views/SellerOrderPOSView';
 import LoginView from './views/LoginView';
 import OrdersSalesModal from './components/OrdersSalesModal';
-import ServerExplorerModal from './components/ServerExplorerModal';
-import ProfitStatusModal from './components/ProfitStatusModal';
 import AppConfigModal from './components/AppConfigModal';
 import CashBankModal from './components/CashBankModal';
 import AccountsReceivableModal from './components/AccountsReceivableModal';
@@ -272,10 +268,7 @@ function MainApp() {
   const [pendingOrderToBill, setPendingOrderToBill] = useState(null);
   const [ordersSalesModalTab, setOrdersSalesModalTab] = useState('nuevo');
   const [ordersSalesModalOrder, setOrdersSalesModalOrder] = useState(null);
-  const [showServerExplorerModal, setShowServerExplorerModal] = useState(false);
-  const [showProfitStatusModal, setShowProfitStatusModal] = useState(false);
   const [showDebtCollectionModal, setShowDebtCollectionModal] = useState(false);
-  const [showDatabaseComparatorModal, setShowDatabaseComparatorModal] = useState(false);
   const [suppliers, setSuppliersState] = useState(() => []);
   const [sales, setSalesState] = useState(() => []);
   const [purchases, setPurchasesState] = useState(() => []);
@@ -464,7 +457,7 @@ function MainApp() {
           // Procesar cola de sincronización offline si quedaron operaciones pendientes
           flushSyncQueue();
 
-          // Sincronizar con Profit Plus 2K8 al arrancar (en segundo plano, sin bloquear)
+          // Sincronizar con Supabase al arrancar (en segundo plano, sin bloquear)
           triggerProfitSync().then(async () => {
             const [
               freshProds, freshClis, freshBnks, freshCashDesks, freshCobs, freshFacs,
@@ -495,7 +488,7 @@ function MainApp() {
               getSupabaseProfitAuditTrails()
             ]);
             if (!isMounted) return;
-            console.log('[Profit Sync Inicial] Datos actualizados desde Profit Plus 2K8 ✓');
+            console.log('[Profit Sync Inicial] Datos actualizados desde Supabase ✓');
             if (freshProds?.length > 0) setProductsState(freshProds);
             if (freshClis?.length > 0) setClientsState(freshClis);
             if (freshBnks) setProfitBankAccounts(freshBnks);
@@ -857,7 +850,7 @@ function MainApp() {
     };
   }, [config?.tasaDolar]);
 
-  // Sincronización periódica automática con Profit Plus 2K8 (cada 2 minutos)
+  // Sincronización periódica automática con Supabase (cada 2 minutos)
   useEffect(() => {
     let isRunning = false;
 
@@ -888,7 +881,7 @@ function MainApp() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Suscripción a Cambios en TIEMPO REAL (Supabase Realtime) para Profit Plus y base de datos
+  // Suscripción a Cambios en TIEMPO REAL (Supabase Realtime) para Supabase y base de datos
   useEffect(() => {
     const unsubscribe = subscribeToRealtimeChanges({
       onProductsChange: async () => {
@@ -1050,7 +1043,7 @@ function MainApp() {
     };
   }, []);
 
-  // Función para forzar sincronización y recarga inmediata desde Profit Plus
+  // Función para forzar sincronización y recarga inmediata desde Supabase
   const handleSyncProfit = async () => {
     try {
       // 1. Intentar llamar al puente si está activo
@@ -1229,7 +1222,7 @@ function MainApp() {
   const handleDeleteClient = async (id) => {
     const confirmed = await notify.confirm({
       title: '¿Eliminar Cliente?',
-      message: '¿Está seguro de eliminar o desactivar este cliente de la cartera comercial y de Profit Plus?',
+      message: '¿Está seguro de eliminar o desactivar este cliente de la cartera comercial y de Supabase?',
       confirmText: 'Sí, Eliminar Cliente',
       cancelText: 'Cancelar',
       isDestructive: true
@@ -1438,7 +1431,6 @@ function MainApp() {
         currentUser={currentUser}
         onLogout={handleLogout}
         onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
-        onOpenServerExplorer={() => setShowServerExplorerModal(true)}
         onOpenCashBankModal={() => setActiveTab('caja')}
         onOpenAccountsReceivableModal={() => setActiveTab('cxc')}
         onOpenAccountsPayableModal={() => setActiveTab('cxp')}
@@ -1466,7 +1458,6 @@ function MainApp() {
           setGlobalSearch={setGlobalSearch}
           onSyncProfit={handleSyncProfit}
           onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
-          onOpenServerExplorer={() => setShowServerExplorerModal(true)}
           productsCount={products?.length || 31}
           clientsCount={clients?.length || 610}
           products={products}
@@ -1498,8 +1489,6 @@ function MainApp() {
               onSaveClient={handleSaveClient}
               onDeleteClient={handleDeleteClient}
               onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
-              onOpenServerExplorer={() => setShowServerExplorerModal(true)}
-              onOpenDatabaseComparator={() => setShowDatabaseComparatorModal(true)}
             />
           )}
 
@@ -1860,13 +1849,6 @@ function MainApp() {
             />
           )}
 
-          {/* MÓDULO: EXPLORADOR MULTI-BASE DE DATOS PROFIT PLUS & SQL SERVER */}
-          {activeTab === 'bases-datos' && canAccessModule(currentUser?.rol, 'bases-datos', currentUser) && (
-            <MultiDatabaseExplorerView
-              currentUser={currentUser}
-              theme={theme}
-            />
-          )}
 
           {/* MÓDULO: CENTRO DE NOTIFICACIONES & ALERTAS */}
           {activeTab === 'notificaciones' && canAccessModule(currentUser?.rol, 'notificaciones', currentUser) && (
@@ -1891,8 +1873,6 @@ function MainApp() {
               currentUser={currentUser}
               products={products}
               clients={clients}
-              onOpenServerExplorer={() => setShowServerExplorerModal(true)}
-              onOpenProfitModal={() => setShowProfitStatusModal(true)}
             />
           )}
 
@@ -1949,31 +1929,6 @@ function MainApp() {
         </main>
 
 
-        {/* Modal de Explorador del Servidor y Base de Datos */}
-        <ServerExplorerModal
-          isOpen={showServerExplorerModal}
-          onClose={() => setShowServerExplorerModal(false)}
-          onSyncComplete={handleSyncProfit}
-          onNavigate={setActiveTab}
-          currentUser={currentUser}
-          products={products}
-          clients={clients}
-          sales={sales}
-          orders={orders}
-          suppliers={suppliers}
-          cashMovements={cashMovements}
-        />
-
-        {/* Modal de Estado Profit Plus 2K8 */}
-        <ProfitStatusModal
-          isOpen={showProfitStatusModal}
-          onClose={() => setShowProfitStatusModal(false)}
-          onSyncComplete={handleSyncProfit}
-          onOpenExplorer={() => setShowServerExplorerModal(true)}
-          currentUser={currentUser}
-          productsCount={products?.length || 43}
-          clientsCount={clients?.length || 631}
-        />
 
 
         {/* Modal de Inteligencia de Cobranza & WhatsApp */}
@@ -1987,23 +1942,6 @@ function MainApp() {
           config={config}
         />
 
-        {/* Modal / Pantalla Completa: Comparador Tripartito de Bases de Datos */}
-        {showDatabaseComparatorModal && (
-          <div
-            style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              zIndex: 9999,
-              backgroundColor: '#060913',
-              overflowY: 'auto'
-            }}
-          >
-            <DatabaseComparatorView onClose={() => setShowDatabaseComparatorModal(false)} />
-          </div>
-        )}
       </div>
     </div>
   );
@@ -2021,13 +1959,6 @@ export default function App() {
     window.location.hash === '#supabase-tables'
   );
 
-  const isDatabaseComparator = typeof window !== 'undefined' && (
-    window.location.search.includes('view=database-comparator') ||
-    window.location.search.includes('view=db-compare') ||
-    window.location.search.includes('view=comparator') ||
-    window.location.hash === '#database-comparator' ||
-    window.location.hash === '#db-compare'
-  );
 
   if (isDeviceSimulator) {
     return <DeviceSimulatorView />;
@@ -2037,9 +1968,6 @@ export default function App() {
     return <SupabaseTablesView />;
   }
 
-  if (isDatabaseComparator) {
-    return <DatabaseComparatorView />;
-  }
 
   return <MainApp />;
 }

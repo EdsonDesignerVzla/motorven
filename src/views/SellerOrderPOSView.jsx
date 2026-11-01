@@ -303,7 +303,7 @@ export default function SellerOrderPOSView({
       numeroDoc: orderCorrelativo,
       correlativo: orderCorrelativo,
       clienteId: selectedClient.id || selectedClient.codigo || 'CLI-TEMP',
-      clienteNombre: selectedClient.nombre || selectedClient.razonSocial || 'Cliente Profit',
+      clienteNombre: selectedClient.nombre || selectedClient.razonSocial || 'Cliente',
       clienteRif: selectedClient.rif || 'J-000000000',
       direccionEntrega: deliveryAddress,
       zonaVenta: selectedClient.zona || '01 - Valencia',

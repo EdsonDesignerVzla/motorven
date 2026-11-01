@@ -198,7 +198,7 @@ export default function AccountsPayableModal({
             </div>
             <div>
               <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                Cuentas por Pagar (CxP) & Proveedores Profit Plus
+                Cuentas por Pagar (CxP) & Proveedores Supabase
               </h2>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 Control de Pasivos y Facturas de Compra • Tasa BCV: {formatBs(tasaBcv)}

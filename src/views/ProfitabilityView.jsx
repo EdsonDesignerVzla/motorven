@@ -433,7 +433,7 @@ export default function ProfitabilityView({
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
           >
             <RefreshCw size={15} className={syncing ? 'spinning' : ''} />
-            <span>{syncing ? 'Sincronizando...' : 'Recargar Profit'}</span>
+            <span>{syncing ? 'Sincronizando...' : 'Recargar'}</span>
           </button>
           <button
             onClick={handlePrintReport}
@@ -604,7 +604,7 @@ export default function ProfitabilityView({
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>Costo USD</th>
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>Precio (A)</th>
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>Margen Unitario</th>
-                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>Ventas Profit</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>Ventas</th>
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>Utilidad Real</th>
                     <th style={{ padding: '0.75rem', textAlign: 'center' }}>Acción</th>
                   </tr>

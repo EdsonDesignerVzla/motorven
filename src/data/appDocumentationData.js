@@ -8,15 +8,15 @@ export const SYSTEM_METADATA = {
   version: "5.0.0 Enterprise Multi-Device",
   company: "SIGNUM MOTORVEN, C.A. / GRUPO MOTORVEN",
   rif: "J-30401927-4",
-  databaseSync: "Profit Plus 2K8 (GRUMOTOR SQL Server) + Supabase PostgreSQL Realtime",
+  databaseSync: "Supabase (GRUMOTOR SQL Server) + Supabase PostgreSQL Realtime",
   lastUpdated: "Octubre 2026",
   author: "Equipo de Arquitectura y Desarrollo de Sistemas SIGNUM MOTORVEN",
   recentMilestones: [
-    "Sincronización Bidireccional Completa (CRUD) Profit Plus 2K8 ↔ Supabase: Crear, Guardar/Modificar y Eliminar clientes, lubricantes y pedidos en vivo.",
+    "Sincronización Bidireccional Completa (CRUD) Supabase ↔ Supabase: Crear, Guardar/Modificar y Eliminar clientes, lubricantes y pedidos en vivo.",
     "Motor Smart Merge: Fusión inteligente de datos que preserva imágenes HD 4K, fichas de viscosidad, especificaciones de laboratorio, contraseñas encriptadas, roles y georreferenciación GPS.",
     "Gestión Inteligente de Eliminación: Hard-delete para registros limpios y Soft-delete automático para resguardar la trazabilidad fiscal SENIAT.",
-    "Directorio Oficial de Clientes con alta, edición, desactivación y sincronización en tiempo real con Profit Plus.",
-    "Sincronización Anual 2026 Completa con Profit Plus SQL Server (GRUMOTOR): 2.493 facturas, 4.050 renglones y 155.199,9 Litros reales facturados.",
+    "Directorio Oficial de Clientes con alta, edición, desactivación y sincronización en tiempo real con Supabase.",
+    "Sincronización Anual 2026 Completa con Supabase SQL Server (GRUMOTOR): 2.493 facturas, 4.050 renglones y 155.199,9 Litros reales facturados.",
     "Ejercicio y Período Fiscal Parametrizable con fechas de inicio y corte editables y preservación de historial de cierres anuales.",
     "Explorador Multi-Base de Datos en vivo de las 49 tablas transaccionales de SQL Server y réplica local autónoma.",
     "Arquitectura Standalone 100% Autónoma con soporte para despliegue web estático en GitHub Pages (carpeta dist y ZIP).",
@@ -38,7 +38,7 @@ export const MODULES_DOCUMENTATION = [
     category: "Dirección & Gestión",
     badge: "Principal",
     roleRequired: "Todos los Roles",
-    summary: "Centro de comando gerencial con métricas en tiempo real de Profit Plus 2K8, KPIs de facturación, volumen en litros, cobros, tasa BCV, filtro mensual/anual, acceso directo al Centro de Notificaciones & Alertas y comparativas de rendimiento de la fuerza de ventas.",
+    summary: "Centro de comando gerencial con métricas en tiempo real de Supabase, KPIs de facturación, volumen en litros, cobros, tasa BCV, filtro mensual/anual, acceso directo al Centro de Notificaciones & Alertas y comparativas de rendimiento de la fuerza de ventas.",
     components: [
       {
         name: "Acceso Directo: Centro de Notificaciones & Alertas",
@@ -62,7 +62,7 @@ export const MODULES_DOCUMENTATION = [
       },
       {
         name: "Top 5 Lubricantes Más Vendidos & Cartera de Clientes",
-        description: "Ranking por volumen de litros y desglose de Cuentas por Cobrar (Al Día vs Vencidas) sincronizadas con Profit Plus."
+        description: "Ranking por volumen de litros y desglose de Cuentas por Cobrar (Al Día vs Vencidas) sincronizadas con Supabase."
       }
     ],
     modals: [
@@ -108,7 +108,7 @@ export const MODULES_DOCUMENTATION = [
         action: "Abre el informe ejecutivo gerencial consolidado listo para impresión o descarga PDF."
       },
       {
-        name: "Sincronizar Profit Plus",
+        name: "Sincronizar Supabase",
         color: "Verde Esmeralda",
         icon: "RefreshCw",
         action: "Ejecuta una sincronización inmediata bajo demanda con la base de datos SQL Server (GRUMOTOR)."
@@ -118,7 +118,7 @@ export const MODULES_DOCUMENTATION = [
       "Consultar el Centro de Notificaciones & Alertas al comenzar el turno para atender alertas críticas de inventario o morosidad.",
       "Utilizar el selector de meses para auditar el cumplimiento comercial mes a mes o proyectar el cierre anual.",
       "Revisar el tacómetro de 2 columnas para identificar rápidamente a los asesores con mayor aporte a la meta empresarial.",
-      "Sincronizar con Profit Plus tras emitir nuevas facturas en la planta para refrescar el cumplimiento en vivo."
+      "Sincronizar con Supabase tras emitir nuevas facturas en la planta para refrescar el cumplimiento en vivo."
     ]
   },
 
@@ -132,11 +132,11 @@ export const MODULES_DOCUMENTATION = [
     category: "Monitoreo & Auditoría",
     badge: "Alertas en Vivo",
     roleRequired: "Todos los Roles",
-    summary: "Centro neurálgico de alertas operativas, financieras y de sistema que detecta automáticamente quiebres de stock ROP en lubricantes, clientes con morosidad crítica > 30 días en CxC, libros fiscales pendientes ante el SENIAT y estado de enlace Profit Plus 2K8 / Supabase. Permite filtrado multinivel, gestión de lectura individual o masiva, navegación contextual al módulo afectado e impresión de reporte oficial PDF.",
+    summary: "Centro neurálgico de alertas operativas, financieras y de sistema que detecta automáticamente quiebres de stock ROP en lubricantes, clientes con morosidad crítica > 30 días en CxC, libros fiscales pendientes ante el SENIAT y estado de enlace Supabase. Permite filtrado multinivel, gestión de lectura individual o masiva, navegación contextual al módulo afectado e impresión de reporte oficial PDF.",
     components: [
       {
         name: "Bandeja Unificada de Notificaciones & Pestañas de Categoría",
-        description: "Organiza las alertas en 5 vistas: 'Todas' (consolidado general), 'Inventario' (existencias críticas y ROP), 'Cuentas por Cobrar' (clientes con moras graves o crédito excedido), 'Fiscal & SENIAT' (libros fiscales y cierres Z pendientes) y 'Sistema' (enlace Profit Plus, servidor SQL y Supabase)."
+        description: "Organiza las alertas en 5 vistas: 'Todas' (consolidado general), 'Inventario' (existencias críticas y ROP), 'Cuentas por Cobrar' (clientes con moras graves o crédito excedido), 'Fiscal & SENIAT' (libros fiscales y cierres Z pendientes) y 'Sistema' (enlace Supabase, servidor SQL y Supabase)."
       },
       {
         name: "Filtros de Severidad (Semáforo de Criticidad)",
@@ -234,7 +234,7 @@ export const MODULES_DOCUMENTATION = [
       },
       {
         name: "Pestaña 'Facturar'",
-        description: "Convierte un pedido confirmado en factura de venta formal. Integra directamente con el POS para procesar el cobro y registrar el movimiento en Profit Plus."
+        description: "Convierte un pedido confirmado en factura de venta formal. Integra directamente con el POS para procesar el cobro y registrar el movimiento en Supabase."
       },
       {
         name: "Pestaña 'Imprimir / Notas de Entrega'",
@@ -351,7 +351,7 @@ export const MODULES_DOCUMENTATION = [
         buttonTrigger: "Botón 'Kardex & Mermas'",
         purpose: "Auditoría cronológica de todas las entradas (compras, ajustes positivos) y salidas (facturas de venta, notas de entrega, mermas) con saldo acumulado.",
         keyFeatures: [
-          "Trazabilidad por número de documento de Profit Plus y tipo de movimiento",
+          "Trazabilidad por número de documento de Supabase y tipo de movimiento",
           "Detalle de responsable del movimiento y motivos de merma o traslado",
           "Exportación a Excel del historial completo por producto"
         ]
@@ -373,7 +373,7 @@ export const MODULES_DOCUMENTATION = [
         name: "Kardex & Mermas",
         color: "Dorado / Ámbar",
         icon: "BarChart2",
-        action: "Abre el auditor de ajustes y traslados sincronizados desde Profit Plus."
+        action: "Abre el auditor de ajustes y traslados sincronizados desde Supabase."
       },
       {
         name: "Exportar CSV",
@@ -397,7 +397,7 @@ export const MODULES_DOCUMENTATION = [
     bestPractices: [
       "Auditar la Matriz de Reorden dos veces por semana para anticipar pedidos a refinería con suficiente Lead Time.",
       "Realizar tomas físicas mensuales utilizando la 'Hoja de Toma Física' para conciliar existencias reales contra el sistema.",
-      "Verificar en el Kardex cualquier discrepancia física antes de realizar ajustes de inventario en Profit Plus."
+      "Verificar en el Kardex cualquier discrepancia física antes de realizar ajustes de inventario en Supabase."
     ]
   },
 
@@ -415,7 +415,7 @@ export const MODULES_DOCUMENTATION = [
     components: [
       {
         name: "Selector de Clientes con Búsqueda Rápida",
-        description: "Autocompletado instantáneo por RIF, Razón Social o Código Profit Plus, mostrando saldo deudor actual y condición comercial."
+        description: "Autocompletado instantáneo por RIF, Razón Social o Código Supabase, mostrando saldo deudor actual y condición comercial."
       },
       {
         name: "Catálogo Visual de Lubricantes",
@@ -494,7 +494,7 @@ export const MODULES_DOCUMENTATION = [
     category: "Finanzas & Cartera",
     badge: "Estratégico",
     roleRequired: "Administrador, Finanzas, Cobranzas",
-    summary: "Monitoreo integral de los 614 clientes de Profit Plus, análisis de antigüedad de saldos (Aging), estados de cuenta automáticos y recordatorios de cobro vía WhatsApp.",
+    summary: "Monitoreo integral de los 614 clientes de Supabase, análisis de antigüedad de saldos (Aging), estados de cuenta automáticos y recordatorios de cobro vía WhatsApp.",
     components: [
       {
         name: "Métricas de Cartera y Cuentas por Cobrar",
@@ -537,7 +537,7 @@ export const MODULES_DOCUMENTATION = [
         name: "Nuevo Cliente (Alta Profit)",
         color: "Azul Índigo / Rojo Motorven",
         icon: "Plus",
-        action: "Abre el formulario para registrar un nuevo cliente con código co_cli, RIF, zona y condiciones en Profit Plus 2K8 y Supabase."
+        action: "Abre el formulario para registrar un nuevo cliente con código co_cli, RIF, zona y condiciones en Supabase."
       },
       {
         name: "Modificar Cliente",
@@ -571,7 +571,7 @@ export const MODULES_DOCUMENTATION = [
       }
     ],
     bestPractices: [
-      "Al registrar nuevos clientes, verificar que el código no exceda 10 caracteres alfanuméricos conforme al estándar de Profit Plus 2K8.",
+      "Al registrar nuevos clientes, verificar que el código no exceda 10 caracteres alfanuméricos conforme al estándar de Supabase.",
       "Enviar estados de cuenta preventivos 3 días antes del vencimiento de la factura.",
       "Aplicar bloqueo automático a clientes en tramo crítico (>30 días) hasta registrar abono formal."
     ]
@@ -587,7 +587,7 @@ export const MODULES_DOCUMENTATION = [
     category: "Comercial & RRHH",
     badge: "Gerencial",
     roleRequired: "Administrador, Gerencia, Ventas",
-    summary: "Panel de desempeño de la fuerza de ventas con 10 asesores sincronizados desde Profit Plus 2K8 (GRUMOTOR), asignación y edición de zonas comerciales territoriales, cuotas mensuales en litros, cobranzas efectivas por asesor, liquidación formal de comisiones y exportación de reportes.",
+    summary: "Panel de desempeño de la fuerza de ventas con 10 asesores sincronizados desde Supabase (GRUMOTOR), asignación y edición de zonas comerciales territoriales, cuotas mensuales en litros, cobranzas efectivas por asesor, liquidación formal de comisiones y exportación de reportes.",
     components: [
       {
         name: "Gestión y Reasignación de Zonas Comerciales por Asesor",
@@ -595,11 +595,11 @@ export const MODULES_DOCUMENTATION = [
       },
       {
         name: "Ranking & Rendimiento Comercial en Litros",
-        description: "Tabla de posiciones del equipo sincronizada con Profit Plus, mostrando zona asignada, clientes atendidos, volumen vendido en litros, cajas equivalentes, cumplimiento de cuota individual, ventas facturadas ($) y cobranza efectiva ($)."
+        description: "Tabla de posiciones del equipo sincronizada con Supabase, mostrando zona asignada, clientes atendidos, volumen vendido en litros, cajas equivalentes, cumplimiento de cuota individual, ventas facturadas ($) y cobranza efectiva ($)."
       },
       {
         name: "Cobranzas por Asesor Comercial (Pestaña Dedicada)",
-        description: "Muestra las cobranzas efectivas logradas por cada vendedor en USD y Bolívares BCV, número de recibos aplicados en Profit Plus, porcentaje de efectividad sobre ventas facturadas, saldo pendiente en calle y desglose expandible de recibos de cobro."
+        description: "Muestra las cobranzas efectivas logradas por cada vendedor en USD y Bolívares BCV, número de recibos aplicados en Supabase, porcentaje de efectividad sobre ventas facturadas, saldo pendiente en calle y desglose expandible de recibos de cobro."
       },
       {
         name: "Cuadro de Comisiones & Liquidación por Asesor",
@@ -692,7 +692,7 @@ export const MODULES_DOCUMENTATION = [
       "Mantener actualizadas las zonas comerciales asignadas a cada vendedor para garantizar que los reportes de cobertura geográfica sean fidedignos.",
       "Si un asesor comercial es reubicado a otra zona o estado, actualizar de inmediato su registro para que el pipeline de órdenes refleje el nuevo circuito.",
       "Configurar la Meta Mensual Global al inicio de cada mes mediante el botón 'Configurar Meta Mensual' para repartir equitativamente el objetivo entre el equipo.",
-      "Las zonas y metas configuradas se conservan protegidas en base de datos aunque se ejecuten sincronizaciones continuas con Profit Plus."
+      "Las zonas y metas configuradas se conservan protegidas en base de datos aunque se ejecuten sincronizaciones continuas con Supabase."
     ]
   },
 
@@ -706,7 +706,7 @@ export const MODULES_DOCUMENTATION = [
     category: "Compras & Abastecimiento",
     badge: "Financiero",
     roleRequired: "Administrador, Compras, Finanzas",
-    summary: "Control de proveedores de bases lubricantes, aditivos, envases y etiquetas, con registro de compras en Profit Plus, órdenes de pago y cuentas por pagar.",
+    summary: "Control de proveedores de bases lubricantes, aditivos, envases y etiquetas, con registro de compras en Supabase, órdenes de pago y cuentas por pagar.",
     components: [
       {
         name: "Resumen de Cuentas por Pagar (CxP)",
@@ -714,7 +714,7 @@ export const MODULES_DOCUMENTATION = [
       },
       {
         name: "Tabla de Compras y Facturas de Proveedor",
-        description: "Listado de compras sincronizadas con Profit Plus, número de control fiscal, proveedor, monto neto e IVA."
+        description: "Listado de compras sincronizadas con Supabase, número de control fiscal, proveedor, monto neto e IVA."
       },
       {
         name: "Directorio de Proveedores Homologados",
@@ -723,7 +723,7 @@ export const MODULES_DOCUMENTATION = [
     ],
     modals: [
       {
-        name: "Detalle de Compra Profit Plus (ProfitPurchaseDetailModal)",
+        name: "Detalle de Compra Supabase (ProfitPurchaseDetailModal)",
         buttonTrigger: "Click en cualquier factura de compra",
         purpose: "Desglose de productos recibidos, costos de adquisición en planta, fletes y retenciones fiscales aplicadas."
       },
@@ -735,7 +735,7 @@ export const MODULES_DOCUMENTATION = [
       {
         name: "Asiento Contable / Comprobante (AccountingEntryModal)",
         buttonTrigger: "Botón 'Ver Asiento' en documentos de compra",
-        purpose: "Auditoría de las cuentas de débito y crédito generadas en la contabilidad general de Profit Plus."
+        purpose: "Auditoría de las cuentas de débito y crédito generadas en la contabilidad general de Supabase."
       }
     ],
     buttons: [
@@ -837,19 +837,19 @@ export const MODULES_DOCUMENTATION = [
     category: "Tesorería & Bancos",
     badge: "Operativo",
     roleRequired: "Administrador, Tesorería, Caja, Finanzas",
-    summary: "Control integral de tesorería y efectivo multimoneda: Arqueo de caja chica en USD y Bs. BCV, registro de ingresos/egresos menores y conciliación con las 10 cuentas bancarias de Profit Plus 2K8.",
+    summary: "Control integral de tesorería y efectivo multimoneda: Arqueo de caja chica en USD y Bs. BCV, registro de ingresos/egresos menores y conciliación con las 10 cuentas bancarias de Supabase.",
     components: [
       {
         name: "Arqueo de Caja Chica y Libro de Movimientos",
         description: "Registro cronológico de entradas y salidas de efectivo, pagos móviles y transferencias con soporte de beneficiario, concepto y responsable."
       },
       {
-        name: "Disponibilidad Bancaria Profit Plus",
+        name: "Disponibilidad Bancaria Supabase",
         description: "Saldos auditados en tiempo real sincronizados desde SQL Server en Banesco, Mercantil, Venezuela, Provincial, etc."
       },
       {
         name: "Libro de Cobranzas y Recibos",
-        description: "Historial de recibos de cobro asentados en Profit Plus con banco receptor y número de referencia bancaria."
+        description: "Historial de recibos de cobro asentados en Supabase con banco receptor y número de referencia bancaria."
       }
     ],
     modals: [
@@ -1083,7 +1083,7 @@ export const MODULES_DOCUMENTATION = [
     category: "Seguridad & Control",
     badge: "Auditoría",
     roleRequired: "Solo Administrador Master / TI / Gerencia",
-    summary: "Registro inmutable de eventos del sistema: inicios de sesión, cambios de tasas cambiarias, modificaciones de precios, eliminaciones y sincronizaciones con Profit Plus.",
+    summary: "Registro inmutable de eventos del sistema: inicios de sesión, cambios de tasas cambiarias, modificaciones de precios, eliminaciones y sincronizaciones con Supabase.",
     components: [
       {
         name: "Línea de Tiempo de Eventos de Seguridad",
@@ -1271,8 +1271,8 @@ export const MODULES_DOCUMENTATION = [
         purpose: "Permite a los administradores ajustar la tasa comercial en Bolívares con entrada de derecha a izquierda."
       },
       {
-        name: "Estado de Enlace Profit Plus 2K8 (ProfitStatusModal)",
-        buttonTrigger: "Click en la insignia 'Profit Plus' en la barra superior",
+        name: "Estado de Enlace Supabase (ProfitStatusModal)",
+        buttonTrigger: "Click en la insignia 'Supabase' en la barra superior",
         purpose: "Diagnóstico completo de latencia, tablas sincronizadas y salud del daemon SQL Server."
       },
       {
@@ -1416,7 +1416,7 @@ export const MODULES_DOCUMENTATION = [
     category: "Tecnología & Auditoría",
     badge: "TI & Master",
     roleRequired: "Administrador Master, Tecnología & Informática",
-    summary: "Supervisión directa, en vivo y transparente de las 49 tablas transaccionales de la base de datos de SIGNUM MOTORVEN y el servidor SQL Server 2014 GRUMOTOR de Profit Plus 2K8.",
+    summary: "Supervisión directa, en vivo y transparente de las 49 tablas transaccionales de la base de datos de SIGNUM MOTORVEN y el servidor SQL Server 2014 GRUMOTOR de Supabase.",
     components: [
       {
         name: "Selector de Tablas Transaccionales",
@@ -1439,7 +1439,7 @@ export const MODULES_DOCUMENTATION = [
       {
         name: "Explorador de Tablas (ServerExplorerModal)",
         buttonTrigger: "Botón 'Explorar Tablas' en la barra de servidor del Dashboard o desde el menú lateral",
-        purpose: "Inspeccionar las tablas de la base de datos local y de Profit Plus con paginación, filtros y visualización de registros.",
+        purpose: "Inspeccionar las tablas de la base de datos local y de Supabase con paginación, filtros y visualización de registros.",
         keyFeatures: [
           "Monitoreo de 49 tablas transaccionales",
           "Búsqueda instantánea en vivo",
@@ -1459,7 +1459,7 @@ export const MODULES_DOCUMENTATION = [
         name: "Abrir Servidor en Nueva Ventana",
         color: "Azul Eléctrico",
         icon: "ExternalLink",
-        action: "Abre la raíz del servidor Profit Plus Micro-API (:3005) en una pestaña nueva para diagnóstico de hardware y discos."
+        action: "Abre la raíz del servidor Supabase Micro-API (:3005) en una pestaña nueva para diagnóstico de hardware y discos."
       },
       {
         name: "Descargar Tabla JSON",
@@ -1481,8 +1481,8 @@ export const MODULES_DOCUMENTATION = [
 // ==============================================================================
 export const FREQUENTLY_ASKED_QUESTIONS = [
   {
-    question: "¿Cómo se actualizan los datos de Profit Plus 2K8 en la aplicación web?",
-    answer: "El sistema cuenta con un Daemon en segundo plano (Profit Bridge) que se conecta directamente al servidor SQL Server de GRUMOTOR. Los datos de facturas, clientes, cobros, inventario y compras se sincronizan en tiempo real mediante Supabase Webhooks y consultas programadas. Puede forzar una sincronización manual desde el botón 'Sincronizar Profit Plus' en el Dashboard o en la barra superior."
+    question: "¿Cómo se actualizan los datos de Supabase en la aplicación web?",
+    answer: "El sistema cuenta con un Daemon en segundo plano (Profit Bridge) que se conecta directamente al servidor SQL Server de GRUMOTOR. Los datos de facturas, clientes, cobros, inventario y compras se sincronizan en tiempo real mediante Supabase Webhooks y consultas programadas. Puede forzar una sincronización manual desde el botón 'Sincronizar Supabase' en el Dashboard o en la barra superior."
   },
   {
     question: "¿Qué ocurre si se interrumpe la conexión a Internet mientras estoy facturando en el POS?",
@@ -1550,7 +1550,7 @@ export const FREQUENTLY_ASKED_QUESTIONS = [
   },
   {
     question: "¿Cómo asignar o reasignar las zonas comerciales a los asesores de venta?",
-    answer: "En el módulo 'Asesores Comerciales & Zonas de Venta', cada vendedor cuenta con una zona o circuito asignado. Para asignar o modificar la zona, haga clic en el botón 'Editar Zona Asignada' (ícono MapPin) presente en la fila del asesor o en su Ficha Técnica. Se abrirá el modal de reasignación territorial donde podrá seleccionar la nueva zona geográfica (Gran Caracas, Centro-Occidente, Oriente, Los Llanos, etc.) o ingresar una zona personalizada. Al guardar, el cambio se sincroniza de inmediato en Supabase y se actualizan automáticamente las vistas de Pedidos, Preventa y Clientes asociados a ese territorio, sin que se alteren las ventas históricas de Profit Plus."
+    answer: "En el módulo 'Asesores Comerciales & Zonas de Venta', cada vendedor cuenta con una zona o circuito asignado. Para asignar o modificar la zona, haga clic en el botón 'Editar Zona Asignada' (ícono MapPin) presente en la fila del asesor o en su Ficha Técnica. Se abrirá el modal de reasignación territorial donde podrá seleccionar la nueva zona geográfica (Gran Caracas, Centro-Occidente, Oriente, Los Llanos, etc.) o ingresar una zona personalizada. Al guardar, el cambio se sincroniza de inmediato en Supabase y se actualizan automáticamente las vistas de Pedidos, Preventa y Clientes asociados a ese territorio, sin que se alteren las ventas históricas de Supabase."
   },
   {
     question: "¿Cómo garantiza el sistema la legibilidad óptima y visualización en cualquier dispositivo (smartphones, tablets, laptops, PC)?",
@@ -1566,7 +1566,7 @@ export const FREQUENTLY_ASKED_QUESTIONS = [
   },
   {
     question: "¿Por qué en Enero de 2026 no aparecen litros facturados en el Dashboard?",
-    answer: "En la base de datos oficial GRUMOTOR de Profit Plus SQL Server, la empresa no emitió facturación comercial en el mes de Enero de 2026. La primera factura oficial emitida en el ejercicio 2026 fue la Factura N° 12 con fecha del 10 de Febrero de 2026. A partir de esa fecha y hasta la actualidad, el sistema consolida el 100% de las facturas (2.493 documentos) y sus 155.199,9 Litros de lubricante vendidos."
+    answer: "En la base de datos oficial GRUMOTOR de Supabase SQL Server, la empresa no emitió facturación comercial en el mes de Enero de 2026. La primera factura oficial emitida en el ejercicio 2026 fue la Factura N° 12 con fecha del 10 de Febrero de 2026. A partir de esa fecha y hasta la actualidad, el sistema consolida el 100% de las facturas (2.493 documentos) y sus 155.199,9 Litros de lubricante vendidos."
   },
   {
     question: "¿Cómo modificar las fechas de apertura o cierre del ejercicio fiscal en curso?",
@@ -1581,12 +1581,12 @@ export const FREQUENTLY_ASKED_QUESTIONS = [
     answer: "La aplicación cuenta con una compilación de producción optimizada y autónoma en la carpeta 'dist/' (y su equivalente comprimido 'dist_github_deploy.zip'). Para publicarla: (1) En su repositorio de GitHub, haga clic en 'Add file' ➔ 'Upload files'; (2) Arrastre todo el contenido de 'dist/' (incluyendo la carpeta assets, index.html, 404.html y .nojekyll); (3) Haga clic en 'Commit changes'; (4) Vaya a 'Settings' ➔ 'Pages', elija 'Deploy from a branch', seleccione la rama 'main' (o master) con la carpeta '/ (root)' y presione 'Save'. En 2 minutos su sistema estará en línea."
   },
   {
-    question: "¿Cómo funciona la sincronización bidireccional entre la aplicación web y Profit Plus 2K8?",
-    answer: "El sistema opera con doble vía: (1) Cuando crea, modifica o elimina un cliente o lubricante desde la app web, el cambio impacta de inmediato en SQL Server (GRUMOTOR) respetando todas las reglas contables e integridad referencial; (2) Cuando se opera en Profit Plus de escritorio en Windows (ej. se cambian precios o stocks), el demonio de fondo detecta las actualizaciones cada 2 minutos o al presionar 'Sincronizar Profit' y las refleja en la web al instante."
+    question: "¿Cómo funciona la sincronización bidireccional entre la aplicación web y Supabase?",
+    answer: "El sistema opera con doble vía: (1) Cuando crea, modifica o elimina un cliente o lubricante desde la app web, el cambio impacta de inmediato en SQL Server (GRUMOTOR) respetando todas las reglas contables e integridad referencial; (2) Cuando se opera en Supabase de escritorio en Windows (ej. se cambian precios o stocks), el demonio de fondo detecta las actualizaciones cada 2 minutos o al presionar 'Sincronizar Profit' y las refleja en la web al instante."
   },
   {
-    question: "¿Por qué no se pierden las imágenes de envases ni las fichas de laboratorio al sincronizar desde Profit Plus?",
-    answer: "Gracias al motor arquitectónico 'Smart Merge': Profit Plus 2K8 no almacena imágenes ni especificaciones de laboratorio ni contraseñas. Antes de actualizar Supabase, el sincronizador consulta los registros existentes en la nube, retiene la metadata enriquecida (fotos WebP/Base64, viscosidades API, laboratorio a 40°C/100°C, credenciales y georreferenciación GPS) y fusiona únicamente los datos contables e inventario de Profit Plus, garantizando 0% de pérdida de información."
+    question: "¿Por qué no se pierden las imágenes de envases ni las fichas de laboratorio al sincronizar desde Supabase?",
+    answer: "Gracias al motor arquitectónico 'Smart Merge': Supabase no almacena imágenes ni especificaciones de laboratorio ni contraseñas. Antes de actualizar Supabase, el sincronizador consulta los registros existentes en la nube, retiene la metadata enriquecida (fotos WebP/Base64, viscosidades API, laboratorio a 40°C/100°C, credenciales y georreferenciación GPS) y fusiona únicamente los datos contables e inventario de Supabase, garantizando 0% de pérdida de información."
   }
 ];
 
@@ -1723,9 +1723,9 @@ export const WORKFLOWS_STEP_BY_STEP = [
     ]
   },
   {
-    title: "13. Flujo de Exploración y Auditoría de Tablas en Profit Plus SQL Server",
+    title: "13. Flujo de Exploración y Auditoría de Tablas en Supabase SQL Server",
     steps: [
-      "En el Dashboard Ejecutivo (con rol Administrador Master o TI), ubique la barra superior 'SERVIDOR PROFIT PLUS 2K8 & SQL SERVER'.",
+      "En el Dashboard Ejecutivo (con rol Administrador Master o TI), ubique la barra superior 'SERVIDOR SUPABASE & SQL SERVER'.",
       "Haga clic en 'Explorar Tablas' para abrir el modal del explorador multi-base de datos.",
       "Seleccione del menú desplegable cualquiera de las 49 tablas (factura, reng_fac, clientes, cobros, saart, prov, etc.).",
       "Utilice el buscador en tiempo real para localizar transacciones o renglones específicos sin necesidad de escribir código SQL.",
@@ -1743,12 +1743,12 @@ export const WORKFLOWS_STEP_BY_STEP = [
     ]
   },
   {
-    title: "15. Flujo de Creación, Modificación y Eliminación Bidireccional (App Web ↔ Profit Plus 2K8)",
+    title: "15. Flujo de Creación, Modificación y Eliminación Bidireccional (App Web ↔ Supabase)",
     steps: [
-      "Para Registrar un Nuevo Cliente: Ingrese a 'Clientes & Directorio Oficial', presione el botón '+ Nuevo Cliente', complete el código co_cli (máximo 10 caracteres), RIF, razón social, vendedor asignado y zona comercial. Al hacer clic en 'Registrar Cliente', se guardará en Profit Plus (SQL Server: clientes) y en Supabase en tiempo real.",
-      "Para Modificar Datos: Localice el cliente o lubricante en la lista, presione 'Modificar', ajuste los precios, límites de crédito o condiciones fiscales y guarde los cambios. El impacto en Profit Plus y la nube es inmediato (<15 ms).",
+      "Para Registrar un Nuevo Cliente: Ingrese a 'Clientes & Directorio Oficial', presione el botón '+ Nuevo Cliente', complete el código co_cli (máximo 10 caracteres), RIF, razón social, vendedor asignado y zona comercial. Al hacer clic en 'Registrar Cliente', se guardará en Supabase (SQL Server: clientes) y en Supabase en tiempo real.",
+      "Para Modificar Datos: Localice el cliente o lubricante en la lista, presione 'Modificar', ajuste los precios, límites de crédito o condiciones fiscales y guarde los cambios. El impacto en Supabase y la nube es inmediato (<15 ms).",
       "Para Eliminar un Registro: Presione 'Eliminar' en la ficha del elemento. Si el registro no tiene histórico contable, el sistema ejecutará un borrado físico limpio; si ya tiene facturas o pedidos pasados, aplicará automáticamente Soft Delete fiscal (anulado = 1 o inactivo = 1) para resguardar la legalidad tributaria SENIAT.",
-      "Para Modificaciones Directas en Profit Desktop (Windows): Cuando en administración cambien precios o stock en Profit de escritorio, el motor 'Smart Merge' detectará los cambios automáticamente y actualizará la app web sin alterar fotos, fichas técnicas ni contraseñas."
+      "Para Modificaciones Directas en Supabase Desktop (Windows): Cuando en administración cambien precios o stock en Supabase de escritorio, el motor 'Smart Merge' detectará los cambios automáticamente y actualizará la app web sin alterar fotos, fichas técnicas ni contraseñas."
     ]
   }
 ];

@@ -37,7 +37,6 @@ export default function Navigation({
   currentUser,
   onLogout,
   onOpenOrdersSalesModal,
-  onOpenServerExplorer,
   onOpenCashBankModal,
   onOpenAccountsReceivableModal,
   onOpenAccountsPayableModal,
@@ -62,7 +61,6 @@ export default function Navigation({
     { id: 'cxp', label: 'Cuentas por Pagar (CxP)', icon: Building2 },
     { id: 'reportes', label: 'Libros Fiscales SENIAT', icon: FileSpreadsheet },
     { id: 'auditoria', label: 'Auditoría & Contable', icon: ShieldCheck },
-    { id: 'bases-datos', label: 'Bases de Datos Profit', icon: Database },
     { id: 'usuarios', label: 'Gestión de Usuarios', icon: Users },
     { id: 'notificaciones', label: 'Notificaciones & Alertas', icon: Bell },
     { id: 'configuracion', label: 'Configuración General', icon: Settings }
@@ -140,37 +138,6 @@ export default function Navigation({
           flexDirection: 'column',
           gap: '0.75rem'
         }}>
-          {isMasterAdmin(currentUser) && onOpenServerExplorer && (
-            <button
-              type="button"
-              onClick={() => {
-                onOpenServerExplorer();
-                if (setMobileOpen) setMobileOpen(false);
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
-                gap: '8px',
-                width: '100%',
-                padding: sidebarCollapsed ? '0.65rem' : '0.65rem 0.85rem',
-                borderRadius: '10px',
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.2) 0%, rgba(30, 58, 138, 0.35) 100%)',
-                border: '1px solid rgba(56, 189, 248, 0.45)',
-                color: '#38bdf8',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                textAlign: 'left'
-              }}
-              title="Profit & Base de Datos: Explorar servidor Profit Plus 2K8, SQL Server y Supabase"
-            >
-              <Server size={16} />
-              {!sidebarCollapsed && <span className="server-explorer-label" style={{ flex: 1 }}>Profit & Base de Datos</span>}
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
-            </button>
-          )}
 
           {/* Botón Visor de Dispositivos */}
           <button

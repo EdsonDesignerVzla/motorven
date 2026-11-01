@@ -300,7 +300,7 @@ export default function OrdersPipelineView({
               <Truck size={28} color="var(--motorven-red)" /> Pipeline de Pedidos & Preventa
             </h1>
             <span className="badge badge-primary" style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>
-              PROFIT 2K8 SYNC
+              SUPABASE SYNC
             </span>
           </div>
           <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
@@ -309,11 +309,6 @@ export default function OrdersPipelineView({
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-          {isMasterOrGerencia(currentUser) && onSyncProfit && (
-            <button className="btn btn-secondary btn-sm" onClick={onSyncProfit} style={{ fontSize: '0.82rem' }}>
-              <RefreshCw size={15} /> Sincronizar Profit
-            </button>
-          )}
           <button className="btn btn-secondary btn-sm" onClick={exportPipelineCsv} style={{ fontSize: '0.82rem' }}>
             <Download size={15} /> Exportar Pipeline (CSV)
           </button>
@@ -780,7 +775,7 @@ export default function OrdersPipelineView({
                   Planificador de Rutas & Despacho Logístico
                 </h3>
                 <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  Agrupación de pedidos por zona geográfica oficial de Profit Plus 2K8 para carga y salida de camiones
+                  Agrupación de pedidos por zona geográfica oficial de Supabase para carga y salida de camiones
                 </p>
               </div>
             </div>
@@ -952,7 +947,7 @@ export default function OrdersPipelineView({
                     </span>
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    Emisión: {selectedOrder.fechaEmision ? new Date(selectedOrder.fechaEmision).toLocaleString() : 'N/A'} • Origen: {selectedOrder.profitOrigen || 'Profit Plus 2K8'}
+                    Emisión: {selectedOrder.fechaEmision ? new Date(selectedOrder.fechaEmision).toLocaleString() : 'N/A'} • Origen: {selectedOrder.profitOrigen || 'Supabase'}
                   </div>
                 </div>
               </div>

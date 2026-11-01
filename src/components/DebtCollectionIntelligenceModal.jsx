@@ -64,7 +64,7 @@ export default function DebtCollectionIntelligenceModal({
   const tasaBcv = Number(propTasaBcv || config?.tasaDolar) || 827.73;
 
   // 1. Motor de Cálculo de Antigüedad de Saldos (Aging) por Factura y por Cliente
-  // Consolidando clientes locales con deuda y facturas pendientes de Profit Plus
+  // Consolidando clientes locales con deuda y facturas pendientes de Supabase
   const agingData = useMemo(() => {
     const hoy = new Date();
     const clientsMap = {};

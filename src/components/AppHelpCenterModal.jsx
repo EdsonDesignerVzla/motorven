@@ -848,7 +848,7 @@ export default function AppHelpCenterModal({
                   Catálogo de Modales & Ventanas de Alto Rendimiento
                 </h3>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
-                  Explicación profunda de las herramientas emergentes integradas con Profit Plus 2K8.
+                  Explicación profunda de las herramientas emergentes integradas con Supabase.
                 </p>
               </div>
 

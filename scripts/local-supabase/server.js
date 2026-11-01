@@ -125,42 +125,8 @@ function saveDatabase() {
   }, 300);
 }
 
-// Envío simultáneo asíncrono hacia el bridge de Profit Plus
-function forwardWriteToProfitBridge(table, action, record) {
-  try {
-    const tableToEntity = {
-      'products': 'product',
-      'clients': 'client',
-      'users': 'user',
-      'profit_sellers': 'seller',
-      'suppliers': 'supplier',
-      'sales': 'sale',
-      'orders': 'order',
-      'purchases': 'purchase',
-      'cash_movements': 'cash-movement'
-    };
-    const entity = tableToEntity[table];
-    if (!entity || !record) return;
-
-    const postData = JSON.stringify({ action, [entity === 'cash-movement' ? 'movement' : entity]: record });
-    const req = http.request({
-      hostname: '127.0.0.1',
-      port: 3005,
-      path: `/api/profit/write/${entity}`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      },
-      timeout: 3000
-    }, (res) => {
-      res.resume();
-    });
-    req.on('error', () => {});
-    req.write(postData);
-    req.end();
-  } catch (_) {}
-}
+// Conexion con Profit Plus eliminada: Supabase local es la unica fuente de verdad.
+function forwardWriteToProfitBridge() {}
 
 // Helpers para evaluar filtros de PostgREST
 function matchFilter(value, operator, target) {

@@ -215,9 +215,9 @@
     {
       "nombreEmpresa": "GRUPO MOTORVEN C.A.",
       "marcaOficial": "OILSTONE ® por KEYSTONE, C.A.",
-      "rif": "J-31115365-9",
-      "direccion": "Zona Industrial III, Carrera 2 con Calle 4, Barquisimeto / Los Ruices, Caracas",
-      "telefono": "+58 (251) 269.13.964 / +58 (212) 555-8899",
+      "rif": "J507805484",
+      "direccion": "AV PPAL LOCAL 62 PB, CENTRO INDUSTRIAL RINCÓN COUNTRY . PARCELA 45 SECTOR PARAPARALLOS GUAYOS CARABOBO ZONA POSTAL 2010 / Zona Industrial III, Carrera 2 con Calle 4, Barquisimeto",
+      "telefono": "(+58) 424-4742050 / (+58) 424-4557055",
       "email": "ventas@keystone.net.ve",
       "instagram": "@oilstone_vzla",
       "tasaDolar": 886.22,
@@ -240,7 +240,7 @@
       "nombre_empresa": "GRUPO MOTORVEN C.A.",
       "marca_oficial": "OILSTONE ® por KEYSTONE, C.A.",
       "tasa_dolar": 889.25,
-      "tasa_keystone": 909.9,
+      "tasa_keystone": 38.5,
       "moneda_principal": "USD",
       "moneda_secundaria": "Bs.",
       "almacen_actual": "ALM-01 Planta Principal Oilstone",
@@ -528299,7 +528299,7 @@
       "active": true,
       "created_at": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-10-26T19:07:04.838Z",
-      "ultimo_acceso": "2026-10-31T15:55:31.734Z",
+      "ultimo_acceso": "2026-11-01T15:55:15.657Z",
       "foto": "https://api.dicebear.com/7.x/bottts/svg?seed=EdsonMaster&backgroundColor=0284c7"
     },
     {
@@ -529840,12 +529840,11 @@
     {
       "id": "notif_init_04",
       "tipo": "sistema",
-      "titulo": "Sincronización Profit Plus 2K8 en Tiempo Real Activa",
-      "mensaje": "El enlace con la base de datos SQL Server y Supabase Cloud opera con latencia óptima y persistencia bidireccional de clientes y catálogo.",
+      "titulo": "Sincronización Supabase en Tiempo Real Activa",
+      "mensaje": "La base de datos Supabase opera con latencia óptima y persistencia en tiempo real de clientes y catálogo.",
       "leido": false,
-      "metadata": {
-        "bridgePort": 3005
-      }
+      "metadata": {},
+      "origen": "SUPABASE"
     },
     {
       "id": "notif_init_05",
@@ -531928,6 +531927,146 @@
       "modulo": "USUARIOS",
       "detalles": "Eliminación permanente del usuario @autotest_1793498149042 (Operador Automatizado)",
       "created_at": "2026-11-01T01:55:54.138Z"
+    },
+    {
+      "id": "LOG-1793547562046-GE16Q",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793547562040 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T15:39:22.046Z"
+    },
+    {
+      "id": "LOG-1793547562050-JDWOK",
+      "usuario_id": "usr-autotest-1793547562040",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T15:39:22.050Z"
+    },
+    {
+      "id": "LOG-1793547562056-DP86H",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793547562040 (Operador Automatizado)",
+      "created_at": "2026-11-01T15:39:22.056Z"
+    },
+    {
+      "id": "LOG-1793548032522-GQ1WS",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGOUT",
+      "modulo": "SEGURIDAD",
+      "detalles": "Cierre de sesión de @edson designer",
+      "created_at": "2026-11-01T15:47:12.522Z"
+    },
+    {
+      "id": "LOG-1793548105522-SQR3V",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
+      "created_at": "2026-11-01T15:48:25.522Z"
+    },
+    {
+      "id": "LOG-1793548160853-J4VLS",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
+      "created_at": "2026-11-01T15:49:20.853Z"
+    },
+    {
+      "id": "LOG-1793548345885-CLSZR",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
+      "created_at": "2026-11-01T15:52:25.885Z"
+    },
+    {
+      "id": "LOG-1793548515658-ZI6FZ",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
+      "created_at": "2026-11-01T15:55:15.658Z"
+    },
+    {
+      "id": "LOG-1793548633544-XGQG0",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793548633538 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T15:57:13.544Z"
+    },
+    {
+      "id": "LOG-1793548633548-HYH8X",
+      "usuario_id": "usr-autotest-1793548633538",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T15:57:13.548Z"
+    },
+    {
+      "id": "LOG-1793548633552-OW5UP",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793548633538 (Operador Automatizado)",
+      "created_at": "2026-11-01T15:57:13.552Z"
+    },
+    {
+      "id": "LOG-1793548984959-EIOJN",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793548984951 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T16:03:04.959Z"
+    },
+    {
+      "id": "LOG-1793548984964-J8UNV",
+      "usuario_id": "usr-autotest-1793548984951",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T16:03:04.964Z"
+    },
+    {
+      "id": "LOG-1793548984970-2E32G",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793548984951 (Operador Automatizado)",
+      "created_at": "2026-11-01T16:03:04.970Z"
     }
   ],
   "order_items": [

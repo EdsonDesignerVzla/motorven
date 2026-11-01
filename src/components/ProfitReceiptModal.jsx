@@ -101,7 +101,7 @@ export default function ProfitReceiptModal({ receipt, onClose, config = {}, curr
                   Recibo de Cobro #{receipt.cobNum}
                 </h3>
                 <span className="badge badge-success" style={{ fontSize: '0.68rem', padding: '2px 8px' }}>
-                  Profit Plus 2K8
+                  Supabase
                 </span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
@@ -240,7 +240,7 @@ export default function ProfitReceiptModal({ receipt, onClose, config = {}, curr
               </div>
             ) : (
               <div style={{ padding: '1rem', background: 'var(--surface-input)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                Cobro registrado con método directo en cuenta Profit.
+                Cobro registrado con método directo en cuenta bancaria.
               </div>
             )}
           </div>

@@ -214,7 +214,7 @@ export default function InventoryKardexModal({
                   Kardex Físico, Mermas & Ajustes de Inventario
                 </h2>
                 <span className="badge badge-primary" style={{ fontSize: '0.72rem' }}>
-                  Profit Plus 2K8 Oficial
+                  Supabase Oficial
                 </span>
               </div>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
@@ -229,7 +229,7 @@ export default function InventoryKardexModal({
               disabled={isSyncing}
               className="btn btn-secondary btn-sm"
               style={{ fontSize: '0.78rem' }}
-              title="Sincronizar ajustes con SQL Server"
+              title="Recargar ajustes desde Supabase"
             >
               <span className={isSyncing ? "animate-spin" : ""}>🔄</span>
               {isSyncing ? "Sincronizando..." : "Sincronizar"}
@@ -299,7 +299,7 @@ export default function InventoryKardexModal({
               {stats.totalAdjustments + stats.totalTransfers} <span className="text-sm font-medium text-slate-400">docs</span>
             </div>
             <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              100% conciliado con Profit 2K8
+              100% conciliado con Supabase
             </div>
           </div>
         </div>
@@ -726,7 +726,7 @@ export default function InventoryKardexModal({
         {/* Pie del Modal */}
         <div className="p-4 bg-slate-100 dark:bg-[#070d1e] border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 print:hidden">
           <div>
-            Auditando <strong>{adjustments.length}</strong> ajustes y <strong>{transfers.length}</strong> traslados sincronizados con SQL Server Profit Plus 2K8.
+            Auditando <strong>{adjustments.length}</strong> ajustes y <strong>{transfers.length}</strong> traslados sincronizados con Supabase.
           </div>
           <button
             onClick={onClose}

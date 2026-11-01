@@ -202,7 +202,7 @@ export default function AccountsReceivableModal({
             </div>
             <div>
               <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                Cuentas por Cobrar (CxC) & Facturas Profit Plus
+                Cuentas por Cobrar (CxC) & Facturas Supabase
               </h2>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 Gestión de Créditos, Cartera y Vencimientos • Tasa BCV: {formatBs(tasaBcv)}

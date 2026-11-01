@@ -235,7 +235,7 @@ export default function ClientsDirectoryModal({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Directorio_Clientes_Profit2K8_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `Directorio_Clientes_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -323,7 +323,7 @@ export default function ClientsDirectoryModal({
       setSelectedClientId(payload.codigo);
     } catch (err) {
       console.error(err);
-      notify?.error ? notify.error('Error al guardar el cliente en Profit y Supabase') : alert('Error al guardar cliente');
+      notify?.error ? notify.error('Error al guardar el cliente en Supabase') : alert('Error al guardar cliente');
     } finally {
       setIsSavingClient(false);
     }
@@ -361,7 +361,7 @@ export default function ClientsDirectoryModal({
                   Directorio Oficial de Clientes
                 </h2>
                 <span className="badge badge-primary" style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem', letterSpacing: '0.5px' }}>
-                  PROFIT PLUS 2K8 • GRUMOTOR
+                  SUPABASE
                 </span>
               </div>
               <p style={{ margin: '2px 0 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
@@ -375,7 +375,7 @@ export default function ClientsDirectoryModal({
               onClick={handleOpenCreate}
               className="btn btn-primary btn-sm"
               style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-              title="Registrar un nuevo cliente en Profit Plus y sincronizar con Supabase"
+              title="Registrar un nuevo cliente en Supabase y sincronizar con Supabase"
             >
               <Plus size={14} /> Nuevo Cliente
             </button>
@@ -681,7 +681,7 @@ export default function ClientsDirectoryModal({
             )}
           </div>
 
-          {/* PANEL DERECHO: DETALLE COMPLETO Y PARÁMETROS DE PROFIT PLUS */}
+          {/* PANEL DERECHO: DETALLE COMPLETO Y PARÁMETROS DE SUPABASE */}
           <div className="clients-detail-panel">
             {selectedClient ? (
               <>
@@ -707,7 +707,7 @@ export default function ClientsDirectoryModal({
                       </span>
                       {selectedClient.inactivo ? (
                         <span className="badge badge-danger" style={{ fontSize: '0.72rem' }}>
-                          <AlertTriangle size={12} style={{ marginRight: '3px' }} /> Inactivo en Profit
+                          <AlertTriangle size={12} style={{ marginRight: '3px' }} /> Inactivo en Supabase
                         </span>
                       ) : (
                         <span className="badge badge-success" style={{ fontSize: '0.72rem' }}>
@@ -814,7 +814,7 @@ export default function ClientsDirectoryModal({
                             alignItems: 'center',
                             gap: '5px'
                           }}
-                          title="Modificar datos del cliente en Profit Plus y Supabase"
+                          title="Modificar datos del cliente en Supabase"
                         >
                           <Edit2 size={13} />
                           <span>Modificar</span>
@@ -833,7 +833,7 @@ export default function ClientsDirectoryModal({
                             gap: '5px',
                             color: 'var(--motorven-red)'
                           }}
-                          title="Eliminar cliente de Profit Plus y Supabase"
+                          title="Eliminar cliente de Supabase"
                         >
                           <Trash2 size={13} />
                           <span>Eliminar</span>
@@ -875,7 +875,7 @@ export default function ClientsDirectoryModal({
                 {activeTab === 'FICHA' && (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
                     <div className="clients-info-card">
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>CÓDIGO PROFIT PLUS (co_cli)</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>CÓDIGO SUPABASE (co_cli)</span>
                       <div style={{ fontSize: '0.95rem', fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--text-primary)', marginTop: '2px' }}>
                         {selectedClient.codigo || selectedClient.id}
                       </div>
@@ -1115,7 +1115,7 @@ export default function ClientsDirectoryModal({
                     <div className="clients-info-card" style={{ gridColumn: '1 / -1' }}>
                       <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>COMENTARIOS & OBSERVACIONES INTERNAS (comentario)</span>
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginTop: '6px', whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>
-                        {selectedClient.comentarios || 'Sin observaciones registradas para este cliente en Profit Plus.'}
+                        {selectedClient.comentarios || 'Sin observaciones registradas para este cliente en Supabase.'}
                       </div>
                     </div>
                   </div>
@@ -1123,14 +1123,14 @@ export default function ClientsDirectoryModal({
               </>
             ) : (
               <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                Selecciona un cliente de la lista para ver todos sus parámetros técnicos de Profit Plus 2K8.
+                Selecciona un cliente de la lista para ver todos sus parámetros técnicos de Supabase.
               </div>
             )}
           </div>
         </div>
 
         {/* ========================================================================= */}
-        {/* 5. MODAL FLOTANTE DE CREACIÓN / EDICIÓN DE CLIENTE (PROFIT + SUPABASE) */}
+        {/* 5. MODAL FLOTANTE DE CREACIÓN / EDICIÓN DE CLIENTE (SUPABASE) */}
         {/* ========================================================================= */}
         {isFormOpen && (
           <div
@@ -1193,7 +1193,7 @@ export default function ClientsDirectoryModal({
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>
-                      {isEditing ? 'Modificar Cliente en Profit Plus' : 'Registrar Nuevo Cliente en Profit Plus'}
+                      {isEditing ? 'Modificar Cliente en Supabase' : 'Registrar Nuevo Cliente en Supabase'}
                     </h3>
                     <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
                       Sincronización bidireccional automática con Supabase
@@ -1221,7 +1221,7 @@ export default function ClientsDirectoryModal({
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      CÓDIGO PROFIT (co_cli) *
+                      CÓDIGO (co_cli) *
                     </label>
                     <input
                       type="text"
@@ -1508,7 +1508,7 @@ export default function ClientsDirectoryModal({
                     style={{ width: '16px', height: '16px', accentColor: 'var(--motorven-red)' }}
                   />
                   <label htmlFor="clientInactivoCheck" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                    Marcar cliente como inactivo en Profit Plus 2K8
+                    Marcar cliente como inactivo en Supabase
                   </label>
                 </div>
 
@@ -1538,7 +1538,7 @@ export default function ClientsDirectoryModal({
                   >
                     {isSavingClient ? (
                       <>
-                        <RotateCcw size={15} className="spin" /> Guardando en Profit Plus...
+                        <RotateCcw size={15} className="spin" /> Guardando en Supabase...
                       </>
                     ) : (
                       <>

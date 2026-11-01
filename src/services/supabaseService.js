@@ -1136,7 +1136,7 @@ export const saveSupabaseProduct = async (product) => {
     const mapped = mapProductFromDb(data);
     saveStorageProduct(mapped);
 
-    // Reflejo en tiempo real en Profit Plus (SQL Server: art) y comparativa
+    // Reflejo en tiempo real en Supabase (SQL Server: art) y comparativa
     try {
       const profitRes = await writeProfitProduct(mapped, 'SAVE');
       if (profitRes?.comparison) {
@@ -1144,7 +1144,7 @@ export const saveSupabaseProduct = async (product) => {
         mapped._comparison = profitRes.comparison;
       }
     } catch (e) {
-      console.warn('[saveSupabaseProduct] Aviso escribiendo en Profit:', e.message);
+      console.warn('[saveSupabaseProduct] Aviso escribiendo en Supabase:', e.message);
     }
 
     return mapped;
@@ -1163,9 +1163,9 @@ export const deleteSupabaseProduct = async (id) => {
 
   deleteStorageProduct(id);
 
-  // Reflejo en tiempo real en Profit Plus (SQL Server: art anulado=1)
+  // Reflejo en tiempo real en Supabase (SQL Server: art anulado=1)
   writeProfitProduct({ id, codigo: coArt }, 'DELETE').catch(e => {
-    console.warn('[deleteSupabaseProduct] Aviso eliminando en Profit:', e.message);
+    console.warn('[deleteSupabaseProduct] Aviso eliminando en Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1241,7 +1241,7 @@ export const saveSupabaseClient = async (client) => {
     const mapped = mapClientFromDb(data);
     saveStorageClient(mapped);
 
-    // Reflejo en tiempo real en Profit Plus (SQL Server: clientes) y comparativa
+    // Reflejo en tiempo real en Supabase (SQL Server: clientes) y comparativa
     try {
       const profitRes = await writeProfitClient(mapped, 'SAVE');
       if (profitRes?.comparison) {
@@ -1249,7 +1249,7 @@ export const saveSupabaseClient = async (client) => {
         mapped._comparison = profitRes.comparison;
       }
     } catch (e) {
-      console.warn('[saveSupabaseClient] Aviso escribiendo en Profit:', e.message);
+      console.warn('[saveSupabaseClient] Aviso escribiendo en Supabase:', e.message);
     }
 
     return mapped;
@@ -1266,9 +1266,9 @@ export const deleteSupabaseClient = async (id) => {
   const target = currentClients.find(c => c.id === id || c.codigo === id);
   const coCli = target?.codigo || target?.rif || id;
 
-  // Reflejo en tiempo real en Profit Plus (SQL Server: clientes inactivo=1)
+  // Reflejo en tiempo real en Supabase (SQL Server: clientes inactivo=1)
   writeProfitClient({ id, codigo: coCli, inactivo: true }, 'DELETE').catch(e => {
-    console.warn('[deleteSupabaseClient] Aviso eliminando en Profit:', e.message);
+    console.warn('[deleteSupabaseClient] Aviso eliminando en Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1411,9 +1411,9 @@ export const saveSupabaseSupplier = async (supplier) => {
   const currentSuppliers = getStorageSuppliers();
   const supplierToSave = currentSuppliers.find(s => (supplier.id && s.id === supplier.id) || s.rif === supplier.rif) || supplier;
 
-  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: prov)
+  // Reflejo simultáneo en tiempo real en Supabase (SQL Server: prov)
   writeProfitSupplier(supplierToSave, 'SAVE').catch(e => {
-    console.warn('[saveSupabaseSupplier] Aviso sincronizando con Profit:', e.message);
+    console.warn('[saveSupabaseSupplier] Aviso sincronizando con Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1442,9 +1442,9 @@ export const saveSupabaseSupplier = async (supplier) => {
 export const deleteSupabaseSupplier = async (id) => {
   if (!id) return false;
 
-  // Reflejo en tiempo real en Profit Plus (SQL Server: prov anulado/inactivo)
+  // Reflejo en tiempo real en Supabase (SQL Server: prov anulado/inactivo)
   writeProfitSupplier({ id, co_prov: id, inactivo: true }, 'DELETE').catch(e => {
-    console.warn('[deleteSupabaseSupplier] Aviso eliminando en Profit:', e.message);
+    console.warn('[deleteSupabaseSupplier] Aviso eliminando en Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1646,9 +1646,9 @@ export const processSupabaseSale = async (saleData) => {
     // Sincronizar en almacenamiento local
     saveStorageSale(mapped);
 
-    // Reflejo en tiempo real simultáneo en Profit Plus (SQL Server: factura & reng_fac)
+    // Reflejo en tiempo real simultáneo en Supabase (SQL Server: factura & reng_fac)
     writeProfitSale(mapped, 'SAVE').catch(e => {
-      console.warn('[processSupabaseSale] Aviso sincronizando venta en Profit:', e.message);
+      console.warn('[processSupabaseSale] Aviso sincronizando venta en Supabase:', e.message);
     });
 
     return mapped;
@@ -1690,9 +1690,9 @@ export const saveSupabasePurchase = async (purchaseData) => {
   // 1. Guardar primero en almacenamiento local
   const localSaved = saveStoragePurchase(purchaseData);
 
-  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: compras & reng_com)
+  // Reflejo simultáneo en tiempo real en Supabase (SQL Server: compras & reng_com)
   writeProfitPurchase(localSaved, 'SAVE').catch(e => {
-    console.warn('[saveSupabasePurchase] Aviso sincronizando con Profit:', e.message);
+    console.warn('[saveSupabasePurchase] Aviso sincronizando con Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1743,9 +1743,9 @@ export const getSupabaseCashMovements = async () => {
 export const addSupabaseCashMovement = async (mov) => {
   const localMov = addStorageCashMovement(mov);
 
-  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: cobros / mov_caj)
+  // Reflejo simultáneo en tiempo real en Supabase (SQL Server: cobros / mov_caj)
   writeProfitCashMovement(localMov, 'SAVE').catch(e => {
-    console.warn('[addSupabaseCashMovement] Aviso sincronizando con Profit:', e.message);
+    console.warn('[addSupabaseCashMovement] Aviso sincronizando con Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1796,9 +1796,9 @@ export const getSupabaseOrders = async () => {
 export const saveSupabaseOrder = async (orderData) => {
   saveStorageOrder(orderData);
 
-  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: pedidos & reng_ped)
+  // Reflejo simultáneo en tiempo real en Supabase (SQL Server: pedidos & reng_ped)
   writeProfitOrder(orderData, 'SAVE').catch(e => {
-    console.warn('[saveSupabaseOrder] Aviso sincronizando con Profit:', e.message);
+    console.warn('[saveSupabaseOrder] Aviso sincronizando con Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -1839,9 +1839,9 @@ export const saveSupabaseOrder = async (orderData) => {
 export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
   updateStorageOrderStatus(orderId, newStatus);
 
-  // Reflejo simultáneo en tiempo real en Profit Plus
+  // Reflejo simultáneo en tiempo real en Supabase
   writeProfitOrder({ id: orderId, status: newStatus }, 'UPDATE').catch(e => {
-    console.warn('[updateSupabaseOrderStatus] Aviso sincronizando estado con Profit:', e.message);
+    console.warn('[updateSupabaseOrderStatus] Aviso sincronizando estado con Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
@@ -2169,7 +2169,7 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
           detalles: `${accionTipo === 'CREAR_USUARIO' ? 'Creación de nuevo usuario' : 'Actualización de datos para'} @${savedFromDb.username} (${savedFromDb.nombre}) con rol ${savedFromDb.rol}`
         }).catch(() => {});
 
-        // Reflejo en tiempo real en Profit Plus (SQL Server: vendedor) y comparativa
+        // Reflejo en tiempo real en Supabase (SQL Server: vendedor) y comparativa
         try {
           const profitRes = await writeProfitUser(savedFromDb, 'SAVE');
           if (profitRes?.comparison) {
@@ -2177,7 +2177,7 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
             savedFromDb._comparison = profitRes.comparison;
           }
         } catch (e) {
-          console.warn('[saveSupabaseUser] Aviso sincronizando con Profit:', e.message);
+          console.warn('[saveSupabaseUser] Aviso sincronizando con Supabase:', e.message);
         }
 
         return savedFromDb;
@@ -2222,9 +2222,9 @@ export const deleteSupabaseUser = async (userId, auditUser = null) => {
     }
   } catch (_) {}
 
-  // Reflejo en tiempo real en Profit Plus (SQL Server: vendedor)
+  // Reflejo en tiempo real en Supabase (SQL Server: vendedor)
   writeProfitUser(targetUser || { id: userId }, 'DELETE').catch(e => {
-    console.warn('[deleteSupabaseUser] Aviso eliminando de Profit:', e.message);
+    console.warn('[deleteSupabaseUser] Aviso eliminando de Supabase:', e.message);
   });
 
   // 2. Supabase
@@ -2483,7 +2483,7 @@ export const pushUserLogToSupabase = async (logData) => {
 };
 
 // ==========================================
-//  PROFIT PLUS 2K8 - TESORERÍA, FACTURAS Y COBROS
+//  SUPABASE - TESORERÍA, FACTURAS Y COBROS
 // ==========================================
 
 export const getSupabaseProfitBankAccounts = async () => {
@@ -2796,7 +2796,7 @@ export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
   // 1. Guardar de forma nativa en tiempo real en la aplicación
   saveStorageSeller({ coVen, coZon, zona });
 
-  // Reflejo en tiempo real en Profit Plus
+  // Reflejo en tiempo real en Supabase
   writeProfitSeller({ coVen, coZon, zona }, 'SAVE').catch(() => {});
 
   // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
@@ -2845,7 +2845,7 @@ export const updateSupabaseSellerTarget = async (coVen, { metaLitrosMes, comisio
   // 1. Guardar de forma nativa en tiempo real en la aplicación
   saveStorageSeller({ coVen, metaLitrosMes, comisionPct });
 
-  // Reflejo en tiempo real en Profit Plus
+  // Reflejo en tiempo real en Supabase
   writeProfitSeller({ coVen, metaLitrosMes, comisionPct }, 'SAVE').catch(() => {});
 
   // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
@@ -3565,11 +3565,11 @@ export const seedInitialNotificationsIfEmpty = async (products = [], clients = [
         tipo: 'sistema',
         severidad: 'exito',
         modulo: 'dashboard',
-        titulo: 'Sincronización Profit Plus 2K8 en Tiempo Real Activa',
-        mensaje: 'El enlace con la base de datos SQL Server y Supabase Cloud opera con latencia óptima y persistencia bidireccional de clientes y catálogo.',
+        titulo: 'Sincronización Supabase en Tiempo Real Activa',
+        mensaje: 'La base de datos Supabase opera con latencia óptima y persistencia en tiempo real de clientes y catálogo.',
         destinatario_rol: 'ALL',
-        origen: 'PROFIT BRIDGE',
-        metadata: { bridgePort: 3005 }
+        origen: 'SUPABASE',
+        metadata: {}
       },
       {
         id: 'notif_init_05',
@@ -3596,7 +3596,7 @@ export const seedInitialNotificationsIfEmpty = async (products = [], clients = [
 };
 
 // ==============================================================================
-// TABLAS AVANZADAS PROFIT PLUS 2K8 (GRUMOTOR) SINCRONIZADAS EN SUPABASE
+// TABLAS AVANZADAS SUPABASE (GRUMOTOR) SINCRONIZADAS EN SUPABASE
 // ==============================================================================
 
 export const getSupabaseProfitBanks = async () => {
@@ -3771,7 +3771,7 @@ export const getSupabaseProfitAuditTrailsEvents = async (limit = 500) => {
     if (error) throw error;
     return data || [];
   } catch (err) {
-    console.warn('[Supabase] Error cargando pistas de auditoría de Profit:', err.message);
+    console.warn('[Supabase] Error cargando pistas de auditoría de Supabase:', err.message);
     return [];
   }
 };

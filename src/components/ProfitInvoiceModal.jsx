@@ -72,7 +72,7 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                  Factura de Venta Profit #{invoice.factNum}
+                  Factura de Venta #{invoice.factNum}
                 </h3>
                 <span
                   className={`badge ${isCobrada ? 'badge-success' : isAnulada ? 'badge-danger' : 'badge-warning'}`}
@@ -82,7 +82,7 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
                 </span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Documento Fiscal Oficial Profit Plus 2K8 - Grupo Motorven C.A.
+                Documento Fiscal Oficial Supabase - Grupo Motorven C.A.
               </div>
             </div>
           </div>

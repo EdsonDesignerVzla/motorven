@@ -576,18 +576,6 @@ export default function SellersView({
             <Clock size={15} color="#25D366" /> Inteligencia Cobranzas & WhatsApp
           </button>
 
-          {isMasterOrGerencia(currentUser) && (
-            <button
-              className="btn btn-secondary"
-              onClick={handleTriggerSync}
-              disabled={syncing}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem' }}
-            >
-              <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
-              {syncing ? 'Sincronizando...' : 'Sincronizar Profit'}
-            </button>
-          )}
-
           {/* BOTÓN IMPRIMIR REPORTE */}
           <button
             className="btn btn-print-report"
@@ -1151,7 +1139,7 @@ export default function SellersView({
                                           {formatBs(Number(cob.montoBs || (Number(cob.montoUsd || 0) * (cob.tasa || config?.tasaDolar || 827.73))))}
                                         </td>
                                         <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                          {cob.descrip || 'Cobro aplicado en Profit Plus'}
+                                          {cob.descrip || 'Cobro aplicado en Supabase'}
                                         </td>
                                         <td style={{ textAlign: 'center' }}>
                                           <span className="badge badge-success" style={{ fontSize: '0.62rem' }}>APLICADO</span>
@@ -1162,7 +1150,7 @@ export default function SellersView({
                                 </table>
                               ) : (
                                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', padding: '0.75rem', textAlign: 'center' }}>
-                                  No hay cobros aplicados registrados en Profit Plus para este período.
+                                  No hay cobros aplicados registrados en Supabase para este período.
                                 </div>
                               )}
                             </td>
@@ -1766,7 +1754,7 @@ export default function SellersView({
               )}
 
               <div style={{ background: 'var(--surface-input, rgba(0, 43, 122, 0.03))', padding: '0.85rem', borderRadius: '10px', border: '1px solid var(--border-glass)', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                ℹ La nueva zona se sincronizará automáticamente en tiempo real en la base de datos Supabase, los reportes en PDF y en Profit Plus.
+                ℹ La nueva zona se sincronizará automáticamente en tiempo real en la base de datos Supabase, los reportes en PDF y en Supabase.
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem' }}>
@@ -1851,7 +1839,7 @@ export default function SellersView({
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', background: '#f8fafc', padding: '1rem', borderRadius: '10px', marginBottom: '1.25rem', fontSize: '0.82rem' }}>
               <div>
                 <div><strong>Asesor Comercial:</strong> {receiptModalSettlement.venDes}</div>
-                <div><strong>Cód. Profit:</strong> {receiptModalSettlement.coVen}</div>
+                <div><strong>Cód. Vendedor:</strong> {receiptModalSettlement.coVen}</div>
                 <div><strong>C.I. / RIF:</strong> {receiptModalSettlement.cedula || 'N/A'}</div>
               </div>
               <div>

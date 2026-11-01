@@ -154,7 +154,7 @@ export default function CashflowView({
   const saldoCajaUsd = totalIngresosUsd - totalEgresosUsd;
   const saldoCajaBs = saldoCajaUsd * tasaBcv;
 
-  // Cartera CxC Consolidada (Clientes Locales + Facturas Pendientes Profit Plus)
+  // Cartera CxC Consolidada (Clientes Locales + Facturas Pendientes Supabase)
   const clientesConDeuda = useMemo(() => {
     const map = new Map();
     const hoy = new Date();
@@ -181,7 +181,7 @@ export default function CashflowView({
       }
     });
 
-    // 2. Integrar facturas de Profit Plus con saldo pendiente
+    // 2. Integrar facturas de Supabase con saldo pendiente
     (profitInvoices || []).forEach(inv => {
       if (inv.anulado || inv.status === 'ANULADA') return;
       const saldo = Number(inv.saldoUsd || (inv.saldoBs ? inv.saldoBs / (inv.tasa || tasaBcv) : inv.saldo || 0));
@@ -990,7 +990,7 @@ export default function CashflowView({
                         {fullMode && (
                           <td style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.78rem', fontWeight: 600 }}>
                             {cli.facturasCount > 0 ? (
-                              <span title={`${cli.facturasCount} facturas pendientes registradas en Profit Plus`}>
+                              <span title={`${cli.facturasCount} facturas pendientes registradas en Supabase`}>
                                 {cli.facturasCount} fac.
                               </span>
                             ) : (
@@ -1068,7 +1068,7 @@ export default function CashflowView({
   };
 
   // =========================================================================
-  // SUB-VISTA 1: 🏛️ CUENTAS BANCARIAS PROFIT PLUS
+  // SUB-VISTA 1: 🏛️ CUENTAS BANCARIAS SUPABASE
   // =========================================================================
   const renderBankAccountsView = () => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -1105,7 +1105,7 @@ export default function CashflowView({
           </div>
           <div>
             <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>
-              Disponibilidad Bancaria Profit Plus 2K8
+              Disponibilidad Bancaria Supabase
             </h3>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
               Conciliación oficial de {profitBankAccounts.length} cuentas bancarias activas en Grupo Motorven
@@ -1164,7 +1164,7 @@ export default function CashflowView({
       >
         {profitBankAccounts.length === 0 ? (
           <div className="bento-card" style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-            No hay cuentas bancarias sincronizadas desde Profit Plus.
+            No hay cuentas bancarias sincronizadas desde Supabase.
           </div>
         ) : (
           profitBankAccounts.map((account) => {
@@ -1334,7 +1334,7 @@ export default function CashflowView({
           <div className="bento-card-header">
             <span className="bento-card-header-title">
               <Receipt size={18} color="var(--motorven-navy)" />
-              Auditoría Oficial de Recibos de Cobranza Profit Plus 2K8
+              Auditoría Oficial de Recibos de Cobranza Supabase
             </span>
             <span className="badge badge-primary" style={{ fontSize: '0.68rem', fontFamily: 'var(--font-code)' }}>
               {filteredProfitCollections.length} Recibos
@@ -1545,7 +1545,7 @@ export default function CashflowView({
           <div className="bento-card-header">
             <span className="bento-card-header-title">
               <FileText size={18} color="var(--motorven-red)" />
-              Libro y Control de Facturación Profit Plus 2K8
+              Libro y Control de Facturación Supabase
             </span>
             <span className="badge badge-primary" style={{ fontSize: '0.68rem', fontFamily: 'var(--font-code)' }}>
               {filteredProfitInvoices.length} Facturas
@@ -1710,7 +1710,7 @@ export default function CashflowView({
               ? 'Control de antigüedad de saldos (Aging), estados de cuenta y cobranza automatizada vía WhatsApp'
               : activeTab === 'CXP'
               ? 'Auditoría de compromisos con proveedores de lubricantes, órdenes de pago y facturas pendientes'
-              : 'Flujo de caja POS mostrador, disponibilidades bancarias y cobranzas auditadas de Profit Plus 2K8'}
+              : 'Flujo de caja POS mostrador, disponibilidades bancarias y cobranzas auditadas de Supabase'}
           </div>
         </div>
 
@@ -1811,7 +1811,7 @@ export default function CashflowView({
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', fontWeight: 600 }}>
-                Bancos Profit Plus
+                Bancos Supabase
               </span>
               <span className="badge badge-primary" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>
                 {profitBankAccounts.length} Cuentas
@@ -1921,7 +1921,7 @@ export default function CashflowView({
               }}
             >
               <Landmark size={14} style={{ marginRight: '5px' }} />
-              Bancos Profit ({profitBankAccounts.length})
+              Bancos ({profitBankAccounts.length})
             </button>
 
             {/* Cobranzas Profit */}
@@ -1936,7 +1936,7 @@ export default function CashflowView({
               }}
             >
               <Receipt size={14} style={{ marginRight: '5px' }} />
-              Cobranzas Profit ({profitCollections.length})
+              Cobranzas ({profitCollections.length})
             </button>
 
             {/* Facturas Profit */}
@@ -1951,7 +1951,7 @@ export default function CashflowView({
               }}
             >
               <FileText size={14} style={{ marginRight: '5px' }} />
-              Facturas Profit ({profitInvoices.length})
+              Facturas ({profitInvoices.length})
             </button>
 
             {/* Solo CxC Clientes */}

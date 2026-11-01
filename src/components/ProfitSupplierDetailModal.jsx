@@ -91,7 +91,7 @@ export default function ProfitSupplierDetailModal({
                 </span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                RIF: {supplier.rif} | Código Profit: {supplier.coProv}
+                RIF: {supplier.rif} | Código: {supplier.coProv}
               </div>
             </div>
           </div>
@@ -173,7 +173,7 @@ export default function ProfitSupplierDetailModal({
                 {supplierPurchases.length} Docs
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                Registradas en Profit Plus
+                Registradas en Supabase
               </div>
             </div>
           </div>
@@ -192,7 +192,7 @@ export default function ProfitSupplierDetailModal({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: 'var(--text-main)' }}>
               <MapPin size={16} color="var(--motorven-red)" />
-              <span>{supplier.direccion || 'Dirección no registrada en Profit'}</span>
+              <span>{supplier.direccion || 'Dirección no registrada en Supabase'}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: 'var(--text-main)' }}>
               <Phone size={16} color="var(--motorven-navy)" />
@@ -248,7 +248,7 @@ export default function ProfitSupplierDetailModal({
                   ) : (
                     <tr>
                       <td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
-                        No hay facturas de compra registradas para este proveedor en Profit.
+                        No hay facturas de compra registradas para este proveedor en Supabase.
                       </td>
                     </tr>
                   )}

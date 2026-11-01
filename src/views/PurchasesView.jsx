@@ -392,7 +392,7 @@ export default function PurchasesView({
                 Compras, Proveedores & Cuentas por Pagar (CxP)
               </h1>
               <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Gestión integral sincronizada en tiempo real con Profit Plus 2K8 (GRUMOTOR) y SENIAT
+                Gestión integral de compras y proveedores conforme a SENIAT
               </p>
             </div>
           </div>
@@ -434,17 +434,6 @@ export default function PurchasesView({
             <FileText size={15} />
             Retenciones ISLR SENIAT
           </button>
-          {isMasterOrGerencia(currentUser) && (
-            <button
-              className="btn btn-secondary"
-              onClick={handleTriggerSync}
-              disabled={syncing || isSyncingProfit}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem' }}
-            >
-              <RefreshCw size={15} className={syncing || isSyncingProfit ? 'animate-spin' : ''} />
-              {syncing || isSyncingProfit ? 'Sincronizando...' : 'Sincronizar Profit'}
-            </button>
-          )}
           <button
             className="btn btn-print-report"
             onClick={() => generatePurchasesPDF({ purchases: filteredPurchases, suppliers: filteredSuppliers, config, currentUser })}
@@ -562,7 +551,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <FileText size={16} /> Facturas de Compra Profit ({profitPurchases.length})
+          <FileText size={16} /> Facturas de Compra ({profitPurchases.length})
         </button>
 
         <button

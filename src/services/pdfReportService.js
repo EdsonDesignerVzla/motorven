@@ -2181,7 +2181,7 @@ export function generateDashboardPDF({
     base.doc,
     22,
     'BLOQUE 2: SALUD FINANCIERA, TESORERÍA & DISPONIBILIDAD BANCARIA',
-    `Facturación Neta, Cobranza Recaudada, Efectividad y Liquidez en Cuentas Profit Plus - ${periodoLabel}`,
+    `Facturación Neta, Cobranza Recaudada, Efectividad y Liquidez en Cuentas Supabase - ${periodoLabel}`,
     base.tableWidth,
     base.startX
   );
@@ -2530,7 +2530,7 @@ export function generateInventoryPDF({
     currentY,
     isPhysicalTake ? 'REGISTRO DE AUDITORÍA FÍSICA EN BODEGA' : 'DIAGNÓSTICO DE COBERTURA DE STOCK & DISPONIBILIDAD',
     isPhysicalTake
-      ? `Auditoría física de inventario ejecutada en ${warehouseName}. Auditor Responsable: ${auditorName || currentUser?.nombre || 'Auditor de Almacén'}. Los valores presentados confrontan la existencia en tiempo real del sistema Profit Plus versus el levantamiento físico de conteo para efectos de conciliación fiscal y control de mermas.`
+      ? `Auditoría física de inventario ejecutada en ${warehouseName}. Auditor Responsable: ${auditorName || currentUser?.nombre || 'Auditor de Almacén'}. Los valores presentados confrontan la existencia en tiempo real del sistema Supabase versus el levantamiento físico de conteo para efectos de conciliación fiscal y control de mermas.`
       : `El inventario en almacén central registra una valorización total de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Se identifican ${countCriticos} ítems en umbral de alerta que ameritan reposición con planta. La disponibilidad general se sitúa en niveles óptimos para el despacho inmediato del pipeline comercial.`,
     base.tableWidth,
     base.startX
@@ -3608,7 +3608,7 @@ export function generatePurchasesPDF({ purchases = [], suppliers = [], config = 
 export function generateCashflowPDF({ bankAccounts = [], cashDesks = [], cashMovements = [], config = {}, currentUser = null }) {
   const base = createBaseReport({
     title: 'ESTADO DE FLUJO DE CAJA, DISPONIBILIDAD BANCARIA & TESORERÍA',
-    subtitle: 'Posición Consolidada Bimonetaria en Efectivo y Cuentas Bancarias Profit Plus',
+    subtitle: 'Posición Consolidada Bimonetaria en Efectivo y Cuentas Bancarias Supabase',
     moduleCode: 'CAJ',
     currentUser,
     config
@@ -3985,7 +3985,7 @@ export function generateManualPDF({ config = {}, currentUser = null, activeModul
     ['5. Pipeline Comercial (Pedidos & Preventa)', 'Flujo de cotización, autorización en caja, facturación formal y desbloqueo automático de orden de entrega.'],
     ['6. Fuerza de Ventas & Zonas de Asesores', 'Supervisión de vendedores, asignación y reasignación de zonas comerciales, liquidación de comisiones y volumen en litros.'],
     ['7. Gestión de Cobranzas (CxC & Aging)', 'Control de envejecimiento de deuda a 1-15, 16-30 y +30 días, límites de crédito, recordatorios estructurados por WhatsApp y scoring predictivo.'],
-    ['8. Tesorería, Cajas & Bancos Profit Plus', 'Arqueo físico interactivo por denominación, conciliación bancaria multimoneda y disponibilidad de cuentas en tiempo real.'],
+    ['8. Tesorería, Cajas & Bancos Supabase', 'Arqueo físico interactivo por denominación, conciliación bancaria multimoneda y disponibilidad de cuentas en tiempo real.'],
     ['9. Compras & Procura de Insumos (CxP)', 'Recepción de gandolas de lubricantes, verificación de costos en planta, retenciones de ISLR y programación de pagos a proveedores.'],
     ['10. Módulo Tributario SENIAT', 'Generación de Libros Fiscales de Ventas y Compras (Arts. 75 y 76), comprobantes de ISLR, Cierres Diarios Z/X con hash SHA-256 y TXT/XML oficiales.'],
     ['11. Auditoría Forense & Libros Contables', 'Registro inmutable de asientos diarios, balance de comprobación, pistas de trazabilidad y eventos de seguridad.'],
@@ -3993,7 +3993,7 @@ export function generateManualPDF({ config = {}, currentUser = null, activeModul
     ['13. Gestión de Usuarios & Seguridad', 'Estructura jerárquica de 9 roles, visualización segura de contraseñas (.btn-password-eye), fotos de perfil optimizadas y bitácora de auditoría.'],
     ['14. Barra Superior & Ajustes Globales', 'Tasas BCV/Keystone/Euro/USDT, conmutador de tema Claro/Oscuro de alto contraste, diagnóstico Profit y soporte multi-dispositivo sin cortes.'],
     ['15. Ejercicio & Período Fiscal Anual', 'Apertura y cierre de ejercicio dinámico, parametrización de fechas, consolidación histórica anual y archivo de ejercicios pasados.'],
-    ['16. Explorador Multi-Base de Datos & SQL Server', 'Supervisión de las 49 tablas transaccionales en tiempo real, búsqueda y exportación de datos de Profit Plus GRUMOTOR.']
+    ['16. Explorador Multi-Base de Datos & SQL Server', 'Supervisión de las 49 tablas transaccionales en tiempo real, búsqueda y exportación de datos de Supabase GRUMOTOR.']
   ];
 
   autoTable(base.doc, {
@@ -4147,10 +4147,10 @@ export function generateNotificationsPDF({
 
 /**
  * =========================================================================
- * 28. REPORTE OFICIAL: ESQUEMA DETALLADO DE CUENTAS BANCARIAS PROFIT PLUS
+ * 28. REPORTE OFICIAL: ESQUEMA DETALLADO DE CUENTAS BANCARIAS SUPABASE
  * =========================================================================
  * Genera el informe institucional de todas las cuentas bancarias registradas en
- * la base de datos GRUMOTOR de Profit Plus (tabla [cuentas] + [bancos]), con saldos
+ * la base de datos GRUMOTOR de Supabase (tabla [cuentas] + [bancos]), con saldos
  * contables, equivalente oficial BCV, sucursales, ejecutivos y cajas de tesorería.
  */
 export function generateBankAccountsPDF({
@@ -4236,7 +4236,7 @@ export function generateBankAccountsPDF({
   const totalConsolidadoUsd = totalBancosUsd + totalCajasUsd + (tasaBcv > 0 ? totalCajasBs / tasaBcv : 0);
 
   const base = createBaseReport({
-    title: 'ESQUEMA DETALLADO DE CUENTAS BANCARIAS - PROFIT PLUS (GRUMOTOR)',
+    title: 'ESQUEMA DETALLADO DE CUENTAS BANCARIAS - SUPABASE (GRUMOTOR)',
     subtitle: 'Auditoría Oficial de Disponibilidades Bancarias, Saldos Contables y Cajas de Tesorería',
     moduleCode: 'TES',
     currentUser,
@@ -4277,7 +4277,7 @@ export function generateBankAccountsPDF({
   currentY = addAnalyticalBox(
     base.doc,
     currentY,
-    'AUDITORÍA DE DISPONIBILIDAD BANCARIA & TESORERÍA - PROFIT PLUS 2K8 (GRUMOTOR)',
+    'AUDITORÍA DE DISPONIBILIDAD BANCARIA & TESORERÍA - SUPABASE (GRUMOTOR)',
     `El presente informe corporativo consolida el registro fidedigno de los instrumentos bancarios y fondos de tesorería del GRUPO MOTORVEN, C.A., extraídos de las tablas [dbo].[cuentas] y [dbo].[cajas] en SQL Server (GRUMOTOR). Se verifican 10 cuentas corrientes operativas en 6 entidades financieras nacionales con una disponibilidad neta en moneda de curso legal de ${formatBs(totalBancosBs)} (${formatUsd(totalBancosUsd)} USD tasa oficial BCV ${formatBs(tasaBcv)}/USD) y un fondo físico en bóveda de ${formatUsd(totalCajasUsd)} USD. Los sobregiros temporales responden a emisión de cheques y órdenes de compensación en tránsito pendientes de cobro bancario.`,
     base.tableWidth,
     base.startX
@@ -4444,7 +4444,7 @@ export function generateBankAccountsPDF({
   currentY = addSignatures(
     base.doc,
     currentY,
-    ['GERENCIA DE TESORERÍA', 'DIRECCIÓN DE FINANZAS', 'AUDITORÍA PROFIT PLUS'],
+    ['GERENCIA DE TESORERÍA', 'DIRECCIÓN DE FINANZAS', 'AUDITORÍA SUPABASE'],
     base.tableWidth,
     base.startX
   );
@@ -4457,10 +4457,10 @@ export function generateBankAccountsPDF({
 
 /**
  * =========================================================================
- * 39. GENERADOR OFICIAL DE REPORTE DE TABLA PROFIT PLUS (SQL SERVER)
+ * 39. GENERADOR OFICIAL DE REPORTE DE TABLA SUPABASE (SQL SERVER)
  * =========================================================================
  * Permite visualizar e imprimir individualmente los datos y estructura de
- * cualquiera de las tablas de las 26 bases de datos de Profit Plus (GRUMOTOR, etc.)
+ * cualquiera de las tablas de las 26 bases de datos de Supabase (GRUMOTOR, etc.)
  */
 export function generateProfitDatabaseTablePDF({
   database = 'GRUMOTOR',

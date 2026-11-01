@@ -39,8 +39,6 @@ import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails } from 
 import { subscribeSyncStatus, flushSyncQueue } from '../services/offlineSyncService';
 import { uploadUserProfilePhoto, deleteUserProfilePhoto } from '../services/imageStorageService';
 import { compressProfileImage } from '../services/imageCompression';
-import ProfitStatusModal from './ProfitStatusModal';
-import ServerExplorerModal from './ServerExplorerModal';
 import AppConfigModal from './AppConfigModal';
 import AppHelpCenterModal from './AppHelpCenterModal';
 import { useNotification } from '../context/NotificationContext';
@@ -75,7 +73,6 @@ export default function HeaderBar({
   onLogout,
   onSyncProfit,
   onOpenOrdersSalesModal,
-  onOpenServerExplorer,
   productsCount = 31,
   clientsCount = 610,
   products = [],
@@ -392,11 +389,6 @@ export default function HeaderBar({
     }
   };
 
-  // Estados y Handlers para Integración Profit Plus 2K8
-  const [showProfitModal, setShowProfitModal] = useState(false);
-  const [showServerExplorer, setShowServerExplorer] = useState(false);
-  const [syncingProfit, setSyncingProfit] = useState(false);
-  const [profitToast, setProfitToast] = useState(null);
 
   // Función de Salida Total del Sistema — Limpia caché, cierra pestaña o redirige a about:blank
   const handleSystemExit = async () => {
@@ -441,28 +433,6 @@ export default function HeaderBar({
     }, 100);
   };
 
-  const handleQuickProfitSync = async () => {
-    if (syncingProfit) return;
-    setSyncingProfit(true);
-    setProfitToast(null);
-    try {
-      if (onSyncProfit) {
-        await onSyncProfit();
-      }
-      setProfitToast({
-        type: 'success',
-        msg: `¡Profit Plus 2K8 sincronizado! (${productsCount} lubricantes, ${clientsCount} clientes)`
-      });
-    } catch (err) {
-      setProfitToast({
-        type: 'error',
-        msg: 'Error sincronizando con Profit Plus'
-      });
-    } finally {
-      setSyncingProfit(false);
-      setTimeout(() => setProfitToast(null), 4000);
-    }
-  };
 
   return (
     <>
@@ -899,142 +869,6 @@ export default function HeaderBar({
 
                   {(currentUser?.rol === 'ADMINISTRADOR MASTER' || currentUser?.username?.toLowerCase() === 'edson designer' || currentUser?.rol === 'ADMINISTRADOR DEL SISTEMA' || currentUser?.rol === 'ADMIN') && (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDropdownMenuOpen(false);
-                          if (onOpenServerExplorer) onOpenServerExplorer();
-                          else setShowServerExplorer(true);
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '10px',
-                          padding: '9px 10px',
-                          borderRadius: '10px',
-                          border: 'none',
-                          background: 'transparent',
-                          color: 'var(--text-main)',
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                          transition: 'background 0.15s ease',
-                          width: '100%',
-                          boxSizing: 'border-box',
-                          overflow: 'hidden'
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.08)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        <div
-                          style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '10px',
-                            background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.2), rgba(30, 58, 138, 0.3))',
-                            border: '1px solid rgba(56, 189, 248, 0.4)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#38bdf8',
-                            flexShrink: 0
-                          }}
-                        >
-                          <Server size={18} />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', minWidth: 0 }}>
-                            <span style={{ fontSize: '0.82rem', fontWeight: 800, letterSpacing: '0.01em', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-                              SERVIDOR PROFIT 2K8
-                            </span>
-                            <span
-                              style={{
-                                fontSize: '0.58rem',
-                                fontWeight: 800,
-                                padding: '2px 6px',
-                                borderRadius: '4px',
-                                background: 'rgba(56, 189, 248, 0.15)',
-                                color: '#38bdf8',
-                                flexShrink: 0,
-                                letterSpacing: '0.03em'
-                              }}
-                            >
-                              SQL
-                            </span>
-                          </div>
-                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            Explorador de tablas y micro-API SQL Server
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDropdownMenuOpen(false);
-                          setShowProfitModal(true);
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '10px',
-                          padding: '9px 10px',
-                          borderRadius: '10px',
-                          border: 'none',
-                          background: 'transparent',
-                          color: 'var(--text-main)',
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                          transition: 'background 0.15s ease',
-                          width: '100%',
-                          boxSizing: 'border-box',
-                          overflow: 'hidden'
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(16, 185, 129, 0.08)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        <div
-                          style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '10px',
-                            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.2))',
-                            border: '1px solid rgba(52, 211, 153, 0.4)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#34d399',
-                            flexShrink: 0
-                          }}
-                        >
-                          <Database size={18} />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', minWidth: 0 }}>
-                            <span style={{ fontSize: '0.82rem', fontWeight: 800, letterSpacing: '0.01em', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-                              ESTADO PROFIT 2K8
-                            </span>
-                            <span
-                              style={{
-                                fontSize: '0.58rem',
-                                fontWeight: 800,
-                                padding: '2px 6px',
-                                borderRadius: '4px',
-                                background: 'rgba(16, 185, 129, 0.15)',
-                                color: '#34d399',
-                                flexShrink: 0,
-                                letterSpacing: '0.03em'
-                              }}
-                            >
-                              ACTIVO
-                            </span>
-                          </div>
-                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            Conexión SQL Server y tablas transaccionales
-                          </div>
-                        </div>
-                      </button>
-
-                      <div style={{ height: '1px', background: 'var(--border-glass)', margin: '2px 4px' }} />
 
                       {/* Renglón: TABLAS SUPABASE */}
                       <button
@@ -1254,53 +1088,10 @@ export default function HeaderBar({
         </div>
       </div>
 
-      {/* CONTENEDOR 2: DEBAJO DE LAS TASAS (DOCK INTEGRACIÓN PROFIT 2K8) */}
+      {/* CONTENEDOR 2: DEBAJO DE LAS TASAS (DOCK INTEGRACIÓN SUPABASE) */}
       {isMasterAdmin(currentUser) && (
         <div className="header-profit-subrow">
           <div className="profit-subbar-dock">
-            <button
-              type="button"
-              className="btn-profit-sync-subdock"
-              onClick={handleQuickProfitSync}
-              disabled={syncingProfit}
-              title="Sincronizar lubricantes, stock y clientes con Profit Plus 2K8 en tiempo real"
-            >
-              <RefreshCw size={12} style={{ animation: syncingProfit ? 'spin 1s linear infinite' : 'none' }} />
-              <span>{syncingProfit ? 'Sincronizando con Profit Plus...' : 'Sincronizar Profit 2K8'}</span>
-            </button>
-
-            <div className="dock-separator" aria-hidden="true" />
-
-            <button
-              type="button"
-              className="btn-server-explorer"
-              onClick={() => (onOpenServerExplorer ? onOpenServerExplorer() : setShowServerExplorer(true))}
-              title="Explorar servidor Profit Plus 2K8, bases de datos SQL Server, tablas y API en tiempo real"
-            >
-              <Server size={12} />
-              <span className="profit-status-wrapper">
-                <span className="profit-status-dot"></span>
-                <span>Servidor SQL</span>
-              </span>
-            </button>
-
-            <div className="dock-separator" aria-hidden="true" />
-
-            <button
-              type="button"
-              className="btn-profit-status"
-              onClick={() => setShowProfitModal(true)}
-              title="Ver estado de conexión con SQL Server (GRUMOTOR) y detalles de Profit Plus"
-            >
-              <Database size={12} />
-              <span className="profit-status-wrapper">
-                <span className="profit-status-dot green"></span>
-                <span>Profit 2K8</span>
-              </span>
-            </button>
-
-            <div className="dock-separator" aria-hidden="true" />
-
             <button
               type="button"
               className="btn-server-explorer"
@@ -1765,57 +1556,6 @@ export default function HeaderBar({
         </div>
       )}
 
-      {/* Toast de Sincronización Profit Plus */}
-      {profitToast && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: '24px',
-            right: '24px',
-            zIndex: 99999,
-            background: profitToast.type === 'success' ? '#064e3b' : '#7f1d1d',
-            border: `1px solid ${profitToast.type === 'success' ? '#10b981' : '#ef4444'}`,
-            color: '#fff',
-            borderRadius: '12px',
-            padding: '0.75rem 1.25rem',
-            boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            animation: 'fadeIn 0.2s ease-out'
-          }}
-        >
-          {profitToast.type === 'success' ? <CheckCircle2 size={18} color="#34d399" /> : <AlertCircle size={18} color="#f87171" />}
-          <span>{profitToast.msg}</span>
-        </div>
-      )}
-
-      {/* Modal de Diagnóstico y Estado Profit Plus 2K8 */}
-      <ProfitStatusModal
-        isOpen={showProfitModal}
-        onClose={() => setShowProfitModal(false)}
-        onSyncComplete={onSyncProfit}
-        onOpenExplorer={() => setShowServerExplorer(true)}
-        currentUser={currentUser}
-        productsCount={productsCount}
-        clientsCount={clientsCount}
-      />
-
-      {/* Modal de Explorador del Servidor y Base de Datos */}
-      <ServerExplorerModal
-        isOpen={showServerExplorer}
-        onClose={() => setShowServerExplorer(false)}
-        onSyncComplete={onSyncProfit}
-        currentUser={currentUser}
-        products={products}
-        clients={clients}
-        sales={sales}
-        orders={orders}
-        suppliers={suppliers}
-        cashMovements={cashMovements}
-      />
 
       {/* Modal de Configuración General de Toda la Aplicación */}
       <AppConfigModal

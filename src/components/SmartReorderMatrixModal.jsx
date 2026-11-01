@@ -63,7 +63,7 @@ export default function SmartReorderMatrixModal({
       const codigo = (prod.codigo || '').trim().toUpperCase();
       const descrip = (prod.descripcion || '').toLowerCase();
       
-      // Intentar mapear ventas históricas desde facturas de Profit y ventas locales
+      // Intentar mapear ventas históricas desde facturas de Supabase y ventas locales
       let totalLitrosVendidos = 0;
       let totalCajasVendidas = 0;
 

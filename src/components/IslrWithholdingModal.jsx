@@ -249,7 +249,7 @@ export default function IslrWithholdingModal({
                 </span>
               </div>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Gestión de Comprobantes de Retención de I.S.L.R., Órdenes de Pago Profit Plus y Catálogo de Tarifas Fiscales
+                Gestión de Comprobantes de Retención de I.S.L.R., Órdenes de Pago Supabase y Catálogo de Tarifas Fiscales
               </p>
             </div>
           </div>
@@ -703,7 +703,7 @@ export default function IslrWithholdingModal({
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-slate-400 mb-1">Código Profit</label>
+                        <label className="block text-xs text-slate-400 mb-1">Código</label>
                         <input
                           type="text"
                           value={formData.proveedorCod}
@@ -915,7 +915,7 @@ export default function IslrWithholdingModal({
               <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-900/60">
                 <div className="px-4 py-3 bg-slate-800/80 border-b border-slate-800 flex justify-between items-center">
                   <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                    Órdenes de Pago Profit Plus (ord_pago)
+                    Órdenes de Pago Supabase (ord_pago)
                   </h4>
                   <span className="text-[11px] text-slate-400">
                     Sincronizado con Banco & CxP

@@ -96,7 +96,7 @@ export default function SalesPOSView({
     } else {
       setSelectedClient({
         id: orderToLoad.clienteId || 'CLI-TEMP',
-        razonSocial: orderToLoad.clienteNombre || 'Cliente Profit',
+        razonSocial: orderToLoad.clienteNombre || 'Cliente',
         rif: orderToLoad.clienteRif || 'J-000000000',
         tipoCliente: 'Mayorista',
         direccion: orderToLoad.direccionEntrega || 'Venezuela',
@@ -591,9 +591,9 @@ export default function SalesPOSView({
                 padding: '5px 12px',
                 borderRadius: '10px'
               }}
-              title="Ver Devoluciones, Garantías y Notas de Crédito de Clientes sincronizadas desde Profit Plus"
+              title="Ver Devoluciones, Garantías y Notas de Crédito de Clientes sincronizadas desde Supabase"
             >
-              ↩️ Devoluciones Profit {profitReturns.length > 0 && `(${profitReturns.length})`}
+              ↩️ Devoluciones {profitReturns.length > 0 && `(${profitReturns.length})`}
             </button>
 
             <div style={{ display: 'flex', background: 'var(--bg-industrial)', padding: '4px', borderRadius: '14px', border: '1px solid var(--border-glass)', flexWrap: 'wrap', gap: '2px' }}>
@@ -1342,7 +1342,7 @@ export default function SalesPOSView({
         />
       )}
 
-      {/* Modal de Control de Devoluciones y Garantías de Clientes Profit Plus */}
+      {/* Modal de Control de Devoluciones y Garantías de Clientes Supabase */}
       <CustomerReturnsModal
         isOpen={showReturnsModal}
         onClose={() => setShowReturnsModal(false)}

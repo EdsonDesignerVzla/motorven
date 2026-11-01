@@ -390,14 +390,14 @@ export default function InventoryView({
 
   const handleFormSubmit = async (e) => {
     e.preventDefault();
-    setSavingStatus({ saving: true, message: 'Guardando en Supabase y Profit Plus (art)...' });
+    setSavingStatus({ saving: true, message: 'Guardando en Supabase...' });
     try {
       const saved = await onSaveProduct(editingProduct);
       if (saved && saved._comparison) {
         setSavingStatus({
           saving: false,
           success: true,
-          message: '✅ Sincronizado y Comparado: Profit Plus [art] y Supabase 100% coincidentes.'
+          message: '✅ Sincronizado y Comparado: Supabase [art] y Supabase 100% coincidentes.'
         });
         setTimeout(() => {
           setShowModal(false);
@@ -468,7 +468,7 @@ export default function InventoryView({
               color: '#fbbf24',
               fontWeight: 700
             }}
-            title="Ver Kardex Físico, Mermas, Ajustes y Traslados sincronizados desde Profit Plus"
+            title="Ver Kardex Físico, Mermas, Ajustes y Traslados sincronizados desde Supabase"
           >
             <BarChart2 size={16} /> Kardex & Mermas ({inventoryAdjustments.length + warehouseTransfers.length})
           </button>
@@ -694,7 +694,7 @@ export default function InventoryView({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            {/* Filtro por Almacén Profit Plus */}
+            {/* Filtro por Almacén Supabase */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Warehouse size={16} color="var(--neon-cyan)" />
               <select
@@ -742,10 +742,10 @@ export default function InventoryView({
           </div>
         </div>
 
-        {/* Chips de Almacenes y Líneas Profit Plus */}
+        {/* Chips de Almacenes y Líneas Supabase */}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)', alignItems: 'center' }}>
           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-            Almacenes Profit:
+            Almacenes:
           </span>
           {(warehouses.length > 0 ? warehouses : [
             { coAlm: 'ALM-01', desAlm: 'Principal Mostrador' },
@@ -1150,7 +1150,7 @@ export default function InventoryView({
                     )}
                     {!uploadingImage && editingProduct.imagen && (
                       <span style={{ fontSize: '0.74rem', color: '#10b981', fontWeight: 600 }}>
-                        ✅ Imagen en Base64 (Lista para Supabase; excluida de Profit)
+                        ✅ Imagen en Base64 (Lista para Supabase; excluida de Supabase)
                       </span>
                     )}
                   </div>
@@ -1265,7 +1265,7 @@ export default function InventoryView({
                     disabled={isSyncingPhysical}
                     className="btn btn-secondary btn-sm"
                     style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 8px', borderColor: '#94a3b8', color: '#0f172a', background: '#f8fafc' }}
-                    title="Recargar inventario real desde Profit Plus / Base de Datos"
+                    title="Recargar inventario real desde Supabase / Base de Datos"
                   >
                     <RefreshCw size={13} className={isSyncingPhysical ? 'animate-spin' : ''} color="#0284c7" />
                     <span>{isSyncingPhysical ? 'Sincronizando...' : 'Sincronizar Stock'}</span>

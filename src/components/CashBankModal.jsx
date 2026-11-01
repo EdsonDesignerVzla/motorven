@@ -248,7 +248,7 @@ export default function CashBankModal({
                 Caja Chica & Tesorería Bancaria
               </h2>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Control Bimonetario Profit Plus 2K8 • Tasa BCV: {formatBs(tasaBcv)}
+                Control Bimonetario Supabase • Tasa BCV: {formatBs(tasaBcv)}
               </span>
             </div>
           </div>
@@ -437,7 +437,7 @@ export default function CashBankModal({
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
                 <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  Cajas de custodia, caja chica y mostradores sincronizados con Supabase & Profit Plus 2K8.
+                  Cajas de custodia, caja chica y mostradores sincronizados con Supabase.
                 </span>
                 <button
                   onClick={() => setShowNewMovForm(!showNewMovForm)}

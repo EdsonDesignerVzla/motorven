@@ -88,7 +88,7 @@ export default function ProfitPurchaseDetailModal({ purchase, onClose, config = 
                 </span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Registro Oficial de Compras Profit Plus 2K8 - Grupo Motorven C.A.
+                Registro Oficial de Compras Supabase - Grupo Motorven C.A.
               </div>
             </div>
           </div>
@@ -153,7 +153,7 @@ export default function ProfitPurchaseDetailModal({ purchase, onClose, config = 
                 Forma Pago: <strong>{purchase.formaPag || 'Crédito / Contado'}</strong>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Origen: <strong>Profit SQL Server</strong>
+                Origen: <strong>Supabase</strong>
               </div>
             </div>
           </div>
@@ -197,7 +197,7 @@ export default function ProfitPurchaseDetailModal({ purchase, onClose, config = 
                   ) : (
                     <tr>
                       <td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
-                        Compra sin renglones individuales desglosados en Profit.
+                        Compra sin renglones individuales desglosados en Supabase.
                       </td>
                     </tr>
                   )}

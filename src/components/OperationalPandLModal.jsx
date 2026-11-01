@@ -84,7 +84,7 @@ export default function OperationalPandLModal({
       productCategoryMap[code] = p.categoria || 'Gasolina';
     });
 
-    // Procesar facturas de Profit Plus
+    // Procesar facturas de Supabase
     const activeInvoices = profitInvoices.filter(f => !f.anulado);
 
     activeInvoices.forEach(inv => {

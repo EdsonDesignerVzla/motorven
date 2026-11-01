@@ -148,7 +148,7 @@ export default function CustomerReturnsModal({
                   Control de Devoluciones, Garantías & Notas de Crédito
                 </h2>
                 <span className="badge badge-success" style={{ fontSize: '0.68rem', letterSpacing: '0.5px' }}>
-                  Profit Plus 2K8 Oficial
+                  Supabase Oficial
                 </span>
                 <span className="badge badge-info" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                   <span className="live-dot"></span> Tiempo Real
@@ -166,7 +166,7 @@ export default function CustomerReturnsModal({
               disabled={isSyncing}
               className="btn btn-secondary btn-sm"
               style={{ fontWeight: 700 }}
-              title="Sincronizar devoluciones con SQL Server Profit"
+              title="Recargar devoluciones desde Supabase"
             >
               <RefreshCw size={14} className={isSyncing ? "spin" : ""} color="var(--neon-cyan)" />
               {isSyncing ? "Sincronizando..." : "Sincronizar"}
@@ -565,7 +565,7 @@ export default function CustomerReturnsModal({
         {/* Pie del Modal */}
         <div style={{ padding: '0.85rem 1.75rem', background: 'var(--bg-modal)', borderTop: '1px solid var(--border-glass)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.775rem', color: 'var(--text-muted)' }}>
           <div>
-            Mostrando <strong>{filteredReturns.length}</strong> de <strong>{profitReturns.length}</strong> devoluciones registradas en Profit Plus 2K8.
+            Mostrando <strong>{filteredReturns.length}</strong> de <strong>{profitReturns.length}</strong> devoluciones registradas en Supabase.
           </div>
           <button
             onClick={onClose}

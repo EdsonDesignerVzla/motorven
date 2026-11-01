@@ -26,8 +26,6 @@ import {
   Lock,
   Unlock
 } from 'lucide-react';
-import ServerExplorerModal from './ServerExplorerModal';
-import ProfitStatusModal from './ProfitStatusModal';
 import { INITIAL_CONFIG } from '../data/mockData';
 import { formatBs } from '../services/formatService';
 import { generateConfigPDF } from '../services/pdfReportService';
@@ -77,14 +75,10 @@ export default function AppConfigModal({
   currentUser,
   products = [],
   clients = [],
-  onOpenServerExplorer,
-  onOpenProfitModal,
   initialTab = 'empresa'
 }) {
   const notify = useNotification();
   const [activeTab, setActiveTab] = useState(initialTab);
-  const [showServerExplorerModal, setShowServerExplorerModal] = useState(false);
-  const [showProfitStatusModal, setShowProfitStatusModal] = useState(false);
   const [formData, setFormData] = useState({
     // Datos Empresa
     nombreEmpresa: config?.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.',
@@ -126,7 +120,7 @@ export default function AppConfigModal({
     plantillaWhatsapp: config?.plantillaWhatsapp || 'Estimado(a) {cliente}, le saludamos de {empresa}. Le recordamos cordialmente que presenta un saldo pendiente de {montoUsd} ({montoBs}) con {diasMora} días de antigüedad. Agradecemos su pronta gestión de pago. ¡Feliz día!',
 
     // Sincronización Profit
-    profitBridgeUrl: config?.profitBridgeUrl || 'http://localhost:3005',
+    profitBridgeUrl: config?.profitBridgeUrl || '',
     syncIntervalSec: config?.syncIntervalSec || 60,
     offlineFirstEnabled: config?.offlineFirstEnabled !== undefined ? config.offlineFirstEnabled : true,
 
@@ -230,7 +224,7 @@ export default function AppConfigModal({
         bloqueoMoraDias: 30,
         alertaAmarillaMoraDias: 15,
         plantillaWhatsapp: 'Estimado(a) {cliente}, le saludamos de {empresa}. Le recordamos cordialmente que presenta un saldo pendiente de {montoUsd} ({montoBs}) con {diasMora} días de antigüedad. Agradecemos su pronta gestión de pago. ¡Feliz día!',
-        profitBridgeUrl: 'http://localhost:3005',
+        profitBridgeUrl: '',
         syncIntervalSec: 60,
         offlineFirstEnabled: true,
         sonidosNotificacion: true
@@ -247,7 +241,6 @@ export default function AppConfigModal({
     { id: 'pos', label: 'Ventas & POS', icon: ShoppingCart, color: '#6366f1' },
     { id: 'inventario', label: 'Inventario & ROP', icon: Package, color: 'var(--motorven-gold)' },
     { id: 'cobranzas', label: 'Cobranzas & WhatsApp', icon: Users, color: '#8b5cf6' },
-    { id: 'sync', label: 'Profit & Base de Datos', icon: Database, color: '#ec4899' },
     { id: 'visual', label: 'Preferencias & Audio', icon: Palette, color: '#14b8a6' }
   ];
 
@@ -443,10 +436,6 @@ export default function AppConfigModal({
                   type="button"
                   onClick={() => {
                     setActiveTab(tab.id);
-                    if (tab.id === 'sync') {
-                      if (onOpenServerExplorer) onOpenServerExplorer();
-                      else setShowServerExplorerModal(true);
-                    }
                   }}
                   style={{
                     display: 'flex',
@@ -1307,275 +1296,6 @@ export default function AppConfigModal({
               </div>
             )}
 
-            {/* TAB 6: PROFIT & DB */}
-            {activeTab === 'sync' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                <div style={{ borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
-                  <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: '#ec4899' }}>
-                    Enlace Profit Plus 2K8 & Sincronización Supabase
-                  </h3>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '2px 0 0' }}>
-                    Ajustes de conexión con el Daemon SQL Server (GRUMOTOR) y accesos directos a la base de datos de Supabase.
-                  </p>
-                </div>
-
-                {/* BOTONES PRINCIPALES: ABRIR MODALES DEL SERVIDOR Y PROFIT */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                  gap: '12px'
-                }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onOpenServerExplorer) onOpenServerExplorer();
-                      else setShowServerExplorerModal(true);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '1rem 1.25rem',
-                      borderRadius: '12px',
-                      background: 'linear-gradient(135deg, #0284c7 0%, #002b7a 100%)',
-                      border: '1px solid rgba(56, 189, 248, 0.5)',
-                      color: '#ffffff',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      boxShadow: '0 4px 14px rgba(2, 132, 199, 0.4)',
-                      transition: 'transform 0.15s ease'
-                    }}
-                  >
-                    <div style={{
-                      width: '40px',
-                      height: '40px',
-                      borderRadius: '10px',
-                      background: 'rgba(255, 255, 255, 0.15)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
-                    }}>
-                      <Server size={22} color="#ffffff" />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: '0.92rem', letterSpacing: '-0.01em' }}>
-                        Explorador Servidor & Base de Datos
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: 'rgba(255, 255, 255, 0.8)', marginTop: '2px' }}>
-                        Abrir ventana modal con tablas SQL Server, API :3005 y sincronización
-                      </div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onOpenProfitModal) onOpenProfitModal();
-                      else setShowProfitStatusModal(true);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '1rem 1.25rem',
-                      borderRadius: '12px',
-                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.35) 100%)',
-                      border: '1px solid rgba(16, 185, 129, 0.6)',
-                      color: '#34d399',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      boxShadow: '0 4px 14px rgba(16, 185, 129, 0.2)',
-                      transition: 'transform 0.15s ease'
-                    }}
-                  >
-                    <div style={{
-                      width: '40px',
-                      height: '40px',
-                      borderRadius: '10px',
-                      background: 'rgba(16, 185, 129, 0.25)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
-                    }}>
-                      <Database size={22} color="#34d399" />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: '0.92rem', letterSpacing: '-0.01em', color: '#ffffff' }}>
-                        Estado Profit Plus 2K8 (GRUMOTOR)
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        Abrir modal de diagnóstico de conexión y verificación en tiempo real
-                      </div>
-                    </div>
-                  </button>
-                </div>
-
-                {/* ACCESOS DIRECTOS A SUPABASE */}
-                <div style={{
-                  background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(6, 78, 59, 0.15) 100%)',
-                  border: '1px solid rgba(16, 185, 129, 0.35)',
-                  borderRadius: '12px',
-                  padding: '1rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.75rem'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <div style={{
-                        width: '32px',
-                        height: '32px',
-                        borderRadius: '8px',
-                        background: '#10b981',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#ffffff'
-                      }}>
-                        <Database size={18} />
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          Base de Datos Supabase (PostgreSQL)
-                          <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.2)', padding: '2px 6px', borderRadius: '4px', color: '#34d399' }}>
-                            Conectado
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          Motor: <code style={{ color: '#3ecf8e' }}>Supabase Local Standalone</code> (:54321) • 48 Tablas (100% On-Premise / 0 Cuotas)
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {/* BOTÓN 1: ABRIR TABLAS EN HOJA NUEVA DEL NAVEGADOR */}
-                      <button
-                        type="button"
-                        onClick={() => window.open('?view=supabase-tables', '_blank')}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '8px 14px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                          color: '#ffffff',
-                          fontSize: '0.8rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
-                        }}
-                        title="Ver todas las tablas de Supabase en una hoja nueva del navegador"
-                      >
-                        <Table size={15} />
-                        Ver Tablas en Hoja Nueva
-                        <ExternalLink size={13} />
-                      </button>
-
-                      {/* BOTÓN 2: ABRIR STUDIO LOCAL SUPABASE (SIN TOKEN NI CUOTAS) */}
-                      <button
-                        type="button"
-                        onClick={() => window.open('http://localhost:54321/', '_blank')}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '8px 12px',
-                          borderRadius: '8px',
-                          border: '1px solid rgba(62, 207, 142, 0.6)',
-                          background: 'rgba(62, 207, 142, 0.15)',
-                          color: '#3ecf8e',
-                          fontSize: '0.8rem',
-                          fontWeight: 700,
-                          cursor: 'pointer'
-                        }}
-                        title="Abrir Studio del Servidor Local Supabase en el puerto 54321 (Gratis, sin token ni cuotas)"
-                      >
-                        <Server size={14} />
-                        Supabase Studio Local (:54321)
-                        <ExternalLink size={13} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Resumen rápido de registros */}
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
-                    gap: '8px',
-                    paddingTop: '0.5rem',
-                    borderTop: '1px solid rgba(16, 185, 129, 0.2)'
-                  }}>
-                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Clientes</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#38bdf8' }}>631</div>
-                    </div>
-                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Productos</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#34d399' }}>43</div>
-                    </div>
-                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Facturas</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#a78bfa' }}>360</div>
-                    </div>
-                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cobros</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#f59e0b' }}>576</div>
-                    </div>
-                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>CxP Deudas</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#f43f5e' }}>177</div>
-                    </div>
-                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Vendedores</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ec4899' }}>21</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  <div>
-                    <label style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-                      URL del Daemon Profit Bridge
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.profitBridgeUrl}
-                      onChange={(e) => handleChange('profitBridgeUrl', e.target.value)}
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-glass)', fontSize: '0.85rem', fontFamily: 'var(--font-code)', outline: 'none' }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-                      Intervalo de Auto-Sincronización (Segundos)
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.syncIntervalSec}
-                      onChange={(e) => handleChange('syncIntervalSec', parseInt(e.target.value, 10) || 30)}
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-glass)', fontSize: '0.85rem', outline: 'none' }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <input
-                    type="checkbox"
-                    id="offlineFirstEnabled"
-                    checked={formData.offlineFirstEnabled}
-                    onChange={(e) => handleChange('offlineFirstEnabled', e.target.checked)}
-                    style={{ width: '18px', height: '18px', accentColor: '#ec4899', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="offlineFirstEnabled" style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--text-main)', cursor: 'pointer' }}>
-                    Habilitar Modo Offline-First (Cola local con auto-reintento)
-                  </label>
-                </div>
-              </div>
-            )}
 
             {/* TAB 7: PREFERENCIAS & AUDIO */}
             {activeTab === 'visual' && (
@@ -1662,21 +1382,6 @@ export default function AppConfigModal({
       </div>
     </div>
 
-      {/* Modal de Explorador del Servidor & Base de Datos */}
-      <ServerExplorerModal
-        isOpen={showServerExplorerModal}
-        onClose={() => setShowServerExplorerModal(false)}
-        currentUser={currentUser}
-        products={products}
-        clients={clients}
-      />
-
-      {/* Modal de Estado Profit Plus 2K8 */}
-      <ProfitStatusModal
-        isOpen={showProfitStatusModal}
-        onClose={() => setShowProfitStatusModal(false)}
-        currentUser={currentUser}
-      />
     </>
   );
 }

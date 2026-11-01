@@ -375,18 +375,17 @@ export const SYSTEM_MODULES = [
   { id: 'auditoria', label: 'Auditoría & Contabilidad', badge: 'Libro Diario & Trazabilidad' },
   { id: 'usuarios', label: 'Usuarios & Accesos', badge: 'Gestión Operadores' },
   { id: 'notificaciones', label: 'Notificaciones & Alertas', badge: 'Alertas & Eventos' },
-  { id: 'bases-datos', label: 'Bases de Datos Profit', badge: '26 BDs SQL Server' },
   { id: 'configuracion', label: 'Configuración General', badge: 'Parámetros del Sistema' }
 ];
 
 // Módulos permitidos por cada rol por defecto
 export const ROLE_PERMISSIONS = {
-  'ADMINISTRADOR MASTER': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'bases-datos', 'usuarios', 'notificaciones', 'configuracion'],
-  'TECNOLOGÍA & INFORMÁTICA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'bases-datos', 'usuarios', 'notificaciones', 'configuracion'],
-  'ADMINISTRADOR DEL SISTEMA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'bases-datos', 'usuarios', 'notificaciones', 'configuracion'],
-  'GERENCIA': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'bases-datos', 'usuarios', 'notificaciones'],
-  'ADMINISTRACIÓN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'bases-datos', 'usuarios', 'notificaciones'],
-  'ADMIN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'bases-datos', 'usuarios', 'notificaciones'],
+  'ADMINISTRADOR MASTER': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'TECNOLOGÍA & INFORMÁTICA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'ADMINISTRADOR DEL SISTEMA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'GERENCIA': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMINISTRACIÓN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMIN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
   'VENTAS': ['preventa', 'pedidos', 'ventas', 'vendedores', 'inventario', 'cxc', 'notificaciones'],
   'VENDEDOR': ['preventa', 'pedidos', 'ventas', 'vendedores', 'inventario', 'cxc', 'notificaciones'],
   'ALMACEN': ['pedidos', 'inventario', 'compras', 'notificaciones'],

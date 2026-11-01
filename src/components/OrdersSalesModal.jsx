@@ -871,18 +871,6 @@ export default function OrdersSalesModal({
 
           {/* Botones de Cabecera */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {isMasterOrGerencia(currentUser) && onSyncProfit && (
-              <button
-                type="button"
-                onClick={onSyncProfit}
-                className="btn btn-secondary btn-sm"
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem' }}
-                title="Sincronizar pedidos con Profit Plus"
-              >
-                <RefreshCw size={14} />
-                <span>Sincronizar Profit</span>
-              </button>
-            )}
           </div>
         </div>
 

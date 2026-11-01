@@ -57,7 +57,7 @@ export default function AuditLedgerView({
 
   const tasa = config?.tasaDolar || 827.73;
 
-  // Helper to parse forensic field diffs from Profit Plus pistas.campos
+  // Helper to parse forensic field diffs from Supabase pistas.campos
   const parseForensicDiffs = (camposText) => {
     if (!camposText || typeof camposText !== 'string') return [];
     const lines = camposText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -644,7 +644,7 @@ export default function AuditLedgerView({
             {totalAuditorias} <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>operaciones</span>
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Trazabilidad completa con Profit
+            Trazabilidad completa con Supabase
           </div>
         </div>
       </div>
@@ -835,7 +835,7 @@ export default function AuditLedgerView({
         </div>
       )}
 
-      {/* SUB-TAB 2: LOG DE AUDITORÍA FORENSE NATIVA DE PROFIT PLUS */}
+      {/* SUB-TAB 2: LOG DE AUDITORÍA FORENSE NATIVA DE SUPABASE */}
       {activeSubTab === 'audit' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           
@@ -849,7 +849,7 @@ export default function AuditLedgerView({
                 {auditKpis.total.toLocaleString()}
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                Auditados desde SQL Server GRUMOTOR
+                Auditados desde Supabase
               </div>
             </div>
 
@@ -1017,7 +1017,7 @@ export default function AuditLedgerView({
                             Operador: <strong style={{ color: 'var(--text-primary)' }}>{trail.usuario}</strong>
                           </span>
                           <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'var(--bg-surface)', color: 'var(--text-muted)', border: '1px solid var(--border-glass)' }}>
-                            {trail.maquina || 'Terminal Profit'}
+                            {trail.maquina || 'Terminal'}
                           </span>
                           {trail.campos && (
                             <button

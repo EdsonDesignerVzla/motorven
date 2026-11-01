@@ -384,7 +384,7 @@ export default function DispatchRouteModal({
         {/* Modal Footer */}
         <div className="modal-footer" style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Manifiesto logístico generado con datos de Profit Plus 2K8
+            Manifiesto logístico generado con datos de Supabase
           </span>
           <button onClick={onClose} className="btn btn-secondary">
             Cerrar Hoja de Ruta

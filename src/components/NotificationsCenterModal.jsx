@@ -443,7 +443,7 @@ export default function NotificationsCenterModal({
               { id: 'inventario', label: 'Inventario & ROP', icon: Package },
               { id: 'cxc', label: 'Cobranzas & CxC', icon: DollarSign },
               { id: 'reportes', label: 'Fiscal & SENIAT', icon: FileText },
-              { id: 'sistema', label: 'Sistema & Profit', icon: Server }
+              { id: 'sistema', label: 'Sistema', icon: Server }
             ].map(tab => {
               const Icon = tab.icon;
               const isActive = activeCategory === tab.id;
