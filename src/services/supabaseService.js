@@ -2762,24 +2762,38 @@ export const getSupabaseProfitSellers = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    const mapped = (data || []).map(s => ({
-      id: s.id,
-      coVen: s.co_ven,
-      venDes: s.ven_des,
-      cedula: s.cedula || '',
-      telefonos: s.telefonos || '',
-      direccion: s.direccion || '',
-      tipo: s.tipo || 'A',
-      comisionPct: Number(s.comision_pct || 3.0),
-      metaLitrosMes: Number(s.meta_litros_mes || 3000),
-      activo: Boolean(s.activo),
-      foto: s.foto || '',
-      avatar: s.avatar || '',
-      coZon: s.co_zon || '',
-      zona: s.zona || '',
-      createdAt: s.created_at,
-      updatedAt: s.updated_at
-    }));
+    const mapped = (data || []).map(s => {
+      const coVen = String(s.co_ven || s.coVen || s.id || '').trim();
+      const venDes = String(s.ven_des || s.venDes || s.nombre || '').trim();
+      const fallback = (REAL_PROFIT_SELLERS || []).find(
+        r =>
+          (r.coVen && String(r.coVen).trim().toLowerCase() === coVen.toLowerCase()) ||
+          (r.venDes && venDes && String(r.venDes).trim().toLowerCase() === venDes.toLowerCase())
+      );
+      const coZon = String(s.co_zon || s.coZon || fallback?.coZon || fallback?.co_zon || '').trim();
+      const zona = String(s.zona || fallback?.zona || '').trim();
+      return {
+        id: s.id || coVen,
+        coVen,
+        co_ven: coVen,
+        venDes: venDes || fallback?.venDes || coVen,
+        ven_des: venDes || fallback?.venDes || coVen,
+        cedula: s.cedula || fallback?.cedula || '',
+        telefonos: s.telefonos || fallback?.telefonos || '',
+        direccion: s.direccion || fallback?.direccion || '',
+        tipo: s.tipo || fallback?.tipo || 'A',
+        comisionPct: Number(s.comision_pct ?? s.comisionPct ?? fallback?.comisionPct ?? 3.0),
+        metaLitrosMes: Number(s.meta_litros_mes ?? s.metaLitrosMes ?? fallback?.metaLitrosMes ?? 3000),
+        activo: s.activo !== undefined ? Boolean(s.activo) : true,
+        foto: s.foto || fallback?.foto || '',
+        avatar: s.avatar || fallback?.avatar || '',
+        coZon,
+        co_zon: coZon,
+        zona,
+        createdAt: s.created_at || s.createdAt,
+        updatedAt: s.updated_at || s.updatedAt
+      };
+    }).filter(s => s.coVen || s.venDes);
 
     if (mapped.length > 0) {
       saveStorageAllSellers(mapped);
@@ -2794,20 +2808,21 @@ export const getSupabaseProfitSellers = async () => {
 
 export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
   // 1. Guardar de forma nativa en tiempo real en la aplicación
-  saveStorageSeller({ coVen, coZon, zona });
+  saveStorageSeller({ coVen, co_ven: coVen, coZon, co_zon: coZon, zona });
 
   // Reflejo en tiempo real en Supabase
-  writeProfitSeller({ coVen, coZon, zona }, 'SAVE').catch(() => {});
+  writeProfitSeller({ coVen, co_ven: coVen, coZon, co_zon: coZon, zona }, 'SAVE').catch(() => {});
 
   // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
-    return { co_ven: coVen, co_zon: coZon, zona };
+    return { co_ven: coVen, coVen, co_zon: coZon, coZon, zona };
   }
 
   try {
     const payload = {
       co_zon: coZon || null,
+      coZon: coZon || null,
       zona: zona || null,
       updated_at: new Date().toISOString()
     };
@@ -2821,7 +2836,7 @@ export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseSellerZone');
     enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
-    return { co_ven: coVen, co_zon: coZon, zona };
+    return { co_ven: coVen, coVen, co_zon: coZon, coZon, zona };
   }
 };
 
@@ -2914,14 +2929,25 @@ export const getSupabaseProfitZones = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(z => ({
-      id: z.id,
-      coZon: z.co_zon,
-      zonDes: z.zon_des,
-      disCen: z.dis_cen,
-      createdAt: z.created_at,
-      updatedAt: z.updated_at
-    }));
+    const seen = new Map();
+    (data || []).forEach(z => {
+      if (!z) return;
+      const coZon = String(z.co_zon || z.coZon || '').trim();
+      const zonDes = String(z.zon_des || z.zonDes || '').trim();
+      if (!coZon || seen.has(coZon)) return;
+      seen.set(coZon, {
+        id: z.id || `ZON-${coZon}`,
+        coZon,
+        co_zon: coZon,
+        zonDes,
+        zon_des: zonDes,
+        disCen: z.dis_cen ?? z.disCen ?? '',
+        createdAt: z.created_at || z.createdAt,
+        updatedAt: z.updated_at || z.updatedAt
+      });
+    });
+    const list = Array.from(seen.values()).sort((a, b) => a.coZon.localeCompare(b.coZon));
+    return list.length > 0 ? list : REAL_PROFIT_ZONES;
   } catch (err) {
     console.warn('[Supabase] Error cargando zonas Profit:', err.message);
     return REAL_PROFIT_ZONES;

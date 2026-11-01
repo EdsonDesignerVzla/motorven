@@ -37,6 +37,7 @@ import OilstoneProductImage from './OilstoneProductImage';
 import { isMasterOrGerencia } from '../services/authService';
 import { CREDIT_APPROVERS_CATALOG } from './AppConfigModal';
 import { generateOrdersPDF, generateSellerOrderPDF } from '../services/pdfReportService';
+import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
 
 const STATUS_CONFIG = {
   PENDIENTE: {
@@ -155,9 +156,63 @@ export default function OrdersSalesModal({
   const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders]);
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients]);
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
-  const safeProfitZones = useMemo(() => (Array.isArray(profitZones) ? profitZones : []), [profitZones]);
+  const safeProfitZones = useMemo(() => {
+    const rawZones = Array.isArray(profitZones) && profitZones.length > 0 ? profitZones : REAL_PROFIT_ZONES;
+    const seen = new Map();
+    (rawZones || []).forEach(z => {
+      if (!z) return;
+      const coZon = String(z.coZon || z.co_zon || '').trim();
+      const fallbackZon = (REAL_PROFIT_ZONES || []).find(rz => String(rz.coZon || rz.co_zon || '').trim() === coZon);
+      const zonDes = String(z.zonDes || z.zon_des || fallbackZon?.zonDes || fallbackZon?.zon_des || '').trim();
+      if (!coZon || seen.has(coZon)) return;
+      seen.set(coZon, {
+        ...z,
+        coZon,
+        co_zon: coZon,
+        zonDes,
+        zon_des: zonDes
+      });
+    });
+    return Array.from(seen.values()).sort((a, b) => a.coZon.localeCompare(b.coZon));
+  }, [profitZones]);
   const safeProfitTransports = useMemo(() => (Array.isArray(profitTransports) ? profitTransports : []), [profitTransports]);
-  const safeProfitSellers = useMemo(() => (Array.isArray(profitSellers) ? profitSellers : []), [profitSellers]);
+  const safeProfitSellers = useMemo(() => {
+    const rawSellers = Array.isArray(profitSellers) && profitSellers.length > 0 ? profitSellers : REAL_PROFIT_SELLERS;
+    const byName = new Map();
+    (rawSellers || []).forEach(s => {
+      if (!s) return;
+      const rawCode = String(s.coVen || s.co_ven || s.id || '').trim();
+      const rawName = String(s.venDes || s.ven_des || s.nombre || '').trim();
+      const fallback = (REAL_PROFIT_SELLERS || []).find(
+        r =>
+          (rawCode && String(r.coVen || r.id || '').trim().toLowerCase() === rawCode.toLowerCase()) ||
+          (rawName && String(r.venDes || '').trim().toLowerCase() === rawName.toLowerCase())
+      );
+      const venDes = rawName || fallback?.venDes || rawCode;
+      if (!venDes) return;
+      const coVen = rawCode || fallback?.coVen || venDes;
+      const coZon = String(s.coZon || s.co_zon || fallback?.coZon || fallback?.co_zon || '').trim();
+      const zoneObj = safeProfitZones.find(z => z.coZon === coZon);
+      const zona = String(s.zona || zoneObj?.zonDes || fallback?.zona || '').trim();
+      const key = venDes.toLowerCase();
+      const existing = byName.get(key);
+      // Preferir el registro con código corto oficial (ej. FS, VV, YC, CB, CM) sobre USR-SELLER-*
+      if (!existing || (coVen.length <= 4 && (existing.coVen?.length || 0) > 4)) {
+        byName.set(key, {
+          ...fallback,
+          ...s,
+          coVen,
+          co_ven: coVen,
+          venDes,
+          ven_des: venDes,
+          coZon,
+          co_zon: coZon,
+          zona
+        });
+      }
+    });
+    return Array.from(byName.values()).sort((a, b) => a.venDes.localeCompare(b.venDes));
+  }, [profitSellers, safeProfitZones]);
 
   // Formulario Nuevo Pedido
   const [selectedClientId, setSelectedClientId] = useState('');
@@ -482,62 +537,135 @@ export default function OrdersSalesModal({
     return { dias: 0, termKey: 'CONTADO', label: 'Contado' };
   }, [activeClientObj]);
 
-  // Sincronización Vendedor <-> Zona habitual (profit_sellers.co_zon en base de datos)
-  const sellerValue = (s) => s.venDes || s.nombre || s.coVen;
+  // Sincronización bidireccional Vendedor <-> Zona habitual (profit_sellers.co_zon <-> profit_zones.co_zon en BD)
+  const [zoneMismatchAlert, setZoneMismatchAlert] = useState(null);
+  const [outOfZoneConfirmed, setOutOfZoneConfirmed] = useState(false);
+
+  const sellerValue = (s) => (s && (s.venDes || s.ven_des || s.nombre || s.coVen || s.co_ven)) || '';
   const sellerZoneCode = (s) => String((s && (s.coZon || s.co_zon)) || '').trim();
 
-  const findSellerByValue = (value) => safeProfitSellers.find(s => sellerValue(s) === value);
+  const findSellerByValue = (value) => {
+    if (!value) return undefined;
+    const target = String(value).trim().toLowerCase();
+    return safeProfitSellers.find(
+      s =>
+        sellerValue(s).toLowerCase() === target ||
+        String(s.coVen || s.co_ven || '').trim().toLowerCase() === target ||
+        String(s.id || '').trim().toLowerCase() === target
+    );
+  };
+
+  const getZoneFullLabel = (code) => {
+    const clean = String(code || '').trim();
+    const z = safeProfitZones.find(zz => String(zz.coZon || zz.co_zon).trim() === clean);
+    return z ? `${clean} - ${z.zonDes || z.zon_des}` : clean;
+  };
+
+  const getSellersForZone = (code) => {
+    const clean = String(code || '').trim();
+    return safeProfitSellers.filter(s => sellerZoneCode(s) === clean && s.activo !== false);
+  };
+
+  const activeSellerObj = useMemo(
+    () => findSellerByValue(selectedSeller) || safeProfitSellers[0] || null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedSeller, safeProfitSellers]
+  );
+
+  const activeSellerHabitualZone = sellerZoneCode(activeSellerObj);
+  const isSellerOutOfZone = Boolean(
+    activeSellerHabitualZone &&
+    selectedZone &&
+    String(activeSellerHabitualZone).trim() !== String(selectedZone).trim()
+  );
 
   const handleSellerChange = (value) => {
     setSelectedSeller(value);
+    setOutOfZoneConfirmed(false);
     const seller = findSellerByValue(value);
     const zone = sellerZoneCode(seller);
-    if (zone) setSelectedZone(zone);
+    if (zone) {
+      setSelectedZone(zone);
+    }
   };
 
   const handleZoneChange = (newZone) => {
-    const seller = findSellerByValue(selectedSeller);
+    const cleanNewZone = String(newZone || '').trim();
+    const seller = findSellerByValue(selectedSeller) || activeSellerObj;
     const sellerZone = sellerZoneCode(seller);
-    if (sellerZone && sellerZone !== newZone) {
-      const zoneLabel = (code) => {
-        const z = safeProfitZones.find(zz => String(zz.coZon || zz.co_zon).trim() === code);
-        return z ? `${code} - ${z.zonDes || z.zon_des}` : code;
-      };
-      const ok = window.confirm(
-        `Se está seleccionando al vendedor fuera de su zona correspondiente.\n\n` +
-        `Vendedor: ${sellerValue(seller)}\n` +
-        `Zona habitual: ${zoneLabel(sellerZone)}\n` +
-        `Zona seleccionada: ${zoneLabel(newZone)}\n\n` +
-        `¿Desea continuar?`
-      );
-      if (!ok) return;
-      setSelectedZone(newZone);
+
+    if (seller && sellerZone && sellerZone !== cleanNewZone) {
+      const zoneSellers = getSellersForZone(cleanNewZone);
+      setZoneMismatchAlert({
+        sellerName: sellerValue(seller),
+        sellerCode: seller.coVen || seller.co_ven || '',
+        sellerZone,
+        sellerZoneLabel: getZoneFullLabel(sellerZone),
+        newZone: cleanNewZone,
+        newZoneLabel: getZoneFullLabel(cleanNewZone),
+        zoneSellers
+      });
       return;
     }
-    setSelectedZone(newZone);
-    // Si el vendedor no tiene zona asignada, proponer uno de la zona elegida
+
+    setSelectedZone(cleanNewZone);
+    setOutOfZoneConfirmed(false);
     if (!sellerZone) {
-      const match = safeProfitSellers.find(s => sellerZoneCode(s) === newZone && s.activo !== false);
+      const match = getSellersForZone(cleanNewZone)[0];
       if (match) setSelectedSeller(sellerValue(match));
     }
   };
 
-  // Al cargar vendedores, alinear la zona inicial con la zona habitual del vendedor
+  // Al cargar vendedores, asegurar que selectedSeller coincida con un vendedor válido y su zona habitual
   useEffect(() => {
-    const zone = sellerZoneCode(findSellerByValue(selectedSeller));
-    if (zone) setSelectedZone(zone);
+    if (safeProfitSellers.length === 0) return;
+    let matched = findSellerByValue(selectedSeller);
+    if (!matched && currentUser) {
+      matched =
+        findSellerByValue(currentUser.co_ven || currentUser.coVen) ||
+        findSellerByValue(currentUser.nombre) ||
+        findSellerByValue(currentUser.id);
+    }
+    if (!matched) {
+      matched = safeProfitSellers.find(s => sellerZoneCode(s) === '01') || safeProfitSellers[0];
+    }
+    if (matched) {
+      const canonicalVal = sellerValue(matched);
+      if (canonicalVal && canonicalVal !== selectedSeller) {
+        setSelectedSeller(canonicalVal);
+      }
+      const zone = sellerZoneCode(matched);
+      if (zone && !outOfZoneConfirmed) {
+        setSelectedZone(zone);
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeProfitSellers]);
 
-  // Actualizar dirección, zona y plazo comercial automáticamente al elegir cliente
+  // Actualizar dirección, zona, vendedor asignado y plazo comercial automáticamente al elegir cliente
   useEffect(() => {
     if (activeClientObj) {
       setDeliveryAddress(activeClientObj.direccion2 || activeClientObj.direccion || activeClientObj.dir || '');
-      if (activeClientObj.zonaVenta || activeClientObj.coZon) {
-        setSelectedZone(activeClientObj.zonaVenta || activeClientObj.coZon);
+      const clientZone = String(activeClientObj.zonaVenta || activeClientObj.coZon || activeClientObj.co_zon || '').trim();
+      const clientSellerCode = String(activeClientObj.vendedorAsignado || activeClientObj.coVen || activeClientObj.co_ven || '').trim();
+      const matchedClientSeller = findSellerByValue(clientSellerCode);
+
+      if (matchedClientSeller) {
+        setSelectedSeller(sellerValue(matchedClientSeller));
+        const habitualZon = sellerZoneCode(matchedClientSeller);
+        setSelectedZone(clientZone || habitualZon || '01');
+        setOutOfZoneConfirmed(Boolean(clientZone && habitualZon && clientZone !== habitualZon));
+      } else if (clientZone) {
+        setSelectedZone(clientZone);
+        const zoneAdvisor = getSellersForZone(clientZone)[0];
+        if (zoneAdvisor) {
+          setSelectedSeller(sellerValue(zoneAdvisor));
+          setOutOfZoneConfirmed(false);
+        }
       }
       setPaymentTerm(clientAgreedInfo.termKey);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeClientObj, clientAgreedInfo]);
 
   // Cálculo de totales del formulario nuevo pedido
@@ -620,11 +748,18 @@ export default function OrdersSalesModal({
     }
 
     const sellerZoneNow = sellerZoneCode(findSellerByValue(selectedSeller));
-    if (sellerZoneNow && sellerZoneNow !== String(selectedZone).trim()) {
-      const ok = window.confirm(
-        `Se está seleccionando al vendedor fuera de su zona correspondiente.\n\nZona habitual del vendedor: ${sellerZoneNow}\nZona seleccionada: ${selectedZone}\n\n¿Desea continuar?`
-      );
-      if (!ok) return;
+    if (sellerZoneNow && sellerZoneNow !== String(selectedZone).trim() && !outOfZoneConfirmed) {
+      const seller = findSellerByValue(selectedSeller) || activeSellerObj;
+      setZoneMismatchAlert({
+        sellerName: seller ? sellerValue(seller) : selectedSeller,
+        sellerCode: seller?.coVen || seller?.co_ven || '',
+        sellerZone: sellerZoneNow,
+        sellerZoneLabel: getZoneFullLabel(sellerZoneNow),
+        newZone: String(selectedZone).trim(),
+        newZoneLabel: getZoneFullLabel(selectedZone),
+        zoneSellers: getSellersForZone(selectedZone)
+      });
+      return;
     }
 
     try {
@@ -1108,9 +1243,27 @@ export default function OrdersSalesModal({
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                      Vendedor / Asesor Comercial
-                    </label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '6px', flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                        Vendedor / Asesor Comercial
+                      </label>
+                      {activeSellerHabitualZone && (
+                        <span
+                          style={{
+                            fontSize: '0.66rem',
+                            fontWeight: 800,
+                            padding: '1px 7px',
+                            borderRadius: '4px',
+                            background: isSellerOutOfZone ? 'rgba(245, 158, 11, 0.16)' : 'rgba(16, 185, 129, 0.14)',
+                            color: isSellerOutOfZone ? 'var(--motorven-gold, #f59e0b)' : 'var(--semaforo-verde, #10b981)',
+                            border: `1px solid ${isSellerOutOfZone ? 'rgba(245, 158, 11, 0.4)' : 'rgba(16, 185, 129, 0.35)'}`
+                          }}
+                          title="Zona habitual asignada a este asesor en la Base de Datos"
+                        >
+                          {isSellerOutOfZone ? `⚠️ Habitual: Zona ${activeSellerHabitualZone}` : `✓ Zona ${activeSellerHabitualZone}`}
+                        </span>
+                      )}
+                    </div>
                     <select
                       className="form-control"
                       value={selectedSeller}
@@ -1119,8 +1272,8 @@ export default function OrdersSalesModal({
                     >
                       {safeProfitSellers.length > 0 ? (
                         safeProfitSellers.map(s => (
-                          <option key={s.coVen || s.id} value={s.venDes || s.nombre || s.coVen}>
-                            {s.venDes || s.nombre} ({s.coVen}){sellerZoneCode(s) ? ` · Zona ${sellerZoneCode(s)}` : ''}
+                          <option key={s.coVen || s.id} value={sellerValue(s)}>
+                            {s.venDes || s.nombre} ({s.coVen}){sellerZoneCode(s) ? ` · Zona ${sellerZoneCode(s)} (${s.zona || getZoneFullLabel(sellerZoneCode(s))})` : ''}
                           </option>
                         ))
                       ) : (
@@ -1132,24 +1285,78 @@ export default function OrdersSalesModal({
                         </>
                       )}
                     </select>
+                    {activeSellerHabitualZone && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', fontSize: '0.68rem', color: 'var(--text-muted)', gap: '6px', flexWrap: 'wrap' }}>
+                        <span>
+                          Zona habitual BD: <strong style={{ color: isSellerOutOfZone ? 'var(--motorven-gold)' : 'var(--semaforo-verde)' }}>{getZoneFullLabel(activeSellerHabitualZone)}</strong>
+                        </span>
+                        {isSellerOutOfZone && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedZone(activeSellerHabitualZone);
+                              setOutOfZoneConfirmed(false);
+                            }}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: 'var(--neon-cyan, #00f0ff)',
+                              textDecoration: 'underline',
+                              cursor: 'pointer',
+                              padding: 0,
+                              fontSize: '0.68rem',
+                              fontWeight: 700
+                            }}
+                          >
+                            Volver a su zona ({activeSellerHabitualZone})
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                      Zona de Entrega / Despacho
-                    </label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '6px', flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                        Zona de Entrega / Despacho
+                      </label>
+                      {isSellerOutOfZone && (
+                        <span
+                          style={{
+                            fontSize: '0.66rem',
+                            fontWeight: 800,
+                            padding: '1px 7px',
+                            borderRadius: '4px',
+                            background: 'rgba(239, 68, 68, 0.16)',
+                            color: '#f87171',
+                            border: '1px solid rgba(239, 68, 68, 0.4)'
+                          }}
+                        >
+                          ⚠️ Fuera de zona del vendedor
+                        </span>
+                      )}
+                    </div>
                     <select
                       className="form-control"
                       value={selectedZone}
                       onChange={(e) => handleZoneChange(e.target.value)}
-                      style={{ fontSize: '0.82rem', width: '100%' }}
+                      style={{
+                        fontSize: '0.82rem',
+                        width: '100%',
+                        borderColor: isSellerOutOfZone ? 'rgba(245, 158, 11, 0.55)' : undefined
+                      }}
                     >
                       {safeProfitZones.length > 0 ? (
-                        safeProfitZones.map(z => (
-                          <option key={z.coZon || z.co_zon} value={z.coZon || z.co_zon}>
-                            {z.coZon || z.co_zon} - {z.zonDes || z.zon_des}
-                          </option>
-                        ))
+                        safeProfitZones.map(z => {
+                          const zCode = z.coZon || z.co_zon;
+                          const zAdvisors = getSellersForZone(zCode);
+                          const advisorNames = zAdvisors.map(a => `${a.venDes} (${a.coVen})`).join(', ');
+                          return (
+                            <option key={zCode} value={zCode}>
+                              {zCode} - {z.zonDes || z.zon_des}{advisorNames ? ` · [${advisorNames}]` : ''}
+                            </option>
+                          );
+                        })
                       ) : (
                         <>
                           <option value="01">01 - Valencia Norte (Prebo, Trigal, Guaparo)</option>
@@ -1161,6 +1368,42 @@ export default function OrdersSalesModal({
                         </>
                       )}
                     </select>
+                    {(() => {
+                      const zoneAdvisors = getSellersForZone(selectedZone);
+                      if (zoneAdvisors.length === 0) return null;
+                      return (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', fontSize: '0.68rem', color: 'var(--text-muted)', gap: '6px', flexWrap: 'wrap' }}>
+                          <span>
+                            Asesor(es) Zona {selectedZone}:{' '}
+                            <strong style={{ color: 'var(--text-primary)' }}>
+                              {zoneAdvisors.map(a => `${a.venDes} (${a.coVen})`).join(', ')}
+                            </strong>
+                          </span>
+                          {isSellerOutOfZone && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedSeller(sellerValue(zoneAdvisors[0]));
+                                setOutOfZoneConfirmed(false);
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--neon-cyan, #00f0ff)',
+                                textDecoration: 'underline',
+                                cursor: 'pointer',
+                                padding: 0,
+                                fontSize: '0.68rem',
+                                fontWeight: 700
+                              }}
+                              title="Sincronizar automáticamente el vendedor titular de esta zona"
+                            >
+                              Asignar {zoneAdvisors[0].venDes}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <div>
@@ -1329,7 +1572,13 @@ export default function OrdersSalesModal({
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {orderRows.map((row, idx) => {
-                    const matchedProd = safeProducts.find(p => p && (p.id === row.articuloId || p.codigo === row.articuloId));
+                    const matchedProd = safeProducts.find(
+                      p =>
+                        p &&
+                        (String(p.id || '').trim() === String(row.articuloId || '').trim() ||
+                          String(p.codigo || '').trim() === String(row.articuloId || '').trim() ||
+                          String(p.co_art || '').trim() === String(row.articuloId || '').trim())
+                    );
                     const rowLitros = (Number(row.cantidad) || 0) * (Number(row.litrosUnitarios) || 11.35);
                     const rowTotalUsd = (Number(row.cantidad) || 0) * (Number(row.precioUsd) || 0);
 
@@ -1348,12 +1597,31 @@ export default function OrdersSalesModal({
                           borderRadius: '10px'
                         }}
                       >
-                        <div style={{ width: '36px', height: '36px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0 }}>
+                        <div
+                          style={{
+                            width: '44px',
+                            height: '44px',
+                            borderRadius: '8px',
+                            background: '#ffffff',
+                            border: '1px solid rgba(255, 255, 255, 0.2)',
+                            padding: '2px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            overflow: 'hidden',
+                            flexShrink: 0,
+                            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.2)'
+                          }}
+                          title={matchedProd?.descripcion || 'Imagen del Lubricante'}
+                        >
                           <OilstoneProductImage
+                            product={matchedProd}
+                            productId={matchedProd?.id || row.articuloId}
+                            imagen={matchedProd?.imagen}
                             codigo={matchedProd?.codigo || row.articuloId}
                             descripcion={matchedProd?.descripcion}
-                            width={36}
-                            height={36}
+                            width="100%"
+                            height="100%"
                           />
                         </div>
 
@@ -1367,7 +1635,7 @@ export default function OrdersSalesModal({
                             <option value="">-- Seleccionar Lubricante ({safeProducts.length}) --</option>
                             {safeProducts.map(p => (
                               <option key={p.id || p.codigo} value={p.id || p.codigo}>
-                                {p.codigo} - {p.descripcion} ({formatUsd(p.precio_usd_mayor || p.precio_usd_detal || 0)})
+                                {p.codigo} - {p.descripcion} ({formatUsd(p.precioUsdMayor || p.precio_usd_mayor || p.precioUsdDetal || p.precio_usd_detal || p.precio || 0)})
                               </option>
                             ))}
                           </select>
@@ -1930,22 +2198,60 @@ export default function OrdersSalesModal({
                               </td>
                             </tr>
                           ) : (
-                            selectedOrder.items.map((it, idx) => (
-                              <tr key={it.id || idx}>
-                                <td>
-                                  <div style={{ fontWeight: 700 }}>{it.articuloDescripcion || it.articuloId}</div>
-                                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{it.unidadVenta || 'Caja (12L)'}</div>
-                                </td>
-                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{it.cantidad}</td>
-                                <td style={{ textAlign: 'right', color: 'var(--motorven-gold)' }}>
-                                  {Number(it.litrosTotales || (it.cantidad * 11.35)).toFixed(1)} L
-                                </td>
-                                <td style={{ textAlign: 'right' }}>{formatUsd(it.precioUnitarioUsd)}</td>
-                                <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--semaforo-verde)' }}>
-                                  {formatUsd(it.totalUsd)}
-                                </td>
-                              </tr>
-                            ))
+                            selectedOrder.items.map((it, idx) => {
+                              const itemProd = safeProducts.find(
+                                p =>
+                                  p &&
+                                  (String(p.id || '').trim() === String(it.articuloId || '').trim() ||
+                                    String(p.codigo || '').trim() === String(it.articuloId || '').trim() ||
+                                    String(p.co_art || '').trim() === String(it.articuloId || '').trim())
+                              );
+                              return (
+                                <tr key={it.id || idx}>
+                                  <td>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <div
+                                        style={{
+                                          width: '36px',
+                                          height: '36px',
+                                          borderRadius: '6px',
+                                          background: '#ffffff',
+                                          border: '1px solid rgba(255, 255, 255, 0.2)',
+                                          padding: '2px',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          overflow: 'hidden',
+                                          flexShrink: 0
+                                        }}
+                                      >
+                                        <OilstoneProductImage
+                                          product={itemProd}
+                                          productId={itemProd?.id || it.articuloId}
+                                          imagen={itemProd?.imagen || it.imagen}
+                                          codigo={itemProd?.codigo || it.articuloId}
+                                          descripcion={it.articuloDescripcion || itemProd?.descripcion}
+                                          width="100%"
+                                          height="100%"
+                                        />
+                                      </div>
+                                      <div>
+                                        <div style={{ fontWeight: 700 }}>{it.articuloDescripcion || it.articuloId}</div>
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{it.unidadVenta || 'Caja (12L)'}</div>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td style={{ textAlign: 'center', fontWeight: 700 }}>{it.cantidad}</td>
+                                  <td style={{ textAlign: 'right', color: 'var(--motorven-gold)' }}>
+                                    {Number(it.litrosTotales || (it.cantidad * 11.35)).toFixed(1)} L
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>{formatUsd(it.precioUnitarioUsd)}</td>
+                                  <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--semaforo-verde)' }}>
+                                    {formatUsd(it.totalUsd)}
+                                  </td>
+                                </tr>
+                              );
+                            })
                           )}
                         </tbody>
                       </table>
@@ -2890,6 +3196,229 @@ export default function OrdersSalesModal({
                     <span>APROBAR Y LIBERAR CRÉDITO</span>
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL ALERTA DE VENDEDOR FUERA DE SU ZONA CORRESPONDIENTE */}
+        {zoneMismatchAlert && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10000,
+              backgroundColor: 'rgba(5, 10, 24, 0.84)',
+              backdropFilter: 'blur(6px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1rem'
+            }}
+            onClick={() => setZoneMismatchAlert(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: '500px',
+                background: 'var(--bg-card, #0f172a)',
+                border: '1.5px solid rgba(245, 158, 11, 0.55)',
+                borderRadius: '16px',
+                boxShadow: '0 24px 50px rgba(0, 0, 0, 0.65), 0 0 30px rgba(245, 158, 11, 0.18)',
+                overflow: 'hidden',
+                color: 'var(--text-primary)'
+              }}
+            >
+              {/* Cabecera */}
+              <div
+                style={{
+                  padding: '1rem 1.25rem',
+                  background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(15, 23, 42, 0.96) 100%)',
+                  borderBottom: '1px solid rgba(245, 158, 11, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div
+                    style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '10px',
+                      background: 'rgba(245, 158, 11, 0.2)',
+                      border: '1px solid #f59e0b',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#f59e0b',
+                      flexShrink: 0
+                    }}
+                  >
+                    <AlertTriangle size={20} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                      Alerta de Zona Comercial
+                    </h3>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Sincronización de Vendedores & Zonas (Base de Datos)
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setZoneMismatchAlert(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Cuerpo */}
+              <div style={{ padding: '1.15rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                <div
+                  style={{
+                    padding: '0.85rem 1rem',
+                    borderRadius: '10px',
+                    background: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                    fontSize: '0.88rem',
+                    fontWeight: 800,
+                    color: '#fbbf24',
+                    lineHeight: 1.45
+                  }}
+                >
+                  ⚠️ Se está seleccionando al vendedor fuera de su zona correspondiente, ¿desea continuar?
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid var(--border-glass)',
+                    borderRadius: '10px',
+                    padding: '0.85rem 1rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    fontSize: '0.8rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Vendedor / Asesor actual:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>
+                      {zoneMismatchAlert.sellerName} {zoneMismatchAlert.sellerCode ? `(${zoneMismatchAlert.sellerCode})` : ''}
+                    </strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Zona habitual del vendedor:</span>
+                    <strong style={{ color: 'var(--semaforo-verde, #10b981)' }}>
+                      {zoneMismatchAlert.sellerZoneLabel}
+                    </strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', paddingTop: '6px', borderTop: '1px dashed var(--border-glass)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Nueva zona seleccionada:</span>
+                    <strong style={{ color: 'var(--motorven-gold, #f59e0b)' }}>
+                      {zoneMismatchAlert.newZoneLabel}
+                    </strong>
+                  </div>
+                  {zoneMismatchAlert.zoneSellers && zoneMismatchAlert.zoneSellers.length > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Asesor(es) habitual(es) de Zona {zoneMismatchAlert.newZone}:</span>
+                      <strong style={{ color: 'var(--neon-cyan, #00f0ff)' }}>
+                        {zoneMismatchAlert.zoneSellers.map(s => `${s.venDes} (${s.coVen})`).join(', ')}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+
+                {/* Opción Viceversa: Cambiar al vendedor titular de la nueva zona */}
+                {zoneMismatchAlert.zoneSellers && zoneMismatchAlert.zoneSellers.length > 0 && (
+                  <div
+                    style={{
+                      background: 'rgba(0, 240, 255, 0.06)',
+                      border: '1px solid rgba(0, 240, 255, 0.25)',
+                      borderRadius: '10px',
+                      padding: '0.75rem 0.9rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px'
+                    }}
+                  >
+                    <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--neon-cyan, #00f0ff)' }}>
+                      🔄 ¿Prefiere sincronizar automáticamente el vendedor de la Zona {zoneMismatchAlert.newZone}?
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {zoneMismatchAlert.zoneSellers.map(s => (
+                        <button
+                          key={s.coVen || s.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSeller(sellerValue(s));
+                            setSelectedZone(zoneMismatchAlert.newZone);
+                            setOutOfZoneConfirmed(false);
+                            setZoneMismatchAlert(null);
+                          }}
+                          className="btn btn-sm"
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 800,
+                            padding: '5px 10px',
+                            background: 'rgba(0, 240, 255, 0.14)',
+                            border: '1px solid var(--neon-cyan, #00f0ff)',
+                            color: 'var(--neon-cyan, #00f0ff)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Cambiar a {s.venDes} ({s.coVen}) · Zona {zoneMismatchAlert.newZone}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Pie con Botones */}
+              <div
+                style={{
+                  padding: '0.9rem 1.25rem',
+                  borderTop: '1px solid var(--border-glass)',
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                  background: 'rgba(0, 0, 0, 0.2)'
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setZoneMismatchAlert(null)}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.8rem' }}
+                >
+                  No, mantener Zona {zoneMismatchAlert.sellerZone}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedZone(zoneMismatchAlert.newZone);
+                    setOutOfZoneConfirmed(true);
+                    setZoneMismatchAlert(null);
+                  }}
+                  className="btn btn-primary"
+                  style={{
+                    fontSize: '0.82rem',
+                    fontWeight: 800,
+                    background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                    border: 'none',
+                    color: '#0f172a',
+                    boxShadow: '0 4px 14px rgba(245, 158, 11, 0.35)'
+                  }}
+                >
+                  Sí, continuar fuera de su zona
+                </button>
               </div>
             </div>
           </div>

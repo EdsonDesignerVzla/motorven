@@ -776,15 +776,15 @@ export default function SellerOrderPOSView({
         {/* ========================================================================= */}
         {/* COLUMNA DERECHA: RESUMEN DEL PEDIDO & ACCIONES COMERCIALES */}
         {/* ========================================================================= */}
-        <div className="pos-cart-col" style={{ position: 'sticky', top: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+        <div className="pos-cart-col" style={{ position: 'sticky', top: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.65rem', minWidth: 0 }}>
           
-          <div className="bento-card" style={{ padding: '1.1rem', background: 'var(--bg-card-glass)', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div className="bento-card" style={{ padding: '0.9rem', background: 'var(--bg-card-glass)', display: 'flex', flexDirection: 'column', gap: '0.65rem', minWidth: 0 }}>
             
             {/* Header del Carrito */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.65rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <ShoppingCart size={18} color="var(--motorven-red)" />
-                <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
+                <ShoppingCart size={17} color="var(--motorven-red)" style={{ flexShrink: 0 }} />
+                <span style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
                   Resumen de la Preventa ({cartItems.length})
                 </span>
               </div>
@@ -793,7 +793,7 @@ export default function SellerOrderPOSView({
                   type="button"
                   onClick={clearCart}
                   className="btn btn-secondary btn-sm"
-                  style={{ fontSize: '0.68rem', padding: '2px 8px', color: '#f87171' }}
+                  style={{ fontSize: '0.68rem', padding: '2px 8px', color: '#f87171', flexShrink: 0 }}
                 >
                   <Trash2 size={12} style={{ marginRight: '3px' }} /> Vaciar
                 </button>
@@ -801,12 +801,12 @@ export default function SellerOrderPOSView({
             </div>
 
             {/* Lista de Renglones en el Carrito */}
-            <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ maxHeight: '210px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
               {cartItems.length === 0 ? (
-                <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  <ShoppingCart size={38} style={{ opacity: 0.3, margin: '0 auto 8px' }} />
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>El pedido está vacío</div>
-                  <div style={{ fontSize: '0.72rem', marginTop: '2px' }}>Toca los lubricantes del catálogo para sumarlos.</div>
+                <div style={{ padding: '1rem 0.75rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <ShoppingCart size={28} style={{ opacity: 0.3, margin: '0 auto 6px' }} />
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700 }}>El pedido está vacío</div>
+                  <div style={{ fontSize: '0.7rem', marginTop: '2px' }}>Toca los lubricantes del catálogo para sumarlos.</div>
                 </div>
               ) : (
                 cartItems.map((it) => (

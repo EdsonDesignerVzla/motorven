@@ -1324,7 +1324,23 @@ export default function ClientsDirectoryModal({
                     </label>
                     <select
                       value={clientForm.vendedorAsignado}
-                      onChange={e => setClientForm({ ...clientForm, vendedorAsignado: e.target.value })}
+                      onChange={e => {
+                        const newVen = e.target.value;
+                        const sellerZoneMap = {
+                          FS: '01',
+                          YC: '02',
+                          JR: '02',
+                          VV: '03',
+                          CB: '03',
+                          CM: '04',
+                          KB: '05',
+                          VP: '06',
+                          MS: '07',
+                          OF: '07'
+                        };
+                        const mappedZone = sellerZoneMap[newVen] || clientForm.zonaVenta;
+                        setClientForm({ ...clientForm, vendedorAsignado: newVen, zonaVenta: mappedZone });
+                      }}
                       disabled={isSavingClient}
                       style={{
                         width: '100%',
@@ -1336,16 +1352,16 @@ export default function ClientsDirectoryModal({
                         fontSize: '0.85rem'
                       }}
                     >
-                      <option value="OF">OF - Oficina Principal</option>
-                      <option value="CB">CB - Carlos Briceño</option>
-                      <option value="CM">CM - Carlos Mendoza</option>
-                      <option value="FS">FS - Francisco Silva</option>
-                      <option value="JR">JR - Juan Rodríguez</option>
-                      <option value="KB">KB - Karen Barrios</option>
-                      <option value="MS">MS - Manuel Salazar</option>
-                      <option value="VP">VP - Vicente Pérez</option>
-                      <option value="VV">VV - Víctor Valera</option>
-                      <option value="YC">YC - Yelitza Castro</option>
+                      <option value="FS">FS - Freddy Sepulveda · Zona 01</option>
+                      <option value="YC">YC - Yheyson Calderon · Zona 02</option>
+                      <option value="JR">JR - Juan Rodriguez · Zona 02</option>
+                      <option value="VV">VV - Victor Veloz · Zona 03</option>
+                      <option value="CB">CB - Carlos Becerra · Zona 03</option>
+                      <option value="CM">CM - Carlos Machado · Zona 04</option>
+                      <option value="KB">KB - Katherine Becerra · Zona 05</option>
+                      <option value="VP">VP - Vanessa Prieto · Zona 06</option>
+                      <option value="MS">MS - Michael Santana · Zona 07</option>
+                      <option value="OF">OF - Oficina Principal · Zona 07</option>
                     </select>
                   </div>
                 </div>
@@ -1357,7 +1373,45 @@ export default function ClientsDirectoryModal({
                     </label>
                     <select
                       value={clientForm.zonaVenta}
-                      onChange={e => setClientForm({ ...clientForm, zonaVenta: e.target.value })}
+                      onChange={e => {
+                        const newZon = e.target.value;
+                        const sellerZoneMap = {
+                          FS: '01',
+                          YC: '02',
+                          JR: '02',
+                          VV: '03',
+                          CB: '03',
+                          CM: '04',
+                          KB: '05',
+                          VP: '06',
+                          MS: '07',
+                          OF: '07'
+                        };
+                        const zonePrimarySeller = {
+                          '01': 'FS',
+                          '02': 'YC',
+                          '03': 'VV',
+                          '04': 'CM',
+                          '05': 'KB',
+                          '06': 'VP',
+                          '07': 'MS'
+                        };
+                        const currentSellerZone = sellerZoneMap[clientForm.vendedorAsignado];
+                        if (currentSellerZone && currentSellerZone !== newZon) {
+                          const ok = window.confirm(
+                            'Se está seleccionando al vendedor fuera de su zona correspondiente, ¿desea continuar?'
+                          );
+                          if (!ok) {
+                            setClientForm({
+                              ...clientForm,
+                              zonaVenta: newZon,
+                              vendedorAsignado: zonePrimarySeller[newZon] || clientForm.vendedorAsignado
+                            });
+                            return;
+                          }
+                        }
+                        setClientForm({ ...clientForm, zonaVenta: newZon });
+                      }}
                       disabled={isSavingClient}
                       style={{
                         width: '100%',
@@ -1369,13 +1423,13 @@ export default function ClientsDirectoryModal({
                         fontSize: '0.85rem'
                       }}
                     >
-                      <option value="01">Zona 01 - Centro / Valencia</option>
-                      <option value="02">Zona 02 - Gran Caracas</option>
-                      <option value="03">Zona 03 - Región Central (Carabobo / Aragua)</option>
-                      <option value="04">Zona 04 - Occidente (Lara / Zulia)</option>
-                      <option value="05">Zona 05 - Oriente</option>
-                      <option value="06">Zona 06 - Los Llanos</option>
-                      <option value="07">Zona 07 - Guayana / Sur</option>
+                      <option value="01">01 - Pto cabello - Juan jose Mora (FS)</option>
+                      <option value="02">02 - Isabelica - Pque Valencia - Flor Amarillo (YC / JR)</option>
+                      <option value="03">03 - San diego - Naguanagua (VV / CB)</option>
+                      <option value="04">04 - Zona Sur de Valencia (CM)</option>
+                      <option value="05">05 - Florida-Tocuyito-Bejuma-Montalban-Miranda (KB)</option>
+                      <option value="06">06 - Los Guayos-Guacara-San Joaquin-Mariara (VP)</option>
+                      <option value="07">07 - Carabobo (MS / OF)</option>
                     </select>
                   </div>
 

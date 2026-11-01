@@ -782,20 +782,20 @@ export default function InventoryView({
       {/* Tabla de Productos con Semáforo */}
       <div className="card table-card-wrapper" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--border-glass)', borderRadius: '14px', width: '100%', minWidth: 0, maxWidth: '100%' }}>
         <div className="table-container" style={{ width: '100%', maxWidth: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <table className="custom-table table-wide" style={{ fontSize: '0.82rem', width: '100%', minWidth: '1120px' }}>
+          <table className="custom-table table-wide" style={{ fontSize: '0.8rem', width: '100%' }}>
             <thead>
               <tr>
-                <th style={{ width: '110px' }}>Semáforo</th>
-                <th style={{ textAlign: 'center', width: '56px' }}>Imagen</th>
-                <th>Código / OEM</th>
+                <th style={{ width: '88px' }}>Semáforo</th>
+                <th style={{ textAlign: 'center', width: '48px' }}>Imagen</th>
+                <th style={{ width: '86px' }}>Código / OEM</th>
                 <th>Lubricante & Viscosidad</th>
                 <th>Presentación & Ubicación</th>
-                <th style={{ textAlign: 'center' }}>Stock & Litros</th>
-                {canSeeCosts && <th style={{ textAlign: 'right' }}>Costo Unit. ($)</th>}
-                <th style={{ textAlign: 'right' }}>Precio Detal ($ / Bs)</th>
-                <th style={{ textAlign: 'right' }}>Precio Mayor ($)</th>
-                {canSeeCosts && <th style={{ textAlign: 'center' }}>Margen Detal</th>}
-                <th style={{ textAlign: 'center' }} className="col-acciones">Acciones</th>
+                <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>Stock & Litros</th>
+                {canSeeCosts && <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Costo Unit. ($)</th>}
+                <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Precio Detal ($ / Bs)</th>
+                <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Precio Mayor ($)</th>
+                {canSeeCosts && <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>Margen Detal</th>}
+                <th style={{ textAlign: 'center', width: '88px' }} className="col-acciones">Acciones</th>
               </tr>
             </thead>
             <tbody>

@@ -611,9 +611,11 @@ export default function SmartReorderMatrixModal({
                           <td style={{ textAlign: 'center', padding: '4px' }}>
                             <div style={{ width: '32px', height: '32px', borderRadius: '6px', overflow: 'hidden', margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-tertiary)' }}>
                               <OilstoneProductImage
-                                src={item.imagen}
-                                alt={item.codigo}
-                                category={item.categoria}
+                                product={item}
+                                productId={item.id}
+                                imagen={item.imagen}
+                                codigo={item.codigo}
+                                descripcion={item.descripcion}
                                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                               />
                             </div>

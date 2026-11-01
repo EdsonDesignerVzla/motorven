@@ -59,6 +59,53 @@ async function initDatabase() {
           f.vendedorId = venId;
         });
       }
+      if (Array.isArray(database.profit_zones)) {
+        const seenZones = new Map();
+        database.profit_zones.forEach(z => {
+          if (!z) return;
+          const coZon = String(z.co_zon || z.coZon || '').trim();
+          const zonDes = String(z.zon_des || z.zonDes || '').trim();
+          if (!coZon) return;
+          const normalized = {
+            ...z,
+            id: z.id || `ZON-${coZon}`,
+            co_zon: coZon,
+            coZon: coZon,
+            zon_des: zonDes,
+            zonDes: zonDes,
+            dis_cen: z.dis_cen ?? z.disCen ?? '',
+            disCen: z.disCen ?? z.dis_cen ?? ''
+          };
+          if (!seenZones.has(coZon)) {
+            seenZones.set(coZon, normalized);
+          }
+        });
+        database.profit_zones = Array.from(seenZones.values()).sort((a, b) => a.coZon.localeCompare(b.coZon));
+      }
+      if (Array.isArray(database.profit_sellers)) {
+        const zoneMap = new Map(
+          (database.profit_zones || []).map(z => [String(z.coZon || z.co_zon).trim(), z.zonDes || z.zon_des || ''])
+        );
+        database.profit_sellers.forEach(s => {
+          if (!s) return;
+          const coVen = String(s.co_ven || s.coVen || s.id || '').trim();
+          const venDes = String(s.ven_des || s.venDes || s.nombre || '').trim();
+          const coZon = String(s.co_zon || s.coZon || '').trim();
+          const zona = String(s.zona || zoneMap.get(coZon) || '').trim();
+          s.co_ven = coVen;
+          s.coVen = coVen;
+          s.ven_des = venDes;
+          s.venDes = venDes;
+          s.co_zon = coZon;
+          s.coZon = coZon;
+          s.zona = zona;
+          s.comision_pct = Number(s.comision_pct ?? s.comisionPct ?? 3);
+          s.comisionPct = s.comision_pct;
+          s.meta_litros_mes = Number(s.meta_litros_mes ?? s.metaLitrosMes ?? 3000);
+          s.metaLitrosMes = s.meta_litros_mes;
+        });
+      }
+      saveDatabase();
       console.log(`[Supabase Local] Base de datos cargada: ${Object.keys(database).length} tablas activas.`);
       return;
     } catch (err) {

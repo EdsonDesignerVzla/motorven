@@ -722,8 +722,8 @@ export default function SalesPOSView({
             </div>
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: '1rem' }}>
+          <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', minWidth: 0 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(205px, 1fr))', gap: '0.85rem' }}>
               {filteredProducts.map((p) => {
                 const rawStock = Number(p.stock ?? p.stockActual ?? p.existencia ?? 0);
                 const committedQty = getProductCommittedQty(p);
@@ -751,23 +751,24 @@ export default function SalesPOSView({
                     key={p.id}
                     className="bento-card"
                     style={{
-                      padding: '0.9rem',
+                      padding: '0.85rem',
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'space-between',
                       border: isOutOfStock ? '1px solid rgba(255,23,68,0.35)' : '1px solid var(--border-glass)',
                       opacity: isOutOfStock ? 0.72 : 1,
-                      transition: 'transform 0.15s ease, box-shadow 0.15s ease'
+                      transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                      minWidth: 0
                     }}
                   >
                     <div>
                       {/* Imagen Vectorial Oficial del Catálogo - Limpia, sin datos sobrepuestos */}
                       <div 
                         style={{
-                          height: '135px',
+                          height: '130px',
                           borderRadius: '12px',
                           overflow: 'hidden',
-                          marginBottom: '0.75rem',
+                          marginBottom: '0.65rem',
                           position: 'relative',
                           background: '#ffffff',
                           border: '1px solid rgba(0,0,0,0.08)',
@@ -796,7 +797,7 @@ export default function SalesPOSView({
                       </div>
 
                       {/* Metadatos Superiores: Norma y Presentación */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', flexWrap: 'wrap', marginBottom: '3px' }}>
                         <span style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
                           {p.normaApi || 'API SL / CI-4'}
                         </span>
@@ -828,17 +829,17 @@ export default function SalesPOSView({
                       <div
                         style={{
                           marginTop: '0.35rem',
-                          padding: '7px 9px',
+                          padding: '6px 8px',
                           borderRadius: '10px',
                           background: stockConfig.bg,
                           border: `1px solid ${stockConfig.border}`,
                           display: 'flex',
                           flexDirection: 'column',
-                          gap: '5px'
+                          gap: '4px'
                         }}
                       >
                         {/* 1. Nivel Superior: Estado Semáforo + Disponibilidad Neta */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px 6px' }}>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
                             <span
                               style={{
@@ -850,17 +851,17 @@ export default function SalesPOSView({
                                 flexShrink: 0
                               }}
                             />
-                            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: stockConfig.color, textTransform: 'uppercase', letterSpacing: '0.3px', whiteSpace: 'nowrap' }}>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 800, color: stockConfig.color, textTransform: 'uppercase', letterSpacing: '0.2px', whiteSpace: 'nowrap' }}>
                               {stockConfig.label}
                             </span>
                           </div>
 
-                          <div style={{ textAlign: 'right', display: 'inline-flex', alignItems: 'baseline', gap: '4px', flexShrink: 0 }}>
-                            <strong style={{ fontSize: '0.82rem', color: isOutOfStock ? '#ef4444' : 'var(--text-main, #f8fafc)', fontFamily: 'var(--font-code)' }}>
+                          <div style={{ textAlign: 'right', display: 'inline-flex', alignItems: 'baseline', gap: '4px', flexShrink: 0, marginLeft: 'auto' }}>
+                            <strong style={{ fontSize: '0.8rem', color: isOutOfStock ? '#ef4444' : 'var(--text-main, #f8fafc)', fontFamily: 'var(--font-code)' }}>
                               {disponibleReal} {unitLabel}
                             </strong>
                             {p.litrosPorUnidad > 0 && disponibleReal > 0 && (
-                              <span style={{ fontSize: '0.67rem', color: 'var(--neon-cyan, #38bdf8)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
+                              <span style={{ fontSize: '0.65rem', color: 'var(--neon-cyan, #38bdf8)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
                                 ({(disponibleReal * p.litrosPorUnidad).toLocaleString('es-VE', { maximumFractionDigits: 0 })} L)
                               </span>
                             )}
@@ -874,10 +875,11 @@ export default function SalesPOSView({
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'space-between',
+                              flexWrap: 'wrap',
                               gap: '4px',
                               borderTop: '1px dashed rgba(255, 255, 255, 0.08)',
                               paddingTop: '4px',
-                              fontSize: '0.65rem'
+                              fontSize: '0.64rem'
                             }}
                           >
                             <span style={{ color: 'var(--text-muted)' }} title="Existencia física total en bodega">
@@ -907,12 +909,12 @@ export default function SalesPOSView({
                     </div>
 
                     {/* Footer: Precio Bimoneda y Botón de Acción Flexible */}
-                    <div style={{ marginTop: '0.75rem', paddingTop: '0.65rem', borderTop: '1px solid var(--border-glass)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <div style={{ marginTop: '0.65rem', paddingTop: '0.6rem', borderTop: '1px solid var(--border-glass)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.08rem', fontWeight: 900, color: 'var(--motorven-emerald)', lineHeight: 1.1 }}>
+                        <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.02rem', fontWeight: 900, color: 'var(--motorven-emerald)', lineHeight: 1.1 }}>
                           {formatUsd(precioUsd)}
                         </div>
-                        <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={{ fontSize: '0.66rem', color: 'var(--motorven-gold)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {formatBs(precioUsd * config.tasaDolar)}
                         </div>
                       </div>
@@ -923,11 +925,12 @@ export default function SalesPOSView({
                         disabled={disponibleReal <= 0}
                         style={{
                           opacity: disponibleReal <= 0 ? 0.5 : 1,
-                          fontSize: '0.74rem',
+                          fontSize: '0.73rem',
                           fontWeight: 700,
-                          padding: '6px 12px',
+                          padding: '5px 10px',
                           whiteSpace: 'nowrap',
-                          flexShrink: 0
+                          flexShrink: 0,
+                          marginLeft: 'auto'
                         }}
                       >
                         <Plus size={14} /> {isOutOfStock ? (committedQty > 0 ? 'En O.C.' : 'Agotado') : (disponibleReal <= 0 ? 'Sin Cupo' : 'Añadir')}
@@ -947,18 +950,19 @@ export default function SalesPOSView({
               background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(37, 99, 235, 0.15))',
               border: '1.5px solid var(--motorven-gold)',
               borderRadius: '10px',
-              padding: '8px 12px',
-              marginBottom: '0.85rem',
+              padding: '6px 10px',
+              marginBottom: '0.6rem',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              gap: '8px'
+              gap: '8px',
+              flexShrink: 0
             }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 800, fontSize: '0.8rem', color: 'var(--motorven-gold)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <FileText size={14} /> Facturando: {activeOrderInPOS.numeroDoc || activeOrderInPOS.id}
+                <div style={{ fontWeight: 800, fontSize: '0.78rem', color: 'var(--motorven-gold)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <FileText size={13} /> Facturando: {activeOrderInPOS.numeroDoc || activeOrderInPOS.id}
                 </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   Asesor: <strong style={{ color: 'var(--text-primary)' }}>{activeOrderInPOS.vendedorId || 'Asesor'}</strong> • {Number(activeOrderInPOS.totalLitros || 0).toFixed(1)} Lts
                 </div>
               </div>
@@ -978,19 +982,20 @@ export default function SalesPOSView({
           )}
 
           {/* Selector de Cliente con Validación Fiscal SENIAT */}
-          <div style={{ paddingBottom: '0.85rem', borderBottom: '1px solid var(--border-glass)', marginBottom: '0.85rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+          <div style={{ paddingBottom: '0.6rem', borderBottom: '1px solid var(--border-glass)', marginBottom: '0.6rem', minWidth: 0, width: '100%', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '5px', margin: 0, fontSize: '0.72rem' }}>
                 <UserCheck size={14} color="var(--neon-cyan)" /> Cliente Seleccionado
               </label>
               {selectedClient && (
                 <span style={{
-                  fontSize: '0.65rem',
-                  padding: '2px 8px',
+                  fontSize: '0.64rem',
+                  padding: '2px 7px',
                   borderRadius: '6px',
                   background: validateRif(selectedClient.rif).isValid ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
                   color: validateRif(selectedClient.rif).isValid ? 'var(--motorven-emerald)' : 'var(--motorven-red)',
-                  fontWeight: 700
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap'
                 }}>
                   {validateRif(selectedClient.rif).isValid ? '✓ RIF SENIAT Válido' : '⚠ RIF Inválido'}
                 </span>
@@ -998,6 +1003,7 @@ export default function SalesPOSView({
             </div>
             <select
               className="form-control"
+              style={{ width: '100%', maxWidth: '100%', minWidth: 0, fontSize: '0.8rem', padding: '0.45rem 2rem 0.45rem 0.7rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}
               value={selectedClient?.id || ''}
               onChange={(e) => {
                 const c = clients.find(cl => cl.id === e.target.value);
@@ -1012,65 +1018,83 @@ export default function SalesPOSView({
               ))}
             </select>
             {selectedClient?.domicilioFiscal && (
-              <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 📍 {selectedClient.domicilioFiscal}
               </div>
             )}
             {selectedClient?.agenteRetencionIva && (
-              <div style={{ fontSize: '0.7rem', color: 'var(--motorven-gold)', marginTop: '2px' }}>
+              <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', marginTop: '2px' }}>
                 🏛️ Agente Retención IVA ({selectedClient.porcentajeRetencionIva || 75}%)
               </div>
             )}
           </div>
 
           {/* Lista de Ítems en Carrito */}
-          <div style={{ flex: 1, maxHeight: '280px', minHeight: '120px', overflowY: 'auto', marginBottom: '1rem', borderBottom: '1px solid var(--border-glass)' }}>
+          <div style={{ flex: '1 1 auto', maxHeight: '220px', minHeight: '64px', overflowY: 'auto', marginBottom: '0.65rem', borderBottom: '1px solid var(--border-glass)', minWidth: 0 }}>
             {cartItems.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#64748b' }}>
-                <ShoppingCart size={36} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
-                <p style={{ fontSize: '0.85rem' }}>Seleccione lubricantes del catálogo para la orden.</p>
+              <div style={{ textAlign: 'center', padding: '0.9rem 0.75rem', color: '#64748b' }}>
+                <ShoppingCart size={28} style={{ marginBottom: '0.35rem', opacity: 0.5 }} />
+                <p style={{ fontSize: '0.8rem', margin: 0, lineHeight: 1.3 }}>Seleccione lubricantes del catálogo para la orden.</p>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingRight: '4px' }}>
-                {cartItems.map(item => (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', paddingRight: '4px', paddingBottom: '0.45rem' }}>
+                {cartItems.map(item => {
+                  const itemProd = products.find(p => p && (p.id === item.articuloId || p.codigo === item.codigo || p.codigo === item.articuloId));
+                  return (
                   <div key={item.articuloId} style={{
                     background: 'rgba(255,255,255,0.03)',
-                    padding: '0.65rem 0.85rem',
-                    borderRadius: '12px',
+                    padding: '0.5rem 0.65rem',
+                    borderRadius: '10px',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between'
+                    justifyContent: 'space-between',
+                    gap: '6px',
+                    minWidth: 0
                   }}>
-                    <div style={{ flex: 1, paddingRight: '8px' }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.825rem' }}>{item.descripcion}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--motorven-emerald)' }}>
+                    <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: '#ffffff', border: '1px solid rgba(255,255,255,0.18)', padding: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                      <OilstoneProductImage
+                        product={itemProd}
+                        productId={itemProd?.id || item.articuloId}
+                        imagen={itemProd?.imagen || item.imagen}
+                        codigo={itemProd?.codigo || item.codigo || item.articuloId}
+                        descripcion={item.descripcion}
+                        width="100%"
+                        height="100%"
+                      />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, paddingRight: '2px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.descripcion}</div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--motorven-emerald)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {formatUsd(item.precioUsd)} x {item.cantidad} = <strong>{formatUsd(item.subtotalUsd)}</strong> ({item.litros.toFixed(1)} L)
                       </div>
                     </div>
                     
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '2px 8px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad - 1)}>-</button>
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>{item.cantidad}</span>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '2px 8px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad + 1)}>+</button>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px', color: 'var(--motorven-red)', marginLeft: '4px' }} onClick={() => removeItem(item.articuloId)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '2px 7px', minHeight: '26px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad - 1)}>-</button>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, minWidth: '18px', textAlign: 'center' }}>{item.cantidad}</span>
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '2px 7px', minHeight: '26px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad + 1)}>+</button>
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px', minHeight: '26px', color: 'var(--motorven-red)', marginLeft: '2px' }} onClick={() => removeItem(item.articuloId)}>
                         <Trash2 size={12} />
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
 
           {/* Formas de Pago */}
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <div style={{ marginBottom: '0.65rem', minWidth: 0, width: '100%', flexShrink: 0 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem', marginBottom: '0.45rem' }}>
               <button
                 className="btn btn-sm"
                 onClick={() => setCondicionPago('CONTADO')}
                 style={{
                   background: condicionPago === 'CONTADO' ? 'var(--motorven-emerald)' : 'var(--bg-btn-secondary)',
-                  color: condicionPago === 'CONTADO' ? '#fff' : 'var(--text-primary)'
+                  color: condicionPago === 'CONTADO' ? '#fff' : 'var(--text-primary)',
+                  padding: '0.4rem 0.5rem',
+                  fontSize: '0.76rem'
                 }}
               >
                 Pago Contado
@@ -1080,7 +1104,9 @@ export default function SalesPOSView({
                 onClick={() => setCondicionPago('CREDITO')}
                 style={{
                   background: condicionPago === 'CREDITO' ? 'var(--motorven-gold)' : 'var(--bg-btn-secondary)',
-                  color: condicionPago === 'CREDITO' ? '#fff' : 'var(--text-primary)'
+                  color: condicionPago === 'CREDITO' ? '#fff' : 'var(--text-primary)',
+                  padding: '0.4rem 0.5rem',
+                  fontSize: '0.76rem'
                 }}
               >
                 Venta Crédito
@@ -1090,7 +1116,7 @@ export default function SalesPOSView({
             {condicionPago === 'CONTADO' && (
               <select
                 className="form-control"
-                style={{ fontSize: '0.8rem' }}
+                style={{ width: '100%', maxWidth: '100%', minWidth: 0, fontSize: '0.78rem', padding: '0.42rem 2rem 0.42rem 0.7rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}
                 value={metodoPago}
                 onChange={(e) => setMetodoPago(e.target.value)}
               >
@@ -1104,35 +1130,35 @@ export default function SalesPOSView({
           </div>
 
           {/* Panel de Totales Bimoneda */}
-          <div style={{ background: 'var(--bg-card-glass)', border: '1px solid var(--border-glass)', padding: '1rem', borderRadius: '14px', marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+          <div style={{ background: 'var(--bg-card-glass)', border: '1px solid var(--border-glass)', padding: '0.7rem 0.85rem', borderRadius: '12px', marginBottom: '0.65rem', minWidth: 0, flexShrink: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
               <span>Litros Totales:</span>
               <strong style={{ color: 'var(--neon-cyan)' }}>{totalLitrosCarrito.toFixed(2)} L</strong>
             </div>
 
             {fiscalTaxes.baseExentaUsd > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                 <span>Base Exenta (0%):</span>
                 <span>{formatUsd(fiscalTaxes.baseExentaUsd)} ({formatBs(fiscalTaxes.baseExentaBs)})</span>
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
               <span>Base General (16%):</span>
               <span>{formatUsd(fiscalTaxes.baseGeneralUsd)} ({formatBs(fiscalTaxes.baseGeneralBs)})</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
               <span>IVA General (16%):</span>
               <span>{formatUsd(fiscalTaxes.ivaGeneralUsd)} ({formatBs(fiscalTaxes.ivaGeneralBs)})</span>
             </div>
 
             {fiscalTaxes.baseReducidaUsd > 0 && (
               <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                   <span>Base Reducida (8%):</span>
                   <span>{formatUsd(fiscalTaxes.baseReducidaUsd)} ({formatBs(fiscalTaxes.baseReducidaBs)})</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                   <span>IVA Reducido (8%):</span>
                   <span>{formatUsd(fiscalTaxes.ivaReducidoUsd)} ({formatBs(fiscalTaxes.ivaReducidoBs)})</span>
                 </div>
@@ -1140,32 +1166,32 @@ export default function SalesPOSView({
             )}
 
             {fiscalTaxes.aplicaIgtf && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--motorven-gold)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--motorven-gold)' }}>
                 <span>IGTF Divisas (3%):</span>
                 <span>{formatUsd(fiscalTaxes.igtfUsd)} ({formatBs(fiscalTaxes.igtfBs)})</span>
               </div>
             )}
 
             {fiscalTaxes.retencionIvaBs > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--neon-cyan)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--neon-cyan)' }}>
                 <span>Retención IVA ({fiscalTaxes.porcentajeRetencionIva}%):</span>
                 <span>-{formatBs(fiscalTaxes.retencionIvaBs)}</span>
               </div>
             )}
 
-            <div style={{ height: '1px', background: 'var(--border-glass)', margin: '0.5rem 0' }}></div>
+            <div style={{ height: '1px', background: 'var(--border-glass)', margin: '0.4rem 0' }}></div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total {tipoDoc.replace('_', ' ')}</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 900, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '4px 8px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total {tipoDoc.replace('_', ' ')}</div>
+                <div style={{ fontSize: 'clamp(1.15rem, 1.6vw, 1.4rem)', fontWeight: 900, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)', lineHeight: 1.1 }}>
                   {formatUsd(totalUsd)}
                 </div>
               </div>
 
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>Tasa BCV: {formatBs(tasaBcv)}</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--motorven-gold)' }}>
+              <div style={{ textAlign: 'right', minWidth: 0, marginLeft: 'auto' }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Tasa BCV: {formatBs(tasaBcv)}</div>
+                <div style={{ fontSize: 'clamp(0.9rem, 1.3vw, 1.05rem)', fontWeight: 700, color: 'var(--motorven-gold)', lineHeight: 1.15 }}>
                   {formatBs(totalBs)}
                 </div>
               </div>
@@ -1174,11 +1200,11 @@ export default function SalesPOSView({
 
           <button
             className="btn btn-success"
-            style={{ width: '100%', padding: '0.85rem', fontSize: '1rem' }}
+            style={{ width: '100%', padding: '0.68rem 1rem', fontSize: '0.92rem', flexShrink: 0 }}
             onClick={handleFinalizeSale}
             disabled={cartItems.length === 0}
           >
-            <CheckCircle size={20} /> REALIZAR PEDIDO
+            <CheckCircle size={18} /> REALIZAR PEDIDO
           </button>
         </div>
       </div>

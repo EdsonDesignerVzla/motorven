@@ -1544,24 +1544,34 @@ export default function DashboardView({
                 </span>
               </div>
 
-              <div className="tacometro-wrapper" style={{ flex: 1, padding: '0.5rem 0' }}>
-                <div style={{ position: 'relative', width: '220px', height: '125px', margin: '0 auto' }}>
-                  <svg viewBox="0 0 200 125" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-                    <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--bg-btn-secondary, rgba(255,255,255,0.1))" strokeWidth="22" strokeLinecap="round" />
-                    <path d="M 20 100 A 80 80 0 0 1 100 20" fill="none" stroke="#ef4444" strokeWidth="18" strokeLinecap="square" />
-                    <path d="M 100 20 A 80 80 0 0 1 164 52" fill="none" stroke="#f59e0b" strokeWidth="18" strokeLinecap="square" />
-                    <path d="M 164 52 A 80 80 0 0 1 180 100" fill="none" stroke="#10b981" strokeWidth="18" strokeLinecap="square" />
+              <div className="tacometro-wrapper" style={{ flex: 1, padding: '0.4rem 0' }}>
+                <div style={{ position: 'relative', width: '240px', maxWidth: '100%', height: '134px', margin: '0 auto' }}>
+                  <svg viewBox="0 0 240 134" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+                    {/* Pista base del tacómetro */}
+                    <path d="M 44 108 A 76 76 0 0 1 196 108" fill="none" stroke="var(--bg-btn-secondary, rgba(255,255,255,0.1))" strokeWidth="20" strokeLinecap="butt" />
+                    {/* Tramo Crítico (0% - 50%) */}
+                    <path d="M 44 108 A 76 76 0 0 1 120 32" fill="none" stroke="#ef4444" strokeWidth="18" strokeLinecap="butt" />
+                    {/* Tramo Precaución (50% - 80%) */}
+                    <path d="M 120 32 A 76 76 0 0 1 181.5 63.3" fill="none" stroke="#f59e0b" strokeWidth="18" strokeLinecap="butt" />
+                    {/* Tramo Óptimo (80% - 100%) */}
+                    <path d="M 181.5 63.3 A 76 76 0 0 1 196 108" fill="none" stroke="#10b981" strokeWidth="18" strokeLinecap="butt" />
 
-                    <text x="10" y="118" fill="var(--text-muted)" fontSize="10" fontWeight="700" fontFamily="var(--font-code)">0%</text>
-                    <text x="92" y="12" fill="var(--text-muted)" fontSize="10" fontWeight="700" fontFamily="var(--font-code)">50%</text>
-                    <text x="168" y="44" fill="var(--text-muted)" fontSize="10" fontWeight="700" fontFamily="var(--font-code)">80%</text>
-                    <text x="178" y="118" fill="var(--text-muted)" fontSize="10" fontWeight="700" fontFamily="var(--font-code)">100%</text>
+                    {/* Marcas guía exteriores para cada umbral */}
+                    <line x1="120" y1="21" x2="120" y2="16" stroke="var(--text-muted)" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
+                    <line x1="190" y1="57" x2="195" y2="53.5" stroke="var(--text-muted)" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
 
-                    <g transform={`rotate(${Math.min(Math.max((kpiData.cumplimientoMetaPct / 100) * 180 - 90, -90), 90)}, 100, 100)`} style={{ transition: 'transform 0.8s ease-out' }}>
-                      <line x1="100" y1="100" x2="100" y2="24" stroke="rgba(0,0,0,0.3)" strokeWidth="6" strokeLinecap="round" />
-                      <polygon points="96,100 104,100 101.5,22 98.5,22" fill="var(--motorven-red)" stroke="var(--text-heading)" strokeWidth="1.5" />
-                      <circle cx="100" cy="100" r="11" fill="var(--motorven-navy)" stroke="var(--text-heading)" strokeWidth="2.5" />
-                      <circle cx="100" cy="100" r="4" fill="var(--motorven-gold)" />
+                    {/* Etiquetas numéricas separadas del arco sin solapamiento */}
+                    <text x="44" y="126" textAnchor="middle" fill="var(--text-secondary, #cbd5e1)" fontSize="10.5" fontWeight="800" fontFamily="var(--font-code)">0%</text>
+                    <text x="120" y="12" textAnchor="middle" fill="#fbbf24" fontSize="10.5" fontWeight="800" fontFamily="var(--font-code)">50%</text>
+                    <text x="199" y="53" textAnchor="start" fill="#34d399" fontSize="10.5" fontWeight="800" fontFamily="var(--font-code)">80%</text>
+                    <text x="196" y="126" textAnchor="middle" fill="var(--text-secondary, #cbd5e1)" fontSize="10.5" fontWeight="800" fontFamily="var(--font-code)">100%</text>
+
+                    {/* Aguja indicadora */}
+                    <g transform={`rotate(${Math.min(Math.max((kpiData.cumplimientoMetaPct / 100) * 180 - 90, -90), 90)}, 120, 108)`} style={{ transition: 'transform 0.8s ease-out' }}>
+                      <line x1="120" y1="108" x2="120" y2="36" stroke="rgba(0,0,0,0.35)" strokeWidth="6" strokeLinecap="round" />
+                      <polygon points="116,108 124,108 121.5,34 118.5,34" fill="var(--motorven-red)" stroke="var(--text-heading)" strokeWidth="1.5" />
+                      <circle cx="120" cy="108" r="11" fill="var(--motorven-navy)" stroke="var(--text-heading)" strokeWidth="2.5" />
+                      <circle cx="120" cy="108" r="4" fill="var(--motorven-gold)" />
                     </g>
                   </svg>
                 </div>

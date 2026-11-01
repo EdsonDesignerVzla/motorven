@@ -86,7 +86,11 @@ export const initStorage = () => {
   try {
     const rawSellers = localStorage.getItem(KEYS.SELLERS);
     const parsedSellers = rawSellers ? JSON.parse(rawSellers) : [];
-    if (!parsedSellers || parsedSellers.length < 15) {
+    const hasValidZones =
+      Array.isArray(parsedSellers) &&
+      parsedSellers.length >= 10 &&
+      parsedSellers.every(s => Boolean((s.venDes || s.ven_des) && (s.coZon || s.co_zon)));
+    if (!hasValidZones) {
       localStorage.setItem(KEYS.SELLERS, JSON.stringify(REAL_PROFIT_SELLERS));
     }
   } catch (_) {
@@ -486,7 +490,29 @@ export const getStorageSellers = () => {
   try {
     const raw = localStorage.getItem(KEYS.SELLERS);
     const parsed = raw ? JSON.parse(raw) : [];
-    return parsed && parsed.length > 0 ? parsed : DEFAULT_PROFIT_SELLERS;
+    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_PROFIT_SELLERS;
+    return parsed.map(s => {
+      const coVen = String(s?.coVen || s?.co_ven || s?.id || '').trim();
+      const venDes = String(s?.venDes || s?.ven_des || s?.nombre || '').trim();
+      const fallback = (DEFAULT_PROFIT_SELLERS || []).find(
+        r =>
+          (r.coVen && String(r.coVen).trim().toLowerCase() === coVen.toLowerCase()) ||
+          (r.venDes && venDes && String(r.venDes).trim().toLowerCase() === venDes.toLowerCase())
+      );
+      const coZon = String(s?.coZon || s?.co_zon || fallback?.coZon || fallback?.co_zon || '').trim();
+      const zona = String(s?.zona || fallback?.zona || '').trim();
+      return {
+        ...fallback,
+        ...s,
+        coVen: coVen || fallback?.coVen || '',
+        co_ven: coVen || fallback?.coVen || '',
+        venDes: venDes || fallback?.venDes || '',
+        ven_des: venDes || fallback?.venDes || '',
+        coZon,
+        co_zon: coZon,
+        zona
+      };
+    });
   } catch (_) {
     return DEFAULT_PROFIT_SELLERS;
   }

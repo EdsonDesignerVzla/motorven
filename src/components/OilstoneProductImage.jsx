@@ -1,14 +1,57 @@
 import React from 'react';
+import { REAL_PRODUCTS } from '../data/supabaseRealData';
 
-export default function OilstoneProductImage({ productId, product, imagen, codigo, descripcion, width = "100%", height = "100%", style = {} }) {
-  // 1. Si existe imagen real cargada (URL de Supabase Storage o Base64), mostrarla directamente
-  const imgUrl = imagen || product?.imagen;
-  if (imgUrl && typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:'))) {
+function resolveCatalogProductImage({ imagen, src, product, productId, codigo, descripcion }) {
+  const direct = imagen || src || product?.imagen || product?.foto || product?.image;
+  if (direct && typeof direct === 'string' && (direct.startsWith('http') || direct.startsWith('data:') || direct.startsWith('/'))) {
+    return direct;
+  }
+
+  const rawKey = String(productId || codigo || product?.id || product?.codigo || product?.co_art || '').trim().toUpperCase();
+  const rawDesc = String(descripcion || product?.descripcion || product?.nombre || '').trim().toUpperCase();
+
+  if (!rawKey && !rawDesc) return null;
+
+  let catalog = REAL_PRODUCTS || [];
+  if (typeof window !== 'undefined') {
+    try {
+      const cached = localStorage.getItem('sm_products_v4_fiscal');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          catalog = [...parsed, ...(REAL_PRODUCTS || [])];
+        }
+      }
+    } catch (_) {}
+  }
+
+  const matched = catalog.find((p) => {
+    if (!p) return false;
+    const pId = String(p.id || '').trim().toUpperCase();
+    const pCod = String(p.codigo || '').trim().toUpperCase();
+    const pCoArt = String(p.co_art || '').trim().toUpperCase();
+    if (rawKey && (pId === rawKey || pCod === rawKey || pCoArt === rawKey)) return true;
+    if (rawDesc && String(p.descripcion || p.nombre || '').trim().toUpperCase() === rawDesc) return true;
+    return false;
+  });
+
+  const foundImg = matched?.imagen || matched?.foto || matched?.image;
+  if (foundImg && typeof foundImg === 'string' && (foundImg.startsWith('http') || foundImg.startsWith('data:') || foundImg.startsWith('/'))) {
+    return foundImg;
+  }
+
+  return null;
+}
+
+export default function OilstoneProductImage({ productId, product, imagen, src, codigo, descripcion, width = "100%", height = "100%", style = {} }) {
+  // 1. Si existe imagen real cargada (directa o en el catálogo de productos por código/ID), mostrarla directamente
+  const imgUrl = resolveCatalogProductImage({ imagen, src, product, productId, codigo, descripcion });
+  if (imgUrl) {
     return (
       <img 
         src={imgUrl} 
         alt={descripcion || product?.descripcion || 'Envase Oficial OILSTONE ®'} 
-        style={{ width, height, objectFit: 'contain', ...style }} 
+        style={{ width, height, objectFit: 'contain', background: '#ffffff', borderRadius: '6px', ...style }} 
       />
     );
   }

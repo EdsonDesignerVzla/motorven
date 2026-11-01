@@ -118,34 +118,26 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
   const DeptIcon = DEPT_ICONS[selectedDeptId] || Briefcase;
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        width: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: '1.5rem',
-        background: 'var(--bg-radial)',
-        position: 'relative',
-        color: 'var(--text-main)',
-        transition: 'background 0.3s ease'
-      }}
-    >
-      {/* Botón de alternancia de tema flotante */}
+    <div className="login-page-wrapper">
+      {/* Barra superior para el botón de alternancia de tema (sin solapar la tarjeta ni el logo) */}
       {onToggleTheme && (
-        <div style={{ position: 'absolute', top: '1.25rem', right: '1.25rem', zIndex: 10 }}>
+        <div
+          className="login-theme-bar"
+          style={{
+            maxWidth: currentStep === 1 && !isManualMode ? '500px' : '480px'
+          }}
+        >
           <button
             type="button"
             onClick={onToggleTheme}
-            className="btn btn-secondary"
+            className="btn btn-secondary login-theme-btn"
             style={{
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              padding: '0.45rem 0.95rem',
-              fontSize: '0.82rem',
+              padding: '0.42rem 0.9rem',
+              fontSize: '0.8rem',
+              minHeight: '36px',
               borderRadius: '20px',
               boxShadow: isDark ? '0 4px 12px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,43,122,0.1)'
             }}
@@ -158,46 +150,31 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
 
       {/* Contenedor Principal de Login */}
       <div
+        className="login-card"
         style={{
-          width: '100%',
           maxWidth: currentStep === 1 && !isManualMode ? '500px' : '480px',
-          background: 'var(--surface-card)',
-          backdropFilter: 'blur(16px)',
-          border: '1px solid var(--border-glass)',
-          borderRadius: '16px',
-          padding: '2rem 1.75rem',
           boxShadow: isDark
             ? '0 25px 50px rgba(0, 0, 0, 0.55), 0 0 30px rgba(0, 43, 122, 0.15)'
-            : '0 20px 45px -10px rgba(0, 43, 122, 0.16), 0 4px 16px rgba(0, 0, 0, 0.04)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          transition: 'all 0.25s ease'
+            : '0 20px 45px -10px rgba(0, 43, 122, 0.16), 0 4px 16px rgba(0, 0, 0, 0.04)'
         }}
       >
         {/* Logo & Encabezado Corporativo */}
-        <div style={{ marginBottom: '1.25rem', textAlign: 'center', width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '0.85rem' }}>
-            <MotorvenLogo width={180} height="auto" />
+        <div className="login-header-block">
+          <div className="login-logo-box">
+            <MotorvenLogo width={180} height="auto" className="login-logo-img" />
           </div>
           <h2
+            className="login-main-title"
             style={{
-              fontFamily: 'var(--font-heading)',
-              fontSize: '1.35rem',
-              fontWeight: 800,
-              letterSpacing: '0.5px',
-              margin: '0 0 0.4rem 0',
               color: isDark ? '#ffffff' : '#001a4d'
             }}
           >
             Sistema de Gestión Integral
           </h2>
           <p
+            className="login-main-subtitle"
             style={{
-              fontSize: '0.86rem',
-              fontWeight: 600,
-              color: isDark ? '#cbd5e1' : '#334155',
-              margin: 0
+              color: isDark ? '#cbd5e1' : '#334155'
             }}
           >
             {isManualMode
@@ -212,7 +189,7 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
         {/* PASO 1: SELECCIÓN DE DEPARTAMENTO (DISEÑO UNIFORME CORPORATIVO) */}
         {/* ========================================================================= */}
         {currentStep === 1 && !isManualMode && (
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.65rem', marginBottom: '1.25rem' }}>
+          <div className="login-dept-list">
             {DEPARTMENTS.map((dept) => {
               const IconComp = DEPT_ICONS[dept.id] || Briefcase;
               const countInDept = users.filter((u) => getUserDepartment(u) === dept.id).length;
@@ -220,17 +197,11 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
               return (
                 <div
                   key={dept.id}
+                  className="login-dept-card"
                   onClick={() => handleSelectDepartment(dept.id)}
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.8rem 1rem',
-                    borderRadius: '12px',
-                    cursor: 'pointer',
                     background: isDark ? 'rgba(15, 26, 54, 0.7)' : '#ffffff',
                     border: isDark ? '1px solid rgba(255, 255, 255, 0.16)' : '1.5px solid #cbd5e1',
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                     boxShadow: isDark
                       ? '0 2px 8px rgba(0, 0, 0, 0.3)'
                       : '0 2px 6px rgba(0, 43, 122, 0.08)'
@@ -246,53 +217,30 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                     e.currentTarget.style.transform = 'none';
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
+                  <div className="login-dept-left">
                     <div
+                      className="login-dept-icon"
                       style={{
-                        width: '42px',
-                        height: '42px',
-                        borderRadius: '10px',
                         background: isDark ? 'rgba(0, 43, 122, 0.5)' : '#002b7a',
                         border: isDark ? '1.5px solid rgba(147, 197, 253, 0.4)' : '1px solid #001f5c',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: isDark ? '#93c5fd' : '#ffffff',
-                        flexShrink: 0
+                        color: isDark ? '#93c5fd' : '#ffffff'
                       }}
                     >
-                      <IconComp size={22} strokeWidth={2.3} />
+                      <IconComp size={20} strokeWidth={2.3} />
                     </div>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span
-                          style={{
-                            fontWeight: 800,
-                            fontSize: '0.94rem',
-                            color: isDark ? '#ffffff' : '#0f172a'
-                          }}
-                        >
-                          {dept.nombre}
-                        </span>
-                        <span
-                          style={{
-                            fontSize: '0.68rem',
-                            fontWeight: 800,
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            background: isDark ? 'rgba(0, 43, 122, 0.6)' : '#002b7a',
-                            color: '#ffffff'
-                          }}
-                        >
-                          {dept.codigo}
-                        </span>
+                    <div className="login-dept-info">
+                      <div
+                        className="login-dept-name"
+                        style={{
+                          color: isDark ? '#ffffff' : '#0f172a'
+                        }}
+                      >
+                        {dept.nombre}
                       </div>
                       <div
+                        className="login-dept-subtitle"
                         style={{
-                          fontSize: '0.78rem',
-                          fontWeight: 500,
-                          color: isDark ? '#cbd5e1' : '#475569',
-                          marginTop: '2px'
+                          color: isDark ? '#cbd5e1' : '#475569'
                         }}
                       >
                         {dept.subtitulo}
@@ -300,20 +248,34 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span
-                      style={{
-                        fontSize: '0.74rem',
-                        fontWeight: 700,
-                        color: isDark ? '#e2e8f0' : '#002b7a',
-                        background: isDark ? 'rgba(255, 255, 255, 0.1)' : '#e2e8f0',
-                        padding: '3px 9px',
-                        borderRadius: '12px'
-                      }}
-                    >
-                      {countInDept} {countInDept === 1 ? 'usuario' : 'usuarios'}
-                    </span>
-                    <ChevronRight size={18} color={isDark ? '#94a3b8' : '#002b7a'} strokeWidth={2.5} />
+                  <div className="login-dept-right">
+                    <div className="login-dept-badges-col">
+                      <span
+                        className="login-dept-code"
+                        style={{
+                          background: isDark ? 'rgba(0, 43, 122, 0.75)' : '#002b7a',
+                          border: isDark ? '1px solid rgba(147, 197, 253, 0.35)' : 'none',
+                          color: '#ffffff'
+                        }}
+                      >
+                        {dept.codigo}
+                      </span>
+                      <span
+                        className="login-dept-users-badge"
+                        style={{
+                          color: isDark ? '#e2e8f0' : '#002b7a',
+                          background: isDark ? 'rgba(255, 255, 255, 0.1)' : '#e2e8f0'
+                        }}
+                      >
+                        {countInDept} {countInDept === 1 ? 'usuario' : 'usuarios'}
+                      </span>
+                    </div>
+                    <ChevronRight
+                      size={18}
+                      color={isDark ? '#94a3b8' : '#002b7a'}
+                      strokeWidth={2.5}
+                      style={{ flexShrink: 0 }}
+                    />
                   </div>
                 </div>
               );
@@ -325,55 +287,47 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
         {/* PASO 2: SELECCIÓN DE USUARIO EN EL DEPARTAMENTO + FORMULARIO DE CLAVE */}
         {/* ========================================================================= */}
         {currentStep === 2 && !isManualMode && (
-          <div style={{ width: '100%' }}>
+          <div style={{ width: '100%', minWidth: 0 }}>
             {/* Cabecera del departamento seleccionado con botón volver */}
             <div
+              className="login-step2-header"
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '0.65rem 0.85rem',
-                borderRadius: '10px',
                 background: isDark ? 'rgba(0, 43, 122, 0.4)' : '#eef4ff',
-                border: `1.5px solid ${isDark ? 'rgba(147, 197, 253, 0.3)' : '#cbd5e1'}`,
-                marginBottom: '1rem'
+                border: `1.5px solid ${isDark ? 'rgba(147, 197, 253, 0.3)' : '#cbd5e1'}`
               }}
             >
               <button
                 type="button"
                 onClick={handleBackToDepartments}
+                className="login-back-btn"
                 style={{
                   background: isDark ? 'rgba(255, 255, 255, 0.08)' : '#ffffff',
                   border: isDark ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid #cbd5e1',
                   color: isDark ? '#93c5fd' : '#002b7a',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '0.8rem',
-                  fontWeight: 800,
-                  padding: '5px 9px',
-                  borderRadius: '7px',
                   boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.06)'
                 }}
               >
-                <ArrowLeft size={16} strokeWidth={2.5} />
+                <ArrowLeft size={15} strokeWidth={2.5} style={{ flexShrink: 0 }} />
                 <span>Departamentos</span>
               </button>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <DeptIcon size={17} color={isDark ? '#93c5fd' : '#002b7a'} strokeWidth={2.2} />
-                <span style={{ fontSize: '0.86rem', fontWeight: 800, color: isDark ? '#ffffff' : '#0f172a' }}>
+              <div className="login-step2-dept-badge">
+                <DeptIcon size={16} color={isDark ? '#93c5fd' : '#002b7a'} strokeWidth={2.2} style={{ flexShrink: 0 }} />
+                <span
+                  className="login-step2-dept-name"
+                  style={{ color: isDark ? '#ffffff' : '#0f172a' }}
+                >
                   {selectedDeptMeta?.nombre}
                 </span>
                 <span
                   style={{
-                    fontSize: '0.68rem',
+                    fontSize: '0.66rem',
                     fontWeight: 800,
                     padding: '2px 6px',
                     borderRadius: '4px',
                     background: isDark ? 'rgba(0, 43, 122, 0.7)' : '#002b7a',
-                    color: '#ffffff'
+                    color: '#ffffff',
+                    flexShrink: 0
                   }}
                 >
                   {selectedDeptMeta?.codigo}
@@ -382,11 +336,11 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
             </div>
 
             {/* Listado de Colaboradores del Área */}
-            <div style={{ marginBottom: '1rem' }}>
+            <div style={{ marginBottom: '1rem', width: '100%', minWidth: 0 }}>
               <label
                 style={{
                   display: 'block',
-                  fontSize: '0.78rem',
+                  fontSize: '0.76rem',
                   fontWeight: 800,
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px',
@@ -397,47 +351,33 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                 Colaboradores de este Departamento:
               </label>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div className="login-users-list">
                 {deptUsers.map((usr) => {
                   const isSelected = selectedUsername.toLowerCase() === usr.username.toLowerCase();
 
                   return (
                     <div
                       key={usr.id}
+                      className="login-user-card"
                       onClick={() => handleSelectUser(usr)}
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '0.65rem 0.9rem',
-                        borderRadius: '10px',
-                        cursor: 'pointer',
                         background: isSelected
                           ? (isDark ? 'rgba(0, 43, 122, 0.5)' : '#eef4ff')
                           : (isDark ? 'rgba(15, 26, 54, 0.7)' : '#ffffff'),
                         border: isSelected
                           ? (isDark ? '2px solid #e60012' : '2px solid #002b7a')
                           : (isDark ? '1px solid rgba(255, 255, 255, 0.15)' : '1.5px solid #cbd5e1'),
-                        transition: 'all 0.2s ease',
                         boxShadow: isSelected
                           ? (isDark ? '0 0 15px rgba(230,0,18,0.25)' : '0 2px 8px rgba(0,43,122,0.14)')
                           : (isDark ? 'none' : '0 1px 4px rgba(0,0,0,0.03)')
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                      <div className="login-user-left">
                         <div
+                          className="login-user-avatar"
                           style={{
-                            fontSize: '1.25rem',
-                            width: '38px',
-                            height: '38px',
-                            borderRadius: '8px',
                             background: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e2e8f0',
-                            border: isDark ? '1px solid rgba(255,255,255,0.15)' : '1px solid #cbd5e1',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            overflow: 'hidden',
-                            flexShrink: 0
+                            border: isDark ? '1px solid rgba(255,255,255,0.15)' : '1px solid #cbd5e1'
                           }}
                         >
                           {usr.foto ? (
@@ -450,11 +390,13 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                             usr.avatar
                           )}
                         </div>
-                        <div>
+                        <div style={{ minWidth: 0, flex: '1 1 0%' }}>
                           <div
                             style={{
                               fontWeight: 800,
-                              fontSize: '0.9rem',
+                              fontSize: '0.88rem',
+                              lineHeight: 1.25,
+                              wordBreak: 'break-word',
                               color: isSelected
                                 ? (isDark ? '#ffffff' : '#002b7a')
                                 : (isDark ? '#f1f5f9' : '#0f172a')
@@ -464,8 +406,11 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                           </div>
                           <div
                             style={{
-                              fontSize: '0.76rem',
+                              fontSize: '0.75rem',
                               fontWeight: 500,
+                              lineHeight: 1.25,
+                              marginTop: '2px',
+                              wordBreak: 'break-word',
                               color: isDark ? '#cbd5e1' : '#475569'
                             }}
                           >
@@ -484,7 +429,8 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                            flexShrink: 0
                           }}
                         >
                           <Check size={14} color="#fff" strokeWidth={3} />
@@ -501,18 +447,19 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
               <div
                 style={{
                   width: '100%',
-                  padding: '0.7rem 0.9rem',
+                  padding: '0.65rem 0.85rem',
                   borderRadius: '9px',
                   background: isDark ? 'rgba(0, 43, 122, 0.25)' : '#eef4ff',
                   border: `1.5px solid ${isDark ? 'rgba(147, 197, 253, 0.3)' : '#bfdbfe'}`,
-                  marginBottom: '1.1rem',
-                  fontSize: '0.78rem',
+                  marginBottom: '1rem',
+                  fontSize: '0.76rem',
                   color: isDark ? '#e2e8f0' : '#1e3a8a',
-                  lineHeight: 1.45
+                  lineHeight: 1.45,
+                  boxSizing: 'border-box'
                 }}
               >
-                <strong style={{ color: isDark ? '#93c5fd' : '#002b7a', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px', fontWeight: 800 }}>
-                  <ShieldCheck size={15} strokeWidth={2.4} /> Alcance del Rol ({selectedUserData.rol}):
+                <strong style={{ color: isDark ? '#93c5fd' : '#002b7a', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px', fontWeight: 800, flexWrap: 'wrap' }}>
+                  <ShieldCheck size={15} strokeWidth={2.4} style={{ flexShrink: 0 }} /> Alcance del Rol ({selectedUserData.rol}):
                 </strong>
                 {selectedUserData.descripcion}
               </div>
@@ -535,17 +482,17 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                     marginBottom: '1rem'
                   }}
                 >
-                  <AlertCircle size={16} />
+                  <AlertCircle size={16} style={{ flexShrink: 0 }} />
                   <span>{errorMsg}</span>
                 </div>
               )}
 
-              <div className="form-group" style={{ marginBottom: '1.25rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <div className="form-group" style={{ marginBottom: '1.15rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '4px 8px', marginBottom: '6px' }}>
                   <label
                     className="form-label"
                     style={{
-                      fontSize: '0.82rem',
+                      fontSize: '0.8rem',
                       fontWeight: 700,
                       display: 'flex',
                       alignItems: 'center',
@@ -554,11 +501,11 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                       color: isDark ? '#f1f5f9' : '#0f172a'
                     }}
                   >
-                    <KeyRound size={15} color="#e60012" strokeWidth={2.4} /> Contraseña de Acceso
+                    <KeyRound size={15} color="#e60012" strokeWidth={2.4} style={{ flexShrink: 0 }} /> Contraseña de Acceso
                   </label>
                   <span
                     style={{
-                      fontSize: '0.74rem',
+                      fontSize: '0.72rem',
                       fontWeight: 600,
                       color: selectedUserData?.password === '' ? (isDark ? '#34d399' : '#059669') : (isDark ? '#cbd5e1' : '#64748b')
                     }}
@@ -566,18 +513,21 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
                     {selectedUserData?.password === '' ? 'Acceso libre sin clave' : '* Ingrese su clave'}
                   </span>
                 </div>
-                <div style={{ position: 'relative' }}>
+                <div style={{ position: 'relative', width: '100%' }}>
                   <input
                     type={showPassword ? 'text' : 'password'}
-                    className="form-control"
+                    className="form-control login-input"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={selectedUserData?.password === '' ? 'No requiere clave (presione Iniciar Sesión)' : 'Ingrese su clave institucional'}
                     required={selectedUserData?.password !== ''}
                     autoFocus
                     style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
                       fontSize: '0.9rem',
-                      paddingRight: '2.5rem',
+                      padding: '0.7rem 2.6rem 0.7rem 0.9rem',
+                      borderRadius: '10px',
                       background: isDark ? 'rgba(6, 9, 19, 0.8)' : '#ffffff',
                       border: isDark ? '1px solid rgba(255, 255, 255, 0.2)' : '1.5px solid #cbd5e1',
                       color: isDark ? '#ffffff' : '#0f172a'
@@ -671,14 +621,18 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
               </label>
               <input
                 type="text"
-                className="form-control"
+                className="form-control login-input"
                 value={selectedUsername}
                 onChange={(e) => setSelectedUsername(e.target.value)}
                 placeholder="edson designer, admin, ventas..."
                 required
                 autoFocus
                 style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
                   fontSize: '0.9rem',
+                  padding: '0.7rem 0.9rem',
+                  borderRadius: '10px',
                   background: isDark ? 'rgba(6, 9, 19, 0.8)' : '#ffffff',
                   border: isDark ? '1px solid rgba(255, 255, 255, 0.2)' : '1.5px solid #cbd5e1',
                   color: isDark ? '#ffffff' : '#0f172a'
@@ -700,17 +654,20 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
               >
                 <KeyRound size={15} color="#e60012" strokeWidth={2.4} /> Contraseña de Acceso
               </label>
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative', width: '100%' }}>
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  className="form-control"
+                  className="form-control login-input"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Ingrese su contraseña"
                   required
                   style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
                     fontSize: '0.9rem',
-                    paddingRight: '2.5rem',
+                    padding: '0.7rem 2.6rem 0.7rem 0.9rem',
+                    borderRadius: '10px',
                     background: isDark ? 'rgba(6, 9, 19, 0.8)' : '#ffffff',
                     border: isDark ? '1px solid rgba(255, 255, 255, 0.2)' : '1.5px solid #cbd5e1',
                     color: isDark ? '#ffffff' : '#0f172a'

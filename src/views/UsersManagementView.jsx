@@ -740,18 +740,18 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
           {/* Tabla de Usuarios Registrados */}
           <div className="card">
             <div className="table-container">
-              <table className="custom-table" style={{ width: '100%', minWidth: '1350px', tableLayout: 'auto' }}>
+              <table className="custom-table" style={{ width: '100%', tableLayout: 'auto' }}>
                 <thead>
                   <tr>
-                    <th style={{ minWidth: '230px', whiteSpace: 'nowrap' }}>Operador</th>
-                    <th style={{ minWidth: '150px', whiteSpace: 'nowrap' }}>Usuario</th>
-                    <th style={{ minWidth: '180px', whiteSpace: 'nowrap' }}>Departamento</th>
-                    <th style={{ minWidth: '165px', whiteSpace: 'nowrap' }}>Rol Asignado</th>
-                    <th style={{ minWidth: '180px', whiteSpace: 'nowrap' }}>Cargo / Responsabilidad</th>
-                    <th style={{ minWidth: '105px', whiteSpace: 'nowrap', textAlign: 'center' }}>Estado</th>
-                    <th style={{ minWidth: '160px', whiteSpace: 'nowrap' }}>Último Acceso</th>
-                    <th style={{ minWidth: '150px', whiteSpace: 'nowrap', textAlign: 'center' }}>Contraseña</th>
-                    <th style={{ minWidth: '150px', whiteSpace: 'nowrap', textAlign: 'center' }}>Acciones</th>
+                    <th>Operador</th>
+                    <th>Usuario</th>
+                    <th>Departamento</th>
+                    <th>Rol Asignado</th>
+                    <th>Cargo / Responsabilidad</th>
+                    <th style={{ textAlign: 'center' }}>Estado</th>
+                    <th>Último Acceso</th>
+                    <th style={{ textAlign: 'center' }}>Contraseña</th>
+                    <th style={{ textAlign: 'center' }}>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
