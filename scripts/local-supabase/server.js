@@ -17,46 +17,21 @@ const PORT = process.env.SUPABASE_LOCAL_PORT || 54321;
 const HOST = '0.0.0.0';
 const DB_FILE = path.join(projectRoot, 'supabase', 'local_database.json');
 
-// Importar datos reales iniciales de Supabase
-import {
-  REAL_CONFIG,
-  REAL_PRODUCTS,
-  REAL_CLIENTS,
-  REAL_PROFIT_INVOICES,
-  REAL_PROFIT_COLLECTIONS,
-  REAL_PROFIT_ACCOUNTS_PAYABLE,
-  REAL_PROFIT_SUPPLIER_PAYMENTS,
-  REAL_PROFIT_PURCHASES,
-  REAL_PROFIT_SUPPLIERS,
-  REAL_PROFIT_SELLERS,
-  REAL_PROFIT_BANK_ACCOUNTS,
-  REAL_PROFIT_CASH_DESKS,
-  REAL_PROFIT_ZONES,
-  REAL_PROFIT_TRANSPORTS,
-  REAL_PROFIT_CUSTOMER_RETURNS,
-  REAL_PROFIT_INVENTORY_ADJUSTMENTS,
-  REAL_PROFIT_WAREHOUSE_TRANSFERS,
-  REAL_PROFIT_ISLR_CONCEPTS,
-  REAL_PROFIT_BENEFICIARIES,
-  REAL_PROFIT_PAYMENT_ORDERS,
-  REAL_PROFIT_WAREHOUSES,
-  REAL_PROFIT_PRODUCT_LINES,
-  REAL_PROFIT_PRODUCT_CATEGORIES,
-  REAL_PROFIT_CURRENCIES,
-  REAL_USERS,
-  REAL_ORDERS,
-  REAL_SALES,
-  REAL_PURCHASES,
-  REAL_SUPPLIERS,
-  REAL_CASH_MOVEMENTS,
-  REAL_FISCAL_CLOSURES,
-  REAL_NOTIFICATIONS,
-  REAL_SIGNUM_MOTORVEN
-} from '../../src/data/supabaseRealData.js';
+// Prevenir caídas no deseadas de Node
+process.on('uncaughtException', (err) => {
+  console.warn('[Supabase Local] Uncaught Exception prevenido:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Supabase Local] Unhandled Rejection prevenido:', reason);
+});
+
+// Mantener activo el event loop indefinidamente
+setInterval(() => {}, 60000);
 
 let database = {};
 
-function initDatabase() {
+async function initDatabase() {
   if (fs.existsSync(DB_FILE)) {
     try {
       console.log(`[Supabase Local] Cargando base de datos persistida desde: ${DB_FILE}`);
@@ -84,55 +59,56 @@ function initDatabase() {
           f.vendedorId = venId;
         });
       }
-      if (!database.SIGNUM_MOTORVEN) {
-        database = { SIGNUM_MOTORVEN: JSON.parse(JSON.stringify(REAL_SIGNUM_MOTORVEN)), ...database };
-        saveDatabase();
-      }
       console.log(`[Supabase Local] Base de datos cargada: ${Object.keys(database).length} tablas activas.`);
       return;
     } catch (err) {
-      console.warn(`[Supabase Local] Error al leer ${DB_FILE}, inicializando desde datos de producción:`, err.message);
+      console.warn(`[Supabase Local] Error al leer ${DB_FILE}, cargando respaldo dinámico:`, err.message);
     }
   }
 
-  console.log(`[Supabase Local] Inicializando 33 tablas con datos vivos reales de producción...`);
-  database = {
-    SIGNUM_MOTORVEN: JSON.parse(JSON.stringify(REAL_SIGNUM_MOTORVEN)),
-    config: [JSON.parse(JSON.stringify(REAL_CONFIG))],
-    products: JSON.parse(JSON.stringify(REAL_PRODUCTS)),
-    clients: JSON.parse(JSON.stringify(REAL_CLIENTS)),
-    profit_invoices: JSON.parse(JSON.stringify(REAL_PROFIT_INVOICES)),
-    profit_collections: JSON.parse(JSON.stringify(REAL_PROFIT_COLLECTIONS)),
-    profit_accounts_payable: JSON.parse(JSON.stringify(REAL_PROFIT_ACCOUNTS_PAYABLE)),
-    profit_supplier_payments: JSON.parse(JSON.stringify(REAL_PROFIT_SUPPLIER_PAYMENTS)),
-    profit_purchases: JSON.parse(JSON.stringify(REAL_PROFIT_PURCHASES)),
-    profit_suppliers: JSON.parse(JSON.stringify(REAL_PROFIT_SUPPLIERS)),
-    profit_sellers: JSON.parse(JSON.stringify(REAL_PROFIT_SELLERS)),
-    profit_bank_accounts: JSON.parse(JSON.stringify(REAL_PROFIT_BANK_ACCOUNTS)),
-    profit_cash_desks: JSON.parse(JSON.stringify(REAL_PROFIT_CASH_DESKS)),
-    profit_zones: JSON.parse(JSON.stringify(REAL_PROFIT_ZONES)),
-    profit_transports: JSON.parse(JSON.stringify(REAL_PROFIT_TRANSPORTS)),
-    profit_customer_returns: JSON.parse(JSON.stringify(REAL_PROFIT_CUSTOMER_RETURNS)),
-    profit_inventory_adjustments: JSON.parse(JSON.stringify(REAL_PROFIT_INVENTORY_ADJUSTMENTS)),
-    profit_warehouse_transfers: JSON.parse(JSON.stringify(REAL_PROFIT_WAREHOUSE_TRANSFERS)),
-    profit_islr_concepts: JSON.parse(JSON.stringify(REAL_PROFIT_ISLR_CONCEPTS)),
-    profit_beneficiaries: JSON.parse(JSON.stringify(REAL_PROFIT_BENEFICIARIES)),
-    profit_payment_orders: JSON.parse(JSON.stringify(REAL_PROFIT_PAYMENT_ORDERS)),
-    profit_warehouses: JSON.parse(JSON.stringify(REAL_PROFIT_WAREHOUSES)),
-    profit_product_lines: JSON.parse(JSON.stringify(REAL_PROFIT_PRODUCT_LINES)),
-    profit_product_categories: JSON.parse(JSON.stringify(REAL_PROFIT_PRODUCT_CATEGORIES)),
-    profit_currencies: JSON.parse(JSON.stringify(REAL_PROFIT_CURRENCIES)),
-    users: JSON.parse(JSON.stringify(REAL_USERS)),
-    orders: JSON.parse(JSON.stringify(REAL_ORDERS)),
-    sales: JSON.parse(JSON.stringify(REAL_SALES)),
-    purchases: JSON.parse(JSON.stringify(REAL_PURCHASES)),
-    suppliers: JSON.parse(JSON.stringify(REAL_SUPPLIERS)),
-    cash_movements: JSON.parse(JSON.stringify(REAL_CASH_MOVEMENTS)),
-    fiscal_closures: JSON.parse(JSON.stringify(REAL_FISCAL_CLOSURES)),
-    notifications: JSON.parse(JSON.stringify(REAL_NOTIFICATIONS))
-  };
-
-  saveDatabase();
+  console.log(`[Supabase Local] Inicializando tablas con datos vivos reales desde módulo de respaldo...`);
+  try {
+    const realData = await import('../../src/data/supabaseRealData.js');
+    database = {
+      SIGNUM_MOTORVEN: JSON.parse(JSON.stringify(realData.REAL_SIGNUM_MOTORVEN || {})),
+      config: [JSON.parse(JSON.stringify(realData.REAL_CONFIG || {}))],
+      products: JSON.parse(JSON.stringify(realData.REAL_PRODUCTS || [])),
+      clients: JSON.parse(JSON.stringify(realData.REAL_CLIENTS || [])),
+      profit_invoices: JSON.parse(JSON.stringify(realData.REAL_PROFIT_INVOICES || [])),
+      profit_collections: JSON.parse(JSON.stringify(realData.REAL_PROFIT_COLLECTIONS || [])),
+      profit_accounts_payable: JSON.parse(JSON.stringify(realData.REAL_PROFIT_ACCOUNTS_PAYABLE || [])),
+      profit_supplier_payments: JSON.parse(JSON.stringify(realData.REAL_PROFIT_SUPPLIER_PAYMENTS || [])),
+      profit_purchases: JSON.parse(JSON.stringify(realData.REAL_PROFIT_PURCHASES || [])),
+      profit_suppliers: JSON.parse(JSON.stringify(realData.REAL_PROFIT_SUPPLIERS || [])),
+      profit_sellers: JSON.parse(JSON.stringify(realData.REAL_PROFIT_SELLERS || [])),
+      profit_bank_accounts: JSON.parse(JSON.stringify(realData.REAL_PROFIT_BANK_ACCOUNTS || [])),
+      profit_cash_desks: JSON.parse(JSON.stringify(realData.REAL_PROFIT_CASH_DESKS || [])),
+      profit_zones: JSON.parse(JSON.stringify(realData.REAL_PROFIT_ZONES || [])),
+      profit_transports: JSON.parse(JSON.stringify(realData.REAL_PROFIT_TRANSPORTS || [])),
+      profit_customer_returns: JSON.parse(JSON.stringify(realData.REAL_PROFIT_CUSTOMER_RETURNS || [])),
+      profit_inventory_adjustments: JSON.parse(JSON.stringify(realData.REAL_PROFIT_INVENTORY_ADJUSTMENTS || [])),
+      profit_warehouse_transfers: JSON.parse(JSON.stringify(realData.REAL_PROFIT_WAREHOUSE_TRANSFERS || [])),
+      profit_islr_concepts: JSON.parse(JSON.stringify(realData.REAL_PROFIT_ISLR_CONCEPTS || [])),
+      profit_beneficiaries: JSON.parse(JSON.stringify(realData.REAL_PROFIT_BENEFICIARIES || [])),
+      profit_payment_orders: JSON.parse(JSON.stringify(realData.REAL_PROFIT_PAYMENT_ORDERS || [])),
+      profit_warehouses: JSON.parse(JSON.stringify(realData.REAL_PROFIT_WAREHOUSES || [])),
+      profit_product_lines: JSON.parse(JSON.stringify(realData.REAL_PROFIT_PRODUCT_LINES || [])),
+      profit_product_categories: JSON.parse(JSON.stringify(realData.REAL_PROFIT_PRODUCT_CATEGORIES || [])),
+      profit_currencies: JSON.parse(JSON.stringify(realData.REAL_PROFIT_CURRENCIES || [])),
+      users: JSON.parse(JSON.stringify(realData.REAL_USERS || [])),
+      orders: JSON.parse(JSON.stringify(realData.REAL_ORDERS || [])),
+      sales: JSON.parse(JSON.stringify(realData.REAL_SALES || [])),
+      purchases: JSON.parse(JSON.stringify(realData.REAL_PURCHASES || [])),
+      suppliers: JSON.parse(JSON.stringify(realData.REAL_SUPPLIERS || [])),
+      cash_movements: JSON.parse(JSON.stringify(realData.REAL_CASH_MOVEMENTS || [])),
+      fiscal_closures: JSON.parse(JSON.stringify(realData.REAL_FISCAL_CLOSURES || [])),
+      notifications: JSON.parse(JSON.stringify(realData.REAL_NOTIFICATIONS || []))
+    };
+    saveDatabase();
+  } catch (err) {
+    console.error('[Supabase Local] Error al importar datos de respaldo:', err);
+    database = {};
+  }
 }
 
 let saveTimeout = null;
@@ -1169,15 +1145,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 // Inicializar y arrancar servidor
-initDatabase();
-
-process.on('uncaughtException', (err) => {
-  console.warn('[Supabase Local] Uncaught Exception prevenido:', err?.message || err);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.warn('[Supabase Local] Unhandled Rejection prevenido:', reason);
-});
+await initDatabase();
 
 // Manejo de errores de puerto ocupado o reconexión
 server.on('error', (err) => {
