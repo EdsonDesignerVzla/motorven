@@ -162,6 +162,23 @@ export default function OrdersSalesModal({
   // Formulario Nuevo Pedido
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clientSearchText, setClientSearchText] = useState('');
+  const [clientTypeFilter, setClientTypeFilter] = useState('ALL');
+  const clientTypes = useMemo(() => {
+    const set = new Set();
+    safeClients.forEach(c => { if (c && c.tipoCliente) set.add(String(c.tipoCliente).trim()); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [safeClients]);
+  const filteredClients = useMemo(() => {
+    const q = clientSearchText.trim().toLowerCase();
+    return safeClients.filter(c => {
+      if (!c) return false;
+      const selId = c.id || c.codigo;
+      if (selId && selId === selectedClientId) return true;
+      if (clientTypeFilter !== 'ALL' && String(c.tipoCliente || '').trim() !== clientTypeFilter) return false;
+      if (!q) return true;
+      return [c.codigo, c.id, c.nombre, c.razonSocial, c.rif].some(v => v && String(v).toLowerCase().includes(q));
+    });
+  }, [safeClients, clientSearchText, clientTypeFilter, selectedClientId]);
   const [selectedSeller, setSelectedSeller] = useState(currentUser?.nombre || 'Vendedor Directo');
   const [selectedZone, setSelectedZone] = useState('01');
   const [deliveryAddress, setDeliveryAddress] = useState('');
@@ -465,6 +482,53 @@ export default function OrdersSalesModal({
     return { dias: 0, termKey: 'CONTADO', label: 'Contado' };
   }, [activeClientObj]);
 
+  // Sincronización Vendedor <-> Zona habitual (profit_sellers.co_zon en base de datos)
+  const sellerValue = (s) => s.venDes || s.nombre || s.coVen;
+  const sellerZoneCode = (s) => String((s && (s.coZon || s.co_zon)) || '').trim();
+
+  const findSellerByValue = (value) => safeProfitSellers.find(s => sellerValue(s) === value);
+
+  const handleSellerChange = (value) => {
+    setSelectedSeller(value);
+    const seller = findSellerByValue(value);
+    const zone = sellerZoneCode(seller);
+    if (zone) setSelectedZone(zone);
+  };
+
+  const handleZoneChange = (newZone) => {
+    const seller = findSellerByValue(selectedSeller);
+    const sellerZone = sellerZoneCode(seller);
+    if (sellerZone && sellerZone !== newZone) {
+      const zoneLabel = (code) => {
+        const z = safeProfitZones.find(zz => String(zz.coZon || zz.co_zon).trim() === code);
+        return z ? `${code} - ${z.zonDes || z.zon_des}` : code;
+      };
+      const ok = window.confirm(
+        `Se está seleccionando al vendedor fuera de su zona correspondiente.\n\n` +
+        `Vendedor: ${sellerValue(seller)}\n` +
+        `Zona habitual: ${zoneLabel(sellerZone)}\n` +
+        `Zona seleccionada: ${zoneLabel(newZone)}\n\n` +
+        `¿Desea continuar?`
+      );
+      if (!ok) return;
+      setSelectedZone(newZone);
+      return;
+    }
+    setSelectedZone(newZone);
+    // Si el vendedor no tiene zona asignada, proponer uno de la zona elegida
+    if (!sellerZone) {
+      const match = safeProfitSellers.find(s => sellerZoneCode(s) === newZone && s.activo !== false);
+      if (match) setSelectedSeller(sellerValue(match));
+    }
+  };
+
+  // Al cargar vendedores, alinear la zona inicial con la zona habitual del vendedor
+  useEffect(() => {
+    const zone = sellerZoneCode(findSellerByValue(selectedSeller));
+    if (zone) setSelectedZone(zone);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeProfitSellers]);
+
   // Actualizar dirección, zona y plazo comercial automáticamente al elegir cliente
   useEffect(() => {
     if (activeClientObj) {
@@ -553,6 +617,14 @@ export default function OrdersSalesModal({
     if (validRows.length === 0) {
       setFeedbackMsg({ type: 'error', text: 'Debe agregar al menos un lubricante con cantidad válida.' });
       return;
+    }
+
+    const sellerZoneNow = sellerZoneCode(findSellerByValue(selectedSeller));
+    if (sellerZoneNow && sellerZoneNow !== String(selectedZone).trim()) {
+      const ok = window.confirm(
+        `Se está seleccionando al vendedor fuera de su zona correspondiente.\n\nZona habitual del vendedor: ${sellerZoneNow}\nZona seleccionada: ${selectedZone}\n\n¿Desea continuar?`
+      );
+      if (!ok) return;
     }
 
     try {
@@ -1010,8 +1082,28 @@ export default function OrdersSalesModal({
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.9rem' }}>
                   <div>
                     <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                      Cliente Destinatario * ({safeClients.length} disponibles)
+                      Cliente Destinatario * ({filteredClients.length} de {safeClients.length})
                     </label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="Buscar por nombre, código o RIF..."
+                        value={clientSearchText}
+                        onChange={(e) => setClientSearchText(e.target.value)}
+                        style={{ fontSize: '0.8rem', flex: '2 1 140px', minWidth: 0, boxSizing: 'border-box' }}
+                      />
+                      <select
+                        className="form-control"
+                        value={clientTypeFilter}
+                        onChange={(e) => setClientTypeFilter(e.target.value)}
+                        style={{ fontSize: '0.8rem', flex: '1 1 110px', minWidth: 0, boxSizing: 'border-box' }}
+                        title="Filtrar por tipo de cliente"
+                      >
+                        <option value="ALL">Todos los tipos</option>
+                        {clientTypes.map(t => (<option key={t} value={t}>{t}</option>))}
+                      </select>
+                    </div>
                     <select
                       className="form-control"
                       value={selectedClientId}
@@ -1019,9 +1111,9 @@ export default function OrdersSalesModal({
                       style={{ fontSize: '0.82rem', width: '100%' }}
                     >
                       <option value="">-- Seleccionar Cliente Registrado --</option>
-                      {safeClients.map(c => (
+                      {filteredClients.map(c => (
                         <option key={c.id || c.codigo} value={c.id || c.codigo}>
-                          {c.codigo || c.id} • {c.nombre || c.razonSocial} ({c.rif})
+                          {c.codigo || c.id} • {c.nombre || c.razonSocial} ({c.rif}){c.tipoCliente ? ' · ' + c.tipoCliente : ''}
                         </option>
                       ))}
                     </select>
@@ -1034,13 +1126,13 @@ export default function OrdersSalesModal({
                     <select
                       className="form-control"
                       value={selectedSeller}
-                      onChange={(e) => setSelectedSeller(e.target.value)}
+                      onChange={(e) => handleSellerChange(e.target.value)}
                       style={{ fontSize: '0.82rem', width: '100%' }}
                     >
                       {safeProfitSellers.length > 0 ? (
                         safeProfitSellers.map(s => (
                           <option key={s.coVen || s.id} value={s.venDes || s.nombre || s.coVen}>
-                            {s.venDes || s.nombre} ({s.coVen})
+                            {s.venDes || s.nombre} ({s.coVen}){sellerZoneCode(s) ? ` · Zona ${sellerZoneCode(s)}` : ''}
                           </option>
                         ))
                       ) : (
@@ -1061,7 +1153,7 @@ export default function OrdersSalesModal({
                     <select
                       className="form-control"
                       value={selectedZone}
-                      onChange={(e) => setSelectedZone(e.target.value)}
+                      onChange={(e) => handleZoneChange(e.target.value)}
                       style={{ fontSize: '0.82rem', width: '100%' }}
                     >
                       {safeProfitZones.length > 0 ? (
@@ -1257,9 +1349,10 @@ export default function OrdersSalesModal({
                       <div
                         key={idx}
                         style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'auto 2.5fr 1fr 1fr 1fr 1.2fr auto',
+                          display: 'flex',
+                          flexWrap: 'wrap',
                           gap: '8px',
+                          minWidth: 0,
                           alignItems: 'center',
                           padding: '8px 10px',
                           background: 'rgba(255, 255, 255, 0.02)',
@@ -1276,12 +1369,12 @@ export default function OrdersSalesModal({
                           />
                         </div>
 
-                        <div>
+                        <div style={{ flex: '2.5 1 220px', minWidth: 0 }}>
                           <select
                             className="form-control"
                             value={row.articuloId}
                             onChange={(e) => handleRowChange(idx, 'articuloId', e.target.value)}
-                            style={{ fontSize: '0.8rem', padding: '6px 8px' }}
+                            style={{ fontSize: '0.8rem', padding: '6px 8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
                           >
                             <option value="">-- Seleccionar Lubricante ({safeProducts.length}) --</option>
                             {safeProducts.map(p => (
@@ -1292,18 +1385,18 @@ export default function OrdersSalesModal({
                           </select>
                         </div>
 
-                        <div>
+                        <div style={{ flex: '1 1 110px', minWidth: 0 }}>
                           <input
                             type="text"
                             className="form-control"
                             value={row.unidad || 'Caja (12L)'}
                             onChange={(e) => handleRowChange(idx, 'unidad', e.target.value)}
                             placeholder="Presentación"
-                            style={{ fontSize: '0.78rem', padding: '6px 8px' }}
+                            style={{ fontSize: '0.78rem', padding: '6px 8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
                           />
                         </div>
 
-                        <div>
+                        <div style={{ flex: '1 1 80px', minWidth: 0 }}>
                           <input
                             type="number"
                             min="1"
@@ -1311,11 +1404,11 @@ export default function OrdersSalesModal({
                             value={row.cantidad}
                             onChange={(e) => handleRowChange(idx, 'cantidad', Math.max(1, Number(e.target.value)))}
                             placeholder="Cant."
-                            style={{ fontSize: '0.82rem', fontWeight: 700, textAlign: 'center', padding: '6px 8px' }}
+                            style={{ fontSize: '0.82rem', fontWeight: 700, textAlign: 'center', padding: '6px 8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
                           />
                         </div>
 
-                        <div>
+                        <div style={{ flex: '1 1 90px', minWidth: 0 }}>
                           <input
                             type="number"
                             step="0.01"
@@ -1323,11 +1416,11 @@ export default function OrdersSalesModal({
                             value={row.precioUsd}
                             onChange={(e) => handleRowChange(idx, 'precioUsd', Number(e.target.value))}
                             placeholder="Precio $"
-                            style={{ fontSize: '0.82rem', fontWeight: 700, textAlign: 'right', padding: '6px 8px' }}
+                            style={{ fontSize: '0.82rem', fontWeight: 700, textAlign: 'right', padding: '6px 8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
                           />
                         </div>
 
-                        <div style={{ textAlign: 'right' }}>
+                        <div style={{ textAlign: 'right', flex: '1 1 90px', minWidth: 0 }}>
                           <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--semaforo-verde)' }}>
                             {formatUsd(rowTotalUsd)}
                           </div>
