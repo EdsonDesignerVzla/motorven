@@ -1,0 +1,18 @@
+{
+  "name": "profit-bridge",
+  "version": "1.0.0",
+  "description": "Conector y Sincronizador de Profit Plus 2K8 (SQL Server) con SIGNUM MOTORVEN y Supabase",
+  "main": "syncProfitToSupabase.js",
+  "type": "module",
+  "scripts": {
+    "start": "node -r ./preload.cjs --tls-min-v1.0 --tls-cipher-list=\"DEFAULT@SECLEVEL=0\" server.js",
+    "bridge": "node -r ./preload.cjs --tls-min-v1.0 --tls-cipher-list=\"DEFAULT@SECLEVEL=0\" server.js",
+    "test-connection": "node -r ./preload.cjs --tls-min-v1.0 --tls-cipher-list=\"DEFAULT@SECLEVEL=0\" testConnection.js",
+    "sync": "node -r ./preload.cjs --tls-min-v1.0 --tls-cipher-list=\"DEFAULT@SECLEVEL=0\" syncProfitToSupabase.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7",
+    "mssql": "^11.0.1"
+  }
+}

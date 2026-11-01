@@ -1,0 +1,2045 @@
+import React, { useState, useEffect } from 'react';
+import { ShieldAlert } from 'lucide-react';
+import Navigation from './components/Navigation';
+import HeaderBar from './components/HeaderBar';
+
+import DashboardView from './views/DashboardView';
+import InventoryView from './views/InventoryView';
+import SalesPOSView from './views/SalesPOSView';
+import PurchasesView from './views/PurchasesView';
+import SellersView from './views/SellersView';
+import ProfitabilityView from './views/ProfitabilityView';
+import CashflowView from './views/CashflowView';
+import TaxReportsView from './views/TaxReportsView';
+import AuditLedgerView from './views/AuditLedgerView';
+import UsersManagementView from './views/UsersManagementView';
+import SupabaseTablesView from './views/SupabaseTablesView';
+import MultiDatabaseExplorerView from './views/MultiDatabaseExplorerView';
+import DeviceSimulatorView from './views/DeviceSimulatorView';
+import DatabaseComparatorView from './views/DatabaseComparatorView';
+import SellerOrderPOSView from './views/SellerOrderPOSView';
+import LoginView from './views/LoginView';
+import OrdersSalesModal from './components/OrdersSalesModal';
+import ServerExplorerModal from './components/ServerExplorerModal';
+import ProfitStatusModal from './components/ProfitStatusModal';
+import AppConfigModal from './components/AppConfigModal';
+import CashBankModal from './components/CashBankModal';
+import AccountsReceivableModal from './components/AccountsReceivableModal';
+import AccountsPayableModal from './components/AccountsPayableModal';
+import DebtCollectionIntelligenceModal from './components/DebtCollectionIntelligenceModal';
+import NotificationsCenterModal from './components/NotificationsCenterModal';
+import ModuleErrorBoundary from './components/ModuleErrorBoundary';
+import signumLogoImg from './assets/logo_signum_transpatente.png';
+import { useNotification } from './context/NotificationContext';
+import {
+  INITIAL_CONFIG,
+  INITIAL_PRODUCTS,
+  INITIAL_CLIENTS,
+  INITIAL_SUPPLIERS,
+  INITIAL_SALES,
+  INITIAL_PURCHASES,
+  INITIAL_CASH_MOVEMENTS,
+  INITIAL_FISCAL_CLOSURES,
+  DEFAULT_PROFIT_SELLERS,
+  INITIAL_ORDERS
+} from './data/mockData';
+import {
+  REAL_CONFIG,
+  REAL_PRODUCTS,
+  REAL_CLIENTS,
+  REAL_ORDERS,
+  REAL_PROFIT_SELLERS,
+  REAL_PROFIT_INVOICES,
+  REAL_PROFIT_COLLECTIONS,
+  REAL_PROFIT_ACCOUNTS_PAYABLE,
+  REAL_PROFIT_SUPPLIER_PAYMENTS,
+  REAL_PROFIT_PURCHASES,
+  REAL_PROFIT_SUPPLIERS,
+  REAL_PROFIT_BANK_ACCOUNTS,
+  REAL_PROFIT_CASH_DESKS,
+  REAL_PROFIT_ZONES,
+  REAL_PROFIT_TRANSPORTS,
+  REAL_PROFIT_CUSTOMER_RETURNS,
+  REAL_PROFIT_INVENTORY_ADJUSTMENTS,
+  REAL_PROFIT_WAREHOUSE_TRANSFERS,
+  REAL_PROFIT_ISLR_CONCEPTS,
+  REAL_PROFIT_BENEFICIARIES,
+  REAL_PROFIT_PAYMENT_ORDERS,
+  REAL_PROFIT_WAREHOUSES,
+  REAL_PROFIT_PRODUCT_LINES,
+  REAL_PROFIT_PRODUCT_CATEGORIES,
+  REAL_PROFIT_PRODUCT_SUBLINES,
+  REAL_PROFIT_CURRENCIES
+} from './data/supabaseRealData';
+
+import {
+  seedDatabaseIfEmpty,
+  getSupabaseConfig,
+  updateSupabaseConfig,
+  getSupabaseProducts,
+  saveSupabaseProduct,
+  deleteSupabaseProduct,
+  getSupabaseClients,
+  saveSupabaseClient,
+  deleteSupabaseClient,
+  getSupabaseSuppliers,
+  getSupabaseSales,
+  processSupabaseSale,
+  getSupabaseCashMovements,
+  addSupabaseCashMovement,
+  getSupabasePurchases,
+  saveSupabasePurchase,
+  getSupabaseOrders,
+  saveSupabaseOrder,
+  updateSupabaseOrderStatus,
+  getSupabaseProfitBankAccounts,
+  getSupabaseProfitCashDesks,
+  updateSupabaseProfitCashDesk,
+  getSupabaseProfitCollections,
+  getSupabaseProfitInvoices,
+  getSupabaseProfitSuppliers,
+  getSupabaseProfitPurchases,
+  getSupabaseProfitAccountsPayable,
+  getSupabaseProfitSupplierPayments,
+  getSupabaseProfitSellers,
+  updateSupabaseSellerPhoto,
+  updateSupabaseSellerTarget,
+  updateSupabaseSellerZone,
+  updateSupabaseGlobalSellersTarget,
+  getSupabaseProfitZones,
+  getSupabaseProfitTransports,
+  getSupabaseProfitReturns,
+  getSupabaseProfitInventoryAdjustments,
+  getSupabaseProfitWarehouseTransfers,
+  getSupabaseProfitIslrConcepts,
+  getSupabaseProfitBeneficiaries,
+  getSupabaseProfitPaymentOrders,
+  getSupabaseProfitIslrWithholdings,
+  getSupabaseProfitAuditTrails,
+  getSupabaseProfitWarehouses,
+  getSupabaseProfitProductLines,
+  getSupabaseProfitProductCategories,
+  getSupabaseProfitProductSublines,
+  getSupabaseProfitCurrencies,
+  fetchBcvRate,
+  getSupabaseFiscalClosures,
+  saveSupabaseFiscalClosure,
+  getSupabaseUsers,
+  saveSupabaseUser
+} from './services/supabaseService';
+import {
+  initOfflineSyncListeners,
+  flushSyncQueue
+} from './services/offlineSyncService';
+import { formatBs } from './services/formatService';
+import {
+  getActiveUser,
+  getUsersList,
+  logout as authLogout,
+  canAccessModule,
+  ROLE_PERMISSIONS,
+  DEFAULT_TABS_BY_ROLE,
+  normalizeRole,
+  DEFAULT_USERS,
+  sortUsersByHierarchy
+} from './services/authService';
+import {
+  subscribeToRealtimeChanges,
+  triggerProfitSync
+} from './services/profitService';
+import { subscribeToRealtimeSync } from './services/realtimeSyncBridge';
+
+
+function MainApp() {
+  const [currentUser, setCurrentUser] = useState(() => {
+    return getActiveUser() || null;
+  });
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tabParam = urlParams.get('tab');
+      if (tabParam) return tabParam;
+      if (window.location.hash) {
+        const h = window.location.hash.replace('#', '');
+        if (h && h !== 'supabase-tables' && h !== 'device-simulator') return h;
+      }
+    }
+    return 'dashboard';
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const h = window.location.hash.replace('#', '');
+        if (h && h !== 'supabase-tables' && h !== 'device-simulator') {
+          setActiveTab(h);
+        }
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // Restablecer scroll al inicio al cambiar de módulo para evitar vistas sobremontadas o cortadas
+  useEffect(() => {
+    const mainEl = document.querySelector('.content-body');
+    if (mainEl) {
+      mainEl.scrollTop = 0;
+    }
+  }, [activeTab]);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('signum_sidebar_collapsed') === 'true';
+  });
+  // Cargar modo inicial (por defecto claro, o el persistido por el usuario)
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('signum_theme') || 'light';
+  });
+  const [config, setConfigState] = useState(() => {
+    try {
+      const cached = localStorage.getItem('signum_app_config');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && Number(parsed.tasaDolar) > 500) return parsed;
+      }
+    } catch (_) {}
+    return REAL_CONFIG;
+  });
+
+  const notify = useNotification();
+
+  useEffect(() => {
+    if (config) {
+      window.dispatchEvent(new CustomEvent('signum_config_updated', { detail: config }));
+    }
+  }, [config]);
+  const [products, setProductsState] = useState(() => {
+    try {
+      const cached = localStorage.getItem('sm_products_v4_fiscal');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length >= 40 && parsed.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0)) {
+          return parsed;
+        }
+      }
+    } catch (_) {}
+    return REAL_PRODUCTS;
+  });
+  const [clients, setClientsState] = useState(() => {
+    try {
+      const cached = localStorage.getItem('sm_clients_v4_fiscal');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length >= 600) return parsed;
+      }
+    } catch (_) {}
+    return REAL_CLIENTS;
+  });
+  const [orders, setOrdersState] = useState(() => {
+    try {
+      const cached = localStorage.getItem('sm_orders_v4_pipeline');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length >= 15) return parsed;
+      }
+    } catch (_) {}
+    return REAL_ORDERS || [];
+  });
+  const [profitBankAccounts, setProfitBankAccounts] = useState(() => REAL_PROFIT_BANK_ACCOUNTS || []);
+  const [profitCashDesks, setProfitCashDesks] = useState(() => REAL_PROFIT_CASH_DESKS || []);
+  const [profitCollections, setProfitCollections] = useState(() => REAL_PROFIT_COLLECTIONS || []);
+  const [profitInvoices, setProfitInvoices] = useState(() => REAL_PROFIT_INVOICES || []);
+  const [profitSuppliers, setProfitSuppliers] = useState(() => REAL_PROFIT_SUPPLIERS || []);
+  const [profitPurchases, setProfitPurchases] = useState(() => REAL_PROFIT_PURCHASES || []);
+  const [profitAccountsPayable, setProfitAccountsPayable] = useState(() => REAL_PROFIT_ACCOUNTS_PAYABLE || []);
+  const [profitSupplierPayments, setProfitSupplierPayments] = useState(() => REAL_PROFIT_SUPPLIER_PAYMENTS || []);
+  const [profitSellers, setProfitSellers] = useState(() => REAL_PROFIT_SELLERS || DEFAULT_PROFIT_SELLERS || []);
+  const [profitZones, setProfitZones] = useState(() => REAL_PROFIT_ZONES || []);
+  const [profitTransports, setProfitTransports] = useState(() => REAL_PROFIT_TRANSPORTS || []);
+  const [profitReturns, setProfitReturns] = useState(() => REAL_PROFIT_CUSTOMER_RETURNS || []);
+  const [profitInventoryAdjustments, setProfitInventoryAdjustments] = useState(() => REAL_PROFIT_INVENTORY_ADJUSTMENTS || []);
+  const [profitWarehouseTransfers, setProfitWarehouseTransfers] = useState(() => REAL_PROFIT_WAREHOUSE_TRANSFERS || []);
+  const [profitIslrConcepts, setProfitIslrConcepts] = useState(() => REAL_PROFIT_ISLR_CONCEPTS || []);
+  const [profitBeneficiaries, setProfitBeneficiaries] = useState(() => REAL_PROFIT_BENEFICIARIES || []);
+  const [profitPaymentOrders, setProfitPaymentOrders] = useState(() => REAL_PROFIT_PAYMENT_ORDERS || []);
+  const [profitIslrWithholdings, setProfitIslrWithholdings] = useState([]);
+  const [profitAuditTrails, setProfitAuditTrails] = useState([]);
+  const [profitWarehouses, setProfitWarehouses] = useState(() => REAL_PROFIT_WAREHOUSES || []);
+  const [profitProductLines, setProfitProductLines] = useState(() => REAL_PROFIT_PRODUCT_LINES || []);
+  const [profitProductCategories, setProfitProductCategories] = useState(() => REAL_PROFIT_PRODUCT_CATEGORIES || []);
+  const [profitProductSublines, setProfitProductSublines] = useState(() => REAL_PROFIT_PRODUCT_SUBLINES || []);
+  const [profitCurrencies, setProfitCurrencies] = useState(() => REAL_PROFIT_CURRENCIES || []);
+  const [pendingOrderToBill, setPendingOrderToBill] = useState(null);
+  const [ordersSalesModalTab, setOrdersSalesModalTab] = useState('nuevo');
+  const [ordersSalesModalOrder, setOrdersSalesModalOrder] = useState(null);
+  const [showServerExplorerModal, setShowServerExplorerModal] = useState(false);
+  const [showProfitStatusModal, setShowProfitStatusModal] = useState(false);
+  const [showDebtCollectionModal, setShowDebtCollectionModal] = useState(false);
+  const [showDatabaseComparatorModal, setShowDatabaseComparatorModal] = useState(false);
+  const [suppliers, setSuppliersState] = useState(() => []);
+  const [sales, setSalesState] = useState(() => []);
+  const [purchases, setPurchasesState] = useState(() => []);
+  const [cashMovements, setCashMovementsState] = useState(() => []);
+  const [fiscalClosures, setFiscalClosures] = useState(() => []);
+  const [usersList, setUsersList] = useState(() => getUsersList());
+  const [globalSearch, setGlobalSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleOpenOrdersSalesModal = (tab = 'nuevo', order = null) => {
+    setOrdersSalesModalTab(tab);
+    setOrdersSalesModalOrder(order);
+    setActiveTab('pedidos');
+  };
+
+  // Asegurar siempre modo claro en el elemento <html> y localStorage al cargar
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('signum_theme', theme);
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  const handleToggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('signum_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
+
+  // Atajo de teclado universal Ctrl+B / Cmd+B para expandir/contraer el menú lateral
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        handleToggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Cargar datos iniciales desde Supabase y sincronizar Tasa BCV
+  useEffect(() => {
+    let isMounted = true;
+    const cleanupOfflineListeners = initOfflineSyncListeners();
+
+    // Limpiar explícitamente cualquier dato de prueba o caché obsoleto para asegurar lectura viva de Supabase
+    try {
+      localStorage.removeItem('signum_profit_dashboard_kpis');
+    } catch (_) {}
+
+    const initApp = async () => {
+      try {
+        
+        // Obtener datos iniciales en paralelo sin esperas secuenciales
+        const [
+          cfg, prods, clis, ords, bnks, cdesks, cobs, facs, sups, sls, cash, purs, closures, usrs,
+          pSups, pPurs, pCxp, pPays, pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers,
+          pIslr, pBen, pOrders, pWithholdings, pAuditTrails,
+          pWarehouses, pLines, pCategories, pSublines, pCurrs
+        ] = await Promise.all([
+          getSupabaseConfig(),
+          getSupabaseProducts(),
+          getSupabaseClients(),
+          getSupabaseOrders(),
+          getSupabaseProfitBankAccounts(),
+          getSupabaseProfitCashDesks(),
+          getSupabaseProfitCollections(),
+          getSupabaseProfitInvoices(),
+          getSupabaseSuppliers(),
+          getSupabaseSales(),
+          getSupabaseCashMovements(),
+          getSupabasePurchases(),
+          getSupabaseFiscalClosures(),
+          getSupabaseUsers(),
+          getSupabaseProfitSuppliers(),
+          getSupabaseProfitPurchases(),
+          getSupabaseProfitAccountsPayable(),
+          getSupabaseProfitSupplierPayments(),
+          getSupabaseProfitSellers(),
+          getSupabaseProfitZones(),
+          getSupabaseProfitTransports(),
+          getSupabaseProfitReturns(),
+          getSupabaseProfitInventoryAdjustments(),
+          getSupabaseProfitWarehouseTransfers(),
+          getSupabaseProfitIslrConcepts(),
+          getSupabaseProfitBeneficiaries(),
+          getSupabaseProfitPaymentOrders(),
+          getSupabaseProfitIslrWithholdings(),
+          getSupabaseProfitAuditTrails(),
+          getSupabaseProfitWarehouses(),
+          getSupabaseProfitProductLines(),
+          getSupabaseProfitProductCategories(),
+          getSupabaseProfitProductSublines(),
+          getSupabaseProfitCurrencies()
+        ]);
+        
+        if (isMounted) {
+          let activeConfig = cfg;
+          // Solo si la base está completamente virgen se ejecuta el seed de respaldo
+          if (!cfg) {
+            await seedDatabaseIfEmpty();
+            activeConfig = await getSupabaseConfig();
+          }
+
+          setConfigState(activeConfig);
+          setProductsState(prods || []);
+          setClientsState(clis || []);
+          setOrdersState(ords || []);
+          setProfitBankAccounts(bnks || []);
+          setProfitCashDesks(cdesks || []);
+          setProfitCollections(cobs || []);
+          setProfitInvoices(facs || []);
+          setProfitSuppliers(pSups || []);
+          setProfitPurchases(pPurs || []);
+          setProfitAccountsPayable(pCxp || []);
+          setProfitSupplierPayments(pPays || []);
+          setProfitSellers(pSellers || []);
+          setProfitZones(pZones || []);
+          setProfitTransports(pTrans || []);
+          setProfitReturns(pReturns || []);
+          setProfitInventoryAdjustments(pAdjustments || []);
+          setProfitWarehouseTransfers(pTransfers || []);
+          setProfitIslrConcepts(pIslr || []);
+          setProfitBeneficiaries(pBen || []);
+          setProfitPaymentOrders(pOrders || []);
+          setProfitIslrWithholdings(pWithholdings || []);
+          setProfitAuditTrails(pAuditTrails || []);
+          setProfitWarehouses(pWarehouses || []);
+          setProfitProductLines(pLines || []);
+          setProfitProductCategories(pCategories || []);
+          setProfitProductSublines(pSublines || []);
+          setProfitCurrencies(pCurrs || []);
+          setSuppliersState(sups || []);
+          setSalesState(sls || []);
+          setPurchasesState(purs || []);
+          setCashMovementsState(cash || []);
+          setFiscalClosures(closures || []);
+          if (usrs && usrs.length > 0) {
+            const hasSysAdmin = usrs.some(u => normalizeRole(u.rol) === 'ADMINISTRADOR DEL SISTEMA' || u.username?.toLowerCase() === 'sysadmin');
+            let combinedUsers = usrs;
+            if (!hasSysAdmin) {
+              const sysAdminDefault = DEFAULT_USERS.find(u => u.id === 'usr-sysadmin');
+              if (sysAdminDefault) {
+                combinedUsers = [sysAdminDefault, ...usrs];
+                saveSupabaseUser(sysAdminDefault, { id: 'usr-sysadmin', nombre: 'Administrador del Sistema', rol: 'ADMINISTRADOR DEL SISTEMA' }).catch(() => {});
+              }
+            }
+            const sortedUsers = sortUsersByHierarchy(combinedUsers);
+            setUsersList(sortedUsers);
+            try {
+              localStorage.setItem('signum_users_list', JSON.stringify(sortedUsers));
+            } catch (_) {}
+            const activeUser = getActiveUser();
+            if (activeUser) {
+              const matched = sortedUsers.find(
+                (u) => u.id === activeUser.id || (u.username && activeUser.username && u.username.toLowerCase() === activeUser.username.toLowerCase())
+              );
+              if (matched) {
+                setCurrentUser(matched);
+                try {
+                  localStorage.setItem('signum_active_user', JSON.stringify(matched));
+                } catch (_) {}
+              }
+            } else {
+              setCurrentUser(null);
+            }
+          }
+
+          // Sincronizar tasa BCV de forma asíncrona en segundo plano (sin congelar el splash)
+          fetchBcvRate().then(async (liveRate) => {
+            if (liveRate && activeConfig?.tasaDolar && liveRate !== activeConfig.tasaDolar) {
+              console.log(`[BCV Sync Inicial] Tasa actualizada a: Bs. ${liveRate}`);
+              const updatedCfg = await updateSupabaseConfig({ tasaDolar: liveRate });
+              if (isMounted) setConfigState(updatedCfg);
+            }
+          }).catch((bcvErr) => {
+            console.warn('Verificación inicial BCV en segundo plano:', bcvErr);
+          });
+
+          // Procesar cola de sincronización offline si quedaron operaciones pendientes
+          flushSyncQueue();
+
+          // Sincronizar con Profit Plus 2K8 al arrancar (en segundo plano, sin bloquear)
+          triggerProfitSync().then(async () => {
+            const [
+              freshProds, freshClis, freshBnks, freshCashDesks, freshCobs, freshFacs,
+              freshPSups, freshPPurs, freshCxp, freshPays, freshSellers,
+              freshZones, freshTrans, freshReturns, freshAju, freshTra,
+              freshIslr, freshBen, freshOrders, freshWithholdings, freshTrails
+            ] = await Promise.all([
+              getSupabaseProducts(),
+              getSupabaseClients(),
+              getSupabaseProfitBankAccounts(),
+              getSupabaseProfitCashDesks(),
+              getSupabaseProfitCollections(),
+              getSupabaseProfitInvoices(),
+              getSupabaseProfitSuppliers(),
+              getSupabaseProfitPurchases(),
+              getSupabaseProfitAccountsPayable(),
+              getSupabaseProfitSupplierPayments(),
+              getSupabaseProfitSellers(),
+              getSupabaseProfitZones(),
+              getSupabaseProfitTransports(),
+              getSupabaseProfitReturns(),
+              getSupabaseProfitInventoryAdjustments(),
+              getSupabaseProfitWarehouseTransfers(),
+              getSupabaseProfitIslrConcepts(),
+              getSupabaseProfitBeneficiaries(),
+              getSupabaseProfitPaymentOrders(),
+              getSupabaseProfitIslrWithholdings(),
+              getSupabaseProfitAuditTrails()
+            ]);
+            if (!isMounted) return;
+            console.log('[Profit Sync Inicial] Datos actualizados desde Profit Plus 2K8 ✓');
+            if (freshProds?.length > 0) setProductsState(freshProds);
+            if (freshClis?.length > 0) setClientsState(freshClis);
+            if (freshBnks) setProfitBankAccounts(freshBnks);
+            if (freshCashDesks) setProfitCashDesks(freshCashDesks);
+            if (freshCobs) setProfitCollections(freshCobs);
+            if (freshFacs) setProfitInvoices(freshFacs);
+            if (freshPSups) setProfitSuppliers(freshPSups);
+            if (freshPPurs) setProfitPurchases(freshPPurs);
+            if (freshCxp) setProfitAccountsPayable(freshCxp);
+            if (freshPays) setProfitSupplierPayments(freshPays);
+            if (freshSellers) setProfitSellers(freshSellers);
+            if (freshZones) setProfitZones(freshZones);
+            if (freshTrans) setProfitTransports(freshTrans);
+            if (freshReturns) setProfitReturns(freshReturns);
+            if (freshAju) setProfitInventoryAdjustments(freshAju);
+            if (freshTra) setProfitWarehouseTransfers(freshTra);
+            if (freshIslr) setProfitIslrConcepts(freshIslr);
+            if (freshBen) setProfitBeneficiaries(freshBen);
+            if (freshOrders) setProfitPaymentOrders(freshOrders);
+            if (freshWithholdings) setProfitIslrWithholdings(freshWithholdings);
+            if (freshTrails) setProfitAuditTrails(freshTrails);
+          }).catch((profitErr) => {
+            console.warn('[Profit Sync Inicial] Bridge no disponible, usando datos de Supabase:', profitErr?.message || profitErr);
+          });
+
+          // Finalizar splash de inmediato una vez cargada la información
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Error cargando los datos iniciales de Supabase:', err);
+        if (isMounted) {
+          // En caso de incidencia de red, no bloquear la aplicación y permitir entrar
+          setLoading(false);
+        }
+      }
+    };
+
+    initApp();
+
+    return () => {
+      isMounted = false;
+      if (cleanupOfflineListeners) cleanupOfflineListeners();
+    };
+  }, []);
+
+  // Suscripción en Tiempo Real: Reconciliaciones desde el Comparador (Modal o Nueva Pestaña)
+  useEffect(() => {
+    const unsubscribe = subscribeToRealtimeSync(({ tableId, action, key, item, allTableData }) => {
+      console.log(`[App Realtime Sync] Recibida reconciliación en tabla '${tableId}' (Acción: ${action}, Clave: ${key})`);
+
+      if (tableId === 'products') {
+        if ((action === 'SYNC_CATALOG_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProductsState(allTableData);
+          try {
+            localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(allTableData));
+          } catch (_) {}
+          notify.success('⚡ Catálogo de Lubricantes actualizado en tiempo real');
+          return;
+        }
+
+        if (action === 'DELETE') {
+          setProductsState(prev => {
+            const next = prev.filter(p => p.codigo !== key && p.id !== key);
+            try { localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next)); } catch (_) {}
+            return next;
+          });
+          notify.info(`Renglón ${key} depurado en tiempo real`);
+          return;
+        }
+
+        if (item) {
+          setProductsState(prev => {
+            const index = prev.findIndex(p => p.codigo === key || p.id === key);
+            let next;
+            if (index >= 0) {
+              next = [...prev];
+              next[index] = { ...next[index], ...item };
+            } else {
+              next = [...prev, item];
+            }
+            try {
+              localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next));
+            } catch (_) {}
+            return next;
+          });
+          notify.success(`⚡ Lubricante ${key} reconciliado y actualizado en tiempo real`);
+        }
+      } else if (tableId === 'clients') {
+        if ((action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setClientsState(allTableData);
+          return;
+        }
+
+        if (action === 'DELETE') {
+          setClientsState(prev => {
+            const next = prev.filter(c => c.rif !== key && c.codigo !== key && c.id !== key);
+            try { localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next)); } catch (_) {}
+            return next;
+          });
+          notify.info(`Cliente ${key} depurado en tiempo real`);
+          return;
+        }
+
+        if (item) {
+          setClientsState(prev => {
+            const index = prev.findIndex(c => c.rif === key || c.codigo === key || c.id === key);
+            let next;
+            if (index >= 0) {
+              next = [...prev];
+              next[index] = { ...next[index], ...item };
+            } else {
+              next = [...prev, item];
+            }
+            try {
+              localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next));
+            } catch (_) {}
+            return next;
+          });
+          notify.success(`⚡ Cliente ${key} sincronizado en tiempo real`);
+        }
+      } else if (tableId === 'warehouses') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitWarehouses(allTableData);
+          return;
+        }
+        if (item) {
+          const normKey = String(key || item.id || item.coAlm || '').replace(/^ALM-/, '');
+          setProfitWarehouses(prev => {
+            const index = prev.findIndex(w => String(w.coAlm || w.co_alm || w.coAlma || w.co_alma || w.id || '').replace(/^ALM-/, '') === normKey);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+          notify.success(`⚡ Almacén ${key} sincronizado en tiempo real`);
+        }
+      } else if (tableId === 'bank_accounts') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitBankAccounts(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitBankAccounts(prev => {
+            const index = prev.findIndex(b => b.codCta === key || b.cod_cta === key || b.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+          notify.success(`⚡ Cuenta bancaria ${key} sincronizada`);
+        }
+      } else if (tableId === 'sellers') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitSellers(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitSellers(prev => {
+            const index = prev.findIndex(s => s.coVen === key || s.co_ven === key || s.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+          notify.success(`⚡ Asesor ${key} sincronizado`);
+        }
+      } else if (tableId === 'suppliers') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitSuppliers(allTableData);
+          setSuppliersState(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitSuppliers(prev => {
+            const index = prev.findIndex(s => s.coProv === key || s.co_prov === key || s.id === key || s.rif === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+          setSuppliersState(prev => {
+            const index = prev.findIndex(s => s.coProv === key || s.co_prov === key || s.id === key || s.rif === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+          notify.success(`⚡ Proveedor ${key} sincronizado`);
+        }
+      } else if (tableId === 'invoices') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitInvoices(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitInvoices(prev => {
+            const index = prev.findIndex(f => f.facturaNumero === key || f.fact_num === key || f.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+        }
+      } else if (tableId === 'inventory_adjustments') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitInventoryAdjustments(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitInventoryAdjustments(prev => {
+            const index = prev.findIndex(a => a.ajueNum === key || a.ajue_num === key || a.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+        }
+      } else if (tableId === 'warehouse_transfers') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitWarehouseTransfers(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitWarehouseTransfers(prev => {
+            const index = prev.findIndex(t => t.trasNum === key || t.tras_num === key || t.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+        }
+      } else if (tableId === 'product_lines') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitProductLines(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitProductLines(prev => {
+            const index = prev.findIndex(l => l.coLin === key || l.co_lin === key || l.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+        }
+      } else if (tableId === 'product_sublines') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setProfitProductSublines(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitProductSublines(prev => {
+            const index = prev.findIndex(s => s.coSubl === key || s.co_subl === key || s.id === key);
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [...prev, item];
+          });
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Sincronizar currentUser con usersList en tiempo real (para reflejar foto inmediatamente)
+  useEffect(() => {
+    if (currentUser && usersList && usersList.length > 0) {
+      const matched = usersList.find(
+        (u) => u.id === currentUser.id || (u.username && currentUser.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
+      );
+      if (matched && (matched.foto !== currentUser.foto || matched.nombre !== currentUser.nombre || matched.cargo !== currentUser.cargo)) {
+        setCurrentUser(matched);
+        try {
+          localStorage.setItem('signum_active_user', JSON.stringify(matched));
+        } catch (_) {}
+      }
+    }
+  }, [usersList, currentUser]);
+
+  // Asegurar que la pestaña activa corresponda a los permisos del usuario
+  useEffect(() => {
+    if (currentUser && !canAccessModule(currentUser.rol, activeTab, currentUser)) {
+      const norm = normalizeRole(currentUser.rol);
+      const allowedModules = (Array.isArray(currentUser.modulos) && currentUser.modulos.length > 0)
+        ? currentUser.modulos
+        : (ROLE_PERMISSIONS[norm] || ['ventas']);
+      const preferredTab = DEFAULT_TABS_BY_ROLE[norm];
+      const fallbackTab = allowedModules.includes(preferredTab)
+        ? preferredTab
+        : (allowedModules[0] || 'ventas');
+      setActiveTab(fallbackTab);
+    }
+  }, [currentUser, activeTab]);
+
+  const handleLoginSuccess = (user) => {
+    setCurrentUser(user);
+    const norm = normalizeRole(user?.rol);
+    const allowedModules = (Array.isArray(user?.modulos) && user.modulos.length > 0)
+      ? user.modulos
+      : (ROLE_PERMISSIONS[norm] || ['ventas']);
+    const targetTab = DEFAULT_TABS_BY_ROLE[norm] || 'ventas';
+    const destinationTab = allowedModules.includes(targetTab) ? targetTab : (allowedModules[0] || 'ventas');
+    setActiveTab(destinationTab);
+  };
+
+  const handleLogout = () => {
+    authLogout();
+    setCurrentUser(null);
+  };
+
+  // Sincronización periódica en tiempo real con el Banco Central de Venezuela (BCV)
+  useEffect(() => {
+    const syncBcvRateSilently = async () => {
+      try {
+        const liveRate = await fetchBcvRate();
+        if (liveRate && config?.tasaDolar && liveRate !== config.tasaDolar) {
+          console.log(`[BCV Sync Automático] Actualizando tasa a: Bs. ${liveRate} (anterior: Bs. ${config.tasaDolar})`);
+          const updatedConfig = await updateSupabaseConfig({ tasaDolar: liveRate });
+          setConfigState(updatedConfig);
+        }
+      } catch (err) {
+        console.warn("[BCV Sync Automático] No se pudo verificar la tasa:", err);
+      }
+    };
+
+    // Polling en tiempo real cada 60 segundos (1 minuto)
+    const interval = setInterval(syncBcvRateSilently, 60000);
+
+    // Sincronizar de inmediato al recuperar foco de la ventana
+    const handleFocus = () => {
+      syncBcvRateSilently();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [config?.tasaDolar]);
+
+  // Sincronización periódica automática con Profit Plus 2K8 (cada 2 minutos)
+  useEffect(() => {
+    let isRunning = false;
+
+    const syncProfitSilently = async () => {
+      if (isRunning) return;
+      isRunning = true;
+      try {
+        await handleSyncProfit();
+        console.log('[Profit Sync Automático] Datos actualizados ✓', new Date().toLocaleTimeString('es-VE'));
+      } catch (err) {
+        console.warn('[Profit Sync Automático] Error silencioso:', err?.message || err);
+      } finally {
+        isRunning = false;
+      }
+    };
+
+    // Polling cada 2 minutos
+    const interval = setInterval(syncProfitSilently, 2 * 60 * 1000);
+
+    // Sincronizar también al recuperar el foco de la ventana
+    const handleFocusProfit = () => syncProfitSilently();
+    window.addEventListener('focus', handleFocusProfit);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocusProfit);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Suscripción a Cambios en TIEMPO REAL (Supabase Realtime) para Profit Plus y base de datos
+  useEffect(() => {
+    const unsubscribe = subscribeToRealtimeChanges({
+      onProductsChange: async () => {
+        console.log('⚡ [Realtime] Recargando catálogo de productos...');
+        const updatedProds = await getSupabaseProducts();
+        if (updatedProds && updatedProds.length > 0) {
+          setProductsState(updatedProds);
+        }
+      },
+      onClientsChange: async () => {
+        console.log('⚡ [Realtime] Recargando cartera de clientes...');
+        const updatedClis = await getSupabaseClients();
+        if (updatedClis && updatedClis.length > 0) {
+          setClientsState(updatedClis);
+        }
+      },
+      onConfigChange: async () => {
+        const updatedCfg = await getSupabaseConfig();
+        if (updatedCfg) {
+          setConfigState(updatedCfg);
+        }
+      },
+      onOrdersChange: async () => {
+        console.log('⚡ [Realtime] Recargando pedidos y preventa...');
+        const updatedOrds = await getSupabaseOrders();
+        if (updatedOrds) {
+          setOrdersState(updatedOrds);
+        }
+      },
+      onBankAccountsChange: async () => {
+        console.log('⚡ [Realtime] Recargando cuentas bancarias...');
+        const updatedBnks = await getSupabaseProfitBankAccounts();
+        if (updatedBnks) setProfitBankAccounts(updatedBnks);
+      },
+      onCashDesksChange: async () => {
+        console.log('⚡ [Realtime] Recargando cajas registradoras Profit...');
+        const updatedDesks = await getSupabaseProfitCashDesks();
+        if (updatedDesks) setProfitCashDesks(updatedDesks);
+      },
+      onCollectionsChange: async () => {
+        console.log('⚡ [Realtime] Recargando cobranzas Profit...');
+        const updatedCobs = await getSupabaseProfitCollections();
+        if (updatedCobs) setProfitCollections(updatedCobs);
+      },
+      onInvoicesChange: async () => {
+        console.log('⚡ [Realtime] Recargando facturas Profit...');
+        const updatedFacs = await getSupabaseProfitInvoices();
+        if (updatedFacs) setProfitInvoices(updatedFacs);
+      },
+      onSuppliersChange: async () => {
+        console.log('⚡ [Realtime] Recargando proveedores Profit...');
+        const updatedSups = await getSupabaseProfitSuppliers();
+        if (updatedSups) setProfitSuppliers(updatedSups);
+      },
+      onPurchasesChange: async () => {
+        console.log('⚡ [Realtime] Recargando compras Profit...');
+        const updatedPurs = await getSupabaseProfitPurchases();
+        if (updatedPurs) setProfitPurchases(updatedPurs);
+      },
+      onAccountsPayableChange: async () => {
+        console.log('⚡ [Realtime] Recargando CxP Profit...');
+        const updatedCxp = await getSupabaseProfitAccountsPayable();
+        if (updatedCxp) setProfitAccountsPayable(updatedCxp);
+      },
+      onSupplierPaymentsChange: async () => {
+        console.log('⚡ [Realtime] Recargando pagos a proveedores...');
+        const updatedPays = await getSupabaseProfitSupplierPayments();
+        if (updatedPays) setProfitSupplierPayments(updatedPays);
+      },
+      onSellersChange: async () => {
+        console.log('⚡ [Realtime] Recargando fuerza de ventas...');
+        const updatedSellers = await getSupabaseProfitSellers();
+        if (updatedSellers) setProfitSellers(updatedSellers);
+      },
+      onZonesChange: async () => {
+        console.log('⚡ [Realtime] Recargando zonas de despacho Profit...');
+        const updatedZones = await getSupabaseProfitZones();
+        if (updatedZones) setProfitZones(updatedZones);
+      },
+      onTransportsChange: async () => {
+        console.log('⚡ [Realtime] Recargando flota / transportistas Profit...');
+        const updatedTransports = await getSupabaseProfitTransports();
+        if (updatedTransports) setProfitTransports(updatedTransports);
+      },
+      onCustomerReturnsChange: async () => {
+        console.log('⚡ [Realtime] Recargando devoluciones de clientes Profit...');
+        const updatedReturns = await getSupabaseProfitReturns();
+        if (updatedReturns) setProfitReturns(updatedReturns);
+      },
+      onInventoryAdjustmentsChange: async () => {
+        console.log('⚡ [Realtime] Recargando ajustes de inventario Profit...');
+        const updatedAju = await getSupabaseProfitInventoryAdjustments();
+        if (updatedAju) setProfitInventoryAdjustments(updatedAju);
+      },
+      onWarehouseTransfersChange: async () => {
+        console.log('⚡ [Realtime] Recargando traslados entre almacenes Profit...');
+        const updatedTra = await getSupabaseProfitWarehouseTransfers();
+        if (updatedTra) setProfitWarehouseTransfers(updatedTra);
+      },
+      onIslrConceptsChange: async () => {
+        console.log('⚡ [Realtime] Recargando conceptos ISLR SENIAT...');
+        const updatedIslr = await getSupabaseProfitIslrConcepts();
+        if (updatedIslr) setProfitIslrConcepts(updatedIslr);
+      },
+      onBeneficiariesChange: async () => {
+        console.log('⚡ [Realtime] Recargando beneficiarios Profit...');
+        const updatedBen = await getSupabaseProfitBeneficiaries();
+        if (updatedBen) setProfitBeneficiaries(updatedBen);
+      },
+      onPaymentOrdersChange: async () => {
+        console.log('⚡ [Realtime] Recargando órdenes de pago Profit...');
+        const updatedOrders = await getSupabaseProfitPaymentOrders();
+        if (updatedOrders) setProfitPaymentOrders(updatedOrders);
+      },
+      onIslrWithholdingsChange: async () => {
+        console.log('⚡ [Realtime] Recargando comprobantes ISLR...');
+        const updatedWithholdings = await getSupabaseProfitIslrWithholdings();
+        if (updatedWithholdings) setProfitIslrWithholdings(updatedWithholdings);
+      },
+      onAuditTrailsChange: async () => {
+        console.log('⚡ [Realtime] Recargando pistas de auditoría forense...');
+        const updatedTrails = await getSupabaseProfitAuditTrails();
+        if (updatedTrails) setProfitAuditTrails(updatedTrails);
+      },
+      onUsersChange: async () => {
+        console.log('⚡ [Realtime] Recargando usuarios del sistema...');
+        const freshUsers = await getSupabaseUsers();
+        if (freshUsers && freshUsers.length > 0) {
+          setUsersList(freshUsers);
+          try {
+            localStorage.setItem('signum_users_list', JSON.stringify(freshUsers));
+          } catch (_) {}
+        }
+      },
+      onSalesChange: async () => {
+        console.log('⚡ [Realtime] Recargando ventas Supabase...');
+        const updatedSales = await getSupabaseSales();
+        if (updatedSales) setSalesState(updatedSales);
+      },
+      onPurchasesChange: async () => {
+        console.log('⚡ [Realtime] Recargando compras Supabase...');
+        const updatedPurchases = await getSupabasePurchases();
+        if (updatedPurchases) setPurchasesState(updatedPurchases);
+      },
+      onCashMovementsChange: async () => {
+        console.log('⚡ [Realtime] Recargando movimientos de caja Supabase...');
+        const updatedCash = await getSupabaseCashMovements();
+        if (updatedCash) setCashMovementsState(updatedCash);
+      },
+      onFiscalClosuresChange: async () => {
+        console.log('⚡ [Realtime] Recargando cierres fiscales Supabase...');
+        const updatedClosures = await getSupabaseFiscalClosures();
+        if (updatedClosures) setFiscalClosures(updatedClosures);
+      }
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Función para forzar sincronización y recarga inmediata desde Profit Plus
+  const handleSyncProfit = async () => {
+    try {
+      // 1. Intentar llamar al puente si está activo
+      await triggerProfitSync().catch(() => {});
+      // 2. Recargar inmediatamente los datos más recientes desde Supabase
+      const [
+        latestProds, latestClis, latestOrds, latestBnks, latestCobs, latestFacs,
+        latestSups, latestPurs, latestCxp, latestPays, latestSellers, latestZones, latestTrans,
+        latestReturns, latestAju, latestTra, latestIslr, latestBen, latestOrders, latestWithholdings,
+        latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs
+      ] = await Promise.all([
+        getSupabaseProducts(),
+        getSupabaseClients(),
+        getSupabaseOrders(),
+        getSupabaseProfitBankAccounts(),
+        getSupabaseProfitCollections(),
+        getSupabaseProfitInvoices(),
+        getSupabaseProfitSuppliers(),
+        getSupabaseProfitPurchases(),
+        getSupabaseProfitAccountsPayable(),
+        getSupabaseProfitSupplierPayments(),
+        getSupabaseProfitSellers(),
+        getSupabaseProfitZones(),
+        getSupabaseProfitTransports(),
+        getSupabaseProfitReturns(),
+        getSupabaseProfitInventoryAdjustments(),
+        getSupabaseProfitWarehouseTransfers(),
+        getSupabaseProfitIslrConcepts(),
+        getSupabaseProfitBeneficiaries(),
+        getSupabaseProfitPaymentOrders(),
+        getSupabaseProfitIslrWithholdings(),
+        getSupabaseProfitAuditTrails(),
+        getSupabaseProfitWarehouses(),
+        getSupabaseProfitProductLines(),
+        getSupabaseProfitProductCategories(),
+        getSupabaseProfitCurrencies()
+      ]);
+      if (latestProds && latestProds.length > 0) setProductsState(latestProds);
+      if (latestClis && latestClis.length > 0) setClientsState(latestClis);
+      if (latestOrds) setOrdersState(latestOrds);
+      if (latestBnks) setProfitBankAccounts(latestBnks);
+      if (latestCobs) setProfitCollections(latestCobs);
+      if (latestFacs) setProfitInvoices(latestFacs);
+      if (latestSups) setProfitSuppliers(latestSups);
+      if (latestPurs) setProfitPurchases(latestPurs);
+      if (latestCxp) setProfitAccountsPayable(latestCxp);
+      if (latestPays) setProfitSupplierPayments(latestPays);
+      if (latestSellers) setProfitSellers(latestSellers);
+      if (latestZones) setProfitZones(latestZones);
+      if (latestTrans) setProfitTransports(latestTrans);
+      if (latestReturns) setProfitReturns(latestReturns);
+      if (latestAju) setProfitInventoryAdjustments(latestAju);
+      if (latestTra) setProfitWarehouseTransfers(latestTra);
+      if (latestIslr) setProfitIslrConcepts(latestIslr);
+      if (latestBen) setProfitBeneficiaries(latestBen);
+      if (latestOrders) setProfitPaymentOrders(latestOrders);
+      if (latestWithholdings) setProfitIslrWithholdings(latestWithholdings);
+      if (latestTrails) setProfitAuditTrails(latestTrails);
+      if (latestWarehouses) setProfitWarehouses(latestWarehouses);
+      if (latestLines) setProfitProductLines(latestLines);
+      if (latestCategories) setProfitProductCategories(latestCategories);
+      if (latestCurrs) setProfitCurrencies(latestCurrs);
+      return true;
+    } catch (err) {
+      console.warn('Sync Profit feedback:', err.message);
+      return false;
+    }
+  };
+
+
+  // Actualizar Tasa del Dólar BCV
+  const handleUpdateTasa = async (nuevaTasa) => {
+    try {
+      const updatedConfig = await updateSupabaseConfig({ tasaDolar: nuevaTasa });
+      setConfigState(updatedConfig);
+      notify.success(`Tasa BCV actualizada exitosamente a ${nuevaTasa} Bs./USD`);
+    } catch (err) {
+      console.error(err);
+      notify.error("Error actualizando la tasa en Supabase");
+    }
+  };
+
+  // Actualizar Tasa Keystone
+  const handleUpdateTasaKeystone = async (nuevaTasa) => {
+    try {
+      const updatedConfig = await updateSupabaseConfig({ tasaKeystone: nuevaTasa });
+      setConfigState(updatedConfig);
+      notify.success(`Tasa Keystone actualizada exitosamente a ${nuevaTasa} Bs./USD`);
+    } catch (err) {
+      console.error(err);
+      notify.error("Error actualizando la tasa Keystone en Supabase");
+    }
+  };
+
+  // Actualizar Configuración General de Toda la Aplicación
+  const handleSaveConfig = async (newConfigData) => {
+    try {
+      const updatedConfig = await updateSupabaseConfig(newConfigData);
+      setConfigState(updatedConfig);
+      notify.success("Configuración general guardada exitosamente");
+      return updatedConfig;
+    } catch (err) {
+      console.error('Error guardando configuración:', err);
+      notify.error("Error al guardar la configuración en el servidor");
+      throw err;
+    }
+  };
+
+  // Guardar / Editar Producto
+  const handleSaveProduct = async (productData) => {
+    try {
+      const saved = await saveSupabaseProduct(productData);
+      setProductsState(prev => {
+        const index = prev.findIndex(p => p.id === saved.id);
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = saved;
+          return updated;
+        } else {
+          return [saved, ...prev];
+        }
+      });
+      notify.success(`Producto "${saved.nombre || saved.codigo}" guardado en inventario.`);
+      return saved;
+    } catch (err) {
+      console.error(err);
+      notify.error("Error al guardar el lubricante en la base de datos");
+      throw err;
+    }
+  };
+
+  // Eliminar Producto
+  const handleDeleteProduct = async (id) => {
+    const confirmed = await notify.confirm({
+      title: '¿Eliminar Lubricante?',
+      message: '¿Está seguro de eliminar este lubricante del inventario de forma permanente?',
+      confirmText: 'Sí, Eliminar Lubricante',
+      cancelText: 'Cancelar',
+      isDestructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+      await deleteSupabaseProduct(id);
+      setProductsState(prev => prev.filter(p => p.id !== id));
+      notify.success("Lubricante eliminado del inventario correctamente");
+    } catch (err) {
+      console.error(err);
+      notify.error("Error al eliminar el lubricante de la base de datos");
+    }
+  };
+
+  // Guardar / Actualizar Cliente
+  const handleSaveClient = async (clientData) => {
+    try {
+      const saved = await saveSupabaseClient(clientData);
+      setClientsState(prev => {
+        const index = prev.findIndex(c => c.id === saved.id);
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = saved;
+          return updated;
+        } else {
+          return [saved, ...prev];
+        }
+      });
+      notify.success(`Cliente "${saved.nombre || saved.rif}" guardado exitosamente.`);
+      return saved;
+    } catch (err) {
+      console.error(err);
+      notify.error("Error al guardar los datos del cliente");
+    }
+  };
+
+  // Eliminar Cliente
+  const handleDeleteClient = async (id) => {
+    const confirmed = await notify.confirm({
+      title: '¿Eliminar Cliente?',
+      message: '¿Está seguro de eliminar o desactivar este cliente de la cartera comercial y de Profit Plus?',
+      confirmText: 'Sí, Eliminar Cliente',
+      cancelText: 'Cancelar',
+      isDestructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+      await deleteSupabaseClient(id);
+      setClientsState(prev => prev.filter(c => c.id !== id && c.codigo !== id));
+      notify.success("Cliente eliminado de la cartera correctamente");
+    } catch (err) {
+      console.error(err);
+      notify.error("Error al eliminar el cliente de la base de datos");
+    }
+  };
+
+  // Procesar Venta / POS
+  const handleProcessSale = async (saleData) => {
+    try {
+      const newSale = await processSupabaseSale(saleData);
+      
+      // Refrescar estados dependientes desde la base de datos
+      const [prods, cash, clis, sls] = await Promise.all([
+        getSupabaseProducts(),
+        getSupabaseCashMovements(),
+        getSupabaseClients(),
+        getSupabaseSales()
+      ]);
+      
+      setProductsState(prods);
+      setCashMovementsState(cash);
+      setClientsState(clis);
+      setSalesState(sls);
+
+      // Si la venta se originó de una Nota de Pedido de Preventa, actualizar su estatus a FACTURADO
+      if (saleData.pedidoOrigenId) {
+        try {
+          await updateSupabaseOrderStatus(saleData.pedidoOrigenId, 'FACTURADO');
+          setOrdersState(prev =>
+            prev.map(o => (o.id === saleData.pedidoOrigenId ? { ...o, status: 'FACTURADO' } : o))
+          );
+        } catch (statusErr) {
+          console.warn('[handleProcessSale] No se pudo actualizar estatus del pedido origen:', statusErr);
+        }
+      }
+      
+      return newSale;
+    } catch (err) {
+      console.error(err);
+      notify.error("Error al procesar la venta en el servidor");
+      throw err;
+    }
+  };
+
+  // Registrar Compra
+  const handleRegisterPurchase = async (purchaseData) => {
+    try {
+      const created = await saveSupabasePurchase(purchaseData);
+      setPurchasesState((prev) => [created, ...prev]);
+      const updatedProds = await getSupabaseProducts();
+      setProductsState(updatedProds);
+      notify.success("Compra registrada en sistema exitosamente");
+      return created;
+    } catch (err) {
+      console.error("Error al registrar compra:", err);
+      notify.error("Error al registrar la compra en el sistema");
+    }
+  };
+
+  // Agregar Movimiento de Caja
+  const handleAddCashMovement = async (mov) => {
+    try {
+      await addSupabaseCashMovement(mov);
+      const updatedMovs = await getSupabaseCashMovements();
+      setCashMovementsState([...updatedMovs]);
+      notify.success("Movimiento registrado en caja chica correctamente");
+    } catch (err) {
+      console.error(err);
+      notify.error("Error al registrar el movimiento en la caja chica");
+    }
+  };
+
+  // Ejecutar Cierre Fiscal Diario (Reporte Z)
+  const handleExecuteCierreZ = async (cierreZ, closedSaleIds = []) => {
+    try {
+      const saved = await saveSupabaseFiscalClosure(cierreZ, closedSaleIds);
+      setFiscalClosures(prev => [saved, ...prev]);
+      // Actualizar estado local de ventas marcándolas como cerradas bajo este Z
+      if (closedSaleIds.length > 0) {
+        setSalesState(prev => prev.map(s => {
+          if (closedSaleIds.includes(s.id)) {
+            return { ...s, cerrada: true, cierre_z_id: saved.id };
+          }
+          return s;
+        }));
+      }
+      notify.success(`Cierre Fiscal Z #${saved.numero_z || ''} generado exitosamente`);
+      return saved;
+    } catch (err) {
+      console.error("Error al registrar el Cierre Z:", err);
+      notify.error("Error al registrar el Cierre Z en el sistema");
+      throw err;
+    }
+  };
+
+  // Guardar nuevo Pedido / Cotización
+  const handleSaveOrder = async (orderData) => {
+    try {
+      const saved = await saveSupabaseOrder(orderData);
+      setOrdersState(prev => {
+        const index = prev.findIndex(o => o.id === saved.id);
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = saved;
+          return updated;
+        } else {
+          return [saved, ...prev];
+        }
+      });
+      notify.success(`Pedido #${saved.orderNumber || ''} guardado exitosamente`);
+      return saved;
+    } catch (err) {
+      console.error('Error guardando pedido:', err);
+      notify.error('Error al guardar el pedido en la base de datos');
+      throw err;
+    }
+  };
+
+  // Actualizar estado de Pedido / Despacho
+  const handleUpdateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const updated = await updateSupabaseOrderStatus(orderId, newStatus);
+      setOrdersState(prev =>
+        prev.map(o => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
+      notify.success(`Estado del pedido actualizado a "${newStatus}"`);
+      return updated;
+    } catch (err) {
+      console.error('Error actualizando estado de pedido:', err);
+      notify.error('Error actualizando el estado del pedido');
+      throw err;
+    }
+  };
+
+  // Proceder a facturar un Pedido en el POS
+  const handleProceedToInvoiceFromOrder = (order) => {
+    setPendingOrderToBill(order);
+    setActiveTab('ventas');
+  };
+
+  if (loading) {
+    return (
+      <div className="app-loading-screen">
+        <div className="loader-container">
+          <img src={signumLogoImg} alt="SIGNUM MOTORVEN" className="loader-logo" />
+          <div className="loader-spinner"></div>
+          <div className="loader-subtext">Iniciando SIGNUM MOTORVEN...</div>
+          <div className="loader-progress-bar">
+            <div className="loader-progress-fill"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="app-error-screen">
+        <div className="error-container">
+          <div className="error-icon">⚠️</div>
+          <div className="error-text">Error de Conexión</div>
+          <div className="error-message">{error}</div>
+          <button onClick={() => window.location.reload()} className="retry-btn">
+            Reintentar Conexión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Si no hay usuario autenticado, mostrar pantalla interna de Login
+  if (!currentUser) {
+    return (
+      <LoginView
+        usersList={usersList}
+        onLoginSuccess={handleLoginSuccess}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+      />
+    );
+  }
+
+  return (
+    <div className={`app-container ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
+      <Navigation
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        config={config}
+        onUpdateTasa={handleUpdateTasa}
+        globalSearch={globalSearch}
+        setGlobalSearch={setGlobalSearch}
+        mobileOpen={mobileMenuOpen}
+        setMobileOpen={setMobileMenuOpen}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
+        onOpenServerExplorer={() => setShowServerExplorerModal(true)}
+        onOpenCashBankModal={() => setActiveTab('caja')}
+        onOpenAccountsReceivableModal={() => setActiveTab('cxc')}
+        onOpenAccountsPayableModal={() => setActiveTab('cxp')}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={handleToggleSidebar}
+      />
+
+      <div className="main-wrapper">
+        <HeaderBar
+          config={config}
+          mobileMenuOpen={mobileMenuOpen}
+          setMobileMenuOpen={setMobileMenuOpen}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={handleToggleSidebar}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          onUpdateTasa={handleUpdateTasa}
+          onUpdateTasaKeystone={handleUpdateTasaKeystone}
+          onSaveConfig={handleSaveConfig}
+          onNavigate={setActiveTab}
+          currentUser={currentUser}
+          onUpdateCurrentUser={setCurrentUser}
+          onLogout={handleLogout}
+          globalSearch={globalSearch}
+          setGlobalSearch={setGlobalSearch}
+          onSyncProfit={handleSyncProfit}
+          onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
+          onOpenServerExplorer={() => setShowServerExplorerModal(true)}
+          productsCount={products?.length || 31}
+          clientsCount={clients?.length || 610}
+          products={products}
+          clients={clients}
+          sales={sales}
+          orders={orders}
+          suppliers={suppliers}
+          cashMovements={cashMovements}
+        />
+
+        <main className="content-body">
+          {activeTab === 'dashboard' && canAccessModule(currentUser?.rol, 'dashboard', currentUser) && (
+            <DashboardView
+              products={products}
+              sales={sales}
+              clients={clients}
+              orders={orders}
+              profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              profitBankAccounts={profitBankAccounts}
+              profitAccountsPayable={profitAccountsPayable}
+              profitSupplierPayments={profitSupplierPayments}
+              profitPurchases={profitPurchases}
+              profitSellers={profitSellers}
+              config={config}
+              currentUser={currentUser}
+              onNavigate={setActiveTab}
+              onSyncProfit={handleSyncProfit}
+              onSaveClient={handleSaveClient}
+              onDeleteClient={handleDeleteClient}
+              onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
+              onOpenServerExplorer={() => setShowServerExplorerModal(true)}
+              onOpenDatabaseComparator={() => setShowDatabaseComparatorModal(true)}
+            />
+          )}
+
+          {activeTab === 'preventa' && canAccessModule(currentUser?.rol, 'preventa', currentUser) && (
+            <ModuleErrorBoundary moduleName="Preventa Móvil (Vendedor)">
+              <SellerOrderPOSView
+                products={products}
+                clients={clients}
+                orders={orders}
+                config={config}
+                profitZones={profitZones}
+                currentUser={currentUser}
+                onSaveOrder={handleSaveOrder}
+                onSyncProfit={handleSyncProfit}
+              />
+            </ModuleErrorBoundary>
+          )}
+
+          {activeTab === 'pedidos' && canAccessModule(currentUser?.rol, 'pedidos', currentUser) && (
+            <OrdersSalesModal
+              orders={orders}
+              clients={clients}
+              products={products}
+              config={config}
+              profitZones={profitZones}
+              profitTransports={profitTransports}
+              profitSellers={profitSellers}
+              profitInvoices={profitInvoices}
+              sales={sales}
+              onSaveOrder={handleSaveOrder}
+              onUpdateOrderStatus={handleUpdateOrderStatus}
+              onProcessSale={handleProcessSale}
+              onSyncProfit={handleSyncProfit}
+              currentUser={currentUser}
+              initialTab={ordersSalesModalTab}
+              initialOrder={ordersSalesModalOrder}
+              onProceedToPOS={handleProceedToInvoiceFromOrder}
+            />
+          )}
+
+          {activeTab === 'inventario' && canAccessModule(currentUser?.rol, 'inventario', currentUser) && (
+            <InventoryView
+              products={products}
+              config={config}
+              inventoryAdjustments={profitInventoryAdjustments}
+              warehouseTransfers={profitWarehouseTransfers}
+              profitInvoices={profitInvoices}
+              sales={sales}
+              profitPurchases={profitPurchases}
+              profitSuppliers={profitSuppliers}
+              onSyncProfit={handleSyncProfit}
+              onSaveProduct={handleSaveProduct}
+              onDeleteProduct={handleDeleteProduct}
+              globalSearch={globalSearch}
+              currentUser={currentUser}
+              warehouses={profitWarehouses}
+              productLines={profitProductLines}
+              productCategories={profitProductCategories}
+            />
+          )}
+
+          {activeTab === 'ventas' && canAccessModule(currentUser?.rol, 'ventas', currentUser) && (
+            <SalesPOSView
+              products={products}
+              clients={clients}
+              orders={orders}
+              config={config}
+              profitReturns={profitReturns}
+              profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              onSyncProfit={handleSyncProfit}
+              onProcessSale={handleProcessSale}
+              onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
+              currentUser={currentUser}
+              pendingOrderToBill={pendingOrderToBill}
+              onClearPendingOrder={() => setPendingOrderToBill(null)}
+            />
+          )}
+
+          {activeTab === 'vendedores' && canAccessModule(currentUser?.rol, 'vendedores', currentUser) && (
+            <ModuleErrorBoundary moduleName="Fuerza de Ventas">
+              <SellersView
+                profitSellers={profitSellers}
+                profitInvoices={profitInvoices}
+                profitCollections={profitCollections}
+                profitBankAccounts={profitBankAccounts}
+                clients={clients}
+                orders={orders}
+                config={config}
+                onSyncProfit={handleSyncProfit}
+                onUpdateSellerTarget={async (coVen, data) => {
+                  setProfitSellers(prev => {
+                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+                    return base.map(s => {
+                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
+                      if (c === coVen.toString().trim()) {
+                        return {
+                          ...s,
+                          metaLitrosMes: Number(data.metaLitrosMes),
+                          meta_litros_mes: Number(data.metaLitrosMes),
+                          comisionPct: Number(data.comisionPct),
+                          comision_pct: Number(data.comisionPct)
+                        };
+                      }
+                      return s;
+                    });
+                  });
+                  try {
+                    await updateSupabaseSellerTarget(coVen, data);
+                    const fresh = await getSupabaseProfitSellers();
+                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
+                  } catch (err) {
+                    console.warn('[Fuerza de Ventas] Guardado reactivo local. Supabase:', err?.message);
+                  }
+                }}
+                onUpdateGlobalTarget={async (totalLitrosMeta) => {
+                  const currentList = (profitSellers && profitSellers.length > 0) ? profitSellers : DEFAULT_PROFIT_SELLERS;
+                  const activeCodes = currentList.map(s => (s.coVen || s.co_ven || s.id || '').toString().trim()).filter(Boolean);
+                  const quotaPerSeller = activeCodes.length > 0 ? parseFloat((totalLitrosMeta / activeCodes.length).toFixed(2)) : totalLitrosMeta;
+
+                  // 1. Actualización optimista inmediata en estado local
+                  setProfitSellers(prev => {
+                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+                    return base.map(s => ({
+                      ...s,
+                      metaLitrosMes: quotaPerSeller,
+                      meta_litros_mes: quotaPerSeller
+                    }));
+                  });
+
+                  // 2. Persistir en config general
+                  try {
+                    await updateSupabaseConfig({ metaComercialLitros: totalLitrosMeta });
+                    setConfigState(prev => ({ ...prev, metaComercialLitros: totalLitrosMeta }));
+                  } catch (e) {
+                    console.warn('[Fuerza de Ventas] Error actualizando config global:', e.message);
+                  }
+
+                  // 3. Persistir en base de datos Supabase para todos los asesores
+                  try {
+                    await updateSupabaseGlobalSellersTarget(activeCodes, totalLitrosMeta);
+                    const fresh = await getSupabaseProfitSellers();
+                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
+                  } catch (err) {
+                    console.warn('[Fuerza de Ventas] Error persistiendo meta distribuida en Supabase:', err?.message);
+                  }
+                }}
+                onUpdateSellerPhoto={async (coVen, photoUrl) => {
+                  setProfitSellers(prev => {
+                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+                    return base.map(s => {
+                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
+                      if (c === coVen.toString().trim()) {
+                        return { ...s, foto: photoUrl, avatar: photoUrl };
+                      }
+                      return s;
+                    });
+                  });
+                  try {
+                    await updateSupabaseSellerPhoto(coVen, photoUrl);
+                    const fresh = await getSupabaseProfitSellers();
+                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
+                  } catch (err) {
+                    console.warn('[Fuerza de Ventas] Error actualizando foto asesor:', err?.message);
+                  }
+                }}
+                profitZones={profitZones}
+                onUpdateSellerZone={async (coVen, zoneData) => {
+                  const targetCoZon = typeof zoneData === 'object' ? (zoneData.coZon || zoneData.co_zon || '') : zoneData;
+                  const targetZonDes = typeof zoneData === 'object' 
+                    ? (zoneData.zona || zoneData.zonDes || zoneData.zon_des || '') 
+                    : ((profitZones || []).find(z => (z.coZon || z.co_zon) === targetCoZon)?.zonDes || targetCoZon);
+
+                  // 1. Optimistic local state update
+                  setProfitSellers(prev => {
+                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+                    return base.map(s => {
+                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
+                      if (c === coVen.toString().trim()) {
+                        return {
+                          ...s,
+                          coZon: targetCoZon,
+                          co_zon: targetCoZon,
+                          zona: targetZonDes
+                        };
+                      }
+                      return s;
+                    });
+                  });
+
+                  // 2. Persist in Supabase and Profit bridge
+                  try {
+                    await updateSupabaseSellerZone(coVen, { coZon: targetCoZon, zona: targetZonDes });
+                    const fresh = await getSupabaseProfitSellers();
+                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
+                  } catch (err) {
+                    console.warn('[Fuerza de Ventas] Error actualizando zona de asesor:', err?.message);
+                  }
+                }}
+                currentUser={currentUser}
+              />
+            </ModuleErrorBoundary>
+          )}
+
+          {activeTab === 'rentabilidad' && canAccessModule(currentUser?.rol, 'rentabilidad', currentUser) && (
+            <ProfitabilityView
+              products={products}
+              profitInvoices={profitInvoices}
+              profitPurchases={profitPurchases}
+              profitSellers={profitSellers}
+              profitTransports={profitTransports}
+              profitZones={profitZones}
+              profitReturns={profitReturns}
+              profitInventoryAdjustments={profitInventoryAdjustments}
+              profitIslrWithholdings={profitIslrWithholdings}
+              cashMovements={cashMovements}
+              clients={clients}
+              config={config}
+              onSyncProfit={handleSyncProfit}
+              currentUser={currentUser}
+            />
+          )}
+
+          {activeTab === 'compras' && canAccessModule(currentUser?.rol, 'compras', currentUser) && (
+            <PurchasesView
+              products={products}
+              suppliers={suppliers}
+              purchases={purchases}
+              config={config}
+              onSaveProduct={handleSaveProduct}
+              onRegisterPurchase={handleRegisterPurchase}
+              currentUser={currentUser}
+              profitSuppliers={profitSuppliers}
+              profitPurchases={profitPurchases}
+              profitAccountsPayable={profitAccountsPayable}
+              profitSupplierPayments={profitSupplierPayments}
+              profitIslrConcepts={profitIslrConcepts}
+              profitBeneficiaries={profitBeneficiaries}
+              profitPaymentOrders={profitPaymentOrders}
+              profitIslrWithholdings={profitIslrWithholdings}
+              profitInvoices={profitInvoices}
+              sales={sales}
+              onSyncProfit={handleSyncProfit}
+            />
+          )}
+
+          {/* MÓDULO 8: CAJA CHICA & BANCOS */}
+          {activeTab === 'caja' && canAccessModule(currentUser?.rol, 'caja', currentUser) && (
+            <CashBankModal
+              cashDesks={profitCashDesks}
+              bankAccounts={profitBankAccounts}
+              cashMovements={cashMovements}
+              onAddMovement={handleAddCashMovement}
+              onUpdateCashDesk={async (desk) => {
+                await updateSupabaseProfitCashDesk(desk);
+                const fresh = await getSupabaseProfitCashDesks();
+                if (fresh) setProfitCashDesks(fresh);
+              }}
+              config={config}
+              currentUser={currentUser}
+            />
+          )}
+
+          {/* MÓDULO 8.1: CUENTAS POR COBRAR (CXC) & AGING */}
+          {activeTab === 'cxc' && canAccessModule(currentUser?.rol, 'cxc', currentUser) && (
+            <AccountsReceivableModal
+              invoices={sales}
+              profitInvoices={profitInvoices}
+              clients={clients}
+              sellers={profitSellers}
+              profitSellers={profitSellers}
+              config={config}
+              currentUser={currentUser}
+              onOpenCollectionIntelligence={() => setShowDebtCollectionModal(true)}
+            />
+          )}
+
+          {/* MÓDULO 8.2: CUENTAS POR PAGAR (CXP) & PROVEEDORES */}
+          {activeTab === 'cxp' && canAccessModule(currentUser?.rol, 'cxp', currentUser) && (
+            <AccountsPayableModal
+              accountsPayable={profitAccountsPayable}
+              profitAccountsPayable={profitAccountsPayable}
+              suppliers={profitSuppliers}
+              profitSuppliers={profitSuppliers}
+              config={config}
+              currentUser={currentUser}
+            />
+          )}
+
+          {activeTab === 'reportes' && canAccessModule(currentUser?.rol, 'reportes', currentUser) && (
+            <TaxReportsView
+              sales={sales}
+              purchases={purchases}
+              suppliers={suppliers}
+              fiscalClosures={fiscalClosures}
+              onExecuteCierreZ={handleExecuteCierreZ}
+              config={config}
+              currentUser={currentUser}
+              profitIslrConcepts={profitIslrConcepts}
+              profitBeneficiaries={profitBeneficiaries}
+              profitPaymentOrders={profitPaymentOrders}
+              profitIslrWithholdings={profitIslrWithholdings}
+              profitAccountsPayable={profitAccountsPayable}
+              profitPurchases={profitPurchases}
+              onSyncProfit={handleSyncProfit}
+            />
+          )}
+
+          {activeTab === 'auditoria' && canAccessModule(currentUser?.rol, 'auditoria', currentUser) && (
+            <AuditLedgerView
+              profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              profitPurchases={profitPurchases}
+              profitSupplierPayments={profitSupplierPayments}
+              profitBankAccounts={profitBankAccounts}
+              profitAuditTrails={profitAuditTrails}
+              cashMovements={cashMovements}
+              usersList={usersList}
+              config={config}
+              onSyncProfit={handleSyncProfit}
+              currentUser={currentUser}
+            />
+          )}
+
+          {activeTab === 'usuarios' && canAccessModule(currentUser?.rol, 'usuarios', currentUser) && (
+            <UsersManagementView
+              currentUser={currentUser}
+              usersList={usersList}
+              config={config}
+              onUpdateCurrentUser={(updatedUser) => {
+                setCurrentUser(updatedUser);
+                try {
+                  localStorage.setItem('signum_active_user', JSON.stringify(updatedUser));
+                } catch (_) {}
+              }}
+              onUsersUpdated={async (savedUser) => {
+                const freshUsers = await getSupabaseUsers();
+                setUsersList(freshUsers);
+                try {
+                  localStorage.setItem('signum_users_list', JSON.stringify(freshUsers));
+                } catch (_) {}
+
+                if (savedUser && currentUser && (savedUser.id === currentUser.id || savedUser.username?.toLowerCase() === currentUser.username?.toLowerCase())) {
+                  setCurrentUser(savedUser);
+                  try {
+                    localStorage.setItem('signum_active_user', JSON.stringify(savedUser));
+                  } catch (_) {}
+                } else if (currentUser) {
+                  const matching = freshUsers.find(u => u.id === currentUser.id || u.username?.toLowerCase() === currentUser.username?.toLowerCase());
+                  if (matching) {
+                    setCurrentUser(matching);
+                    try {
+                      localStorage.setItem('signum_active_user', JSON.stringify(matching));
+                    } catch (_) {}
+                  }
+                }
+              }}
+            />
+          )}
+
+          {/* MÓDULO: EXPLORADOR MULTI-BASE DE DATOS PROFIT PLUS & SQL SERVER */}
+          {activeTab === 'bases-datos' && canAccessModule(currentUser?.rol, 'bases-datos', currentUser) && (
+            <MultiDatabaseExplorerView
+              currentUser={currentUser}
+              theme={theme}
+            />
+          )}
+
+          {/* MÓDULO: CENTRO DE NOTIFICACIONES & ALERTAS */}
+          {activeTab === 'notificaciones' && canAccessModule(currentUser?.rol, 'notificaciones', currentUser) && (
+            <NotificationsCenterModal
+              isOpen={true}
+              onClose={() => setActiveTab('dashboard')}
+              config={config}
+              currentUser={currentUser}
+              products={products}
+              clients={clients}
+              onNavigate={setActiveTab}
+            />
+          )}
+
+          {/* MÓDULO: CONFIGURACIÓN GENERAL DEL SISTEMA */}
+          {activeTab === 'configuracion' && canAccessModule(currentUser?.rol, 'configuracion', currentUser) && (
+            <AppConfigModal
+              isOpen={true}
+              onClose={() => setActiveTab('dashboard')}
+              config={config}
+              onSaveConfig={handleSaveConfig}
+              currentUser={currentUser}
+              products={products}
+              clients={clients}
+              onOpenServerExplorer={() => setShowServerExplorerModal(true)}
+              onOpenProfitModal={() => setShowProfitStatusModal(true)}
+            />
+          )}
+
+          {/* Pantalla de Acceso No Autorizado */}
+          {currentUser && !canAccessModule(currentUser?.rol, activeTab, currentUser) && (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: '62vh',
+              textAlign: 'center',
+              padding: '2.5rem 1.5rem',
+              animation: 'fadeIn 0.25s ease-out'
+            }}>
+              <div style={{
+                width: '72px',
+                height: '72px',
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '2px solid rgba(239, 68, 68, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#ef4444',
+                marginBottom: '1.25rem',
+                boxShadow: '0 8px 24px rgba(239, 68, 68, 0.2)'
+              }}>
+                <ShieldAlert size={38} />
+              </div>
+              <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-heading)', margin: '0 0 0.5rem 0' }}>
+                Módulo No Autorizado
+              </h2>
+              <p style={{ maxWidth: '480px', color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.6, margin: '0 0 1.5rem 0' }}>
+                Su perfil institucional de <strong style={{ color: 'var(--text-primary)' }}>{currentUser.rol}</strong> ({currentUser.nombre}) no cuenta con autorización para visualizar o manipular este módulo del sistema.
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const norm = normalizeRole(currentUser.rol);
+                  const allowed = (Array.isArray(currentUser.modulos) && currentUser.modulos.length > 0)
+                    ? currentUser.modulos
+                    : (ROLE_PERMISSIONS[norm] || ['ventas']);
+                  const pref = DEFAULT_TABS_BY_ROLE[norm];
+                  setActiveTab(allowed.includes(pref) ? pref : (allowed[0] || 'ventas'));
+                }}
+                style={{ padding: '0.65rem 1.25rem', fontWeight: 700 }}
+              >
+                Ir a Módulo Principal Autorizado
+              </button>
+            </div>
+          )}
+        </main>
+
+
+        {/* Modal de Explorador del Servidor y Base de Datos */}
+        <ServerExplorerModal
+          isOpen={showServerExplorerModal}
+          onClose={() => setShowServerExplorerModal(false)}
+          onSyncComplete={handleSyncProfit}
+          onNavigate={setActiveTab}
+          currentUser={currentUser}
+          products={products}
+          clients={clients}
+          sales={sales}
+          orders={orders}
+          suppliers={suppliers}
+          cashMovements={cashMovements}
+        />
+
+        {/* Modal de Estado Profit Plus 2K8 */}
+        <ProfitStatusModal
+          isOpen={showProfitStatusModal}
+          onClose={() => setShowProfitStatusModal(false)}
+          onSyncComplete={handleSyncProfit}
+          onOpenExplorer={() => setShowServerExplorerModal(true)}
+          currentUser={currentUser}
+          productsCount={products?.length || 43}
+          clientsCount={clients?.length || 631}
+        />
+
+
+        {/* Modal de Inteligencia de Cobranza & WhatsApp */}
+        <DebtCollectionIntelligenceModal
+          isOpen={showDebtCollectionModal}
+          onClose={() => setShowDebtCollectionModal(false)}
+          profitInvoices={profitInvoices}
+          clients={clients}
+          profitSellers={profitSellers}
+          profitBankAccounts={profitBankAccounts}
+          config={config}
+        />
+
+        {/* Modal / Pantalla Completa: Comparador Tripartito de Bases de Datos */}
+        {showDatabaseComparatorModal && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 9999,
+              backgroundColor: '#060913',
+              overflowY: 'auto'
+            }}
+          >
+            <DatabaseComparatorView onClose={() => setShowDatabaseComparatorModal(false)} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const isDeviceSimulator = typeof window !== 'undefined' && (
+    window.location.search.includes('view=device-simulator') ||
+    window.location.search.includes('view=devices') ||
+    window.location.hash === '#device-simulator'
+  );
+
+  const isSupabaseTablesTab = typeof window !== 'undefined' && (
+    window.location.search.includes('view=supabase-tables') ||
+    window.location.hash === '#supabase-tables'
+  );
+
+  const isDatabaseComparator = typeof window !== 'undefined' && (
+    window.location.search.includes('view=database-comparator') ||
+    window.location.search.includes('view=db-compare') ||
+    window.location.search.includes('view=comparator') ||
+    window.location.hash === '#database-comparator' ||
+    window.location.hash === '#db-compare'
+  );
+
+  if (isDeviceSimulator) {
+    return <DeviceSimulatorView />;
+  }
+
+  if (isSupabaseTablesTab) {
+    return <SupabaseTablesView />;
+  }
+
+  if (isDatabaseComparator) {
+    return <DatabaseComparatorView />;
+  }
+
+  return <MainApp />;
+}

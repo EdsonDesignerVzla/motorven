@@ -1,0 +1,3783 @@
+import { createClient } from '@supabase/supabase-js';
+import {
+  INITIAL_CONFIG,
+  INITIAL_PRODUCTS,
+  INITIAL_CLIENTS,
+  INITIAL_SUPPLIERS,
+  INITIAL_SALES,
+  INITIAL_PURCHASES,
+  INITIAL_CASH_MOVEMENTS,
+  INITIAL_FISCAL_CLOSURES,
+  INITIAL_ORDERS
+} from '../data/mockData.js';
+import {
+  REAL_CONFIG,
+  REAL_PRODUCTS,
+  REAL_CLIENTS,
+  REAL_PROFIT_SELLERS,
+  REAL_PROFIT_INVOICES,
+  REAL_PROFIT_COLLECTIONS,
+  REAL_PROFIT_ACCOUNTS_PAYABLE,
+  REAL_PROFIT_SUPPLIER_PAYMENTS,
+  REAL_PROFIT_PURCHASES,
+  REAL_PROFIT_SUPPLIERS,
+  REAL_PROFIT_BANK_ACCOUNTS,
+  REAL_PROFIT_CASH_DESKS,
+  REAL_PROFIT_ZONES,
+  REAL_PROFIT_TRANSPORTS,
+  REAL_PROFIT_CUSTOMER_RETURNS,
+  REAL_PROFIT_INVENTORY_ADJUSTMENTS,
+  REAL_PROFIT_WAREHOUSE_TRANSFERS,
+  REAL_PROFIT_ISLR_CONCEPTS,
+  REAL_PROFIT_BENEFICIARIES,
+  REAL_PROFIT_PAYMENT_ORDERS,
+  REAL_PROFIT_WAREHOUSES,
+  REAL_PROFIT_PRODUCT_LINES,
+  REAL_PROFIT_PRODUCT_CATEGORIES,
+  REAL_PROFIT_CURRENCIES,
+  REAL_USERS,
+  REAL_ORDERS,
+  REAL_SALES,
+  REAL_PURCHASES,
+  REAL_SUPPLIERS,
+  REAL_CASH_MOVEMENTS,
+  REAL_FISCAL_CLOSURES,
+  REAL_NOTIFICATIONS
+} from '../data/supabaseRealData.js';
+import {
+  calculateFiscalTaxes,
+  generateFiscalControlNumber,
+  generateVatRetentionVoucherNumber
+} from './fiscalService.js';
+import {
+  getConfig as getStorageConfig,
+  updateConfig as updateStorageConfig,
+  getProducts as getStorageProducts,
+  saveProduct as saveStorageProduct,
+  deleteProduct as deleteStorageProduct,
+  getClients as getStorageClients,
+  saveClient as saveStorageClient,
+  getSuppliers as getStorageSuppliers,
+  saveSupplier as saveStorageSupplier,
+  getSales as getStorageSales,
+  saveSale as saveStorageSale,
+  getPurchases as getStoragePurchases,
+  savePurchase as saveStoragePurchase,
+  getCashMovements as getStorageCashMovements,
+  addCashMovement as addStorageCashMovement,
+  getFiscalClosures as getStorageFiscalClosures,
+  saveFiscalClosure as saveStorageFiscalClosure,
+  closeSalesInStorage,
+  getUserLogs as getStorageUserLogs,
+  addUserLog as addStorageUserLog,
+  getOrders as getStorageOrders,
+  saveOrder as saveStorageOrder,
+  updateOrderStatus as updateStorageOrderStatus,
+  getStorageSellers,
+  saveStorageSeller,
+  saveStorageAllSellers,
+  getStorageNotifications,
+  saveStorageNotification,
+  markStorageNotificationRead,
+  markAllStorageNotificationsRead,
+  deleteStorageNotification
+} from './storageService.js';
+import {
+  DEFAULT_USERS,
+  ROLE_PERMISSIONS,
+  sortUsersByHierarchy
+} from './authService.js';
+import {
+  enqueueSyncAction,
+  isNetworkOnline,
+  flushSyncQueue
+} from './offlineSyncService.js';
+import {
+  getProfitRealtimeProducts,
+  getProfitRealtimeClients,
+  writeProfitUser,
+  writeProfitSeller,
+  writeProfitProduct,
+  writeProfitClient,
+  writeProfitSale,
+  writeProfitOrder,
+  writeProfitPurchase,
+  writeProfitSupplier,
+  writeProfitCashMovement
+} from './profitService.js';
+
+const DEFAULT_SUPABASE_URL = 'http://localhost:54321';
+const DEFAULT_SUPABASE_ANON_KEY = 'local-free-token';
+
+const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
+const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+let isSupabaseAvailable = true;
+
+export const resetSupabaseOnlineStatus = () => {
+  isSupabaseAvailable = true;
+};
+
+const withTimeout = (promise, ms = 3500) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Supabase connection timeout")), ms))
+  ]);
+};
+
+const markSupabaseOffline = (err, action = '') => {
+  const msg = err?.message || String(err);
+  if (msg.includes('Failed to fetch') || msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('timeout') || msg.includes('connection timeout') || !isNetworkOnline()) {
+    isSupabaseAvailable = false;
+  }
+  console.warn(`[Supabase Offline Fallback] ${action}:`, msg);
+};
+
+// --- Mappings ---
+
+const mapConfigToDb = (c) => ({
+  id: 1,
+  nombre_empresa: c.nombreEmpresa || c.nombre_empresa,
+  marca_oficial: c.marcaOficial || c.marca_oficial,
+  rif: c.rif,
+  direccion: c.direccion,
+  telefono: c.telefono,
+  email: c.email,
+  instagram: c.instagram,
+  tasa_dolar: c.tasaDolar || c.tasa_dolar,
+  tasa_keystone: c.tasaKeystone || c.tasa_keystone || 38.50,
+  moneda_principal: c.monedaPrincipal || c.moneda_principal,
+  moneda_secundaria: c.monedaSecundaria || c.moneda_secundaria,
+  almacen_actual: c.almacenActual || c.almacen_actual,
+  iva_porcentaje: c.ivaPorcentaje || c.iva_porcentaje,
+  igtf_porcentaje: c.igtfPorcentaje || c.igtf_porcentaje,
+  meta_comercial_litros: c.metaComercialLitros || c.meta_comercial_litros
+});
+
+const mapConfigFromDb = (c) => {
+  if (!c) return null;
+  return {
+    nombreEmpresa: c.nombre_empresa,
+    marcaOficial: c.marca_oficial,
+    rif: c.rif,
+    direccion: c.direccion,
+    telefono: c.telefono,
+    email: c.email,
+    instagram: c.instagram,
+    tasaDolar: Number(c.tasa_dolar),
+    tasaKeystone: Number(c.tasa_keystone || 38.50),
+    monedaPrincipal: c.moneda_principal,
+    monedaSecundaria: c.moneda_secundaria,
+    almacenActual: c.almacen_actual,
+    ivaPorcentaje: Number(c.iva_porcentaje),
+    igtfPorcentaje: Number(c.igtf_porcentaje),
+    metaComercialLitros: Number(c.meta_comercial_litros)
+  };
+};
+
+export const inferProductLineAndFamily = (p) => {
+  const code = String(p.codigo || p.id || '').toUpperCase();
+  const desc = String(p.descripcion || p.nombre || '').toUpperCase();
+  const cat = String(p.categoria || '').toUpperCase();
+
+  let linea = p.linea || p.co_lin || p.coLin;
+  let linea_descripcion = p.linea_descripcion || p.lineaDescripcion || p.lin_des || p.linDes;
+  let familia = p.familia || p.co_sub || p.coSub;
+  let familia_descripcion = p.familia_descripcion || p.familiaDescripcion || p.subl_des || p.sublDes;
+  let co_cat = p.co_cat || p.coCat || 'MIN';
+
+  if (!linea) {
+    if (code.includes('DIESEL') || desc.includes('DIESEL') || cat.includes('DIESEL')) {
+      linea = 'LUB-DIE';
+      linea_descripcion = 'LUBRICANTES MOTOR DIÉSEL PESADO';
+      familia = 'DIE-50';
+      familia_descripcion = 'Diésel Monogrado SAE 50 CF/CF-2';
+    } else if (desc.includes('HIDRA') || cat.includes('HIDRA') || desc.includes('AW68')) {
+      linea = 'LUB-HID';
+      linea_descripcion = 'LUBRICANTES HIDRÁULICOS & INDUSTRIALES';
+      familia = 'HID-68';
+      familia_descripcion = 'Hidráulicos Anti-desgaste ISO VG 68';
+      co_cat = 'IND';
+    } else if (desc.includes('DEXRON') || desc.includes('ATF') || (cat.includes('TRANSMISION') && desc.includes('AUTOMATICA'))) {
+      linea = 'LUB-TRA';
+      linea_descripcion = 'LUBRICANTES TRANSMISIÓN & CAJAS';
+      familia = 'TRA-AUT';
+      familia_descripcion = 'Transmisión Automática Dexron II / Mercon';
+      co_cat = 'IND';
+    } else if (desc.includes('TRANS-MANUAL') || desc.includes('SAE 140') || desc.includes('GL-4')) {
+      linea = 'LUB-TRA';
+      linea_descripcion = 'LUBRICANTES TRANSMISIÓN & CAJAS';
+      familia = 'TRA-MAN';
+      familia_descripcion = 'Transmisión Manual y Diferenciales SAE 140 GL-4';
+      co_cat = 'IND';
+    } else if (desc.includes('2 TIEMPOS') || desc.includes('2T') || desc.includes('4 TIEMPOS') || desc.includes('MOTOS')) {
+      linea = 'LUB-MOT';
+      linea_descripcion = 'LUBRICANTES MOTOS 4T / 2T';
+      familia = desc.includes('2') ? 'MOT-2T' : 'MOT-4T';
+      familia_descripcion = desc.includes('2') ? 'Motos 2 Tiempos API TC JASO FB' : 'Motos 4 Tiempos 20W-50 JASO MA2';
+    } else if (desc.includes('FUERA DE BORDA') || desc.includes('TC-W3')) {
+      linea = 'LUB-GAS';
+      linea_descripcion = 'LUBRICANTES MOTOR GASOLINA';
+      familia = 'MAR-FB';
+      familia_descripcion = 'Marino Fuera de Borda TC-W3';
+    } else if (code === '101815' || desc.includes('FLETE')) {
+      linea = 'SER-LOG';
+      linea_descripcion = 'SERVICIOS & LOGÍSTICA';
+      familia = 'SER-FLE';
+      familia_descripcion = 'Servicios de Flete y Distribución';
+      co_cat = 'IND';
+    } else if (code === 'GNP001' || desc.includes('PUBLICIDAD') || desc.includes('PROPAGANDA')) {
+      linea = 'GAS-OPE';
+      linea_descripcion = 'GASTOS OPERACIONALES NO PRODUCTIVOS';
+      familia = 'GAS-NOP';
+      familia_descripcion = 'Gastos Operacionales y Publicidad';
+      co_cat = 'IND';
+    } else {
+      linea = 'LUB-GAS';
+      linea_descripcion = 'LUBRICANTES MOTOR GASOLINA';
+      if (desc.includes('SEMI') || desc.includes('R500')) {
+        familia = 'SEM-GAS';
+        familia_descripcion = 'Semi-Sintético Alta Tecnología R500';
+        co_cat = 'SEM';
+      } else if (desc.includes('25W-60') || desc.includes('ALTO KILOMETRAJE')) {
+        familia = 'AK-GAS';
+        familia_descripcion = 'Alto Kilometraje SAE 25W-60';
+      } else {
+        familia = 'MIN-GAS';
+        familia_descripcion = 'Mineral Motor Gasolina';
+      }
+    }
+  }
+
+  return {
+    linea,
+    linea_descripcion,
+    lineaDescripcion: linea_descripcion,
+    co_lin: linea,
+    coLin: linea,
+    familia,
+    familia_descripcion,
+    familiaDescripcion: familia_descripcion,
+    co_sub: familia,
+    coSub: familia,
+    co_cat,
+    coCat: co_cat
+  };
+};
+
+const mapProductToDb = (p) => {
+  const precioUsdDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? 0) || 0;
+  const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
+  const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || 0;
+  const litrosPorUnidad = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 1) || 1;
+  const stock = Number(p.stock ?? 0) || 0;
+  const comprometido = Number(p.comprometido ?? 0) || 0;
+  const stockMinimo = Number(p.stockMinimo ?? p.stock_minimo ?? 0) || 0;
+
+  const hierarchy = inferProductLineAndFamily(p);
+
+  return {
+    id: p.id,
+    codigo: p.codigo,
+    oem: p.oem || '',
+    descripcion: p.descripcion || p.nombre || '',
+    nombre: p.nombre || p.descripcion || '',
+    marca: p.marca || 'OILSTONE',
+    categoria: p.categoria || 'Lubricantes',
+    viscosidad: p.viscosidad || '',
+    norma_api: p.normaApi || p.norma_api || '',
+    normaApi: p.normaApi || p.norma_api || '',
+    presentaciones_disponibles: p.presentacionesDisponibles || p.presentaciones_disponibles || [],
+    presentacionesDisponibles: p.presentacionesDisponibles || p.presentaciones_disponibles || [],
+    unidad: p.unidad || 'UND',
+    litros_por_unidad: litrosPorUnidad,
+    litrosPorUnidad,
+    stock,
+    comprometido,
+    stock_minimo: stockMinimo,
+    stockMinimo,
+    costo_usd: costoUsd,
+    costoUsd,
+    costo: costoUsd,
+    precio_usd_detal: precioUsdDetal,
+    precioUsdDetal,
+    precio_usd_mayor: precioUsdMayor,
+    precioUsdMayor,
+    precio: precioUsdDetal,
+    precioUsd: precioUsdDetal,
+    precioVenta: precioUsdDetal,
+    precioMayor: precioUsdMayor,
+    aplica_iva: p.aplicaIva !== undefined ? p.aplicaIva : (p.aplica_iva !== undefined ? p.aplica_iva : true),
+    aplicaIva: p.aplicaIva !== undefined ? p.aplicaIva : (p.aplica_iva !== undefined ? p.aplica_iva : true),
+    color_etiqueta: p.colorEtiqueta || p.color_etiqueta || '#002b7a',
+    colorEtiqueta: p.colorEtiqueta || p.color_etiqueta || '#002b7a',
+    imagen: p.imagen || '',
+    especificaciones: p.especificaciones || {},
+    linea: hierarchy.linea,
+    linea_descripcion: hierarchy.linea_descripcion,
+    lineaDescripcion: hierarchy.lineaDescripcion,
+    co_lin: hierarchy.co_lin,
+    coLin: hierarchy.coLin,
+    familia: hierarchy.familia,
+    familia_descripcion: hierarchy.familia_descripcion,
+    familiaDescripcion: hierarchy.familiaDescripcion,
+    co_sub: hierarchy.co_sub,
+    coSub: hierarchy.coSub,
+    co_cat: hierarchy.co_cat,
+    coCat: hierarchy.coCat
+  };
+};
+
+const mapProductFromDb = (p) => {
+  if (!p) return null;
+  const precioUsdDetal = Number(p.precio_usd_detal ?? p.precioUsdDetal ?? p.precio ?? p.precioVenta ?? 0) || 0;
+  const precioUsdMayor = Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
+  const costoUsd = Number(p.costo_usd ?? p.costoUsd ?? p.costo ?? 0) || 0;
+  const litrosPorUnidad = Number(p.litros_por_unidad ?? p.litrosPorUnidad ?? 1) || 1;
+  const stock = Number(p.stock ?? 0) || 0;
+  const comprometido = Number(p.comprometido ?? 0) || 0;
+  const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 0) || 0;
+
+  const hierarchy = inferProductLineAndFamily(p);
+
+  return {
+    id: p.id,
+    codigo: p.codigo || p.id,
+    oem: p.oem || '',
+    descripcion: p.descripcion || p.nombre || '',
+    nombre: p.nombre || p.descripcion || '',
+    marca: p.marca || 'OILSTONE',
+    categoria: p.categoria || 'Lubricantes',
+    viscosidad: p.viscosidad || '',
+    normaApi: p.norma_api || p.normaApi || '',
+    norma_api: p.norma_api || p.normaApi || '',
+    presentacionesDisponibles: p.presentaciones_disponibles || p.presentacionesDisponibles || [],
+    presentaciones_disponibles: p.presentaciones_disponibles || p.presentacionesDisponibles || [],
+    unidad: p.unidad || 'UND',
+    litrosPorUnidad,
+    litros_por_unidad: litrosPorUnidad,
+    stock,
+    comprometido,
+    stockMinimo,
+    stock_minimo: stockMinimo,
+    costoUsd,
+    costo_usd: costoUsd,
+    costo: costoUsd,
+    precioUsdDetal,
+    precio_usd_detal: precioUsdDetal,
+    precioUsdMayor,
+    precio_usd_mayor: precioUsdMayor,
+    precio: precioUsdDetal,
+    precioUsd: precioUsdDetal,
+    precioVenta: precioUsdDetal,
+    precioMayor: precioUsdMayor,
+    aplicaIva: p.aplica_iva !== undefined ? p.aplica_iva : (p.aplicaIva !== undefined ? p.aplicaIva : true),
+    aplica_iva: p.aplica_iva !== undefined ? p.aplica_iva : (p.aplicaIva !== undefined ? p.aplicaIva : true),
+    colorEtiqueta: p.color_etiqueta || p.colorEtiqueta || '#002b7a',
+    color_etiqueta: p.color_etiqueta || p.colorEtiqueta || '#002b7a',
+    imagen: p.imagen || '',
+    especificaciones: p.especificaciones || {},
+    linea: hierarchy.linea,
+    linea_descripcion: hierarchy.linea_descripcion,
+    lineaDescripcion: hierarchy.lineaDescripcion,
+    co_lin: hierarchy.co_lin,
+    coLin: hierarchy.coLin,
+    familia: hierarchy.familia,
+    familia_descripcion: hierarchy.familia_descripcion,
+    familiaDescripcion: hierarchy.familiaDescripcion,
+    co_sub: hierarchy.co_sub,
+    coSub: hierarchy.coSub,
+    co_cat: hierarchy.co_cat,
+    coCat: hierarchy.coCat
+  };
+};
+
+const mapClientToDb = (c) => ({
+  id: c.id,
+  codigo: c.codigo || c.id,
+  nombre: c.nombre,
+  rif: c.rif,
+  telefono: c.telefono || '',
+  email: c.email || '',
+  direccion: c.direccion || '',
+  limite_credito_usd: Number(c.limiteCreditoUsd ?? c.limite_credito_usd ?? 0),
+  saldo_deudor_usd: Number(c.saldoDeudorUsd ?? c.saldo_deudor_usd ?? 0),
+  dias_credito: Number(c.diasCredito ?? c.dias_credito ?? 0),
+  tipo_cliente: c.tipoCliente || c.tipo_cliente || 'Mayorista',
+  nit: c.nit || '',
+  direccion2: c.direccion2 || '',
+  ciudad: c.ciudad || '',
+  estado: c.estado || '',
+  zip: c.zip || '',
+  fax: c.fax || '',
+  website: c.website || '',
+  responsable: c.responsable || '',
+  saldo_inicial: Number(c.saldoInicial ?? c.saldo_inicial ?? 0),
+  descuento_pronto_pago: Number(c.descuentoProntoPago ?? c.descuento_pronto_pago ?? 0),
+  descuento_global: Number(c.descuentoGlobal ?? c.descuento_global ?? 0),
+  zona_venta: c.zonaVenta || c.zona_venta || '',
+  segmento: c.segmento || '',
+  vendedor_asignado: c.vendedorAsignado || c.vendedor_asignado || '',
+  tipo_iva: c.tipoIva || c.tipo_iva || '1',
+  es_contribuyente: Boolean(c.esContribuyente ?? c.es_contribuyente ?? true),
+  es_contribuyente_especial: Boolean(c.esContribuyenteEspecial ?? c.es_contribuyente_especial ?? false),
+  porcentaje_retencion_especial: Number(c.porcentajeRetencionEspecial ?? c.porcentaje_retencion_especial ?? 0),
+  inactivo: Boolean(c.inactivo ?? false),
+  sin_credito: Boolean(c.sinCredito ?? c.sin_credito ?? false),
+  fecha_registro: c.fechaRegistro || c.fecha_registro || '',
+  ultima_factura: c.ultimaFactura || c.ultima_factura || '',
+  fecha_ultima_venta: c.fechaUltimaVenta || c.fecha_ultima_venta || '',
+  monto_ultima_venta: Number(c.montoUltimaVenta ?? c.monto_ultima_venta ?? 0),
+  comentarios: c.comentarios || ''
+});
+
+const mapClientFromDb = (c) => {
+  if (!c) return null;
+  return {
+    id: c.id,
+    codigo: c.codigo || c.id,
+    nombre: c.nombre || '',
+    rif: c.rif || '',
+    telefono: c.telefono || '',
+    email: c.email || '',
+    direccion: c.direccion || '',
+    limiteCreditoUsd: Number(c.limite_credito_usd || 0),
+    saldoDeudorUsd: Number(c.saldo_deudor_usd || 0),
+    diasCredito: Number(c.dias_credito || 0),
+    tipoCliente: c.tipo_cliente || 'Mayorista',
+    nit: c.nit || '',
+    direccion2: c.direccion2 || '',
+    ciudad: c.ciudad || '',
+    estado: c.estado || '',
+    zip: c.zip || '',
+    fax: c.fax || '',
+    website: c.website || '',
+    responsable: c.responsable || '',
+    saldoInicial: Number(c.saldo_inicial || 0),
+    descuentoProntoPago: Number(c.descuento_pronto_pago || 0),
+    descuentoGlobal: Number(c.descuento_global || 0),
+    zonaVenta: c.zona_venta || '',
+    segmento: c.segmento || '',
+    vendedorAsignado: c.vendedor_asignado || '',
+    tipoIva: c.tipo_iva || '1',
+    esContribuyente: Boolean(c.es_contribuyente),
+    esContribuyenteEspecial: Boolean(c.es_contribuyente_especial),
+    porcentajeRetencionEspecial: Number(c.porcentaje_retencion_especial || 0),
+    inactivo: Boolean(c.inactivo),
+    sinCredito: Boolean(c.sin_credito),
+    fechaRegistro: c.fecha_registro || '',
+    ultimaFactura: c.ultima_factura || '',
+    fechaUltimaVenta: c.fecha_ultima_venta || '',
+    montoUltimaVenta: Number(c.monto_ultima_venta || 0),
+    comentarios: c.comentarios || ''
+  };
+};
+
+const mapSupplierToDb = (s) => ({
+  id: s.id,
+  codigo: s.codigo,
+  nombre: s.nombre,
+  rif: s.rif,
+  telefono: s.telefono,
+  email: s.email,
+  direccion: s.direccion,
+  saldo_pendiente_usd: s.saldoPendienteUsd || s.saldo_pendiente_usd || 0
+});
+
+const mapSupplierFromDb = (s) => {
+  if (!s) return null;
+  return {
+    id: s.id,
+    codigo: s.codigo,
+    nombre: s.nombre,
+    rif: s.rif,
+    telefono: s.telefono,
+    email: s.email,
+    direccion: s.direccion,
+    saldoPendienteUsd: Number(s.saldo_pendiente_usd)
+  };
+};
+
+const mapSaleToDb = (s) => ({
+  id: s.id,
+  numero_doc: s.numeroDoc || s.numero_doc,
+  numero_control: s.numeroControl || s.numero_control || '00-000000',
+  tipo_doc: s.tipoDoc || s.tipo_doc || 'FACTURA',
+  documento_afectado: s.documentoAfectado || s.documento_afectado || '',
+  fecha: s.fecha,
+  cliente_id: s.clienteId || s.cliente_id,
+  cliente_nombre: s.clienteNombre || s.cliente_nombre,
+  cliente_rif: s.clienteRif || s.cliente_rif,
+  tasa_dolar: s.tasaDolar || s.tasa_dolar,
+  condicion_pago: s.condicionPago || s.condicion_pago,
+  items: s.items,
+  subtotal_usd: s.subtotalUsd || s.subtotal_usd,
+  base_exenta_usd: s.baseExentaUsd || s.base_exenta_usd || 0,
+  base_general_usd: s.baseGeneralUsd || s.base_general_usd || 0,
+  iva_general_usd: s.ivaGeneralUsd || s.iva_general_usd || 0,
+  base_reducida_usd: s.baseReducidaUsd || s.base_reducida_usd || 0,
+  iva_reducida_usd: s.ivaReducidaUsd || s.iva_reducida_usd || 0,
+  base_adicional_usd: s.baseAdicionalUsd || s.base_adicional_usd || 0,
+  iva_adicional_usd: s.ivaAdicionalUsd || s.iva_adicional_usd || 0,
+  iva_usd: s.ivaUsd || s.iva_usd,
+  igtf_usd: s.igtfUsd || s.igtf_usd || 0,
+  total_usd: s.totalUsd || s.total_usd,
+  subtotal_bs: s.subtotalBs || s.subtotal_bs,
+  base_exenta_bs: s.baseExentaBs || s.base_exenta_bs || 0,
+  base_general_bs: s.baseGeneralBs || s.base_general_bs || 0,
+  iva_general_bs: s.ivaGeneralBs || s.iva_general_bs || 0,
+  base_reducida_bs: s.baseReducidaBs || s.base_reducida_bs || 0,
+  iva_reducida_bs: s.ivaReducidaBs || s.iva_reducida_bs || 0,
+  base_adicional_bs: s.baseAdicionalBs || s.base_adicional_bs || 0,
+  iva_adicional_bs: s.ivaAdicionalBs || s.iva_adicional_bs || 0,
+  iva_bs: s.ivaBs || s.iva_bs,
+  igtf_bs: s.igtfBs || s.igtf_bs || 0,
+  total_bs: s.totalBs || s.total_bs,
+  retencion_iva_bs: s.retencionIvaBs || s.retencion_iva_bs || 0,
+  comprobante_retencion_iva: s.comprobanteRetencionIva || s.comprobante_retencion_iva || '',
+  estado: s.estado,
+  metodo_pago: s.metodoPago || s.metodo_pago,
+  vendedor: s.vendedor,
+  cierre_z_id: s.cierreZId || s.cierre_z_id || null,
+  cerrada: Boolean(s.cerrada)
+});
+
+const mapSaleFromDb = (s) => {
+  if (!s) return null;
+  return {
+    id: s.id,
+    numeroDoc: s.numero_doc,
+    numeroControl: s.numero_control || '00-000000',
+    tipoDoc: s.tipo_doc || 'FACTURA',
+    documentoAfectado: s.documento_afectado || '',
+    fecha: s.fecha,
+    clienteId: s.cliente_id,
+    clienteNombre: s.cliente_nombre,
+    clienteRif: s.cliente_rif,
+    tasaDolar: Number(s.tasa_dolar),
+    condicionPago: s.condicion_pago,
+    items: s.items,
+    subtotalUsd: Number(s.subtotal_usd),
+    baseExentaUsd: Number(s.base_exenta_usd || 0),
+    baseGeneralUsd: Number(s.base_general_usd || s.subtotal_usd || 0),
+    ivaGeneralUsd: Number(s.iva_general_usd || s.iva_usd || 0),
+    baseReducidaUsd: Number(s.base_reducida_usd || 0),
+    ivaReducidaUsd: Number(s.iva_reducida_usd || 0),
+    baseAdicionalUsd: Number(s.base_adicional_usd || 0),
+    ivaAdicionalUsd: Number(s.iva_adicional_usd || 0),
+    ivaUsd: Number(s.iva_usd),
+    igtfUsd: Number(s.igtf_usd || 0),
+    totalUsd: Number(s.total_usd),
+    subtotalBs: Number(s.subtotal_bs),
+    baseExentaBs: Number(s.base_exenta_bs || 0),
+    baseGeneralBs: Number(s.base_general_bs || s.subtotal_bs || 0),
+    ivaGeneralBs: Number(s.iva_general_bs || s.iva_bs || 0),
+    baseReducidaBs: Number(s.base_reducida_bs || 0),
+    ivaReducidaBs: Number(s.iva_reducida_bs || 0),
+    baseAdicionalBs: Number(s.base_adicional_bs || 0),
+    ivaAdicionalBs: Number(s.iva_adicional_bs || 0),
+    ivaBs: Number(s.iva_bs),
+    igtfBs: Number(s.igtf_bs || 0),
+    totalBs: Number(s.total_bs),
+    retencionIvaBs: Number(s.retencion_iva_bs || 0),
+    comprobanteRetencionIva: s.comprobante_retencion_iva || '',
+    estado: s.estado,
+    metodoPago: s.metodo_pago,
+    vendedor: s.vendedor,
+    cierreZId: s.cierre_z_id || null,
+    cerrada: Boolean(s.cerrada)
+  };
+};
+
+const mapPurchaseToDb = (p) => ({
+  id: p.id,
+  numero_factura_prov: p.numeroFacturaProv || p.numero_factura_prov,
+  numero_control: p.numeroControl || p.numero_control || '00-000000',
+  tipo_doc: p.tipoDoc || p.tipo_doc || 'FACTURA',
+  documento_afectado: p.documentoAfectado || p.documento_afectado || '',
+  fecha: p.fecha,
+  proveedor_id: p.proveedorId || p.proveedor_id,
+  proveedor_nombre: p.proveedorNombre || p.proveedor_nombre,
+  proveedor_rif: p.proveedorRif || p.proveedor_rif,
+  proveedor_direccion: p.proveedorDireccion || p.proveedor_direccion || '',
+  tasa_dolar: p.tasaDolar || p.tasa_dolar,
+  producto: p.producto,
+  cantidad: p.cantidad,
+  costo_unitario_usd: p.costoUnitarioUsd || p.costo_unitario_usd || 0,
+  subtotal_usd: p.subtotalUsd || p.subtotal_usd || 0,
+  base_exenta_usd: p.baseExentaUsd || p.base_exenta_usd || 0,
+  base_general_usd: p.baseGeneralUsd || p.base_general_usd || 0,
+  iva_general_usd: p.ivaGeneralUsd || p.iva_general_usd || 0,
+  total_usd: p.totalUsd || p.total_usd || 0,
+  subtotal_bs: p.subtotalBs || p.subtotal_bs || 0,
+  base_exenta_bs: p.baseExentaBs || p.base_exenta_bs || 0,
+  base_general_bs: p.baseGeneralBs || p.base_general_bs || 0,
+  iva_general_bs: p.ivaGeneralBs || p.iva_general_bs || 0,
+  total_bs: p.totalBs || p.total_bs || 0,
+  retencion_iva_usd: p.retencionIvaUsd || p.retencion_iva_usd || 0,
+  retencion_iva_bs: p.retencionIvaBs || p.retencion_iva_bs || 0,
+  retencion_islr_usd: p.retencionIslrUsd || p.retencion_islr_usd || 0,
+  retencion_islr_bs: p.retencionIslrBs || p.retencion_islr_bs || 0,
+  numero_comprobante_retencion_iva: p.numeroComprobanteRetencionIva || p.numero_comprobante_retencion_iva || '',
+  numero_comprobante_retencion_islr: p.numeroComprobanteRetencionIslr || p.numero_comprobante_retencion_islr || '',
+  codigo_concepto_islr: p.codigoConceptoIslr || p.codigo_concepto_islr || '055',
+  receptor: p.receptor
+});
+
+const mapPurchaseFromDb = (p) => {
+  if (!p) return null;
+  return {
+    id: p.id,
+    numeroFacturaProv: p.numero_factura_prov,
+    numeroControl: p.numero_control || '00-000000',
+    tipoDoc: p.tipo_doc || 'FACTURA',
+    documentoAfectado: p.documento_afectado || '',
+    fecha: p.fecha,
+    proveedorId: p.proveedor_id,
+    proveedorNombre: p.proveedor_nombre,
+    proveedorRif: p.proveedor_rif,
+    proveedorDireccion: p.proveedor_direccion,
+    tasaDolar: Number(p.tasa_dolar),
+    producto: p.producto,
+    cantidad: Number(p.cantidad),
+    costoUnitarioUsd: Number(p.costo_unitario_usd),
+    subtotalUsd: Number(p.subtotal_usd),
+    baseExentaUsd: Number(p.base_exenta_usd || 0),
+    baseGeneralUsd: Number(p.base_general_usd || p.subtotal_usd || 0),
+    ivaGeneralUsd: Number(p.iva_general_usd || 0),
+    totalUsd: Number(p.total_usd),
+    subtotalBs: Number(p.subtotal_bs),
+    baseExentaBs: Number(p.base_exenta_bs || 0),
+    baseGeneralBs: Number(p.base_general_bs || p.subtotal_bs || 0),
+    ivaGeneralBs: Number(p.iva_general_bs || 0),
+    totalBs: Number(p.total_bs),
+    retencionIvaUsd: Number(p.retencion_iva_usd || 0),
+    retencionIvaBs: Number(p.retencion_iva_bs || 0),
+    retencionIslrUsd: Number(p.retencion_islr_usd || 0),
+    retencionIslrBs: Number(p.retencion_islr_bs || 0),
+    numeroComprobanteRetencionIva: p.numero_comprobante_retencion_iva || '',
+    numeroComprobanteRetencionIslr: p.numero_comprobante_retencion_islr || '',
+    codigoConceptoIslr: p.codigo_concepto_islr || '055',
+    receptor: p.receptor
+  };
+};
+
+const mapCashMovementToDb = (m) => ({
+  id: m.id,
+  fecha: m.fecha,
+  tipo: m.tipo,
+  concepto: m.concepto,
+  monto_usd: m.montoUsd || m.monto_usd || 0,
+  monto_bs: m.montoBs || m.monto_bs || 0,
+  metodo: m.metodo,
+  usuario: m.usuario
+});
+
+const mapCashMovementFromDb = (m) => {
+  if (!m) return null;
+  return {
+    id: m.id,
+    fecha: m.fecha,
+    tipo: m.tipo,
+    concepto: m.concepto,
+    montoUsd: Number(m.monto_usd),
+    montoBs: Number(m.monto_bs),
+    metodo: m.metodo,
+    usuario: m.usuario
+  };
+};
+
+const mapFiscalClosureToDb = (c) => ({
+  id: c.id,
+  tipo: c.tipo,
+  numero_z: c.numeroZ || null,
+  fecha_apertura: c.fechaApertura,
+  fecha_cierre: c.fechaCierre,
+  primera_factura: c.primeraFactura,
+  ultima_factura: c.ultimaFactura,
+  primera_nc: c.primeraNc,
+  ultima_nc: c.ultimaNc,
+  primera_nd: c.primeraNd,
+  ultima_nd: c.ultimaNd,
+  cantidad_facturas: c.cantidadFacturas || 0,
+  cantidad_nc: c.cantidadNc || 0,
+  cantidad_nd: c.cantidadNd || 0,
+  total_documentos: c.totalDocumentos || 0,
+  ventas_exentas_bs: c.ventasExentasBs || 0,
+  base_general_bs: c.baseGeneralBs || 0,
+  debito_general_bs: c.debitoGeneralBs || 0,
+  base_reducida_bs: c.baseReducidaBs || 0,
+  debito_reducido_bs: c.debitoReducidoBs || 0,
+  base_adicional_bs: c.baseAdicionalBs || 0,
+  debito_adicional_bs: c.debitoAdicionalBs || 0,
+  total_debito_fiscal_bs: c.totalDebitoFiscalBs || 0,
+  base_igtf_bs: c.baseIgtfBs || 0,
+  total_igtf_bs: c.totalIgtfBs || 0,
+  total_ventas_bs: c.totalVentasBs || 0,
+  total_ventas_usd: c.totalVentasUsd || 0,
+  tasa_bcv: c.tasaBcv || 827.73,
+  gran_total_historico_bs: c.granTotalHistoricoBs || 0,
+  desglose_pagos: c.desglosePagos || {},
+  usuario_id: c.usuarioId,
+  usuario_nombre: c.usuarioNombre,
+  firma_hash_sha256: c.firmaHashSha256
+});
+
+const mapFiscalClosureFromDb = (c) => ({
+  id: c.id,
+  tipo: c.tipo,
+  numeroZ: c.numero_z,
+  fechaApertura: c.fecha_apertura,
+  fechaCierre: c.fecha_cierre,
+  primeraFactura: c.primera_factura,
+  ultimaFactura: c.ultima_factura,
+  primeraNc: c.primera_nc,
+  ultimaNc: c.ultima_nc,
+  primeraNd: c.primera_nd,
+  ultimaNd: c.ultima_nd,
+  cantidadFacturas: Number(c.cantidad_facturas || 0),
+  cantidadNc: Number(c.cantidad_nc || 0),
+  cantidadNd: Number(c.cantidad_nd || 0),
+  totalDocumentos: Number(c.total_documentos || 0),
+  ventasExentasBs: Number(c.ventas_exentas_bs || 0),
+  baseGeneralBs: Number(c.base_general_bs || 0),
+  debitoGeneralBs: Number(c.debito_general_bs || 0),
+  baseReducidaBs: Number(c.base_reducida_bs || 0),
+  debitoReducidoBs: Number(c.debito_reducido_bs || 0),
+  baseAdicionalBs: Number(c.base_adicional_bs || 0),
+  debitoAdicionalBs: Number(c.debito_adicional_bs || 0),
+  totalDebitoFiscalBs: Number(c.total_debito_fiscal_bs || 0),
+  baseIgtfBs: Number(c.base_igtf_bs || 0),
+  totalIgtfBs: Number(c.total_igtf_bs || 0),
+  totalVentasBs: Number(c.total_ventas_bs || 0),
+  totalVentasUsd: Number(c.total_ventas_usd || 0),
+  tasaBcv: Number(c.tasa_bcv || 827.73),
+  granTotalHistoricoBs: Number(c.gran_total_historico_bs || 0),
+  desglosePagos: c.desglose_pagos || {},
+  usuarioId: c.usuario_id,
+  usuarioNombre: c.usuario_nombre,
+  firmaHashSha256: c.firma_hash_sha256
+});
+
+const mapOrderToDb = (o) => ({
+  id: o.id,
+  numero_doc: o.numeroDoc || o.numero_doc,
+  tipo_doc: o.tipoDoc || o.tipo_doc || 'COTIZACION',
+  fecha_emision: o.fechaEmision || o.fecha_emision || new Date().toISOString(),
+  fecha_vencimiento: o.fechaVencimiento || o.fecha_vencimiento || null,
+  cliente_id: o.clienteId || o.cliente_id,
+  cliente_nombre: o.clienteNombre || o.cliente_nombre,
+  cliente_rif: o.clienteRif || o.cliente_rif,
+  vendedor_id: o.vendedorId || o.vendedor_id,
+  zona_venta: o.zonaVenta || o.zona_venta,
+  segmento: o.segmento,
+  total_bruto_usd: Number(o.totalBrutoUsd ?? o.total_bruto_usd ?? 0),
+  iva_usd: Number(o.ivaUsd ?? o.iva_usd ?? 0),
+  total_neto_usd: Number(o.totalNetoUsd ?? o.total_neto_usd ?? 0),
+  total_litros: Number(o.totalLitros ?? o.total_litros ?? 0),
+  total_cajas: Number(o.totalCajas ?? o.total_cajas ?? 0),
+  total_items: Number(o.totalItems ?? o.total_items ?? (o.items?.length || 0)),
+  status: o.status || 'PENDIENTE',
+  direccion_entrega: o.direccionEntrega || o.direccion_entrega || '',
+  forma_pago: o.formaPago || o.forma_pago || '',
+  comentarios: o.comentarios || '',
+  profit_origen: o.profitOrigen || o.profit_origen || 'GRUMOTOR'
+});
+
+const mapOrderFromDb = (o) => {
+  if (!o) return null;
+  return {
+    id: o.id,
+    numeroDoc: o.numero_doc,
+    tipoDoc: o.tipo_doc || 'COTIZACION',
+    fechaEmision: o.fecha_emision,
+    fechaVencimiento: o.fecha_vencimiento,
+    clienteId: o.cliente_id,
+    clienteNombre: o.cliente_nombre,
+    clienteRif: o.cliente_rif,
+    vendedorId: o.vendedor_id,
+    zonaVenta: o.zona_venta,
+    segmento: o.segmento,
+    totalBrutoUsd: Number(o.total_bruto_usd || 0),
+    ivaUsd: Number(o.iva_usd || 0),
+    totalNetoUsd: Number(o.total_neto_usd || 0),
+    totalLitros: Number(o.total_litros || 0),
+    totalCajas: Number(o.total_cajas || 0),
+    totalItems: Number(o.total_items || (o.order_items?.length || 0)),
+    status: o.status || 'PENDIENTE',
+    direccionEntrega: o.direccion_entrega || '',
+    formaPago: o.forma_pago || '',
+    comentarios: o.comentarios || '',
+    profitOrigen: o.profit_origen || 'GRUMOTOR',
+    items: (o.order_items || []).map(it => ({
+      id: it.id,
+      orderId: it.order_id,
+      rengNum: it.reng_num,
+      articuloId: it.articulo_id,
+      articuloDescripcion: it.articulo_descripcion,
+      unidadVenta: it.unidad_venta,
+      cantidad: Number(it.cantidad || 0),
+      litrosUnitarios: Number(it.litros_unitarios || 0),
+      litrosTotales: Number(it.litros_totales || 0),
+      precioUnitarioUsd: Number(it.precio_unitario_usd || 0),
+      totalUsd: Number(it.total_usd || 0)
+    }))
+  };
+};
+
+// --- Mappings de Usuarios y Auditoría ---
+
+export const mapUserToDb = (u) => {
+  const base = {
+    id: u.id,
+    username: (u.username || '').trim().toLowerCase(),
+    password: u.password || '123456',
+    nombre: (u.nombre || u.name || '').trim(),
+    cargo: (u.cargo || 'Operador').trim(),
+    rol: u.rol || u.role || 'VENTAS',
+    departamento: u.departamento || null,
+    cedula: u.cedula || '',
+    email: u.email || '',
+    phone: u.phone || u.telefono || '',
+    telefono: u.telefono || u.phone || '',
+    seller_id: u.seller_id || u.co_ven || u.coVen || null,
+    co_ven: u.coVen || u.co_ven || u.seller_id || null,
+    coVen: u.coVen || u.co_ven || u.seller_id || null,
+    modulos: Array.isArray(u.modulos) ? u.modulos : (ROLE_PERMISSIONS[u.rol || 'VENTAS'] || []),
+    avatar: u.avatar || '👤',
+    foto: u.foto || null,
+    color: u.color || '#0ea5e9',
+    descripcion: u.descripcion || '',
+    activo: u.activo !== undefined ? u.activo : (u.active !== undefined ? u.active : true),
+    active: u.activo !== undefined ? u.activo : (u.active !== undefined ? u.active : true),
+    ultimo_acceso: u.ultimoAcceso || u.ultimo_acceso || null,
+    updated_at: new Date().toISOString()
+  };
+  return base;
+};
+
+export const mapUserFromDb = (u) => {
+  if (!u) return null;
+  return {
+    id: u.id,
+    username: u.username,
+    password: u.password || '123456',
+    nombre: u.nombre || u.name || '',
+    cargo: u.cargo || '',
+    rol: u.rol || u.role || 'VENTAS',
+    coVen: u.co_ven || u.coVen || u.seller_id || null,
+    co_ven: u.co_ven || u.coVen || u.seller_id || null,
+    seller_id: u.seller_id || u.co_ven || u.coVen || null,
+    cedula: u.cedula || '',
+    email: u.email || '',
+    phone: u.phone || u.telefono || '',
+    telefono: u.telefono || u.phone || '',
+    departamento: u.departamento || null,
+    modulos: Array.isArray(u.modulos) && u.modulos.length > 0 ? u.modulos : (ROLE_PERMISSIONS[u.rol || 'VENTAS'] || []),
+    avatar: u.avatar || '👤',
+    foto: u.foto || null,
+    color: u.color || '#0ea5e9',
+    descripcion: u.descripcion || '',
+    activo: u.activo !== false && u.active !== false,
+    active: u.activo !== false && u.active !== false,
+    ultimoAcceso: u.ultimo_acceso || u.ultimoAcceso || null,
+    createdAt: u.created_at || u.createdAt,
+    updatedAt: u.updated_at || u.updatedAt
+  };
+};
+
+export const mapUserLogToDb = (l) => ({
+  id: l.id || `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+  usuario_id: l.usuarioId || l.usuario_id || null,
+  usuario_nombre: l.usuarioNombre || l.usuario_nombre || 'Sistema',
+  usuario_rol: l.usuarioRol || l.usuario_rol || 'ADMIN',
+  accion: l.accion,
+  modulo: l.modulo || 'USUARIOS',
+  detalles: l.detalles || '',
+  created_at: l.createdAt || l.created_at || new Date().toISOString()
+});
+
+export const mapUserLogFromDb = (l) => {
+  if (!l) return null;
+  return {
+    id: l.id,
+    usuarioId: l.usuario_id,
+    usuarioNombre: l.usuario_nombre,
+    usuarioRol: l.usuario_rol,
+    accion: l.accion,
+    modulo: l.modulo,
+    detalles: l.detalles,
+    createdAt: l.created_at
+  };
+};
+
+// --- DB Seeding ---
+
+export const seedDatabaseIfEmpty = async () => {
+  if (!isSupabaseAvailable) return;
+
+  console.log("[Supabase Sync] Iniciando verificación y sincronización de tablas iniciales...");
+
+  // 1. Config
+  try {
+    const { data: configRows, error: configError } = await supabase.from('config').select('id').limit(1);
+    if (!configError && (!configRows || configRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla config...");
+      await supabase.from('config').insert(mapConfigToDb(REAL_CONFIG));
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando config:", err);
+  }
+
+  // 2. Clients
+  try {
+    const { data: clientRows, error: clientErr } = await supabase.from('clients').select('id').limit(1);
+    if (!clientErr && (!clientRows || clientRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla clients...");
+      const dbClients = REAL_CLIENTS.map(mapClientToDb);
+      await supabase.from('clients').insert(dbClients);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando clients:", err);
+  }
+
+  // 3. Products
+  try {
+    const { data: prodRows, error: prodErr } = await supabase.from('products').select('id').limit(1);
+    if (!prodErr && (!prodRows || prodRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla products...");
+      const dbProducts = REAL_PRODUCTS.map(mapProductToDb);
+      await supabase.from('products').insert(dbProducts);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando products:", err);
+  }
+
+  // 4. Suppliers
+  try {
+    const { data: supRows, error: supErr } = await supabase.from('suppliers').select('id').limit(1);
+    if (!supErr && (!supRows || supRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla suppliers...");
+      const dbSuppliers = INITIAL_SUPPLIERS.map(mapSupplierToDb);
+      await supabase.from('suppliers').insert(dbSuppliers);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando suppliers:", err);
+  }
+
+  // 5. Sales
+  try {
+    const { data: saleRows, error: saleErr } = await supabase.from('sales').select('id').limit(1);
+    if (!saleErr && (!saleRows || saleRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla sales...");
+      const dbSales = INITIAL_SALES.map(mapSaleToDb);
+      await supabase.from('sales').insert(dbSales);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando sales:", err);
+  }
+
+  // 6. Purchases
+  try {
+    const { data: purRows, error: purErr } = await supabase.from('purchases').select('id').limit(1);
+    if (!purErr && (!purRows || purRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla purchases...");
+      const dbPurchases = INITIAL_PURCHASES.map(mapPurchaseToDb);
+      await supabase.from('purchases').insert(dbPurchases);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando purchases:", err);
+  }
+
+  // 7. Cash Movements
+  try {
+    const { data: cashRows, error: cashErr } = await supabase.from('cash_movements').select('id').limit(1);
+    if (!cashErr && (!cashRows || cashRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla cash_movements...");
+      const dbCashMovements = INITIAL_CASH_MOVEMENTS.map(mapCashMovementToDb);
+      await supabase.from('cash_movements').insert(dbCashMovements);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando cash_movements:", err);
+  }
+
+  // 8. Fiscal Closures
+  try {
+    const { data: closureRows, error: closureErr } = await supabase.from('fiscal_closures').select('id').limit(1);
+    if (!closureErr && (!closureRows || closureRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla fiscal_closures...");
+      const dbClosures = INITIAL_FISCAL_CLOSURES.map(mapFiscalClosureToDb);
+      await supabase.from('fiscal_closures').insert(dbClosures);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando fiscal_closures:", err);
+  }
+
+  // 9. Users
+  try {
+    const { data: userRows, error: userErr } = await supabase.from('users').select('id').limit(1);
+    if (!userErr && (!userRows || userRows.length === 0)) {
+      console.log("[Supabase Sync] Sembrando tabla users...");
+      const dbUsers = DEFAULT_USERS.map(mapUserToDb);
+      await supabase.from('users').insert(dbUsers);
+    }
+  } catch (err) {
+    console.warn("[Supabase Sync] Error sembrando users:", err);
+  }
+
+  console.log("[Supabase Sync] Verificación de sembrado completada.");
+};
+
+// --- Core API Methods ---
+
+// Config
+export const getSupabaseConfig = async () => {
+  if (!isSupabaseAvailable) return getStorageConfig();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('config').select('*').eq('id', 1).single()
+    );
+
+    if (error) throw error;
+    const mapped = mapConfigFromDb(data);
+    try {
+      localStorage.setItem('signum_app_config', JSON.stringify(mapped));
+      updateStorageConfig(mapped);
+    } catch (_) {}
+    return mapped;
+  } catch (error) {
+    markSupabaseOffline(error, 'getSupabaseConfig');
+    return getStorageConfig();
+  }
+};
+
+export const updateSupabaseConfig = async (newConfig) => {
+  const current = getStorageConfig() || {};
+  const merged = { ...current, ...newConfig };
+  
+  try {
+    localStorage.setItem('signum_app_config', JSON.stringify(merged));
+    updateStorageConfig(merged);
+  } catch (_) {}
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('config', 'UPDATE', merged);
+    return merged;
+  }
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('config').update(mapConfigToDb(merged)).eq('id', 1).select().single()
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = mapConfigFromDb(data);
+    try {
+      localStorage.setItem('signum_app_config', JSON.stringify(mapped));
+    } catch (_) {}
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabaseConfig');
+    enqueueSyncAction('config', 'UPDATE', merged);
+    return merged;
+  }
+};
+
+// Products
+export const getSupabaseProducts = async () => {
+  // 1. FUENTE MAESTRA DE DATOS: Supabase Cloud (DB_SIGNUM_MOTORVEN)
+  // Almacena productos íntegros con imágenes en Base64, viscosidades y especificaciones completas
+  if (isNetworkOnline()) {
+    try {
+      const { data, error } = await withTimeout(
+        supabase.from('products').select('*').order('codigo', { ascending: true })
+      );
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        isSupabaseAvailable = true;
+        const mapped = data.map(mapProductFromDb);
+        try {
+          localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(mapped));
+        } catch (_) {}
+        return mapped;
+      }
+      if (error) markSupabaseOffline(error, 'getSupabaseProducts');
+    } catch (err) {
+      markSupabaseOffline(err, 'getSupabaseProducts');
+    }
+  }
+
+  // 2. Caché local en caso de estar offline
+  return getStorageProducts();
+};
+
+export const saveSupabaseProduct = async (product) => {
+  // 1. Guardar primero en almacenamiento local para respuesta instantánea de la UI
+  saveStorageProduct(product);
+  const currentProds = getStorageProducts();
+  const prodToSave = currentProds.find(p => (product.id && p.id === product.id) || p.codigo === product.codigo) || product;
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('product', 'UPDATE', prodToSave);
+    return prodToSave;
+  }
+
+  try {
+    const payload = mapProductToDb(prodToSave);
+    const { data, error } = await withTimeout(
+      supabase.from('products').upsert(payload).select().single()
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = mapProductFromDb(data);
+    saveStorageProduct(mapped);
+
+    // Reflejo en tiempo real en Profit Plus (SQL Server: art) y comparativa
+    try {
+      const profitRes = await writeProfitProduct(mapped, 'SAVE');
+      if (profitRes?.comparison) {
+        console.log('[saveSupabaseProduct] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
+        mapped._comparison = profitRes.comparison;
+      }
+    } catch (e) {
+      console.warn('[saveSupabaseProduct] Aviso escribiendo en Profit:', e.message);
+    }
+
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'saveSupabaseProduct');
+    enqueueSyncAction('product', 'UPDATE', prodToSave);
+    writeProfitProduct(prodToSave, 'SAVE').catch(() => {});
+    return prodToSave;
+  }
+};
+
+export const deleteSupabaseProduct = async (id) => {
+  const currentProds = getStorageProducts();
+  const target = currentProds.find(p => p.id === id || p.codigo === id);
+  const coArt = target?.codigo || id;
+
+  deleteStorageProduct(id);
+
+  // Reflejo en tiempo real en Profit Plus (SQL Server: art anulado=1)
+  writeProfitProduct({ id, codigo: coArt }, 'DELETE').catch(e => {
+    console.warn('[deleteSupabaseProduct] Aviso eliminando en Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('product', 'DELETE', { id });
+    return true;
+  }
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('products').delete().eq('id', id)
+    );
+
+    if (error) {
+      // Si tiene histórico o clave foránea, aplicar soft delete en Supabase
+      await supabase.from('products').update({ stock: 0, inactivo: true, anulado: true }).eq('id', id);
+    }
+    isSupabaseAvailable = true;
+    return true;
+  } catch (err) {
+    try {
+      await supabase.from('products').update({ stock: 0, inactivo: true, anulado: true }).eq('id', id);
+    } catch (_) {}
+    return true;
+  }
+};
+
+// Clients
+export const getSupabaseClients = async () => {
+  // 1. FUENTE MAESTRA DE DATOS: Supabase Cloud (DB_SIGNUM_MOTORVEN)
+  // Almacena cartera de clientes completa sincronizada
+  if (isNetworkOnline()) {
+    try {
+      const { data, error } = await withTimeout(
+        supabase.from('clients').select('*').order('nombre', { ascending: true })
+      );
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        isSupabaseAvailable = true;
+        const mapped = data.map(mapClientFromDb);
+        try {
+          localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(mapped));
+        } catch (_) {}
+        return mapped;
+      }
+      if (error) markSupabaseOffline(error, 'getSupabaseClients');
+    } catch (err) {
+      markSupabaseOffline(err, 'getSupabaseClients');
+    }
+  }
+
+  // 2. Caché local en caso de estar offline
+  return getStorageClients();
+};
+
+export const saveSupabaseClient = async (client) => {
+  saveStorageClient(client);
+  const currentClients = getStorageClients();
+  const clientToSave = currentClients.find(c => (client.id && c.id === client.id) || c.rif === client.rif) || client;
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('client', 'UPDATE', clientToSave);
+    return clientToSave;
+  }
+
+  try {
+    const payload = mapClientToDb(clientToSave);
+    const { data, error } = await withTimeout(
+      supabase.from('clients').upsert(payload).select().single()
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = mapClientFromDb(data);
+    saveStorageClient(mapped);
+
+    // Reflejo en tiempo real en Profit Plus (SQL Server: clientes) y comparativa
+    try {
+      const profitRes = await writeProfitClient(mapped, 'SAVE');
+      if (profitRes?.comparison) {
+        console.log('[saveSupabaseClient] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
+        mapped._comparison = profitRes.comparison;
+      }
+    } catch (e) {
+      console.warn('[saveSupabaseClient] Aviso escribiendo en Profit:', e.message);
+    }
+
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'saveSupabaseClient');
+    enqueueSyncAction('client', 'UPDATE', clientToSave);
+    writeProfitClient(clientToSave, 'SAVE').catch(() => {});
+    return clientToSave;
+  }
+};
+
+export const deleteSupabaseClient = async (id) => {
+  const currentClients = getStorageClients();
+  const target = currentClients.find(c => c.id === id || c.codigo === id);
+  const coCli = target?.codigo || target?.rif || id;
+
+  // Reflejo en tiempo real en Profit Plus (SQL Server: clientes inactivo=1)
+  writeProfitClient({ id, codigo: coCli, inactivo: true }, 'DELETE').catch(e => {
+    console.warn('[deleteSupabaseClient] Aviso eliminando en Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('client', 'DELETE', { id });
+    return true;
+  }
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('clients').delete().eq('id', id)
+    );
+
+    if (error) {
+      // Si tiene facturas o documentos en cuentas por cobrar, aplicar soft delete
+      await supabase.from('clients').update({ inactivo: true, sin_credito: true }).eq('id', id);
+    }
+    isSupabaseAvailable = true;
+    return true;
+  } catch (err) {
+    try {
+      await supabase.from('clients').update({ inactivo: true, sin_credito: true }).eq('id', id);
+    } catch (_) {}
+    return true;
+  }
+};
+
+// Batch Upsert Helpers para Reconciliación Ultrarrápida
+export const saveSupabaseBatchProducts = async (productsList) => {
+  if (!Array.isArray(productsList) || productsList.length === 0) return [];
+
+  // 1. Guardar masivamente en almacenamiento local
+  try {
+    const existing = getStorageProducts();
+    const map = new Map();
+    existing.forEach(p => map.set(p.codigo || p.id, p));
+    productsList.forEach(p => map.set(p.codigo || p.id, { ...(map.get(p.codigo || p.id) || {}), ...p }));
+    const merged = Array.from(map.values());
+    localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(merged));
+  } catch (e) {
+    console.warn('[saveSupabaseBatchProducts] Error en local storage:', e);
+  }
+
+  // 2. Si la red está activa, upsert en Supabase por bloques
+  if (isNetworkOnline()) {
+    try {
+      const dbPayloads = productsList.map(mapProductToDb);
+      const chunkSize = 50;
+      for (let i = 0; i < dbPayloads.length; i += chunkSize) {
+        const chunk = dbPayloads.slice(i, i + chunkSize);
+        await withTimeout(supabase.from('products').upsert(chunk));
+      }
+      isSupabaseAvailable = true;
+    } catch (err) {
+      markSupabaseOffline(err, 'saveSupabaseBatchProducts');
+    }
+  }
+
+  return productsList;
+};
+
+export const saveSupabaseBatchClients = async (clientsList) => {
+  if (!Array.isArray(clientsList) || clientsList.length === 0) return [];
+
+  // 1. Guardar masivamente en almacenamiento local
+  try {
+    const existing = getStorageClients();
+    const map = new Map();
+    existing.forEach(c => map.set(c.rif || c.codigo || c.id, c));
+    clientsList.forEach(c => map.set(c.rif || c.codigo || c.id, { ...(map.get(c.rif || c.codigo || c.id) || {}), ...c }));
+    const merged = Array.from(map.values());
+    localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(merged));
+  } catch (e) {
+    console.warn('[saveSupabaseBatchClients] Error en local storage:', e);
+  }
+
+  // 2. Si la red está activa, upsert en Supabase por bloques de 100
+  if (isNetworkOnline()) {
+    try {
+      const dbPayloads = clientsList.map(mapClientToDb);
+      const chunkSize = 100;
+      for (let i = 0; i < dbPayloads.length; i += chunkSize) {
+        const chunk = dbPayloads.slice(i, i + chunkSize);
+        await withTimeout(supabase.from('clients').upsert(chunk));
+      }
+      isSupabaseAvailable = true;
+    } catch (err) {
+      markSupabaseOffline(err, 'saveSupabaseBatchClients');
+    }
+  }
+
+  return clientsList;
+};
+
+export const saveSupabaseBatchTable = async (tableName, rowsList) => {
+  if (!Array.isArray(rowsList) || rowsList.length === 0) return [];
+  if (tableName === 'profit_warehouses') {
+    return saveSupabaseBatchWarehouses(rowsList);
+  }
+  if (isNetworkOnline()) {
+    try {
+      const chunkSize = 100;
+      for (let i = 0; i < rowsList.length; i += chunkSize) {
+        const chunk = rowsList.slice(i, i + chunkSize);
+        await withTimeout(supabase.from(tableName).upsert(chunk));
+      }
+      isSupabaseAvailable = true;
+    } catch (err) {
+      markSupabaseOffline(err, `saveSupabaseBatchTable:${tableName}`);
+    }
+  }
+  return rowsList;
+};
+
+// Suppliers
+export const getSupabaseSuppliers = async () => {
+  if (!isSupabaseAvailable) return getStorageSuppliers();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('suppliers').select('*').order('id', { ascending: true })
+    );
+
+    if (error || !data || data.length === 0) {
+      if (error) markSupabaseOffline(error, 'getSupabaseSuppliers');
+      return getStorageSuppliers();
+    }
+    isSupabaseAvailable = true;
+    const mapped = data.map(mapSupplierFromDb);
+    try {
+      localStorage.setItem('sm_suppliers_v4_fiscal', JSON.stringify(mapped));
+    } catch (_) {}
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseSuppliers');
+    return getStorageSuppliers();
+  }
+};
+
+export const saveSupabaseSupplier = async (supplier) => {
+  saveStorageSupplier(supplier);
+  const currentSuppliers = getStorageSuppliers();
+  const supplierToSave = currentSuppliers.find(s => (supplier.id && s.id === supplier.id) || s.rif === supplier.rif) || supplier;
+
+  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: prov)
+  writeProfitSupplier(supplierToSave, 'SAVE').catch(e => {
+    console.warn('[saveSupabaseSupplier] Aviso sincronizando con Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('supplier', 'UPDATE', supplierToSave);
+    return supplierToSave;
+  }
+
+  try {
+    const payload = mapSupplierToDb(supplierToSave);
+    const { data, error } = await withTimeout(
+      supabase.from('suppliers').upsert(payload).select().single()
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = mapSupplierFromDb(data);
+    saveStorageSupplier(mapped);
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'saveSupabaseSupplier');
+    enqueueSyncAction('supplier', 'UPDATE', supplierToSave);
+    return supplierToSave;
+  }
+};
+
+export const deleteSupabaseSupplier = async (id) => {
+  if (!id) return false;
+
+  // Reflejo en tiempo real en Profit Plus (SQL Server: prov anulado/inactivo)
+  writeProfitSupplier({ id, co_prov: id, inactivo: true }, 'DELETE').catch(e => {
+    console.warn('[deleteSupabaseSupplier] Aviso eliminando en Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('supplier', 'DELETE', { id });
+    return true;
+  }
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('suppliers').delete().eq('id', id)
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return true;
+  } catch (err) {
+    markSupabaseOffline(err, 'deleteSupabaseSupplier');
+    enqueueSyncAction('supplier', 'DELETE', { id });
+    return true;
+  }
+};
+
+// Sales
+export const getSupabaseSales = async () => {
+  if (!isSupabaseAvailable) return getStorageSales();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('sales').select('*').order('fecha', { ascending: false })
+    );
+
+    if (error) {
+      markSupabaseOffline(error, 'getSupabaseSales');
+      return getStorageSales();
+    }
+    isSupabaseAvailable = true;
+    return (data || []).map(mapSaleFromDb);
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseSales');
+    return getStorageSales();
+  }
+};
+
+export const processSupabaseSale = async (saleData) => {
+  if (!isSupabaseAvailable) {
+    return saveStorageSale(saleData);
+  }
+  try {
+    const config = await getSupabaseConfig();
+    const { count, error: countErr } = await withTimeout(
+      supabase.from('sales').select('*', { count: 'exact', head: true })
+    );
+    if (countErr) throw countErr;
+    const numSecuencia = String((count || 0) + 1043).padStart(6, '0');
+
+    const itemsConLitros = (saleData.items || []).map(item => ({
+      ...item,
+      litros: item.litros || (item.cantidad * (item.litrosPorUnidad || 0))
+    }));
+
+    const taxes = calculateFiscalTaxes({
+      items: itemsConLitros,
+      metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
+      condicionPago: saleData.condicionPago || 'CONTADO',
+      tasaBcv: config.tasaDolar,
+      porcentajeRetencionIva: saleData.porcentajeRetencionIva || 75
+    });
+
+    const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+
+    const newSale = {
+      id: `${docPrefix}-${numSecuencia}`,
+      numeroDoc: saleData.numeroDoc || `${docPrefix}-${numSecuencia}`,
+      numeroControl: saleData.numeroControl || generateFiscalControlNumber((count || 0) + 1043),
+      tipoDoc: saleData.tipoDoc || 'FACTURA',
+      documentoAfectado: saleData.documentoAfectado || '',
+      fecha: saleData.fecha || new Date().toISOString(),
+      clienteId: saleData.clienteId || 'CLI-003',
+      clienteNombre: saleData.clienteNombre || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
+      clienteRif: saleData.clienteRif || 'V-18456789-6',
+      tasaDolar: config.tasaDolar,
+      condicionPago: saleData.condicionPago || 'CONTADO',
+      items: itemsConLitros,
+      subtotalUsd: taxes.subtotalNetoUsd,
+      baseExentaUsd: taxes.baseExentaUsd,
+      baseGeneralUsd: taxes.baseGeneralUsd,
+      ivaGeneralUsd: taxes.ivaGeneralUsd,
+      baseReducidaUsd: taxes.baseReducidaUsd,
+      ivaReducidaUsd: taxes.ivaReducidoUsd,
+      baseAdicionalUsd: taxes.baseAdicionalUsd,
+      ivaAdicionalUsd: taxes.ivaAdicionalUsd,
+      ivaUsd: taxes.totalIvaUsd,
+      igtfUsd: taxes.igtfUsd,
+      totalUsd: taxes.totalFacturaUsd,
+      subtotalBs: taxes.subtotalNetoBs,
+      baseExentaBs: taxes.baseExentaBs,
+      baseGeneralBs: taxes.baseGeneralBs,
+      ivaGeneralBs: taxes.ivaGeneralBs,
+      baseReducidaBs: taxes.baseReducidaBs,
+      ivaReducidaBs: taxes.ivaReducidoBs,
+      baseAdicionalBs: taxes.baseAdicionalBs,
+      ivaAdicionalBs: taxes.ivaAdicionalBs,
+      ivaBs: taxes.totalIvaBs,
+      igtfBs: taxes.igtfBs,
+      totalBs: taxes.totalFacturaBs,
+      retencionIvaBs: taxes.retencionIvaBs,
+      comprobanteRetencionIva: saleData.comprobanteRetencionIva || '',
+      estado: saleData.condicionPago === 'CREDITO' ? 'PENDIENTE' : 'PAGADO',
+      metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
+      vendedor: saleData.vendedor || 'Usuario Sistema'
+    };
+
+    // 1. If Factura, Nota de Entrega or Nota de Débito, reduce stock; if Nota de Crédito, increment stock
+    if (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO') {
+      for (const item of newSale.items) {
+        const { data: prodData, error: prodErr } = await supabase
+          .from('products')
+          .select('stock')
+          .eq('id', item.articuloId)
+          .single();
+        
+        if (!prodErr && prodData) {
+          const currentStock = prodData.stock;
+          const newStock = Math.max(0, currentStock - item.cantidad);
+          await supabase
+            .from('products')
+            .update({ stock: newStock })
+            .eq('id', item.articuloId);
+        }
+      }
+    } else if (newSale.tipoDoc === 'NOTA_CREDITO') {
+      for (const item of newSale.items) {
+        const { data: prodData, error: prodErr } = await supabase
+          .from('products')
+          .select('stock')
+          .eq('id', item.articuloId)
+          .single();
+        
+        if (!prodErr && prodData) {
+          const currentStock = prodData.stock;
+          const newStock = currentStock + item.cantidad;
+          await supabase
+            .from('products')
+            .update({ stock: newStock })
+            .eq('id', item.articuloId);
+        }
+      }
+    }
+
+    // 2. Add cash movement or update client accounts
+    if (newSale.condicionPago !== 'CREDITO') {
+      if (newSale.tipoDoc === 'NOTA_CREDITO') {
+        await addSupabaseCashMovement({
+          tipo: 'EGRESO',
+          concepto: `Devolución / NC ${newSale.numeroDoc} a ${newSale.clienteNombre} (Afecta: ${newSale.documentoAfectado || 'N/A'})`,
+          montoUsd: newSale.totalUsd,
+          montoBs: newSale.totalBs,
+          metodo: newSale.metodoPago,
+          usuario: newSale.vendedor
+        });
+      } else {
+        await addSupabaseCashMovement({
+          tipo: 'INGRESO',
+          concepto: `Cobro Venta ${newSale.numeroDoc} - ${newSale.clienteNombre}`,
+          montoUsd: newSale.totalUsd,
+          montoBs: newSale.totalBs,
+          metodo: newSale.metodoPago,
+          usuario: newSale.vendedor
+        });
+      }
+    } else {
+      const { data: clientData, error: clientErr } = await supabase
+        .from('clients')
+        .select('saldo_deudor_usd')
+        .eq('id', newSale.clienteId)
+        .single();
+
+      if (!clientErr && clientData) {
+        const currentDebit = Number(clientData.saldo_deudor_usd);
+        const newDebit = newSale.tipoDoc === 'NOTA_CREDITO'
+          ? Math.max(0, currentDebit - newSale.totalUsd)
+          : currentDebit + newSale.totalUsd;
+        await supabase
+          .from('clients')
+          .update({ saldo_deudor_usd: newDebit })
+          .eq('id', newSale.clienteId);
+      }
+    }
+
+    // 3. Save sale
+    const { data: savedSale, error: saleErr } = await supabase
+      .from('sales')
+      .insert(mapSaleToDb(newSale))
+      .select()
+      .single();
+
+    if (saleErr) throw saleErr;
+    isSupabaseAvailable = true;
+    const mapped = mapSaleFromDb(savedSale);
+    // Sincronizar en almacenamiento local
+    saveStorageSale(mapped);
+
+    // Reflejo en tiempo real simultáneo en Profit Plus (SQL Server: factura & reng_fac)
+    writeProfitSale(mapped, 'SAVE').catch(e => {
+      console.warn('[processSupabaseSale] Aviso sincronizando venta en Profit:', e.message);
+    });
+
+    return mapped;
+  } catch (err) {
+    console.warn("Fallo o indisponibilidad en Supabase procesando venta, ejecutando fallback local:", err);
+    markSupabaseOffline(err, 'processSupabaseSale');
+    const localSale = saveStorageSale(saleData);
+    enqueueSyncAction('sale', 'INSERT', localSale);
+    writeProfitSale(localSale, 'SAVE').catch(() => {});
+    return localSale;
+  }
+};
+
+// Purchases
+export const getSupabasePurchases = async () => {
+  if (!isSupabaseAvailable) return getStoragePurchases();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('purchases').select('*').order('fecha', { ascending: false })
+    );
+
+    if (error) {
+      if (error) markSupabaseOffline(error, 'getSupabasePurchases');
+      return getStoragePurchases();
+    }
+    isSupabaseAvailable = true;
+    const mapped = (data || []).map(mapPurchaseFromDb);
+    try {
+      localStorage.setItem('sm_purchases_v4_fiscal', JSON.stringify(mapped));
+    } catch (_) {}
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabasePurchases');
+    return getStoragePurchases();
+  }
+};
+
+export const saveSupabasePurchase = async (purchaseData) => {
+  // 1. Guardar primero en almacenamiento local
+  const localSaved = saveStoragePurchase(purchaseData);
+
+  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: compras & reng_com)
+  writeProfitPurchase(localSaved, 'SAVE').catch(e => {
+    console.warn('[saveSupabasePurchase] Aviso sincronizando con Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('purchase', 'INSERT', localSaved);
+    return localSaved;
+  }
+
+  try {
+    const payload = mapPurchaseToDb(localSaved);
+    const { data: saved, error: err } = await withTimeout(
+      supabase.from('purchases').insert([payload]).select().single()
+    );
+
+    if (err) throw err;
+    isSupabaseAvailable = true;
+    return mapPurchaseFromDb(saved);
+  } catch (err) {
+    markSupabaseOffline(err, 'saveSupabasePurchase');
+    enqueueSyncAction('purchase', 'INSERT', localSaved);
+    return localSaved;
+  }
+};
+
+// Cash Movements
+export const getSupabaseCashMovements = async () => {
+  if (!isSupabaseAvailable) return getStorageCashMovements();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('cash_movements').select('*').order('fecha', { ascending: false })
+    );
+
+    if (error) {
+      markSupabaseOffline(error, 'getSupabaseCashMovements');
+      return getStorageCashMovements();
+    }
+    isSupabaseAvailable = true;
+    const mapped = (data || []).map(mapCashMovementFromDb);
+    try {
+      localStorage.setItem('sm_cash_movements_v4_fiscal', JSON.stringify(mapped));
+    } catch (_) {}
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseCashMovements');
+    return getStorageCashMovements();
+  }
+};
+
+export const addSupabaseCashMovement = async (mov) => {
+  const localMov = addStorageCashMovement(mov);
+
+  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: cobros / mov_caj)
+  writeProfitCashMovement(localMov, 'SAVE').catch(e => {
+    console.warn('[addSupabaseCashMovement] Aviso sincronizando con Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('cash_movement', 'INSERT', localMov);
+    return localMov;
+  }
+
+  try {
+    const payload = mapCashMovementToDb(localMov);
+    const { data, error } = await withTimeout(
+      supabase.from('cash_movements').upsert([payload]).select().single()
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return mapCashMovementFromDb(data);
+  } catch (err) {
+    markSupabaseOffline(err, 'addSupabaseCashMovement');
+    enqueueSyncAction('cash_movement', 'INSERT', localMov);
+    return localMov;
+  }
+};
+
+// Orders & Preventa
+export const getSupabaseOrders = async () => {
+  if (!isSupabaseAvailable) return getStorageOrders();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('orders').select('*, order_items(*)').order('fecha_emision', { ascending: false })
+    );
+
+    if (error) {
+      markSupabaseOffline(error, 'getSupabaseOrders');
+      return getStorageOrders();
+    }
+    isSupabaseAvailable = true;
+    const mapped = (data || []).map(mapOrderFromDb);
+    try {
+      localStorage.setItem('sm_orders_v4_pipeline', JSON.stringify(mapped));
+    } catch (_) {}
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseOrders');
+    return getStorageOrders();
+  }
+};
+
+export const saveSupabaseOrder = async (orderData) => {
+  saveStorageOrder(orderData);
+
+  // Reflejo simultáneo en tiempo real en Profit Plus (SQL Server: pedidos & reng_ped)
+  writeProfitOrder(orderData, 'SAVE').catch(e => {
+    console.warn('[saveSupabaseOrder] Aviso sincronizando con Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    return orderData;
+  }
+  try {
+    const orderPayload = mapOrderToDb(orderData);
+    const { data: ord, error: ordErr } = await withTimeout(
+      supabase.from('orders').upsert(orderPayload).select().single()
+    );
+    if (ordErr) throw ordErr;
+
+    if (orderData.items && orderData.items.length > 0) {
+      const itemsPayload = orderData.items.map((it, idx) => ({
+        id: `${ord.id}-${it.rengNum || idx + 1}`,
+        order_id: ord.id,
+        reng_num: it.rengNum || idx + 1,
+        articulo_id: it.articuloId,
+        articulo_descripcion: it.articuloDescripcion,
+        unidad_venta: it.unidadVenta || 'Caja (12L)',
+        cantidad: Number(it.cantidad || 1),
+        litros_unitarios: Number(it.litrosUnitarios || 1),
+        litros_totales: Number(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1))),
+        precio_unitario_usd: Number(it.precioUnitarioUsd || 0),
+        total_usd: Number(it.totalUsd || 0)
+      }));
+      await supabase.from('order_items').upsert(itemsPayload, { onConflict: 'id' });
+    }
+
+    isSupabaseAvailable = true;
+    return getSupabaseOrders();
+  } catch (err) {
+    markSupabaseOffline(err, 'saveSupabaseOrder');
+    return orderData;
+  }
+};
+
+export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
+  updateStorageOrderStatus(orderId, newStatus);
+
+  // Reflejo simultáneo en tiempo real en Profit Plus
+  writeProfitOrder({ id: orderId, status: newStatus }, 'UPDATE').catch(e => {
+    console.warn('[updateSupabaseOrderStatus] Aviso sincronizando estado con Profit:', e.message);
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    return true;
+  }
+  try {
+    const { error } = await withTimeout(
+      supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId)
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return true;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabaseOrderStatus');
+    return false;
+  }
+};
+
+export const fetchBcvRateDetails = async () => {
+  try {
+    const res = await fetch("https://ve.dolarapi.com/v1/dolares/oficial");
+    if (!res.ok) throw new Error("Failed to fetch from DolarAPI");
+    const json = await res.json();
+    if (json && json.promedio) {
+      const rawRate = Number(json.promedio);
+      // Tomar exactamente 2 decimales sin redondear hacia arriba (truncar)
+      const rate = Math.trunc((rawRate + 0.000000001) * 100) / 100;
+      return {
+        rate,
+        exactRate: rawRate,
+        fechaActualizacion: json.fechaActualizacion || new Date().toISOString(),
+        fuente: "Banco Central de Venezuela (BCV)"
+      };
+    }
+    throw new Error("Invalid response format");
+  } catch (err) {
+    console.error("Error fetching BCV rate details: ", err);
+    return null;
+  }
+};
+
+export const fetchBcvRate = async () => {
+  const details = await fetchBcvRateDetails();
+  return details ? details.rate : null;
+};
+
+export const fetchEuroRateDetails = async () => {
+  try {
+    const res = await fetch("https://ve.dolarapi.com/v1/euros/oficial");
+    if (!res.ok) throw new Error("Failed to fetch Euro from DolarAPI");
+    const json = await res.json();
+    if (json && json.promedio) {
+      const rawRate = Number(json.promedio);
+      const rate = Math.trunc((rawRate + 0.000000001) * 100) / 100;
+      return {
+        rate,
+        exactRate: rawRate,
+        fechaActualizacion: json.fechaActualizacion || new Date().toISOString(),
+        fuente: "Banco Central de Venezuela (BCV) - Euro Oficial"
+      };
+    }
+    throw new Error("Invalid Euro response format");
+  } catch (err) {
+    console.warn("Error fetching Euro rate: ", err);
+    return null;
+  }
+};
+
+export const fetchUsdtRateDetails = async () => {
+  // 1. Intentar directo desde el endpoint local proxy de Binance P2P en tiempo real
+  try {
+    const res = await fetch("/api/binance-usdt");
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.data && json.data.length > 0) {
+        const prices = json.data
+          .map(d => Number(d.adv?.price))
+          .filter(p => !isNaN(p) && p > 0);
+        if (prices.length > 0) {
+          // Tomar mediana de las órdenes principales de Binance P2P
+          const sorted = [...prices].sort((a, b) => a - b);
+          const medianVal = sorted[Math.floor(sorted.length / 2)];
+          const rate = Math.trunc((medianVal + 0.000000001) * 100) / 100;
+          return {
+            rate,
+            exactRate: medianVal,
+            fechaActualizacion: new Date().toISOString(),
+            fuente: "Binance P2P Oficial en Vivo (USDT/VES)"
+          };
+        }
+      }
+    }
+  } catch (err) {
+    // Si falla el endpoint local, continuar con el espejo en vivo de Binance P2P
+  }
+
+  // 2. Intentar CriptoYa (Espejo en tiempo real de Binance P2P con CORS abierto)
+  try {
+    const res = await fetch("https://criptoya.com/api/usdt/ves");
+    if (res.ok) {
+      const json = await res.json();
+      const p2pVal = json.binancep2p?.ask || json.binancep2p?.bid || json.okexp2p?.ask;
+      if (p2pVal) {
+        const rawRate = Number(p2pVal);
+        const rate = Math.trunc((rawRate + 0.000000001) * 100) / 100;
+        return {
+          rate,
+          exactRate: rawRate,
+          fechaActualizacion: new Date().toISOString(),
+          fuente: "Binance P2P en Vivo (USDT/VES)"
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("Error fetching USDT from CriptoYa, probando fallback: ", err);
+  }
+
+  // 3. Fallback a Dolar Paralelo/Cripto de DolarAPI
+  try {
+    const res = await fetch("https://ve.dolarapi.com/v1/dolares/paralelo");
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.promedio) {
+        const rawRate = Number(json.promedio);
+        const rate = Math.trunc((rawRate + 0.000000001) * 100) / 100;
+        return {
+          rate,
+          exactRate: rawRate,
+          fechaActualizacion: json.fechaActualizacion || new Date().toISOString(),
+          fuente: "Mercado Paralelo / USDT Referencial"
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("Error fetching USDT fallback: ", err);
+  }
+
+  return null;
+};
+
+// ==============================================================================
+// GESTIÓN DE CIERRES FISCALES (REPORTE X Y REPORTE Z) - SENIAT
+// ==============================================================================
+
+export const getSupabaseFiscalClosures = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('fiscal_closures')
+      .select('*')
+      .order('fecha_cierre', { ascending: false });
+
+    if (error || !data || data.length === 0) {
+      if (error) console.warn("Aviso cargando cierres de Supabase, usando fallback:", error);
+      return getStorageFiscalClosures();
+    }
+    return data.map(mapFiscalClosureFromDb);
+  } catch (err) {
+    console.warn("Excepción cargando cierres fiscales, usando fallback local:", err);
+    return getStorageFiscalClosures();
+  }
+};
+
+export const saveSupabaseFiscalClosure = async (closureData, closedSaleIds = []) => {
+  // 1. Sincronizar almacenamiento local de inmediato
+  closeSalesInStorage(closureData.id, closedSaleIds);
+  saveStorageFiscalClosure(closureData);
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('fiscal_closure', 'INSERT', closureData);
+    return closureData;
+  }
+
+  try {
+    const dbPayload = mapFiscalClosureToDb(closureData);
+    const { data, error } = await withTimeout(
+      supabase.from('fiscal_closures').insert([dbPayload]).select().single()
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+
+    // Actualizar ventas cerradas en Supabase
+    if (closedSaleIds.length > 0) {
+      await supabase
+        .from('sales')
+        .update({ cierre_z_id: closureData.id, cerrada: true })
+        .in('id', closedSaleIds);
+    }
+
+    return mapFiscalClosureFromDb(data);
+  } catch (err) {
+    console.warn("Excepción guardando cierre fiscal en Supabase, encolando offline:", err);
+    markSupabaseOffline(err, 'saveSupabaseFiscalClosure');
+    enqueueSyncAction('fiscal_closure', 'INSERT', closureData);
+    return closureData;
+  }
+};
+
+// ==============================================================================
+// GESTIÓN DE USUARIOS Y AUDITORÍA DE ACTIVIDAD EN SUPABASE
+// ==============================================================================
+
+/**
+ * Obtiene el listado completo de usuarios desde Supabase con sincronización a caché local.
+ */
+export const getSupabaseUsers = async () => {
+  const getCachedUsers = () => {
+    try {
+      const raw = localStorage.getItem('signum_users_list');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(u => u.nombre && u.rol)) {
+          return sortUsersByHierarchy(parsed);
+        }
+      }
+    } catch (_) {}
+    return sortUsersByHierarchy(DEFAULT_USERS);
+  };
+
+  if (!isSupabaseAvailable) return getCachedUsers();
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: true })
+    );
+
+    if (error || !data || data.length === 0) {
+      if (error) markSupabaseOffline(error, 'getSupabaseUsers');
+      return getCachedUsers();
+    }
+
+    const mappedUsers = sortUsersByHierarchy(data.map(mapUserFromDb));
+    try {
+      localStorage.setItem('signum_users_list', JSON.stringify(mappedUsers));
+    } catch (_) {}
+
+    return mappedUsers;
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseUsers');
+    return getCachedUsers();
+  }
+};
+
+/**
+ * Guarda o actualiza un usuario en Supabase y sincroniza la memoria local.
+ */
+export const saveSupabaseUser = async (userData, auditUser = null) => {
+  // 1. Sincronización local inmediata (para UI reactiva)
+  let localUsers = [];
+  try {
+    const raw = localStorage.getItem('signum_users_list');
+    localUsers = raw ? JSON.parse(raw) : [...DEFAULT_USERS];
+  } catch (_) {
+    localUsers = [...DEFAULT_USERS];
+  }
+
+  const existingIdx = localUsers.findIndex(u => u.id === userData.id);
+  const existingUser = existingIdx >= 0 ? localUsers[existingIdx] : null;
+
+  // Si no se proporcionó una contraseña nueva en edición, conservar la existente
+  const finalPassword = (userData.password && userData.password.trim()) 
+    ? userData.password.trim() 
+    : (existingUser?.password || '123456');
+
+  const payloadWithPassword = {
+    ...userData,
+    password: finalPassword
+  };
+
+  const dbPayload = mapUserToDb(payloadWithPassword);
+  const mappedUser = mapUserFromDb(dbPayload);
+
+  if (existingIdx >= 0) {
+    localUsers[existingIdx] = { ...localUsers[existingIdx], ...mappedUser };
+  } else {
+    localUsers.push(mappedUser);
+  }
+  const sortedLocal = sortUsersByHierarchy(localUsers);
+  try {
+    localStorage.setItem('signum_users_list', JSON.stringify(sortedLocal));
+  } catch (_) {}
+
+  // 2. Persistencia en Supabase
+  if (isNetworkOnline()) {
+    try {
+      let { data, error } = await withTimeout(
+        supabase
+          .from('users')
+          .upsert([dbPayload], { onConflict: 'id' })
+          .select()
+          .single()
+      );
+
+      if (error && error.message && error.message.includes('modulos')) {
+        const { modulos, ...safePayload } = dbPayload;
+        const retryResult = await withTimeout(
+          supabase
+            .from('users')
+            .upsert([safePayload], { onConflict: 'id' })
+            .select()
+            .single()
+        );
+        data = retryResult.data;
+        error = retryResult.error;
+      }
+
+      if (error) {
+        console.error("Error directo de Supabase al guardar usuario:", error);
+        throw error;
+      }
+
+      if (data) {
+        isSupabaseAvailable = true;
+        const savedFromDb = mapUserFromDb(data);
+        const accionTipo = existingIdx >= 0 ? 'EDITAR_USUARIO' : 'CREAR_USUARIO';
+        logUserActivity({
+          usuarioId: auditUser?.id || 'usr-sistema',
+          usuarioNombre: auditUser?.nombre || 'Sistema',
+          usuarioRol: auditUser?.rol || 'ADMIN',
+          accion: accionTipo,
+          modulo: 'USUARIOS',
+          detalles: `${accionTipo === 'CREAR_USUARIO' ? 'Creación de nuevo usuario' : 'Actualización de datos para'} @${savedFromDb.username} (${savedFromDb.nombre}) con rol ${savedFromDb.rol}`
+        }).catch(() => {});
+
+        // Reflejo en tiempo real en Profit Plus (SQL Server: vendedor) y comparativa
+        try {
+          const profitRes = await writeProfitUser(savedFromDb, 'SAVE');
+          if (profitRes?.comparison) {
+            console.log('[saveSupabaseUser] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
+            savedFromDb._comparison = profitRes.comparison;
+          }
+        } catch (e) {
+          console.warn('[saveSupabaseUser] Aviso sincronizando con Profit:', e.message);
+        }
+
+        return savedFromDb;
+      }
+    } catch (err) {
+      console.warn("No se pudo persistir usuario en Supabase inmediatamente, encolando offline:", err);
+      markSupabaseOffline(err, 'saveSupabaseUser');
+      throw err;
+    }
+  }
+
+  // Si falló la red o estamos offline, encolar para sincronización posterior
+  enqueueSyncAction('user', 'UPDATE', mappedUser);
+  writeProfitUser(mappedUser, 'SAVE').catch(() => {});
+
+  // Audit log local
+  addStorageUserLog({
+    usuarioId: auditUser?.id || 'usr-sistema',
+    usuarioNombre: auditUser?.nombre || 'Sistema',
+    usuarioRol: auditUser?.rol || 'ADMIN',
+    accion: existingIdx >= 0 ? 'EDITAR_USUARIO' : 'CREAR_USUARIO',
+    modulo: 'USUARIOS',
+    detalles: `Registro local de @${mappedUser.username} (${mappedUser.nombre}) [Modo Offline]`
+  });
+
+  return mappedUser;
+};
+
+/**
+ * Elimina un usuario en Supabase y en la memoria local.
+ */
+export const deleteSupabaseUser = async (userId, auditUser = null) => {
+  let targetUser = null;
+  // 1. Local
+  try {
+    const raw = localStorage.getItem('signum_users_list');
+    if (raw) {
+      const users = JSON.parse(raw);
+      targetUser = users.find(u => u.id === userId);
+      const filtered = users.filter(u => u.id !== userId);
+      localStorage.setItem('signum_users_list', JSON.stringify(sortUsersByHierarchy(filtered)));
+    }
+  } catch (_) {}
+
+  // Reflejo en tiempo real en Profit Plus (SQL Server: vendedor)
+  writeProfitUser(targetUser || { id: userId }, 'DELETE').catch(e => {
+    console.warn('[deleteSupabaseUser] Aviso eliminando de Profit:', e.message);
+  });
+
+  // 2. Supabase
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      const { error } = await withTimeout(
+        supabase.from('users').delete().eq('id', userId)
+      );
+      if (error) throw error;
+      isSupabaseAvailable = true;
+    } catch (err) {
+      console.warn("No se pudo eliminar en Supabase inmediatamente, encolando offline:", err);
+      markSupabaseOffline(err, 'deleteSupabaseUser');
+      enqueueSyncAction('user', 'DELETE', { id: userId });
+    }
+  } else {
+    enqueueSyncAction('user', 'DELETE', { id: userId });
+  }
+
+  // Auditoría
+  const userDesc = targetUser ? `@${targetUser.username} (${targetUser.nombre})` : `ID ${userId}`;
+  logUserActivity({
+    usuarioId: auditUser?.id || 'usr-sistema',
+    usuarioNombre: auditUser?.nombre || 'Sistema',
+    usuarioRol: auditUser?.rol || 'ADMIN',
+    accion: 'ELIMINAR_USUARIO',
+    modulo: 'USUARIOS',
+    detalles: `Eliminación permanente del usuario ${userDesc}`
+  }).catch(() => {});
+
+  return true;
+};
+
+/**
+ * Actualiza la marca de último acceso de un usuario tras autenticarse con éxito.
+ */
+export const updateUserLastAccess = async (userId) => {
+  const nowIso = new Date().toISOString();
+
+  // Local
+  try {
+    const raw = localStorage.getItem('signum_users_list');
+    if (raw) {
+      const users = JSON.parse(raw);
+      const updated = users.map(u => u.id === userId ? { ...u, ultimoAcceso: nowIso } : u);
+      localStorage.setItem('signum_users_list', JSON.stringify(updated));
+    }
+  } catch (_) {}
+
+  // Supabase
+  if (isSupabaseAvailable) {
+    try {
+      await supabase
+        .from('users')
+        .update({ ultimo_acceso: nowIso })
+        .eq('id', userId);
+    } catch (e) {
+      console.warn("No se pudo actualizar último acceso en Supabase:", e);
+    }
+  }
+};
+
+/**
+ * Registra un evento de auditoría de actividad en Supabase y localmente.
+ */
+export const logUserActivity = async (logData) => {
+  const dbPayload = mapUserLogToDb(logData);
+
+  // Almacenar localmente siempre
+  addStorageUserLog(dbPayload);
+
+  if (!isSupabaseAvailable) return mapUserLogFromDb(dbPayload);
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('user_activity_logs').insert([dbPayload]).select().single(),
+      1500
+    );
+    if (error) {
+      console.warn("No se pudo persistir log en Supabase:", error);
+      return mapUserLogFromDb(dbPayload);
+    }
+    return mapUserLogFromDb(data);
+  } catch (err) {
+    console.warn("Excepción al registrar actividad en Supabase:", err);
+    return mapUserLogFromDb(dbPayload);
+  }
+};
+
+/**
+ * Obtiene la bitácora de actividad de usuarios desde Supabase con fallback local.
+ */
+export const getSupabaseUserLogs = async (limit = 100) => {
+  if (!isSupabaseAvailable) return getStorageUserLogs();
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('user_activity_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit)
+    );
+
+    if (error || !data) {
+      return getStorageUserLogs();
+    }
+
+    return data.map(mapUserLogFromDb);
+  } catch (err) {
+    return getStorageUserLogs();
+  }
+};
+
+// ==============================================================================
+// DIRECT PUSH HANDLERS FOR OFFLINE SYNC QUEUE
+// ==============================================================================
+
+export const pushConfigToSupabase = async (configData) => {
+  const payload = mapConfigToDb(configData);
+  const { data, error } = await withTimeout(
+    supabase.from('config').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapConfigFromDb(data);
+};
+
+export const pushProductToSupabase = async (productData) => {
+  const payload = mapProductToDb(productData);
+  const { data, error } = await withTimeout(
+    supabase.from('products').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapProductFromDb(data);
+};
+
+export const deleteSupabaseProductDirect = async (productId) => {
+  const { error } = await withTimeout(
+    supabase.from('products').delete().eq('id', productId),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const pushClientToSupabase = async (clientData) => {
+  const payload = mapClientToDb(clientData);
+  const { data, error } = await withTimeout(
+    supabase.from('clients').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapClientFromDb(data);
+};
+
+export const pushSupplierToSupabase = async (supplierData) => {
+  const payload = mapSupplierToDb(supplierData);
+  const { data, error } = await withTimeout(
+    supabase.from('suppliers').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapSupplierFromDb(data);
+};
+
+export const pushSaleToSupabase = async (saleData) => {
+  const payload = mapSaleToDb(saleData);
+  const { data, error } = await withTimeout(
+    supabase.from('sales').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapSaleFromDb(data);
+};
+
+export const pushPurchaseToSupabase = async (purchaseData) => {
+  const payload = mapPurchaseToDb(purchaseData);
+  const { data, error } = await withTimeout(
+    supabase.from('purchases').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapPurchaseFromDb(data);
+};
+
+export const pushCashMovementToSupabase = async (movData) => {
+  const payload = mapCashMovementToDb(movData);
+  const { data, error } = await withTimeout(
+    supabase.from('cash_movements').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapCashMovementFromDb(data);
+};
+
+export const pushFiscalClosureToSupabase = async (closureData) => {
+  const payload = mapFiscalClosureToDb(closureData);
+  const { data, error } = await withTimeout(
+    supabase.from('fiscal_closures').upsert([payload]).select().single(),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapFiscalClosureFromDb(data);
+};
+
+export const pushUserToSupabase = async (userData) => {
+  const payload = mapUserToDb(userData);
+  let { data, error } = await withTimeout(
+    supabase.from('users').upsert([payload], { onConflict: 'id' }).select().single(),
+    4000
+  );
+  if (error && error.message && error.message.includes('modulos')) {
+    const { modulos, ...safePayload } = payload;
+    const retry = await withTimeout(
+      supabase.from('users').upsert([safePayload], { onConflict: 'id' }).select().single(),
+      4000
+    );
+    data = retry.data;
+    error = retry.error;
+  }
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapUserFromDb(data);
+};
+
+export const deleteSupabaseUserDirect = async (userId) => {
+  const { error } = await withTimeout(
+    supabase.from('users').delete().eq('id', userId),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const pushUserLogToSupabase = async (logData) => {
+  const payload = mapUserLogToDb(logData);
+  const { data, error } = await withTimeout(
+    supabase.from('user_activity_logs').insert([payload]).select().single(),
+    3000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return mapUserLogFromDb(data);
+};
+
+// ==========================================
+//  PROFIT PLUS 2K8 - TESORERÍA, FACTURAS Y COBROS
+// ==========================================
+
+export const getSupabaseProfitBankAccounts = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_bank_accounts').select('*').order('cod_cta', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(r => ({
+      id: r.id,
+      codCta: r.cod_cta,
+      numCta: r.num_cta,
+      bancoNombre: r.banco_nombre,
+      saldoBs: Number(r.saldo_bs || 0),
+      saldoUsd: Number(r.saldo_usd || 0),
+      moneda: r.moneda,
+      fechaActualizacion: r.fecha_actualizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando cuentas bancarias Profit:', err.message);
+    return REAL_PROFIT_BANK_ACCOUNTS;
+  }
+};
+
+export const getSupabaseProfitCashDesks = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_cash_desks').select('*').order('co_caja', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(r => ({
+      id: r.id,
+      coCaja: r.co_caja,
+      descripcion: r.descripcion,
+      moneda: r.moneda,
+      saldoUsd: Number(r.saldo_usd || 0),
+      saldoBs: Number(r.saldo_bs || 0),
+      responsable: r.responsable,
+      fechaActualizacion: r.fecha_actualizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando cajas registradoras Profit:', err.message);
+    return REAL_PROFIT_CASH_DESKS;
+  }
+};
+
+export const updateSupabaseProfitCashDesk = async (cashDesk) => {
+  try {
+    const { data, error } = await supabase
+      .from('profit_cash_desks')
+      .upsert({
+        id: cashDesk.id,
+        co_caja: cashDesk.coCaja || cashDesk.co_caja,
+        descripcion: cashDesk.descripcion,
+        moneda: cashDesk.moneda || 'USD',
+        saldo_usd: cashDesk.saldoUsd ?? cashDesk.saldo_usd ?? 0,
+        saldo_bs: cashDesk.saldoBs ?? cashDesk.saldo_bs ?? 0,
+        responsable: cashDesk.responsable || 'Caja General',
+        fecha_actualizacion: new Date().toISOString()
+      }, { onConflict: 'id' })
+      .select();
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.error('[Supabase] Error actualizando caja registradora:', err.message);
+    throw err;
+  }
+};
+
+export const getSupabaseProfitCollections = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_collections').select('*').order('fec_cob', { ascending: false }).limit(5000),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(c => ({
+      id: c.id,
+      cobNum: c.cob_num,
+      fecha: c.fec_cob,
+      clienteId: c.cliente_id,
+      clienteNombre: c.cliente_nombre,
+      clienteRif: c.cliente_rif,
+      vendedorId: c.vendedor_id,
+      montoUsd: Number(c.monto_usd || 0),
+      montoBs: Number(c.monto_bs || 0),
+      tasa: Number(c.tasa || 1),
+      descrip: c.descrip,
+      anulado: c.anulado,
+      formasPago: c.formas_pago || [],
+      documentosAfectados: c.documentos_afectados || [],
+      fechaSincronizacion: c.fecha_sincronizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando cobros Profit:', err.message);
+    return REAL_PROFIT_COLLECTIONS;
+  }
+};
+
+export const getSupabaseProfitInvoices = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_invoices').select('*').order('fec_emis', { ascending: false }).limit(5000),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(f => ({
+      id: f.id,
+      factNum: f.fact_num ?? f.factNum,
+      fechaEmision: f.fec_emis ?? f.fechaEmision,
+      fechaVencimiento: f.fec_venc ?? f.fechaVencimiento,
+      clienteId: f.cliente_id ?? f.clienteId ?? f.co_cli,
+      clienteNombre: f.cliente_nombre ?? f.clienteNombre ?? f.cli_des,
+      clienteRif: f.cliente_rif ?? f.clienteRif ?? f.rif,
+      vendedorId: f.vendedor_id ?? f.vendedorId ?? f.co_ven,
+      totBrutoUsd: Number(f.tot_bruto_usd ?? f.totBrutoUsd ?? f.totalBrutoUsd ?? 0),
+      totBrutoBs: Number(f.tot_bruto_bs ?? f.totBrutoBs ?? f.tot_bruto ?? f.totalBruto ?? 0),
+      ivaUsd: Number(f.iva_usd ?? f.ivaUsd ?? 0),
+      ivaBs: Number(f.iva_bs ?? f.ivaBs ?? f.iva ?? 0),
+      totNetoUsd: Number(f.tot_neto_usd ?? f.totNetoUsd ?? f.totalNetoUsd ?? 0),
+      totNetoBs: Number(f.tot_neto_bs ?? f.totNetoBs ?? f.tot_neto ?? f.totalNeto ?? 0),
+      saldoUsd: Number(f.saldo_usd ?? f.saldoUsd ?? 0),
+      saldoBs: Number(f.saldo_bs ?? f.saldoBs ?? f.saldo ?? 0),
+      status: f.status,
+      anulada: f.anulada,
+      formaPago: f.forma_pag ?? f.formaPago,
+      totalLitros: Number(f.total_litros ?? f.totalLitros ?? 0),
+      totalCajas: Number(f.total_cajas ?? f.totalCajas ?? 0),
+      items: f.items || [],
+      fechaSincronizacion: f.fecha_sincronizacion ?? f.fechaSincronizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando facturas Profit:', err.message);
+    return REAL_PROFIT_INVOICES;
+  }
+};
+
+export const getSupabaseProfitSuppliers = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_suppliers').select('*').order('prov_des', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(s => ({
+      id: s.id,
+      coProv: s.co_prov,
+      provDes: s.prov_des,
+      rif: s.rif,
+      direccion: s.direccion || '',
+      telefonos: s.telefonos || '',
+      email: s.email || '',
+      saldoBs: Number(s.saldo_bs || 0),
+      saldoUsd: Number(s.saldo_usd || 0),
+      limiteCredito: Number(s.limite_credito || 0),
+      diasCredito: Number(s.dias_credito || 0),
+      inactivo: Boolean(s.inactivo)
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando proveedores Profit:', err.message);
+    return REAL_PROFIT_SUPPLIERS;
+  }
+};
+
+export const getSupabaseProfitPurchases = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_purchases').select('*').order('fec_emis', { ascending: false }).limit(5000),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(p => ({
+      id: p.id,
+      factNum: p.fact_num,
+      facturaProv: p.factura_prov,
+      fechaEmision: p.fec_emis,
+      fechaVencimiento: p.fec_venc,
+      coProv: p.co_prov,
+      provNombre: p.prov_nombre,
+      provRif: p.prov_rif,
+      totBrutoUsd: Number(p.tot_bruto_usd || 0),
+      totBrutoBs: Number(p.tot_bruto_bs || 0),
+      ivaUsd: Number(p.iva_usd || 0),
+      ivaBs: Number(p.iva_bs || 0),
+      totNetoUsd: Number(p.tot_neto_usd || 0),
+      totNetoBs: Number(p.tot_neto_bs || 0),
+      saldoUsd: Number(p.saldo_usd || 0),
+      saldoBs: Number(p.saldo_bs || 0),
+      status: p.status,
+      anulada: p.anulada,
+      formaPag: p.forma_pag,
+      items: p.items || [],
+      fechaSincronizacion: p.fecha_sincronizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando compras Profit:', err.message);
+    return REAL_PROFIT_PURCHASES;
+  }
+};
+
+export const getSupabaseProfitAccountsPayable = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_accounts_payable').select('*').order('fec_emis', { ascending: false }).limit(5000),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(d => ({
+      id: d.id,
+      tipoDoc: d.tipo_doc,
+      nroDoc: d.nro_doc,
+      coProv: d.co_prov,
+      provNombre: d.prov_nombre,
+      provRif: d.prov_rif,
+      fechaEmision: d.fec_emis,
+      fechaVencimiento: d.fec_venc,
+      montoNetUsd: Number(d.monto_net_usd || 0),
+      montoNetBs: Number(d.monto_net_bs || 0),
+      saldoUsd: Number(d.saldo_usd || 0),
+      saldoBs: Number(d.saldo_bs || 0),
+      tasa: Number(d.tasa || 1),
+      moneda: d.moneda || 'BS',
+      anulado: Boolean(d.anulado),
+      fechaSincronizacion: d.fecha_sincronizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando CxP Profit:', err.message);
+    return REAL_PROFIT_ACCOUNTS_PAYABLE;
+  }
+};
+
+export const getSupabaseProfitSupplierPayments = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_supplier_payments').select('*').order('fec_pago', { ascending: false }).limit(5000),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(p => ({
+      id: p.id,
+      pagoNum: p.pago_num,
+      fechaPago: p.fec_pago,
+      coProv: p.co_prov,
+      provNombre: p.prov_nombre,
+      provRif: p.prov_rif,
+      montoUsd: Number(p.monto_usd || 0),
+      montoBs: Number(p.monto_bs || 0),
+      tasa: Number(p.tasa || 1),
+      moneda: p.moneda || 'BS',
+      descrip: p.descrip || '',
+      anulado: Boolean(p.anulado),
+      fechaSincronizacion: p.fecha_sincronizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando pagos de proveedores Profit:', err.message);
+    return REAL_PROFIT_SUPPLIER_PAYMENTS;
+  }
+};
+
+export const getSupabaseProfitSellers = async () => {
+  const localSellers = getStorageSellers();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_sellers').select('*').order('ven_des', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = (data || []).map(s => ({
+      id: s.id,
+      coVen: s.co_ven,
+      venDes: s.ven_des,
+      cedula: s.cedula || '',
+      telefonos: s.telefonos || '',
+      direccion: s.direccion || '',
+      tipo: s.tipo || 'A',
+      comisionPct: Number(s.comision_pct || 3.0),
+      metaLitrosMes: Number(s.meta_litros_mes || 3000),
+      activo: Boolean(s.activo),
+      foto: s.foto || '',
+      avatar: s.avatar || '',
+      coZon: s.co_zon || '',
+      zona: s.zona || '',
+      createdAt: s.created_at,
+      updatedAt: s.updated_at
+    }));
+
+    if (mapped.length > 0) {
+      saveStorageAllSellers(mapped);
+      return mapped;
+    }
+    return localSellers.length > 0 ? localSellers : [];
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseProfitSellers');
+    return localSellers.length > 0 ? localSellers : [];
+  }
+};
+
+export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
+  // 1. Guardar de forma nativa en tiempo real en la aplicación
+  saveStorageSeller({ coVen, coZon, zona });
+
+  // Reflejo en tiempo real en Profit Plus
+  writeProfitSeller({ coVen, coZon, zona }, 'SAVE').catch(() => {});
+
+  // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
+    return { co_ven: coVen, co_zon: coZon, zona };
+  }
+
+  try {
+    const payload = {
+      co_zon: coZon || null,
+      zona: zona || null,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await withTimeout(
+      supabase.from('profit_sellers').update(payload).eq('co_ven', coVen).select().single(),
+      4000
+    );
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabaseSellerZone');
+    enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
+    return { co_ven: coVen, co_zon: coZon, zona };
+  }
+};
+
+export const updateSupabaseSellerPhoto = async (coVen, photoUrl) => {
+  saveStorageSeller({ coVen, foto: photoUrl });
+  writeProfitSeller({ coVen, foto: photoUrl }, 'SAVE').catch(() => {});
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_sellers').update({ foto: photoUrl, updated_at: new Date().toISOString() }).eq('co_ven', coVen).select().single(),
+      4000
+    );
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.warn('Error updating seller photo in Supabase:', err);
+    return { co_ven: coVen, foto: photoUrl };
+  }
+};
+
+export const updateSupabaseSellerTarget = async (coVen, { metaLitrosMes, comisionPct }) => {
+  // 1. Guardar de forma nativa en tiempo real en la aplicación
+  saveStorageSeller({ coVen, metaLitrosMes, comisionPct });
+
+  // Reflejo en tiempo real en Profit Plus
+  writeProfitSeller({ coVen, metaLitrosMes, comisionPct }, 'SAVE').catch(() => {});
+
+  // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('seller_target', 'UPDATE', { coVen, metaLitrosMes, comisionPct });
+    return { co_ven: coVen, meta_litros_mes: metaLitrosMes, comision_pct: comisionPct };
+  }
+
+  try {
+    const payload = {};
+    if (metaLitrosMes !== undefined) payload.meta_litros_mes = Number(metaLitrosMes);
+    if (comisionPct !== undefined) payload.comision_pct = Number(comisionPct);
+    payload.updated_at = new Date().toISOString();
+
+    const { data, error } = await withTimeout(
+      supabase.from('profit_sellers').update(payload).eq('co_ven', coVen).select().single(),
+      4000
+    );
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabaseSellerTarget');
+    enqueueSyncAction('seller_target', 'UPDATE', { coVen, metaLitrosMes, comisionPct });
+    return { co_ven: coVen, meta_litros_mes: metaLitrosMes, comision_pct: comisionPct };
+  }
+};
+
+export const updateSupabaseGlobalSellersTarget = async (activeSellerCodes = [], totalLitrosMeta = 0) => {
+  if (!activeSellerCodes || activeSellerCodes.length === 0) return false;
+  const quotaPerSeller = parseFloat((Number(totalLitrosMeta) / activeSellerCodes.length).toFixed(2));
+  const now = new Date().toISOString();
+
+  // 1. Persistencia nativa local inmediata para todos los asesores
+  activeSellerCodes.forEach(coVen => {
+    saveStorageSeller({ coVen, metaLitrosMes: quotaPerSeller });
+  });
+
+  // 2. Si no hay conexión, encolar acción global offline
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('seller_global_target', 'UPDATE', { activeSellerCodes, totalLitrosMeta, quotaPerSeller });
+    return true;
+  }
+
+  try {
+    const updates = activeSellerCodes.map(coVen =>
+      supabase
+        .from('profit_sellers')
+        .update({ meta_litros_mes: quotaPerSeller, updated_at: now })
+        .eq('co_ven', coVen)
+    );
+
+    await Promise.all(updates);
+    return true;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabaseGlobalSellersTarget');
+    enqueueSyncAction('seller_global_target', 'UPDATE', { activeSellerCodes, totalLitrosMeta, quotaPerSeller });
+    return true;
+  }
+};
+
+export const getSupabaseProfitZones = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_zones').select('*').order('co_zon', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(z => ({
+      id: z.id,
+      coZon: z.co_zon,
+      zonDes: z.zon_des,
+      disCen: z.dis_cen,
+      createdAt: z.created_at,
+      updatedAt: z.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando zonas Profit:', err.message);
+    return REAL_PROFIT_ZONES;
+  }
+};
+
+export const getSupabaseProfitTransports = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_transports').select('*').order('co_tran', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(t => ({
+      id: t.id,
+      coTran: t.co_tran,
+      desTran: t.des_tran,
+      respTra: t.resp_tra,
+      createdAt: t.created_at,
+      updatedAt: t.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando transportistas Profit:', err.message);
+    return REAL_PROFIT_TRANSPORTS;
+  }
+};
+
+export const getSupabaseProfitReturns = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_customer_returns').select('*').order('fec_emis', { ascending: false }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(r => ({
+      id: r.id,
+      factNum: r.fact_num,
+      fecEmis: r.fec_emis,
+      coCli: r.co_cli,
+      cliDes: r.cli_des,
+      rif: r.rif,
+      coVen: r.co_ven,
+      venDes: r.ven_des,
+      ncNum: r.nc_num,
+      status: r.status,
+      anulada: r.anulada,
+      descrip: r.descrip,
+      totBruto: Number(r.tot_bruto) || 0,
+      totNeto: Number(r.tot_neto) || 0,
+      iva: Number(r.iva) || 0,
+      tasa: Number(r.tasa) || 1,
+      moneda: r.moneda,
+      coSucu: r.co_sucu,
+      coUsIn: r.co_us_in,
+      renglones: Array.isArray(r.renglones) ? r.renglones : [],
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando devoluciones Profit:', err.message);
+    return REAL_PROFIT_CUSTOMER_RETURNS;
+  }
+};
+
+export const getSupabaseProfitInventoryAdjustments = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_inventory_adjustments').select('*').order('fecha', { ascending: false }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(a => ({
+      id: a.id,
+      ajueNum: a.ajue_num,
+      fecha: a.fecha,
+      motivo: a.motivo,
+      anulada: a.anulada,
+      coSucu: a.co_sucu,
+      coUsIn: a.co_us_in,
+      totalItems: Number(a.total_items) || 0,
+      renglones: Array.isArray(a.renglones) ? a.renglones : [],
+      createdAt: a.created_at,
+      updatedAt: a.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando ajustes de inventario Profit:', err.message);
+    return REAL_PROFIT_INVENTORY_ADJUSTMENTS;
+  }
+};
+
+export const getSupabaseProfitWarehouseTransfers = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_warehouse_transfers').select('*').order('fecha', { ascending: false }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(t => ({
+      id: t.id,
+      trasNum: t.tras_num,
+      fecha: t.fecha,
+      almOrig: t.alm_orig,
+      almDest: t.alm_dest,
+      motivo: t.motivo,
+      confirma: t.confirma,
+      anulada: t.anulada,
+      coSucu: t.co_sucu,
+      coUsIn: t.co_us_in,
+      totalItems: Number(t.total_items) || 0,
+      renglones: Array.isArray(t.renglones) ? t.renglones : [],
+      createdAt: t.created_at,
+      updatedAt: t.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando traslados de almacén Profit:', err.message);
+    return REAL_PROFIT_WAREHOUSE_TRANSFERS;
+  }
+};
+
+export const getSupabaseProfitIslrConcepts = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_islr_concepts').select('*').order('co_islr', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(c => ({
+      id: c.id,
+      coIslr: c.co_islr,
+      islrDes: c.islr_des,
+      islrDes2: c.islr_des2,
+      numeral: c.numeral,
+      literal: c.literal,
+      createdAt: c.created_at,
+      updatedAt: c.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando conceptos ISLR Profit:', err.message);
+    return REAL_PROFIT_ISLR_CONCEPTS;
+  }
+};
+
+export const getSupabaseProfitBeneficiaries = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_beneficiaries').select('*').order('ben_des', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(b => ({
+      id: b.id,
+      codBen: b.cod_ben,
+      benDes: b.ben_des,
+      rif: b.rif,
+      direc1: b.direc1,
+      telefono: b.telefono,
+      tipoPer: b.tipo_per,
+      createdAt: b.created_at,
+      updatedAt: b.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando beneficiarios Profit:', err.message);
+    return REAL_PROFIT_BENEFICIARIES;
+  }
+};
+
+export const getSupabaseProfitPaymentOrders = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_payment_orders').select('*').order('fecha', { ascending: false }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(o => ({
+      id: o.id,
+      ordNum: o.ord_num,
+      fecha: o.fecha,
+      codBen: o.cod_ben,
+      benDes: o.ben_des,
+      descrip: o.descrip,
+      monto: Number(o.monto) || 0,
+      montoRet: Number(o.monto_ret) || 0,
+      formaPag: o.forma_pag,
+      codCta: o.cod_cta,
+      cheNum: o.che_num,
+      anulada: Boolean(o.anulada),
+      tasa: Number(o.tasa) || 1,
+      moneda: o.moneda,
+      coSucu: o.co_sucu,
+      createdAt: o.created_at,
+      updatedAt: o.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando órdenes de pago Profit:', err.message);
+    return REAL_PROFIT_PAYMENT_ORDERS;
+  }
+};
+
+export const getSupabaseProfitIslrWithholdings = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_islr_withholdings').select('*'),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(w => ({
+      id: w.id,
+      nroComprobante: w.nro_comprobante,
+      periodoFiscal: w.periodo_fiscal,
+      fechaEmision: w.fecha_emision || w.created_at,
+      proveedorCod: w.proveedor_cod,
+      proveedorNombre: w.proveedor_nombre,
+      proveedorRif: w.proveedor_rif,
+      proveedorDireccion: w.proveedor_direccion,
+      nroFacturaAfectada: w.nro_factura_afectada,
+      nroControl: w.nro_control,
+      baseImponible: Number(w.base_imponible) || 0,
+      porcentajeRetencion: Number(w.porcentaje_retencion) || 0,
+      montoRetenido: Number(w.monto_retenido) || 0,
+      montoTotalFactura: Number(w.monto_total_factura) || 0,
+      codigoConceptoIslr: w.codigo_concepto_islr,
+      conceptoDescripcion: w.concepto_descripcion,
+      sustraendo: Number(w.sustraendo) || 0,
+      moneda: w.moneda || 'BS',
+      tasaCambio: Number(w.tasa_cambio) || 1,
+      coSucu: w.co_sucu || '01',
+      createdAt: w.created_at,
+      updatedAt: w.updated_at
+    })).sort((a, b) => new Date(b.createdAt || b.fechaEmision || 0) - new Date(a.createdAt || a.fechaEmision || 0));
+  } catch (err) {
+    return [];
+  }
+};
+
+export const mapWarehouseToDb = (w) => {
+  const coAlm = (w.co_alm || w.co_alma || w.coAlm || w.coAlma || w.id?.replace(/^ALM-/, '') || '01').trim();
+  const desAlm = (w.des_alm || w.des_alma || w.desAlm || w.desAlma || '').trim();
+  const stockActual = Number(w.stock_actual ?? w.stockActual ?? (coAlm === '01' ? 1826 : coAlm === '02' ? 866 : 0));
+  return {
+    id: w.id || `ALM-${coAlm}`,
+    co_alma: coAlm,
+    co_alm: coAlm,
+    des_alma: desAlm,
+    des_alm: desAlm,
+    stock_actual: stockActual,
+    campo1: w.campo1 || '',
+    campo2: w.campo2 || '',
+    fecha_actualizacion: w.fecha_actualizacion || w.fechaActualizacion || new Date().toISOString()
+  };
+};
+
+export const mapWarehouseFromDb = (w) => {
+  const coAlm = (w.co_alm || w.co_alma || w.coAlm || w.coAlma || w.id?.replace(/^ALM-/, '') || '01').trim();
+  const desAlm = (w.des_alm || w.des_alma || w.desAlm || w.desAlma || '').trim();
+  const stockActual = Number(w.stock_actual ?? w.stockActual ?? (coAlm === '01' ? 1826 : coAlm === '02' ? 866 : 0));
+  return {
+    id: w.id || `ALM-${coAlm}`,
+    coAlm,
+    co_alm: coAlm,
+    coAlma: coAlm,
+    co_alma: coAlm,
+    desAlm,
+    des_alm: desAlm,
+    desAlma: desAlm,
+    des_alma: desAlm,
+    stockActual,
+    stock_actual: stockActual,
+    campo1: w.campo1 || '',
+    campo2: w.campo2 || '',
+    fechaActualizacion: w.fecha_actualizacion || w.fechaActualizacion || new Date().toISOString()
+  };
+};
+
+export const getSupabaseProfitWarehouses = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_warehouses').select('*').order('id', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(mapWarehouseFromDb);
+  } catch (err) {
+    console.warn('[Supabase] Error cargando almacenes Profit:', err.message);
+    return REAL_PROFIT_WAREHOUSES;
+  }
+};
+
+export const saveSupabaseWarehouse = async (warehouse) => {
+  const dbRecord = mapWarehouseToDb(warehouse);
+  if (isNetworkOnline()) {
+    try {
+      const { error } = await withTimeout(
+        supabase.from('profit_warehouses').upsert(dbRecord, { onConflict: 'id' }),
+        5000
+      );
+      if (error) throw error;
+      isSupabaseAvailable = true;
+    } catch (err) {
+      markSupabaseOffline(err, 'saveSupabaseWarehouse');
+    }
+  }
+  return mapWarehouseFromDb(dbRecord);
+};
+
+export const saveSupabaseBatchWarehouses = async (warehousesList) => {
+  if (!Array.isArray(warehousesList) || warehousesList.length === 0) return [];
+  const dbRecords = warehousesList.map(mapWarehouseToDb);
+  if (isNetworkOnline()) {
+    try {
+      const { error } = await withTimeout(
+        supabase.from('profit_warehouses').upsert(dbRecords, { onConflict: 'id' }),
+        5000
+      );
+      if (error) throw error;
+      isSupabaseAvailable = true;
+    } catch (err) {
+      markSupabaseOffline(err, 'saveSupabaseBatchWarehouses');
+    }
+  }
+  return dbRecords.map(mapWarehouseFromDb);
+};
+
+export const getSupabaseProfitProductLines = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_product_lines').select('*'),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(l => {
+      const coLin = l.co_lin || l.coLin || l.id?.replace(/^LIN-/, '') || '';
+      const linDes = l.lin_des || l.linDes || l.descripcion || l.nombre || coLin;
+      return {
+        id: l.id || `LIN-${coLin}`,
+        coLin,
+        co_lin: coLin,
+        linDes,
+        lin_des: linDes,
+        campo1: l.campo1 || '',
+        fechaActualizacion: l.fecha_actualizacion || l.fechaActualizacion || new Date().toISOString()
+      };
+    });
+  } catch (err) {
+    console.warn('[Supabase] Error cargando líneas Profit:', err.message);
+    return REAL_PROFIT_PRODUCT_LINES;
+  }
+};
+
+export const getSupabaseProfitProductCategories = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_product_categories').select('*'),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(c => {
+      const coCat = c.co_cat || c.coCat || c.id?.replace(/^CAT-/, '') || '';
+      const catDes = c.cat_des || c.catDes || c.descripcion || coCat;
+      return {
+        id: c.id || `CAT-${coCat}`,
+        coCat,
+        co_cat: coCat,
+        catDes,
+        cat_des: catDes,
+        fechaActualizacion: c.fecha_actualizacion || c.fechaActualizacion || new Date().toISOString()
+      };
+    });
+  } catch (err) {
+    console.warn('[Supabase] Error cargando categorías Profit:', err.message);
+    return REAL_PROFIT_PRODUCT_CATEGORIES;
+  }
+};
+
+export const getSupabaseProfitCurrencies = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_currencies').select('*').order('co_mone', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(m => ({
+      id: m.id,
+      coMone: m.co_mone,
+      moneDes: m.mone_des,
+      cambio: Number(m.cambio) || 1,
+      fechaActualizacion: m.fecha_actualizacion
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando monedas Profit:', err.message);
+    return REAL_PROFIT_CURRENCIES;
+  }
+};
+
+export const saveSupabaseProfitIslrWithholding = async (withholding) => {
+  try {
+    const payload = {
+      nro_comprobante: withholding.nroComprobante,
+      periodo_fiscal: withholding.periodoFiscal,
+      fecha_emision: withholding.fechaEmision,
+      proveedor_cod: withholding.proveedorCod,
+      proveedor_nombre: withholding.proveedorNombre,
+      proveedor_rif: withholding.proveedorRif,
+      proveedor_direccion: withholding.proveedorDireccion,
+      nro_factura_afectada: withholding.nroFacturaAfectada,
+      nro_control: withholding.nroControl,
+      base_imponible: withholding.baseImponible,
+      porcentaje_retencion: withholding.porcentajeRetencion,
+      monto_retenido: withholding.montoRetenido,
+      monto_total_factura: withholding.montoTotalFactura,
+      codigo_concepto_islr: withholding.codigoConceptoIslr,
+      concepto_descripcion: withholding.conceptoDescripcion,
+      sustraendo: withholding.sustraendo || 0,
+      moneda: withholding.moneda || 'BS',
+      tasa_cambio: withholding.tasaCambio || 1,
+      co_sucu: withholding.coSucu || '01',
+      updated_at: new Date().toISOString()
+    };
+    if (withholding.id) payload.id = withholding.id;
+
+    const { data, error } = await supabase
+      .from('profit_islr_withholdings')
+      .upsert(payload)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return { success: true, data };
+  } catch (err) {
+    console.error('[Supabase] Error guardando comprobante ISLR:', err);
+    return { success: false, error: err.message };
+  }
+};
+
+export const getSupabaseProfitAuditTrails = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_audit_trails').select('*').order('fecha', { ascending: false }).limit(500),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return (data || []).map(p => ({
+      id: p.id,
+      usuarioId: p.usuario_id,
+      usuario: p.usuario,
+      fecha: p.fecha,
+      empresa: p.empresa,
+      coSucu: p.co_sucu,
+      tabla: p.tabla,
+      numDoc: p.num_doc,
+      codigo: p.codigo,
+      tipoOp: p.tipo_op,
+      maquina: p.maquina,
+      campos: p.campos,
+      rowguid: p.rowguid,
+      createdAt: p.created_at,
+      updatedAt: p.updated_at
+    }));
+  } catch (err) {
+    console.warn('[Supabase] Error cargando pistas de auditoría Profit:', err.message);
+    return [];
+  }
+};
+
+// ==========================================================================
+// MÓDULO CORPORATIVO: CENTRO DE NOTIFICACIONES & ALERTAS (SUPABASE & OFFLINE)
+// ==========================================================================
+
+export const getSupabaseNotifications = async () => {
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('notifications')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200),
+      4000
+    );
+
+    if (error) throw error;
+    isSupabaseAvailable = true;
+
+    if (Array.isArray(data) && data.length > 0) {
+      data.forEach(n => saveStorageNotification(n));
+      return data;
+    }
+  } catch (err) {
+    markSupabaseOffline(err, 'getSupabaseNotifications');
+  }
+
+  return getStorageNotifications();
+};
+
+export const saveSupabaseNotification = async (notificationData) => {
+  const notifId = notificationData.id || `notif_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  const payload = {
+    id: notifId,
+    tipo: notificationData.tipo || 'sistema',
+    severidad: notificationData.severidad || 'info', // 'critica' | 'advertencia' | 'info' | 'exito'
+    modulo: notificationData.modulo || 'dashboard',
+    titulo: notificationData.titulo || 'Notificación del Sistema',
+    mensaje: notificationData.mensaje || '',
+    leida: Boolean(notificationData.leida),
+    destinatario_rol: notificationData.destinatario_rol || 'ALL',
+    destinatario_usuario: notificationData.destinatario_usuario || 'ALL',
+    origen: notificationData.origen || 'SISTEMA',
+    metadata: notificationData.metadata || {},
+    created_at: notificationData.created_at || new Date().toISOString()
+  };
+
+  saveStorageNotification(payload);
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('notifications').upsert(payload).select().single(),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return data;
+  } catch (err) {
+    markSupabaseOffline(err, 'saveSupabaseNotification');
+    enqueueSyncAction({
+      action: 'UPSERT_NOTIFICATION',
+      payload
+    });
+    return payload;
+  }
+};
+
+export const markSupabaseNotificationRead = async (id) => {
+  markStorageNotificationRead(id);
+  const now = new Date().toISOString();
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('notifications').update({ leida: true, fecha_leida: now }).eq('id', id),
+      3500
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+  } catch (err) {
+    markSupabaseOffline(err, 'markSupabaseNotificationRead');
+    enqueueSyncAction({
+      action: 'UPDATE_NOTIFICATION',
+      payload: { id, leida: true, fecha_leida: now }
+    });
+  }
+};
+
+export const markAllSupabaseNotificationsRead = async () => {
+  markAllStorageNotificationsRead();
+  const now = new Date().toISOString();
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('notifications').update({ leida: true, fecha_leida: now }).eq('leida', false),
+      3500
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+  } catch (err) {
+    markSupabaseOffline(err, 'markAllSupabaseNotificationsRead');
+    enqueueSyncAction({
+      action: 'MARK_ALL_NOTIFICATIONS_READ',
+      payload: { fecha_leida: now }
+    });
+  }
+};
+
+export const deleteSupabaseNotification = async (id) => {
+  deleteStorageNotification(id);
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('notifications').delete().eq('id', id),
+      3500
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+  } catch (err) {
+    markSupabaseOffline(err, 'deleteSupabaseNotification');
+  }
+};
+
+export const seedInitialNotificationsIfEmpty = async (products = [], clients = [], config = {}) => {
+  try {
+    const existing = await getSupabaseNotifications();
+    if (Array.isArray(existing) && existing.length > 0) {
+      return existing;
+    }
+
+    const initialNotifs = [
+      {
+        id: 'notif_init_01',
+        tipo: 'stock',
+        severidad: 'critica',
+        modulo: 'inventario',
+        titulo: 'Alerta ROP: 21 SKUs en Nivel Crítico de Inventario',
+        mensaje: 'La matriz de punto de reorden detectó 21 productos de lubricantes Oilstone por debajo del umbral mínimo de seguridad. Se requiere emitir orden de reposición a planta.',
+        destinatario_rol: 'ALL',
+        origen: 'MATRIZ ROP',
+        metadata: { skusCriticos: 21, almacen: 'ALM-01 Planta Principal' }
+      },
+      {
+        id: 'notif_init_02',
+        tipo: 'cxc',
+        severidad: 'advertencia',
+        modulo: 'cxc',
+        titulo: 'Cobranzas: Facturas Vencidas con Más de 30 Días de Mora',
+        mensaje: 'El módulo de Cuentas por Cobrar detectó cuentas pendientes en semáforo rojo. Se activaron recordatorios automatizados de cobranza y estado de cuenta vía WhatsApp.',
+        destinatario_rol: 'ADMINISTRACIÓN & FINANZAS',
+        origen: 'MOTOR CXC',
+        metadata: { agingDays: 30 }
+      },
+      {
+        id: 'notif_init_03',
+        tipo: 'fiscal',
+        severidad: 'info',
+        modulo: 'reportes',
+        titulo: 'SENIAT: Libro Fiscal de Ventas e IVA Preparado',
+        mensaje: 'Los comprobantes de retención IVA (75%) y la numeración consecutiva fiscal de facturas están cuadrados y listos para la exportación de archivos oficiales TXT y XML.',
+        destinatario_rol: 'ALL',
+        origen: 'MOTOR FISCAL',
+        metadata: { providencia: 'SNAT/2011/00071' }
+      },
+      {
+        id: 'notif_init_04',
+        tipo: 'sistema',
+        severidad: 'exito',
+        modulo: 'dashboard',
+        titulo: 'Sincronización Profit Plus 2K8 en Tiempo Real Activa',
+        mensaje: 'El enlace con la base de datos SQL Server y Supabase Cloud opera con latencia óptima y persistencia bidireccional de clientes y catálogo.',
+        destinatario_rol: 'ALL',
+        origen: 'PROFIT BRIDGE',
+        metadata: { bridgePort: 3005 }
+      },
+      {
+        id: 'notif_init_05',
+        tipo: 'sistema',
+        severidad: 'info',
+        modulo: 'configuracion',
+        titulo: 'Tipo de Cambio Oficial BCV Actualizado',
+        mensaje: `Tasa cambiaria oficial del Banco Central de Venezuela fijada en ${config?.tasaDolar || '827.73'} Bs./USD con Tasa Keystone operativa.`,
+        destinatario_rol: 'ALL',
+        origen: 'BCV SCRAPER',
+        metadata: { tasa: config?.tasaDolar || 827.73 }
+      }
+    ];
+
+    for (const item of initialNotifs) {
+      await saveSupabaseNotification(item);
+    }
+
+    return await getSupabaseNotifications();
+  } catch (err) {
+    console.warn('[Supabase] Error en seed de notificaciones iniciales:', err);
+    return getStorageNotifications();
+  }
+};
+
+// ==============================================================================
+// TABLAS AVANZADAS PROFIT PLUS 2K8 (GRUMOTOR) SINCRONIZADAS EN SUPABASE
+// ==============================================================================
+
+export const getSupabaseProfitBanks = async () => {
+  try {
+    const { data, error } = await supabase.from('profit_banks').select('*').order('co_ban', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando bancos:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitPaymentConditions = async () => {
+  try {
+    const { data, error } = await supabase.from('profit_payment_conditions').select('*').order('dias_cred', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando condiciones de pago:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitIncomeExpenseAccounts = async () => {
+  try {
+    const { data, error } = await supabase.from('profit_income_expense_accounts').select('*').order('co_ingr', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando cuentas de ingresos/gastos:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitMeasurementUnits = async () => {
+  try {
+    const { data, error } = await supabase.from('profit_measurement_units').select('*').order('co_uni', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando unidades de medida:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitProductSublines = async () => {
+  try {
+    const { data, error } = await supabase.from('profit_product_sublines').select('*');
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) {
+      return data.map(s => {
+        const coSubl = s.co_subl || s.coSubl || s.id?.replace(/^SUB-/, '') || '';
+        const sublDes = s.subl_des || s.sublDes || s.descripcion || s.nombre || coSubl;
+        const coLin = s.co_lin || s.coLin || '';
+        return {
+          id: s.id || `SUB-${coSubl}`,
+          coSubl,
+          co_subl: coSubl,
+          sublDes,
+          subl_des: sublDes,
+          coLin,
+          co_lin: coLin,
+          updatedAt: s.updated_at || s.updatedAt || new Date().toISOString()
+        };
+      });
+    }
+    return [
+      { id: 'SUB-MIN-GAS', coSubl: 'MIN-GAS', co_subl: 'MIN-GAS', sublDes: 'Mineral Motor Gasolina', subl_des: 'Mineral Motor Gasolina', coLin: 'LUB-GAS', co_lin: 'LUB-GAS' },
+      { id: 'SUB-SEM-GAS', coSubl: 'SEM-GAS', co_subl: 'SEM-GAS', sublDes: 'Semi-Sintético Alta Tecnología R500', subl_des: 'Semi-Sintético Alta Tecnología R500', coLin: 'LUB-GAS', co_lin: 'LUB-GAS' },
+      { id: 'SUB-AK-GAS', coSubl: 'AK-GAS', co_subl: 'AK-GAS', sublDes: 'Alto Kilometraje / Recorridos Gasolina', subl_des: 'Alto Kilometraje / Recorridos Gasolina', coLin: 'LUB-GAS', co_lin: 'LUB-GAS' },
+      { id: 'SUB-DIE-50', coSubl: 'DIE-50', co_subl: 'DIE-50', sublDes: 'Diésel Monogrado SAE 50 CF/CF-2', subl_des: 'Diésel Monogrado SAE 50 CF/CF-2', coLin: 'LUB-DIE', co_lin: 'LUB-DIE' },
+      { id: 'SUB-DIE-15W', coSubl: 'DIE-15W', co_subl: 'DIE-15W', sublDes: 'Diésel Multigrado SAE 15W-40 CI-4', subl_des: 'Diésel Multigrado SAE 15W-40 CI-4', coLin: 'LUB-DIE', co_lin: 'LUB-DIE' },
+      { id: 'SUB-HID-68', coSubl: 'HID-68', co_subl: 'HID-68', sublDes: 'Hidráulicos Anti-desgaste ISO VG 68', subl_des: 'Hidráulicos Anti-desgaste ISO VG 68', coLin: 'LUB-HID', co_lin: 'LUB-HID' },
+      { id: 'SUB-TRA-AUT', coSubl: 'TRA-AUT', co_subl: 'TRA-AUT', sublDes: 'Transmisión Automática Dexron II / Mercon', subl_des: 'Transmisión Automática Dexron II / Mercon', coLin: 'LUB-TRA', co_lin: 'LUB-TRA' },
+      { id: 'SUB-TRA-MAN', coSubl: 'TRA-MAN', co_subl: 'TRA-MAN', sublDes: 'Transmisión Manual y Diferenciales SAE 140 GL-4', subl_des: 'Transmisión Manual y Diferenciales SAE 140 GL-4', coLin: 'LUB-TRA', co_lin: 'LUB-TRA' },
+      { id: 'SUB-MOT-2T', coSubl: 'MOT-2T', co_subl: 'MOT-2T', sublDes: 'Motos 2 Tiempos API TC JASO FB', subl_des: 'Motos 2 Tiempos API TC JASO FB', coLin: 'LUB-MOT', co_lin: 'LUB-MOT' },
+      { id: 'SUB-MOT-4T', coSubl: 'MOT-4T', co_subl: 'MOT-4T', sublDes: 'Motos 4 Tiempos 20W-50 JASO MA2', subl_des: 'Motos 4 Tiempos 20W-50 JASO MA2', coLin: 'LUB-MOT', co_lin: 'LUB-MOT' },
+      { id: 'SUB-MAR-FB', coSubl: 'MAR-FB', co_subl: 'MAR-FB', sublDes: 'Marino Fuera de Borda TC-W3', subl_des: 'Marino Fuera de Borda TC-W3', coLin: 'LUB-GAS', co_lin: 'LUB-GAS' },
+      { id: 'SUB-GRA-CHA', coSubl: 'GRA-CHA', co_subl: 'GRA-CHA', sublDes: 'Grasas Automotrices y Chasis', subl_des: 'Grasas Automotrices y Chasis', coLin: 'GRA-AUT', co_lin: 'GRA-AUT' },
+      { id: 'SUB-SER-FLE', coSubl: 'SER-FLE', co_subl: 'SER-FLE', sublDes: 'Servicios de Flete y Distribución', subl_des: 'Servicios de Flete y Distribución', coLin: 'SER-LOG', co_lin: 'SER-LOG' },
+      { id: 'SUB-GAS-NOP', coSubl: 'GAS-NOP', co_subl: 'GAS-NOP', sublDes: 'Gastos Operacionales y Publicidad', subl_des: 'Gastos Operacionales y Publicidad', coLin: 'GAS-OPE', co_lin: 'GAS-OPE' }
+    ];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando sublíneas de productos:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitTaxRates = async () => {
+  try {
+    const { data, error } = await supabase.from('profit_tax_rates').select('*').order('fecha', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando tasas impositivas:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitStockByWarehouse = async (coArt = null) => {
+  try {
+    let query = supabase.from('profit_stock_by_warehouse').select('*');
+    if (coArt) query = query.eq('co_art', coArt);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando stock por almacén:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitGoodsReceiptNotes = async (limit = 100) => {
+  try {
+    const { data, error } = await supabase.from('profit_goods_receipt_notes').select('*').order('fec_emis', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando notas de recepción:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitCashMovementsDetailed = async (limit = 500) => {
+  try {
+    const { data, error } = await supabase.from('profit_cash_movements_detailed').select('*').order('fecha', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando movimientos de caja detallados:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitBankMovements = async (limit = 1000) => {
+  try {
+    const { data, error } = await supabase.from('profit_bank_movements').select('*').order('fecha', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando movimientos bancarios:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitPaymentMethodsCollections = async (limit = 1000) => {
+  try {
+    const { data, error } = await supabase.from('profit_payment_methods_collections').select('*').limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando formas de pago en cobros:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitPaymentMethodsSupplierPayments = async (limit = 500) => {
+  try {
+    const { data, error } = await supabase.from('profit_payment_methods_supplier_payments').select('*').limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando formas de pago a proveedores:', err.message);
+    return [];
+  }
+};
+
+export const getSupabaseProfitAuditTrailsEvents = async (limit = 500) => {
+  try {
+    const { data, error } = await supabase.from('profit_audit_trails_events').select('*').order('fecha', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('[Supabase] Error cargando pistas de auditoría de Profit:', err.message);
+    return [];
+  }
+};
+
+
+
+
+
+
