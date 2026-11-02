@@ -460,8 +460,9 @@ export function getUsersList() {
           // Si la versión empaquetada (users.json) tiene fecha updated_at más reciente que la caché local, sincronizarla
           const tUpdated = tUser.updated_at || tUser.updatedAt;
           const fUpdated = found.updatedAt || found.updated_at;
-          if (tUpdated && (!fUpdated || new Date(tUpdated).getTime() > new Date(fUpdated).getTime())) {
-            const keepPhoto = found.foto && !String(found.foto).includes('user_kenterbertf2_1793628') ? found.foto : (tUser.foto || null);
+          if (tUpdated && fUpdated && new Date(tUpdated).getTime() > new Date(fUpdated).getTime()) {
+            const hasInvalidPhoto = typeof found.foto === 'string' && found.foto.includes('user_kenterbertf2_1793628');
+            const keepPhoto = !hasInvalidPhoto && found.foto !== undefined ? found.foto : (tUser.foto || null);
             Object.assign(found, tUser, { foto: keepPhoto });
             hasMergedTemp = true;
           } else {
@@ -480,6 +481,9 @@ export function getUsersList() {
             }
             if (typeof found.foto === 'string' && found.foto.includes('user_kenterbertf2_1793628')) {
               found.foto = null;
+              hasMergedTemp = true;
+            } else if (found.foto === undefined && tUser.foto && !String(tUser.foto).includes('user_kenterbertf2_1793628')) {
+              found.foto = tUser.foto;
               hasMergedTemp = true;
             }
             if (tUser.cedula && !found.cedula) {
@@ -537,6 +541,7 @@ export function saveUser(userData) {
   const users = getUsersList();
   let updatedUsers;
   let savedUser;
+  const nowIso = new Date().toISOString();
 
   const cleanUsername = (userData.username || '').trim().toLowerCase();
   if (!cleanUsername) {
@@ -565,10 +570,12 @@ export function saveUser(userData) {
           rol: targetRole,
           departamento: userData.departamento || u.departamento || getUserDepartment({ ...u, ...userData, rol: targetRole }),
           avatar: userData.avatar || u.avatar || roleMeta.avatar,
-          foto: userData.foto !== undefined ? userData.foto : (u.foto || null),
+          foto: userData.foto !== undefined ? userData.foto : (u.foto ?? null),
           color: roleColor,
           password: userData.password ? userData.password.trim() : (u.password || '123456'),
-          modulos: Array.isArray(userData.modulos) ? userData.modulos : (u.modulos || ROLE_PERMISSIONS[targetRole] || [])
+          modulos: Array.isArray(userData.modulos) ? userData.modulos : (u.modulos || ROLE_PERMISSIONS[targetRole] || []),
+          updatedAt: nowIso,
+          updated_at: nowIso
         };
         return savedUser;
       }
@@ -591,10 +598,14 @@ export function saveUser(userData) {
       rol: targetRole,
       departamento: userData.departamento || getUserDepartment({ ...userData, rol: targetRole }),
       avatar: userData.avatar || roleMeta.avatar,
-      foto: userData.foto || null,
+      foto: userData.foto ?? null,
       color: roleColor,
       descripcion: userData.descripcion || `Operador con rol ${targetRole}`,
-      modulos: Array.isArray(userData.modulos) ? userData.modulos : (ROLE_PERMISSIONS[targetRole] || [])
+      modulos: Array.isArray(userData.modulos) ? userData.modulos : (ROLE_PERMISSIONS[targetRole] || []),
+      createdAt: nowIso,
+      created_at: nowIso,
+      updatedAt: nowIso,
+      updated_at: nowIso
     };
     updatedUsers = [...users, savedUser];
   }

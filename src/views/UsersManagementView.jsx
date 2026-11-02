@@ -113,8 +113,12 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
 
   // Suscripción en tiempo real a cambios de usuarios (Crear, Modificar, Eliminar)
   useEffect(() => {
-    const unsub = subscribeToRealtimeSync(({ tableId, action, key, item }) => {
+    const unsub = subscribeToRealtimeSync(({ tableId, action, key, item, allTableData }) => {
       if (tableId === 'users') {
+        if ((action === 'STORAGE_UPDATE' || action === 'SYNC_ALL') && Array.isArray(allTableData)) {
+          setUsers(sortUsersByHierarchy(allTableData));
+          return;
+        }
         if (action === 'DELETE') {
           setUsers(prev => prev.filter(u => String(u.id).trim() !== String(key).trim() && String(u.username || '').toLowerCase() !== String(key).toLowerCase()));
         } else if (item) {
@@ -171,6 +175,8 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
   const [isCompressing, setIsCompressing] = useState(false);
   const [photoSizeInfo, setPhotoSizeInfo] = useState(null);
   const fileInputRef = useRef(null);
+  const rowFileInputRef = useRef(null);
+  const [rowUploadTargetUser, setRowUploadTargetUser] = useState(null);
 
   // Formulario Password
   const [newPassword, setNewPassword] = useState('');
@@ -182,13 +188,6 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
 
   // Mensajes de alerta
   const [alertInfo, setAlertInfo] = useState({ type: '', message: '' });
-
-  // Sincronizar estado local si cambian los props externos
-  useEffect(() => {
-    if (usersList && usersList.length > 0) {
-      setUsers(usersList);
-    }
-  }, [usersList]);
 
   // Cargar bitácora de auditoría al iniciar
   const loadLogs = async () => {
@@ -206,21 +205,6 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
   useEffect(() => {
     loadLogs();
   }, []);
-
-  // Al montar o cambiar la lista de usuarios, sincronizar foto de currentUser de inmediato si difiere
-  useEffect(() => {
-    if (currentUser && users && users.length > 0) {
-      const match = users.find(
-        u => u.id === currentUser.id || (u.username && currentUser.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
-      );
-      if (match && match.foto && match.foto !== currentUser.foto) {
-        if (onUpdateCurrentUser) onUpdateCurrentUser(match);
-        try {
-          localStorage.setItem('signum_active_user', JSON.stringify(match));
-        } catch (_) {}
-      }
-    }
-  }, [users, currentUser, onUpdateCurrentUser]);
 
   const showAlert = (type, message) => {
     setAlertInfo({ type, message });
@@ -273,6 +257,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
 
     try {
       setIsCompressing(true);
+      resetSupabaseOnlineStatus();
       const result = await compressProfileImage(file, { maxSize: 240, quality: 0.82 });
       const base64Data = result.dataUrl;
 
@@ -292,8 +277,35 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
         ...prev,
         foto: finalPhoto
       }));
-      setPhotoSizeInfo(`${result.sizeKb} KB (Supabase Storage)`);
-      showAlert('success', `Foto subida a Supabase Storage con éxito (${result.sizeKb} KB) y lista para guardar.`);
+      setPhotoSizeInfo(`${result.sizeKb} KB (Sincronizada)`);
+
+      // Si estamos editando un usuario existente, persistir y sincronizar la foto de inmediato
+      if (formData.id) {
+        const saved = await saveSupabaseUser({
+          id: formData.id,
+          username: formData.username,
+          foto: finalPhoto
+        }, currentUser);
+
+        setUsers(prev => {
+          const next = prev.map(u => (u.id === saved.id || u.username?.toLowerCase() === saved.username?.toLowerCase()) ? saved : u);
+          return sortUsersByHierarchy(next);
+        });
+
+        const isSelf = currentUser && (
+          currentUser.id === saved.id ||
+          (currentUser.username && saved.username && currentUser.username.toLowerCase() === saved.username.toLowerCase())
+        );
+        if (isSelf && onUpdateCurrentUser) {
+          onUpdateCurrentUser(saved);
+        }
+        if (onUsersUpdated) {
+          await onUsersUpdated(saved);
+        }
+        showAlert('success', `Foto de perfil de @${saved.username} actualizada y sincronizada (${result.sizeKb} KB).`);
+      } else {
+        showAlert('success', `Foto procesada (${result.sizeKb} KB) y lista para guardar el nuevo usuario.`);
+      }
     } catch (err) {
       console.error(err);
       showAlert('error', err.message || 'Error al procesar la foto.');
@@ -318,7 +330,79 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
         await deleteImageFromStorage(previousPhoto);
       } catch (_) {}
     }
-    showAlert('info', 'Foto removida. Haga clic en "Guardar Cambios" para confirmar la eliminación en Supabase.');
+
+    // Si estamos editando un usuario existente, persistir la eliminación de inmediato
+    if (formData.id) {
+      try {
+        resetSupabaseOnlineStatus();
+        const saved = await saveSupabaseUser({
+          id: formData.id,
+          username: formData.username,
+          foto: null
+        }, currentUser);
+
+        setUsers(prev => {
+          const next = prev.map(u => (u.id === saved.id || u.username?.toLowerCase() === saved.username?.toLowerCase()) ? saved : u);
+          return sortUsersByHierarchy(next);
+        });
+
+        const isSelf = currentUser && (
+          currentUser.id === saved.id ||
+          (currentUser.username && saved.username && currentUser.username.toLowerCase() === saved.username.toLowerCase())
+        );
+        if (isSelf && onUpdateCurrentUser) {
+          onUpdateCurrentUser(saved);
+        }
+        if (onUsersUpdated) {
+          await onUsersUpdated(saved);
+        }
+        showAlert('info', `Foto de perfil de @${saved.username} eliminada y sincronizada en Supabase.`);
+      } catch (err) {
+        showAlert('error', err.message || 'Error al eliminar la foto en Supabase.');
+      }
+    } else {
+      showAlert('info', 'Foto removida del formulario.');
+    }
+  };
+
+  const handleDirectRowPhotoSelect = (user) => {
+    setRowUploadTargetUser(user);
+    if (rowFileInputRef.current) {
+      rowFileInputRef.current.value = '';
+      rowFileInputRef.current.click();
+    }
+  };
+
+  const handleDirectRowPhotoChange = async (e) => {
+    const file = e.target.files?.[0];
+    const targetUser = rowUploadTargetUser;
+    if (!file || !targetUser) return;
+
+    try {
+      setIsSyncing(true);
+      const compressed = await compressProfileImage(file, { maxSize: 240, quality: 0.82 });
+      const res = await uploadUserProfilePhoto({
+        userId: targetUser.id,
+        username: targetUser.username,
+        fileOrDataUrl: compressed.dataUrl,
+        currentUser,
+        onUpdateCurrentUser
+      });
+      if (!res.success) throw new Error(res.error || 'Error subiendo foto de perfil');
+
+      const fresh = await getSupabaseUsers();
+      setUsers(fresh);
+      try { localStorage.setItem('signum_users_list', JSON.stringify(fresh)); } catch (_) {}
+      if (onUsersUpdated) await onUsersUpdated(res.user);
+      showAlert('success', `Foto de perfil de @${targetUser.username} actualizada en tiempo real (${compressed.sizeKb} KB).`);
+      loadLogs();
+    } catch (err) {
+      showAlert('error', err.message || 'Error al cambiar la foto de perfil.');
+    } finally {
+      setIsSyncing(false);
+      setRowUploadTargetUser(null);
+      if (rowFileInputRef.current) rowFileInputRef.current.value = '';
+    }
   };
 
   const handleDirectDeletePhoto = async (user) => {
@@ -339,7 +423,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       const fresh = await getSupabaseUsers();
       setUsers(fresh);
       try { localStorage.setItem('signum_users_list', JSON.stringify(fresh)); } catch (_) {}
-      if (onUsersUpdated) onUsersUpdated();
+      if (onUsersUpdated) await onUsersUpdated(res.user);
       showAlert('success', `Foto de perfil de @${user.username} eliminada permanentemente de Supabase.`);
       loadLogs();
     } catch (err) {
@@ -784,6 +868,13 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
 
           {/* Tabla de Usuarios Registrados */}
           <div className="card">
+            <input
+              ref={rowFileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleDirectRowPhotoChange}
+            />
             <div className="table-container">
               <table className="custom-table" style={{ width: '100%', tableLayout: 'auto' }}>
                 <thead>
@@ -809,38 +900,67 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                       <tr key={u.id}>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            {u.foto ? (
-                              <img
-                                src={u.foto}
-                                alt={u.nombre}
+                            <div
+                              onClick={() => handleDirectRowPhotoSelect(u)}
+                              title={`Cambiar foto de perfil de @${u.username}`}
+                              style={{
+                                position: 'relative',
+                                width: '38px',
+                                height: '38px',
+                                borderRadius: '50%',
+                                cursor: 'pointer',
+                                flexShrink: 0
+                              }}
+                            >
+                              {u.foto ? (
+                                <img
+                                  src={u.foto}
+                                  alt={u.nombre}
+                                  style={{
+                                    width: '38px',
+                                    height: '38px',
+                                    borderRadius: '50%',
+                                    objectFit: 'cover',
+                                    border: '2px solid rgba(56, 189, 248, 0.45)',
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  style={{
+                                    width: '38px',
+                                    height: '38px',
+                                    borderRadius: '50%',
+                                    background: 'rgba(255, 255, 255, 0.05)',
+                                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '1.35rem'
+                                  }}
+                                >
+                                  {u.avatar || '👤'}
+                                </div>
+                              )}
+                              <span
                                 style={{
-                                  width: '38px',
-                                  height: '38px',
+                                  position: 'absolute',
+                                  right: '-2px',
+                                  bottom: '-2px',
+                                  width: '16px',
+                                  height: '16px',
                                   borderRadius: '50%',
-                                  objectFit: 'cover',
-                                  border: '2px solid rgba(255, 255, 255, 0.15)',
-                                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                                  flexShrink: 0
-                                }}
-                              />
-                            ) : (
-                              <div
-                                style={{
-                                  width: '38px',
-                                  height: '38px',
-                                  borderRadius: '50%',
-                                  background: 'rgba(255, 255, 255, 0.05)',
-                                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                                  background: '#0284c7',
+                                  border: '1.5px solid #0f172a',
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
-                                  fontSize: '1.35rem',
-                                  flexShrink: 0
+                                  color: '#fff'
                                 }}
                               >
-                                {u.avatar || '👤'}
-                              </div>
-                            )}
+                                <Camera size={9} />
+                              </span>
+                            </div>
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <strong style={{ color: 'var(--text-primary)', fontSize: '0.92rem', fontWeight: 700 }}>{u.nombre}</strong>
@@ -1035,6 +1155,15 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                             >
                               <Edit2 size={14} />
                             </button>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '6px 10px', fontSize: '0.75rem', color: '#38bdf8' }}
+                              onClick={() => handleDirectRowPhotoSelect(u)}
+                              title={`Subir o cambiar foto de @${u.username}`}
+                              aria-label="Subir o cambiar foto de perfil"
+                            >
+                              <Camera size={14} />
+                            </button>
                             {u.foto && (
                               <button
                                 className="btn btn-secondary"
@@ -1043,7 +1172,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                                 title="Eliminar Foto de Perfil en Supabase"
                                 aria-label="Eliminar Foto de Perfil"
                               >
-                                <Camera size={14} />
+                                <Trash2 size={14} />
                               </button>
                             )}
                             {!isCurrent && normalizeRole(u.rol) !== 'ADMINISTRADOR MASTER' && u.username?.toLowerCase() !== 'edson designer' && (

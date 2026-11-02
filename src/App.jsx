@@ -220,7 +220,13 @@ function MainApp() {
       const cached = localStorage.getItem('sm_products_v4_fiscal');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0)) {
+        const hasStaleOil = Array.isArray(parsed) && parsed.some(p => String(p?.id || p?.codigo || '').startsWith('OIL-'));
+        if (
+          Array.isArray(parsed) &&
+          parsed.length >= 25 &&
+          !hasStaleOil &&
+          parsed.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0)
+        ) {
           return sortAsc(parsed);
         }
       }
@@ -242,7 +248,14 @@ function MainApp() {
       const cached = localStorage.getItem('sm_orders_v4_pipeline');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length >= 15) return parsed;
+        const hasBadItems =
+          Array.isArray(parsed) &&
+          parsed.some(o =>
+            !Array.isArray(o?.items) ||
+            o.items.length === 0 ||
+            o.items.some(it => String(it?.articuloId || it?.productoId || it?.codigo || '').startsWith('OIL-'))
+          );
+        if (Array.isArray(parsed) && parsed.length >= 1 && !hasBadItems) return parsed;
       }
     } catch (_) {}
     return REAL_ORDERS || [];
@@ -464,63 +477,6 @@ function MainApp() {
           // Procesar cola de sincronización offline si quedaron operaciones pendientes
           flushSyncQueue();
 
-          // Sincronizar con Supabase al arrancar (en segundo plano, sin bloquear)
-          triggerProfitSync().then(async () => {
-            const [
-              freshProds, freshClis, freshBnks, freshCashDesks, freshCobs, freshFacs,
-              freshPSups, freshPPurs, freshCxp, freshPays, freshSellers,
-              freshZones, freshTrans, freshReturns, freshAju, freshTra,
-              freshIslr, freshBen, freshOrders, freshWithholdings, freshTrails
-            ] = await Promise.all([
-              getSupabaseProducts(),
-              getSupabaseClients(),
-              getSupabaseProfitBankAccounts(),
-              getSupabaseProfitCashDesks(),
-              getSupabaseProfitCollections(),
-              getSupabaseProfitInvoices(),
-              getSupabaseProfitSuppliers(),
-              getSupabaseProfitPurchases(),
-              getSupabaseProfitAccountsPayable(),
-              getSupabaseProfitSupplierPayments(),
-              getSupabaseProfitSellers(),
-              getSupabaseProfitZones(),
-              getSupabaseProfitTransports(),
-              getSupabaseProfitReturns(),
-              getSupabaseProfitInventoryAdjustments(),
-              getSupabaseProfitWarehouseTransfers(),
-              getSupabaseProfitIslrConcepts(),
-              getSupabaseProfitBeneficiaries(),
-              getSupabaseProfitPaymentOrders(),
-              getSupabaseProfitIslrWithholdings(),
-              getSupabaseProfitAuditTrails()
-            ]);
-            if (!isMounted) return;
-            console.log('[Profit Sync Inicial] Datos actualizados desde Supabase ✓');
-            if (freshProds?.length > 0) setProductsState(freshProds);
-            if (freshClis?.length > 0) setClientsState(freshClis);
-            if (freshBnks) setProfitBankAccounts(freshBnks);
-            if (freshCashDesks) setProfitCashDesks(freshCashDesks);
-            if (freshCobs) setProfitCollections(freshCobs);
-            if (freshFacs) setProfitInvoices(freshFacs);
-            if (freshPSups) setProfitSuppliers(freshPSups);
-            if (freshPPurs) setProfitPurchases(freshPPurs);
-            if (freshCxp) setProfitAccountsPayable(freshCxp);
-            if (freshPays) setProfitSupplierPayments(freshPays);
-            if (freshSellers) setProfitSellers(freshSellers);
-            if (freshZones) setProfitZones(freshZones);
-            if (freshTrans) setProfitTransports(freshTrans);
-            if (freshReturns) setProfitReturns(freshReturns);
-            if (freshAju) setProfitInventoryAdjustments(freshAju);
-            if (freshTra) setProfitWarehouseTransfers(freshTra);
-            if (freshIslr) setProfitIslrConcepts(freshIslr);
-            if (freshBen) setProfitBeneficiaries(freshBen);
-            if (freshOrders) setProfitPaymentOrders(freshOrders);
-            if (freshWithholdings) setProfitIslrWithholdings(freshWithholdings);
-            if (freshTrails) setProfitAuditTrails(freshTrails);
-          }).catch((profitErr) => {
-            console.warn('[Profit Sync Inicial] Bridge no disponible, usando datos de Supabase:', profitErr?.message || profitErr);
-          });
-
           // Finalizar splash de inmediato una vez cargada la información
           setLoading(false);
         }
@@ -657,11 +613,15 @@ function MainApp() {
           return;
         }
         if (item) {
+          const cleanKey = String(key || item.coVen || item.co_ven || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
           setProfitSellers(prev => {
-            const index = prev.findIndex(s => s.coVen === key || s.co_ven === key || s.id === key);
+            const index = prev.findIndex(s => {
+              const sCode = String(s.coVen || s.co_ven || s.id || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
+              return cleanKey && sCode === cleanKey;
+            });
             if (index >= 0) {
               const next = [...prev];
-              next[index] = { ...next[index], ...item };
+              next[index] = { ...next[index], ...item, coVen: next[index].coVen || item.coVen, co_ven: next[index].co_ven || item.co_ven };
               return next;
             }
             return [...prev, item];
@@ -780,6 +740,17 @@ function MainApp() {
           const sorted = sortUsersByHierarchy(allTableData);
           setUsersList(sorted);
           try { localStorage.setItem('signum_users_list', JSON.stringify(sorted)); } catch (_) {}
+          setCurrentUser(prev => {
+            if (!prev) return prev;
+            const matched = sorted.find(
+              u => u.id === prev.id || (u.username && prev.username && u.username.toLowerCase() === prev.username.toLowerCase())
+            );
+            if (matched) {
+              try { localStorage.setItem('signum_active_user', JSON.stringify(matched)); } catch (_) {}
+              return matched;
+            }
+            return prev;
+          });
           return;
         }
 
@@ -809,36 +780,167 @@ function MainApp() {
             return sorted;
           });
 
-          // Si el usuario en sesión activa fue modificado, actualizar sesión de inmediato
-          if (currentUser && (currentUser.id === item.id || currentUser.username?.toLowerCase() === item.username?.toLowerCase())) {
-            setCurrentUser(prev => {
+          // Si el usuario en sesión activa fue modificado, actualizar sesión de inmediato usando estado funcional
+          setCurrentUser(prev => {
+            if (!prev) return prev;
+            if (prev.id === item.id || (prev.username && item.username && prev.username.toLowerCase() === item.username.toLowerCase())) {
               const updated = { ...prev, ...item };
               try { localStorage.setItem('signum_active_user', JSON.stringify(updated)); } catch (_) {}
               return updated;
-            });
-          }
+            }
+            return prev;
+          });
           notify.success(`⚡ Usuario @${item.username || key} sincronizado en tiempo real`);
         }
+      } else if (tableId === 'orders') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setOrdersState(allTableData);
+          return;
+        }
+        if (action === 'DELETE') {
+          setOrdersState(prev => prev.filter(o => String(o.id) !== String(key) && String(o.numeroPedido || '') !== String(key)));
+          return;
+        }
+        if (item) {
+          setOrdersState(prev => {
+            const index = prev.findIndex(o => String(o.id) === String(key || item.id) || (item.numeroPedido && o.numeroPedido === item.numeroPedido));
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [item, ...prev];
+          });
+        }
+      } else if (tableId === 'sales') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setSalesState(allTableData);
+          return;
+        }
+        if (item) {
+          setSalesState(prev => {
+            const index = prev.findIndex(s => String(s.id) === String(key || item.id) || (item.facturaNumero && s.facturaNumero === item.facturaNumero));
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [item, ...prev];
+          });
+        }
+      } else if (tableId === 'purchases') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setPurchasesState(allTableData);
+          return;
+        }
+        if (item) {
+          setPurchasesState(prev => {
+            const index = prev.findIndex(p => String(p.id) === String(key || item.id) || (item.facturaNumero && p.facturaNumero === item.facturaNumero));
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [item, ...prev];
+          });
+        }
+      } else if (tableId === 'cash_movements') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setCashMovementsState(allTableData);
+          return;
+        }
+        if (item) {
+          setCashMovementsState(prev => {
+            const index = prev.findIndex(m => String(m.id) === String(key || item.id));
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [item, ...prev];
+          });
+        }
+      } else if (tableId === 'fiscal_closures') {
+        if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
+          setFiscalClosuresState(allTableData);
+          return;
+        }
+        if (item) {
+          setFiscalClosuresState(prev => {
+            const index = prev.findIndex(c => String(c.id) === String(key || item.id));
+            if (index >= 0) {
+              const next = [...prev];
+              next[index] = { ...next[index], ...item };
+              return next;
+            }
+            return [item, ...prev];
+          });
+        }
+      } else if (tableId === 'config' && item && typeof item === 'object') {
+        setConfigState(prev => ({ ...prev, ...item }));
+      } else if (tableId === 'cash_desks' && Array.isArray(allTableData)) {
+        setProfitCashDesks(allTableData);
+      } else if (tableId === 'collections' && Array.isArray(allTableData)) {
+        setProfitCollections(allTableData);
+      } else if (tableId === 'accounts_payable' && Array.isArray(allTableData)) {
+        setProfitAccountsPayable(allTableData);
+      } else if (tableId === 'supplier_payments' && Array.isArray(allTableData)) {
+        setProfitSupplierPayments(allTableData);
+      } else if (tableId === 'zones' && Array.isArray(allTableData)) {
+        setProfitZones(allTableData);
+      } else if (tableId === 'transports' && Array.isArray(allTableData)) {
+        setProfitTransports(allTableData);
+      } else if (tableId === 'customer_returns' && Array.isArray(allTableData)) {
+        setProfitCustomerReturns(allTableData);
       }
     });
 
     return () => unsubscribe();
   }, []);
 
-  // Sincronizar currentUser con usersList en tiempo real (para reflejar foto inmediatamente)
+  // Sincronizar currentUser de forma atómica con usersList y localStorage
+  const handleUpdateCurrentUser = (updatedUser) => {
+    if (!updatedUser) return;
+    setCurrentUser(updatedUser);
+    try {
+      localStorage.setItem('signum_active_user', JSON.stringify(updatedUser));
+    } catch (_) {}
+    setUsersList(prev => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      let changed = false;
+      const next = prev.map(u => {
+        if (u.id === updatedUser.id || (u.username && updatedUser.username && u.username.toLowerCase() === updatedUser.username.toLowerCase())) {
+          changed = true;
+          return { ...u, ...updatedUser };
+        }
+        return u;
+      });
+      if (!changed) return prev;
+      const sorted = sortUsersByHierarchy(next);
+      try {
+        localStorage.setItem('signum_users_list', JSON.stringify(sorted));
+      } catch (_) {}
+      return sorted;
+    });
+  };
+
+  // Sincronizar currentUser cuando usersList se actualiza desde servidor o almacenamiento
   useEffect(() => {
-    if (currentUser && usersList && usersList.length > 0) {
+    if (!usersList || usersList.length === 0) return;
+    setCurrentUser(prev => {
+      if (!prev) return prev;
       const matched = usersList.find(
-        (u) => u.id === currentUser.id || (u.username && currentUser.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
+        (u) => u.id === prev.id || (u.username && prev.username && u.username.toLowerCase() === prev.username.toLowerCase())
       );
-      if (matched && (matched.foto !== currentUser.foto || matched.nombre !== currentUser.nombre || matched.cargo !== currentUser.cargo)) {
-        setCurrentUser(matched);
+      if (matched && (matched.foto !== prev.foto || matched.nombre !== prev.nombre || matched.cargo !== prev.cargo)) {
         try {
           localStorage.setItem('signum_active_user', JSON.stringify(matched));
         } catch (_) {}
+        return matched;
       }
-    }
-  }, [usersList, currentUser]);
+      return prev;
+    });
+  }, [usersList]);
 
   // Asegurar que la pestaña activa corresponda a los permisos del usuario
   useEffect(() => {
@@ -998,14 +1100,22 @@ function MainApp() {
         if (updatedFacs) setProfitInvoices(updatedFacs);
       },
       onSuppliersChange: async () => {
-        console.log('⚡ [Realtime] Recargando proveedores Profit...');
-        const updatedSups = await getSupabaseProfitSuppliers();
-        if (updatedSups) setProfitSuppliers(updatedSups);
+        console.log('⚡ [Realtime] Recargando proveedores...');
+        const [updatedProfitSups, updatedNativeSups] = await Promise.all([
+          getSupabaseProfitSuppliers(),
+          getSupabaseSuppliers()
+        ]);
+        if (updatedProfitSups) setProfitSuppliers(updatedProfitSups);
+        if (updatedNativeSups) setSuppliersState(updatedNativeSups);
       },
       onPurchasesChange: async () => {
-        console.log('⚡ [Realtime] Recargando compras Profit...');
-        const updatedPurs = await getSupabaseProfitPurchases();
-        if (updatedPurs) setProfitPurchases(updatedPurs);
+        console.log('⚡ [Realtime] Recargando compras...');
+        const [updatedProfitPurs, updatedNativePurs] = await Promise.all([
+          getSupabaseProfitPurchases(),
+          getSupabasePurchases()
+        ]);
+        if (updatedProfitPurs) setProfitPurchases(updatedProfitPurs);
+        if (updatedNativePurs) setPurchasesState(updatedNativePurs);
       },
       onAccountsPayableChange: async () => {
         console.log('⚡ [Realtime] Recargando CxP Profit...');
@@ -1072,25 +1182,10 @@ function MainApp() {
         const updatedTrails = await getSupabaseProfitAuditTrails();
         if (updatedTrails) setProfitAuditTrails(updatedTrails);
       },
-      onUsersChange: async () => {
-        console.log('⚡ [Realtime] Recargando usuarios del sistema...');
-        const freshUsers = await getSupabaseUsers();
-        if (freshUsers && freshUsers.length > 0) {
-          setUsersList(freshUsers);
-          try {
-            localStorage.setItem('signum_users_list', JSON.stringify(freshUsers));
-          } catch (_) {}
-        }
-      },
       onSalesChange: async () => {
         console.log('⚡ [Realtime] Recargando ventas Supabase...');
         const updatedSales = await getSupabaseSales();
         if (updatedSales) setSalesState(updatedSales);
-      },
-      onPurchasesChange: async () => {
-        console.log('⚡ [Realtime] Recargando compras Supabase...');
-        const updatedPurchases = await getSupabasePurchases();
-        if (updatedPurchases) setPurchasesState(updatedPurchases);
       },
       onCashMovementsChange: async () => {
         console.log('⚡ [Realtime] Recargando movimientos de caja Supabase...');
@@ -1539,14 +1634,14 @@ function MainApp() {
           onSaveConfig={handleSaveConfig}
           onNavigate={setActiveTab}
           currentUser={currentUser}
-          onUpdateCurrentUser={setCurrentUser}
+          onUpdateCurrentUser={handleUpdateCurrentUser}
           onLogout={handleLogout}
           globalSearch={globalSearch}
           setGlobalSearch={setGlobalSearch}
           onSyncProfit={handleSyncProfit}
           onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
-          productsCount={products?.length || 31}
-          clientsCount={clients?.length || 610}
+          productsCount={products?.length || 29}
+          clientsCount={clients?.length || 631}
           products={products}
           clients={clients}
           sales={sales}
@@ -1724,12 +1819,13 @@ function MainApp() {
                   }
                 }}
                 onUpdateSellerPhoto={async (coVen, photoUrl) => {
+                  const targetClean = String(coVen || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
                   setProfitSellers(prev => {
                     const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
                     return base.map(s => {
-                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
-                      if (c === coVen.toString().trim()) {
-                        return { ...s, foto: photoUrl, avatar: photoUrl };
+                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim().replace(/^usr-seller-/i, '').toLowerCase();
+                      if (c === targetClean) {
+                        return { ...s, foto: photoUrl || '' };
                       }
                       return s;
                     });
@@ -1738,6 +1834,8 @@ function MainApp() {
                     await updateSupabaseSellerPhoto(coVen, photoUrl);
                     const fresh = await getSupabaseProfitSellers();
                     if (fresh && fresh.length > 0) setProfitSellers(fresh);
+                    const freshUsers = await getSupabaseUsers();
+                    if (freshUsers && freshUsers.length > 0) setUsersList(freshUsers);
                   } catch (err) {
                     console.warn('[Fuerza de Ventas] Error actualizando foto asesor:', err?.message);
                   }
@@ -1905,12 +2003,7 @@ function MainApp() {
               currentUser={currentUser}
               usersList={usersList}
               config={config}
-              onUpdateCurrentUser={(updatedUser) => {
-                setCurrentUser(updatedUser);
-                try {
-                  localStorage.setItem('signum_active_user', JSON.stringify(updatedUser));
-                } catch (_) {}
-              }}
+              onUpdateCurrentUser={handleUpdateCurrentUser}
               onUsersUpdated={async (savedUser) => {
                 const freshUsers = await getSupabaseUsers();
                 setUsersList(freshUsers);
@@ -1919,19 +2012,18 @@ function MainApp() {
                 } catch (_) {}
 
                 if (savedUser && currentUser && (savedUser.id === currentUser.id || savedUser.username?.toLowerCase() === currentUser.username?.toLowerCase())) {
-                  setCurrentUser(savedUser);
-                  try {
-                    localStorage.setItem('signum_active_user', JSON.stringify(savedUser));
-                  } catch (_) {}
+                  handleUpdateCurrentUser(savedUser);
                 } else if (currentUser) {
                   const matching = freshUsers.find(u => u.id === currentUser.id || u.username?.toLowerCase() === currentUser.username?.toLowerCase());
                   if (matching) {
-                    setCurrentUser(matching);
-                    try {
-                      localStorage.setItem('signum_active_user', JSON.stringify(matching));
-                    } catch (_) {}
+                    handleUpdateCurrentUser(matching);
                   }
                 }
+
+                try {
+                  const freshSellers = await getSupabaseProfitSellers();
+                  if (freshSellers && freshSellers.length > 0) setProfitSellers(freshSellers);
+                } catch (_) {}
               }}
             />
           )}

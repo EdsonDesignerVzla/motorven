@@ -3,8 +3,8 @@
  * Bucket Oficial: 'signum-media'
  * SIGNUM MOTORVEN • Base de Datos DB_SIGNUM_MOTORVEN
  */
-import { supabase, saveSupabaseUser } from './supabaseService';
-import { compressImageToBase64 } from './imageCompression';
+import { supabase, saveSupabaseUser, resetSupabaseOnlineStatus, isSupabaseOnline } from './supabaseService.js';
+import { compressImageToBase64 } from './imageCompression.js';
 
 export const STORAGE_BUCKET = 'signum-media';
 
@@ -105,8 +105,22 @@ export async function uploadImageToStorage(fileOrDataUrl, folder = STORAGE_FOLDE
     const fileName = `${safeBaseName}_${timestamp}.${extension}`;
     const filePath = `${folder}/${fileName}`;
 
-    // Subir a Supabase Storage con sobrescritura permitida
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    // Si Supabase está marcado fuera de línea, retornar directamente el Base64
+    if (!isSupabaseOnline()) {
+      return {
+        success: true,
+        base64: base64DataUrl,
+        fallbackUrl: base64DataUrl,
+        publicUrl: base64DataUrl,
+        path: filePath,
+        folder,
+        fileName,
+        sizeBytes: blobToUpload.size
+      };
+    }
+
+    // Subir a Supabase Storage con sobrescritura permitida y timeout de seguridad
+    const uploadPromise = supabase.storage
       .from(STORAGE_BUCKET)
       .upload(filePath, blobToUpload, {
         contentType: mimeType,
@@ -114,14 +128,20 @@ export async function uploadImageToStorage(fileOrDataUrl, folder = STORAGE_FOLDE
         cacheControl: '3600'
       });
 
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve({ data: null, error: { message: 'Timeout al subir a Storage' } }), 3000)
+    );
+
+    const { error: uploadError } = await Promise.race([uploadPromise, timeoutPromise]);
+
     if (uploadError) {
       console.warn(`[Supabase Storage Warning] Error al subir a ${filePath}:`, uploadError.message);
-      // Retornar la versión Base64 generada
       return {
         success: Boolean(base64DataUrl),
         base64: base64DataUrl,
         fallbackUrl: base64DataUrl,
         publicUrl: base64DataUrl,
+        path: filePath,
         error: uploadError.message
       };
     }
@@ -133,8 +153,8 @@ export async function uploadImageToStorage(fileOrDataUrl, folder = STORAGE_FOLDE
 
     return {
       success: true,
-      base64: base64DataUrl, // <--- Base64 convertido garantizado
-      publicUrl,
+      base64: base64DataUrl,
+      publicUrl: publicUrl || base64DataUrl,
       path: filePath,
       folder,
       fileName,
@@ -421,6 +441,7 @@ export async function getStorageSummary() {
  */
 export async function uploadUserProfilePhoto({ userId, username, fileOrDataUrl, currentUser = null, onUpdateCurrentUser = null }) {
   try {
+    resetSupabaseOnlineStatus();
     const safeName = `user_${(username || userId || 'avatar').toString().toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`;
     const uploadRes = await uploadImageToStorage(fileOrDataUrl, STORAGE_FOLDERS.USERS, safeName);
 
@@ -431,6 +452,7 @@ export async function uploadUserProfilePhoto({ userId, username, fileOrDataUrl, 
     const finalPhoto = uploadRes.base64 || uploadRes.publicUrl;
 
     // Actualizar usuario en Supabase (tabla users)
+    resetSupabaseOnlineStatus();
     const savedUser = await saveSupabaseUser({
       id: userId,
       username,
@@ -479,12 +501,14 @@ export async function uploadUserProfilePhoto({ userId, username, fileOrDataUrl, 
  */
 export async function deleteUserProfilePhoto({ userId, username, currentPhotoUrl = null, currentUser = null, onUpdateCurrentUser = null }) {
   try {
+    resetSupabaseOnlineStatus();
     // 1. Si existe URL de storage, borrar el archivo físico de Supabase Storage
     if (currentPhotoUrl && typeof currentPhotoUrl === 'string' && !currentPhotoUrl.startsWith('data:')) {
       await deleteImageFromStorage(currentPhotoUrl).catch(() => {});
     }
 
     // 2. Establecer foto en null en la tabla users de Supabase
+    resetSupabaseOnlineStatus();
     const savedUser = await saveSupabaseUser({
       id: userId,
       username,

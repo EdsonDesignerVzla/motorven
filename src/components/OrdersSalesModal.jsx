@@ -156,6 +156,75 @@ export default function OrdersSalesModal({
   const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders]);
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients]);
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
+
+  // Búsqueda tolerante de producto (id / código / co_art como string)
+  const findProductById = (value) => {
+    const key = String(value ?? '').trim();
+    if (!key) return null;
+    return safeProducts.find(
+      p => p && (String(p.id ?? '').trim() === key || String(p.codigo ?? '').trim() === key || String(p.co_art ?? '').trim() === key)
+    ) || null;
+  };
+
+  // Precio mayorista con cadena completa de respaldo (nunca devuelve 0 si existe algún precio)
+  const resolveProductWholesalePrice = (prod) => {
+    if (!prod) return 0;
+    const candidates = [
+      prod.precioUsdMayor, prod.precio_usd_mayor, prod.precioMayor,
+      prod.precioUsdDetal, prod.precio_usd_detal, prod.precioUsd, prod.precioVenta, prod.precio
+    ];
+    for (const c of candidates) {
+      const n = Number(c);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  };
+
+  // ---- Filtro de tipos de lubricantes (Renglones) ----
+  const getLubricantType = (p) =>
+    String(p?.linea_descripcion || p?.lineaDescripcion || p?.categoria || 'OTROS').trim().toUpperCase();
+  const getLubricantPresentation = (p) => {
+    const m = String(p?.descripcion || p?.nombre || '').match(/\(([^)]+)\)\s*$/);
+    const raw = m ? m[1] : (p?.unidad || '');
+    const s = String(raw).trim().toUpperCase();
+    if (s === 'LT' || s === 'LITRO' || s === 'LITROS') return 'LITRO';
+    if (s === 'PL') return 'PAILA';
+    return s || 'OTRO';
+  };
+  const [lubTypeFilter, setLubTypeFilter] = useState('ALL');
+  const [lubPresentationFilter, setLubPresentationFilter] = useState('ALL');
+  const [lubSearchText, setLubSearchText] = useState('');
+  const lubTypeOptions = useMemo(() => {
+    const counts = new Map();
+    safeProducts.forEach(p => { if (p) counts.set(getLubricantType(p), (counts.get(getLubricantType(p)) || 0) + 1); });
+    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeProducts]);
+  const lubPresentationOptions = useMemo(() => {
+    const counts = new Map();
+    safeProducts.forEach(p => {
+      if (!p) return;
+      if (lubTypeFilter !== 'ALL' && getLubricantType(p) !== lubTypeFilter) return;
+      const k = getLubricantPresentation(p);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    });
+    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeProducts, lubTypeFilter]);
+  const filteredLubricants = useMemo(() => {
+    const term = lubSearchText.trim().toLowerCase();
+    return safeProducts.filter(p => {
+      if (!p) return false;
+      if (lubTypeFilter !== 'ALL' && getLubricantType(p) !== lubTypeFilter) return false;
+      if (lubPresentationFilter !== 'ALL' && getLubricantPresentation(p) !== lubPresentationFilter) return false;
+      if (term) {
+        const hay = `${p.codigo || ''} ${p.descripcion || ''} ${p.nombre || ''} ${p.viscosidad || ''} ${p.categoria || ''} ${p.linea_descripcion || ''}`.toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeProducts, lubTypeFilter, lubPresentationFilter, lubSearchText]);
   const safeProfitZones = useMemo(() => {
     const rawZones = Array.isArray(profitZones) && profitZones.length > 0 ? profitZones : REAL_PROFIT_ZONES;
     const seen = new Map();
@@ -721,9 +790,9 @@ export default function OrdersSalesModal({
       const target = { ...updated[index], [field]: value };
 
       if (field === 'articuloId') {
-        const prod = safeProducts.find(p => p && (p.id === value || p.codigo === value));
+        const prod = findProductById(value);
         if (prod) {
-          target.precioUsd = Number(prod.precio_usd_mayor || prod.precio_usd_detal || prod.precioUsdMayor || 0);
+          target.precioUsd = resolveProductWholesalePrice(prod);
           target.unidad = resolveProductUnit(prod, 'Caja');
           target.litrosUnitarios = resolveProductLitersPerUnit(prod);
         }
@@ -769,10 +838,10 @@ export default function OrdersSalesModal({
       const clientRif = activeClientObj?.rif || 'J-000000000';
 
       const itemsFormatted = validRows.map((row, idx) => {
-        const prod = safeProducts.find(p => p && (p.id === row.articuloId || p.codigo === row.articuloId));
+        const prod = findProductById(row.articuloId);
         const cant = Number(row.cantidad) || 1;
         const litUnit = Number(row.litrosUnitarios || (prod ? resolveProductLitersPerUnit(prod) : 11.35));
-        const price = Number(row.precioUsd || prod?.precio_usd_mayor || 0);
+        const price = Number(row.precioUsd) > 0 ? Number(row.precioUsd) : resolveProductWholesalePrice(prod);
 
         return {
           id: `${orderId}-${idx + 1}`,
@@ -785,6 +854,7 @@ export default function OrdersSalesModal({
           litrosUnitarios: litUnit,
           litrosTotales: cant * litUnit,
           precioUnitarioUsd: price,
+          precioUsd: price,
           totalUsd: cant * price
         };
       });
@@ -1570,6 +1640,61 @@ export default function OrdersSalesModal({
                   </button>
                 </div>
 
+                {/* Filtro de tipos de lubricantes */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <div style={{ flex: '2 1 220px', minWidth: 0 }}>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={lubSearchText}
+                      onChange={(e) => setLubSearchText(e.target.value)}
+                      placeholder="Buscar lubricante por código, nombre o viscosidad (ej. 20W50)..."
+                      style={{ fontSize: '0.78rem', padding: '6px 8px', width: '100%', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <div style={{ flex: '1.5 1 200px', minWidth: 0 }}>
+                    <select
+                      className="form-control"
+                      value={lubTypeFilter}
+                      onChange={(e) => { setLubTypeFilter(e.target.value); setLubPresentationFilter('ALL'); }}
+                      style={{ fontSize: '0.78rem', padding: '6px 8px', width: '100%', boxSizing: 'border-box' }}
+                      title="Tipo de lubricante"
+                    >
+                      <option value="ALL">Todos los tipos ({safeProducts.length})</option>
+                      {lubTypeOptions.map(([type, count]) => (
+                        <option key={type} value={type}>{type} ({count})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+                    <select
+                      className="form-control"
+                      value={lubPresentationFilter}
+                      onChange={(e) => setLubPresentationFilter(e.target.value)}
+                      style={{ fontSize: '0.78rem', padding: '6px 8px', width: '100%', boxSizing: 'border-box' }}
+                      title="Presentación"
+                    >
+                      <option value="ALL">Todas las presentaciones</option>
+                      {lubPresentationOptions.map(([pres, count]) => (
+                        <option key={pres} value={pres}>{pres} ({count})</option>
+                      ))}
+                    </select>
+                  </div>
+                  {(lubTypeFilter !== 'ALL' || lubPresentationFilter !== 'ALL' || lubSearchText) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => { setLubTypeFilter('ALL'); setLubPresentationFilter('ALL'); setLubSearchText(''); }}
+                      style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                    >
+                      Limpiar filtros
+                    </button>
+                  )}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    {filteredLubricants.length} de {safeProducts.length} lubricantes
+                  </span>
+                </div>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {orderRows.map((row, idx) => {
                     const matchedProd = safeProducts.find(
@@ -1632,10 +1757,13 @@ export default function OrdersSalesModal({
                             onChange={(e) => handleRowChange(idx, 'articuloId', e.target.value)}
                             style={{ fontSize: '0.8rem', padding: '6px 8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
                           >
-                            <option value="">-- Seleccionar Lubricante ({safeProducts.length}) --</option>
-                            {safeProducts.map(p => (
+                            <option value="">-- Seleccionar Lubricante ({filteredLubricants.length}) --</option>
+                            {(matchedProd && !filteredLubricants.includes(matchedProd)
+                              ? [matchedProd, ...filteredLubricants]
+                              : filteredLubricants
+                            ).map(p => (
                               <option key={p.id || p.codigo} value={p.id || p.codigo}>
-                                {p.codigo} - {p.descripcion} ({formatUsd(p.precioUsdMayor || p.precio_usd_mayor || p.precioUsdDetal || p.precio_usd_detal || p.precio || 0)})
+                                {p.codigo} - {p.descripcion} ({formatUsd(resolveProductWholesalePrice(p))})
                               </option>
                             ))}
                           </select>

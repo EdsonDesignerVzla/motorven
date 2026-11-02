@@ -139,15 +139,19 @@ export default function SellersView({
   }, []);
 
   const handlePhotoUpdated = (newPhotoUrl, coVen) => {
+    const cleanTarget = String(coVen || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
     if (onUpdateSellerPhoto) {
       onUpdateSellerPhoto(coVen, newPhotoUrl);
     }
-    if (selectedSeller && ((selectedSeller.coVen || selectedSeller.id || '').toString().trim() === coVen.toString().trim())) {
-      setSelectedSeller(prev => prev ? ({ ...prev, foto: newPhotoUrl, avatar: newPhotoUrl }) : null);
+    if (selectedSeller) {
+      const selCode = String(selectedSeller.coVen || selectedSeller.co_ven || selectedSeller.id || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
+      if (selCode === cleanTarget) {
+        setSelectedSeller(prev => prev ? ({ ...prev, foto: newPhotoUrl || '' }) : null);
+      }
     }
   };
 
-  // Lista activa de vendedores con respaldo automático y deduplicación
+  // Lista activa de vendedores con respaldo automático y deduplicación preservando foto
   const effectiveSellers = useMemo(() => {
     if (Array.isArray(profitSellers) && profitSellers.length > 0) {
       const byName = new Map();
@@ -156,14 +160,28 @@ export default function SellersView({
         if (!name) return;
         const key = name.toLowerCase();
         const code = (s.coVen || s.co_ven || s.id || '').trim();
-        if (!byName.has(key) || (code.length <= 4 && (byName.get(key).coVen?.length || 0) > 4)) {
+        const existing = byName.get(key);
+        const preservedFoto = s.foto || existing?.foto || '';
+        const preservedAvatar = s.avatar || existing?.avatar || '';
+        if (!existing || (code.length <= 4 && (existing.coVen?.length || 0) > 4)) {
           byName.set(key, {
+            ...(existing || {}),
             ...s,
             coVen: code,
+            co_ven: code,
             venDes: name,
-            coZon: s.coZon || s.co_zon || '',
-            zona: s.zona || '',
-            metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? 3000)
+            ven_des: name,
+            foto: preservedFoto,
+            avatar: preservedAvatar,
+            coZon: s.coZon || s.co_zon || existing?.coZon || '',
+            zona: s.zona || existing?.zona || '',
+            metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? existing?.metaLitrosMes ?? 3000)
+          });
+        } else if (preservedFoto && !existing.foto) {
+          byName.set(key, {
+            ...existing,
+            foto: preservedFoto,
+            avatar: preservedAvatar || existing.avatar
           });
         }
       });
@@ -896,7 +914,7 @@ export default function SellersView({
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <SellerAvatar seller={seller} size={36} />
+                            <SellerAvatar seller={seller} size={36} canEdit={true} onPhotoUpdated={handlePhotoUpdated} />
                             <div>
                               <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.88rem' }}>
                                 {seller.venDes}
@@ -1058,7 +1076,7 @@ export default function SellersView({
                         <tr style={{ background: isExpanded ? 'rgba(2, 132, 199, 0.04)' : undefined }}>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <SellerAvatar seller={seller} size={32} />
+                              <SellerAvatar seller={seller} size={32} canEdit={true} onPhotoUpdated={handlePhotoUpdated} />
                               <div>
                                 <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>{seller.venDes}</div>
                                 <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cód: {seller.coVen}</div>
@@ -1204,7 +1222,7 @@ export default function SellersView({
                   <tr key={seller.id || seller.coVen}>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <SellerAvatar seller={seller} size={32} />
+                        <SellerAvatar seller={seller} size={32} canEdit={true} onPhotoUpdated={handlePhotoUpdated} />
                         <div>
                           <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>{seller.venDes}</div>
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cód: {seller.coVen}</div>
@@ -1454,7 +1472,7 @@ export default function SellersView({
                       <tr key={seller.id || seller.coVen}>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <SellerAvatar seller={seller} size={32} />
+                            <SellerAvatar seller={seller} size={32} canEdit={true} onPhotoUpdated={handlePhotoUpdated} />
                             <div>
                               <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>{seller.venDes}</div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cód: {seller.coVen}</div>

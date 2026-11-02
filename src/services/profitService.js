@@ -4,6 +4,7 @@
  * Las funciones legadas se conservan como stubs sin red para no romper las importaciones.
  */
 import { supabase } from './supabaseService.js';
+import { subscribeToRealtimeSync } from './realtimeSyncBridge.js';
 
 const DISCONNECTED_MSG = 'Conexion con Profit Plus eliminada. Supabase es la unica fuente de datos.';
 const disconnected = (extra = {}) => ({ success: false, disconnected: true, error: DISCONNECTED_MSG, ...extra });
@@ -25,10 +26,11 @@ export async function getProfitBridgeStatus() {
 export async function getProfitRealtimeProducts() { return null; }
 export async function getProfitRealtimeClients() { return null; }
 export async function getProfitDashboardKPIs() { return null; }
-export async function triggerProfitSync() { throw new Error(DISCONNECTED_MSG); }
+export async function triggerProfitSync() { return disconnected(); }
 
 /**
  * Suscribe la aplicación a eventos de TIEMPO REAL (Realtime) en Supabase
+ * Funciona tanto en todos los navegadores como en todos los dispositivos (PC, Laptop, Smartphone, Tablet, iPhone)
  */
 export function subscribeToRealtimeChanges({
   onProductsChange,
@@ -59,254 +61,93 @@ export function subscribeToRealtimeChanges({
   onCashMovementsChange,
   onFiscalClosuresChange
 }) {
-  const channel = supabase
-    .channel('signum-profit-realtime')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'users' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en usuarios:', payload.eventType);
-        if (onUsersChange) onUsersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'products' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en productos:', payload.eventType);
-        if (onProductsChange) onProductsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'clients' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en clientes:', payload.eventType);
-        if (onClientsChange) onClientsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'config' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en configuración:', payload.eventType);
-        if (onConfigChange) onConfigChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'orders' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en pedidos/preventa:', payload.eventType);
-        if (onOrdersChange) onOrdersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_bank_accounts' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en cuentas bancarias:', payload.eventType);
-        if (onBankAccountsChange) onBankAccountsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_cash_desks' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en cajas registradoras:', payload.eventType);
-        if (onCashDesksChange) onCashDesksChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_collections' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en cobranzas Profit:', payload.eventType);
-        if (onCollectionsChange) onCollectionsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_invoices' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en facturas Profit:', payload.eventType);
-        if (onInvoicesChange) onInvoicesChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_suppliers' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en proveedores Profit:', payload.eventType);
-        if (onSuppliersChange) onSuppliersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_purchases' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en compras Profit:', payload.eventType);
-        if (onPurchasesChange) onPurchasesChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_accounts_payable' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en CxP Profit:', payload.eventType);
-        if (onAccountsPayableChange) onAccountsPayableChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_supplier_payments' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en pagos a proveedores:', payload.eventType);
-        if (onSupplierPaymentsChange) onSupplierPaymentsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_sellers' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en vendedores Profit:', payload.eventType);
-        if (onSellersChange) onSellersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_zones' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en zonas Profit:', payload.eventType);
-        if (onZonesChange) onZonesChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_transports' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en transportes Profit:', payload.eventType);
-        if (onTransportsChange) onTransportsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_customer_returns' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en devoluciones de clientes Profit:', payload.eventType);
-        if (onCustomerReturnsChange) onCustomerReturnsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_inventory_adjustments' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en ajustes de inventario Profit:', payload.eventType);
-        if (onInventoryAdjustmentsChange) onInventoryAdjustmentsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_warehouse_transfers' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en traslados entre almacenes Profit:', payload.eventType);
-        if (onWarehouseTransfersChange) onWarehouseTransfersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_islr_concepts' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en conceptos ISLR Profit:', payload.eventType);
-        if (onIslrConceptsChange) onIslrConceptsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_beneficiaries' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en beneficiarios Profit:', payload.eventType);
-        if (onBeneficiariesChange) onBeneficiariesChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_payment_orders' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en órdenes de pago Profit:', payload.eventType);
-        if (onPaymentOrdersChange) onPaymentOrdersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_islr_withholdings' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en comprobantes ISLR Profit:', payload.eventType);
-        if (onIslrWithholdingsChange) onIslrWithholdingsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profit_audit_trails' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en pistas de auditoría Profit:', payload.eventType);
-        if (onAuditTrailsChange) onAuditTrailsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'sales' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en ventas:', payload.eventType);
-        if (onSalesChange) onSalesChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'purchases' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en compras:', payload.eventType);
-        if (onPurchasesChange) onPurchasesChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'cash_movements' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en movimientos de caja:', payload.eventType);
-        if (onCashMovementsChange) onCashMovementsChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'suppliers' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en proveedores:', payload.eventType);
-        if (onSuppliersChange) onSuppliersChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'fiscal_closures' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en cierres fiscales:', payload.eventType);
-        if (onFiscalClosuresChange) onFiscalClosuresChange(payload);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'order_items' },
-      (payload) => {
-        console.log('⚡ [Realtime] Cambio detectado en renglones de pedido:', payload.eventType);
-        if (onOrdersChange) onOrdersChange(payload);
-      }
-    )
-    .subscribe((status) => {
-      console.log('📡 [Realtime Status]:', status);
-    });
+  const tableCallbacks = {
+    users: onUsersChange,
+    products: onProductsChange,
+    clients: onClientsChange,
+    config: onConfigChange,
+    orders: onOrdersChange,
+    order_items: onOrdersChange,
+    profit_bank_accounts: onBankAccountsChange,
+    bank_accounts: onBankAccountsChange,
+    profit_cash_desks: onCashDesksChange,
+    cash_desks: onCashDesksChange,
+    profit_collections: onCollectionsChange,
+    collections: onCollectionsChange,
+    profit_invoices: onInvoicesChange,
+    invoices: onInvoicesChange,
+    profit_suppliers: onSuppliersChange,
+    suppliers: onSuppliersChange,
+    profit_purchases: onPurchasesChange,
+    purchases: onPurchasesChange,
+    profit_accounts_payable: onAccountsPayableChange,
+    accounts_payable: onAccountsPayableChange,
+    profit_supplier_payments: onSupplierPaymentsChange,
+    supplier_payments: onSupplierPaymentsChange,
+    profit_sellers: onSellersChange,
+    sellers: onSellersChange,
+    profit_zones: onZonesChange,
+    zones: onZonesChange,
+    profit_transports: onTransportsChange,
+    transports: onTransportsChange,
+    profit_customer_returns: onCustomerReturnsChange,
+    customer_returns: onCustomerReturnsChange,
+    profit_inventory_adjustments: onInventoryAdjustmentsChange,
+    inventory_adjustments: onInventoryAdjustmentsChange,
+    profit_warehouse_transfers: onWarehouseTransfersChange,
+    warehouse_transfers: onWarehouseTransfersChange,
+    profit_islr_concepts: onIslrConceptsChange,
+    islr_concepts: onIslrConceptsChange,
+    profit_beneficiaries: onBeneficiariesChange,
+    beneficiaries: onBeneficiariesChange,
+    profit_payment_orders: onPaymentOrdersChange,
+    payment_orders: onPaymentOrdersChange,
+    profit_islr_withholdings: onIslrWithholdingsChange,
+    islr_withholdings: onIslrWithholdingsChange,
+    profit_audit_trails: onAuditTrailsChange,
+    audit_trails: onAuditTrailsChange,
+    sales: onSalesChange,
+    cash_movements: onCashMovementsChange,
+    fiscal_closures: onFiscalClosuresChange
+  };
+
+  // 1. Suscribir al motor multi-dispositivo SSE + Delta Polling + BroadcastChannel
+  const unsubscribeBridge = subscribeToRealtimeSync((evt) => {
+    if (!evt) return;
+    const rawTable = evt.table || evt.tableId;
+    const handler = tableCallbacks[rawTable] || tableCallbacks[evt.tableId];
+    if (typeof handler === 'function') {
+      handler({
+        eventType: evt.eventType || (evt.action === 'DELETE' ? 'DELETE' : 'UPDATE'),
+        table: rawTable,
+        new: evt.item || null,
+        old: evt.action === 'DELETE' ? (evt.item || { id: evt.key }) : null,
+        key: evt.key
+      });
+    }
+  });
+
+  // 2. Mantener canal WebSocket nativo de Supabase por compatibilidad si se conecta a Supabase Cloud
+  let channel = null;
+  try {
+    channel = supabase
+      .channel('signum-profit-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
+        const handler = tableCallbacks[payload?.table];
+        if (typeof handler === 'function') {
+          handler(payload);
+        }
+      })
+      .subscribe();
+  } catch (_) {}
 
   return () => {
-    supabase.removeChannel(channel);
+    unsubscribeBridge();
+    if (channel) {
+      try {
+        supabase.removeChannel(channel);
+      } catch (_) {}
+    }
   };
 }
 

@@ -1069,9 +1069,7 @@ export default function InventoryView({
                     onChange={(e) => {
                       const newUnit = e.target.value;
                       const defaultLitersMap = { Paila: 19, Tambor: 208, Totem: 1000, Litros: 1, 'N/A': 0, Caja: 11.35 };
-                      const nextLiters = (editingProduct.codigo === '100403' || editingProduct.codigo === '100502')
-                        ? 19
-                        : (defaultLitersMap[newUnit] ?? editingProduct.litrosPorUnidad);
+                      const nextLiters = defaultLitersMap[newUnit] ?? editingProduct.litrosPorUnidad;
                       setEditingProduct({ ...editingProduct, unidad: newUnit, litrosPorUnidad: nextLiters });
                     }}
                   >

@@ -32,7 +32,8 @@ export const getSyncQueue = () => {
     const raw = localStorage.getItem(SYNC_QUEUE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(item => item && typeof item.entity === 'string' && item.entity.trim().length > 0);
   } catch (err) {
     console.error("[OfflineSync] Error leyendo cola de sincronización:", err);
     return [];
@@ -53,11 +54,19 @@ const saveSyncQueue = (queue) => {
 
 /**
  * Agrega una acción a la cola de sincronización
- * @param {string} entity 'config' | 'product' | 'client' | 'supplier' | 'sale' | 'purchase' | 'cash_movement' | 'fiscal_closure' | 'user'
+ * @param {string} entity 'config' | 'product' | 'client' | 'supplier' | 'sale' | 'purchase' | 'cash_movement' | 'fiscal_closure' | 'user' | 'notification' | 'order' | 'order_status' | 'seller_zone'
  * @param {'INSERT' | 'UPDATE' | 'DELETE'} action
  * @param {any} data Datos de la entidad a sincronizar
  */
 export const enqueueSyncAction = (entity, action, data) => {
+  if (entity && typeof entity === 'object') {
+    const obj = entity;
+    entity = obj.entity || 'notification';
+    action = obj.action || 'UPDATE';
+    data = obj.data ?? obj.payload ?? {};
+  }
+  if (!entity || typeof entity !== 'string') return null;
+
   const queue = getSyncQueue();
   
   // Evitar duplicación innecesaria para updates repetidos del mismo ID
@@ -299,6 +308,16 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           }
           break;
 
+        case 'seller_zone':
+          if (handlers.updateSupabaseSellerZone) {
+            await handlers.updateSupabaseSellerZone(item.data.coVen, {
+              coZon: item.data.coZon,
+              zona: item.data.zona
+            });
+            syncSuccess = true;
+          }
+          break;
+
         case 'seller_global_target':
           if (handlers.updateSupabaseGlobalSellersTarget) {
             await handlers.updateSupabaseGlobalSellersTarget(
@@ -307,6 +326,35 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
             );
             syncSuccess = true;
           }
+          break;
+
+        case 'order':
+          if (handlers.saveSupabaseOrder) {
+            await handlers.saveSupabaseOrder(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'order_status':
+          if (handlers.updateSupabaseOrderStatus) {
+            await handlers.updateSupabaseOrderStatus(
+              item.data.orderId,
+              item.data.nuevoEstado,
+              item.data.metadata || {}
+            );
+            syncSuccess = true;
+          }
+          break;
+
+        case 'notification':
+          if (item.action === 'MARK_ALL_READ' && handlers.markAllSupabaseNotificationsRead) {
+            await handlers.markAllSupabaseNotificationsRead();
+          } else if (item.action === 'UPDATE' && item.data?.id && handlers.markSupabaseNotificationRead) {
+            await handlers.markSupabaseNotificationRead(item.data.id);
+          } else if (handlers.saveSupabaseNotification) {
+            await handlers.saveSupabaseNotification(item.data);
+          }
+          syncSuccess = true;
           break;
 
         default:

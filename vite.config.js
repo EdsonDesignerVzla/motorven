@@ -1,5 +1,59 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'node:fs'
+import path from 'node:path'
+import net from 'node:net'
+import { spawn } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+
+let localSupabaseProc = null;
+function ensureLocalSupabaseRunning() {
+  if (localSupabaseProc) return;
+  const socket = new net.Socket();
+  socket.setTimeout(600);
+  socket.once('connect', () => {
+    socket.destroy();
+  });
+  socket.once('error', () => {
+    socket.destroy();
+    spawnLocalSupabase();
+  });
+  socket.once('timeout', () => {
+    socket.destroy();
+    spawnLocalSupabase();
+  });
+  socket.connect(54321, '127.0.0.1');
+}
+
+function spawnLocalSupabase() {
+  if (localSupabaseProc) return;
+  const scriptPath = path.resolve(process.cwd(), 'scripts/local-supabase/server.js');
+  if (!fs.existsSync(scriptPath)) return;
+  try {
+    localSupabaseProc = spawn(process.execPath, [scriptPath], {
+      cwd: process.cwd(),
+      stdio: 'ignore',
+      detached: true,
+      windowsHide: true
+    });
+    localSupabaseProc.unref();
+    localSupabaseProc.on('exit', () => {
+      localSupabaseProc = null;
+    });
+  } catch (_) {
+    localSupabaseProc = null;
+  }
+}
+
+const autoStartSupabasePlugin = () => ({
+  name: 'auto-start-local-supabase',
+  configureServer() {
+    ensureLocalSupabaseRunning();
+  },
+  configurePreviewServer() {
+    ensureLocalSupabaseRunning();
+  }
+});
 
 // Middleware para consultar la API oficial de Binance P2P en tiempo real sin restricciones de CORS
 const binanceP2pPlugin = () => ({
@@ -51,12 +105,15 @@ const supabaseProxy = {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), binanceP2pPlugin()],
+  plugins: [autoStartSupabasePlugin(), react(), binanceP2pPlugin()],
   base: './',
   server: {
     port: 5180,
     host: true,
-    proxy: supabaseProxy
+    proxy: supabaseProxy,
+    watch: {
+      ignored: ['**/supabase/**', '**/dist/**', '**/docs/**']
+    }
   },
   preview: {
     host: true,

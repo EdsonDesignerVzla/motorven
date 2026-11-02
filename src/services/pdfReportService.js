@@ -2799,6 +2799,39 @@ export function generateOrdersPDF({ orders = [], config = {}, currentUser = null
   finalizeAndSave(base.doc, `Reporte_Pedidos_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
 }
 
+// -------------------------------------------------------------------------
+// Resolutores de precio por renglón (soportan todas las variantes de campos
+// usadas en Notas de Pedido, Ventas POS y Facturas Profit).
+// -------------------------------------------------------------------------
+function resolveItemQty(it = {}) {
+  const q = Number(it.cantidad ?? it.cant ?? it.qty ?? it.total_art ?? 1);
+  return Number.isFinite(q) && q > 0 ? q : 1;
+}
+
+function resolveItemUnitPriceUsd(it = {}) {
+  const candidates = [
+    it.precioUnitarioUsd, it.precio_unitario_usd, it.precioUsd, it.precio_usd,
+    it.precioUnitario, it.precio, it.prec_vta, it.precioVenta
+  ];
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  // Derivar desde el subtotal si sólo se guardó el total del renglón
+  const qty = resolveItemQty(it);
+  const total = Number(it.totalUsd ?? it.subtotalUsd ?? it.total ?? it.totalNeto ?? it.reng_neto ?? 0);
+  return Number.isFinite(total) && total > 0 ? total / qty : 0;
+}
+
+function resolveItemSubtotalUsd(it = {}) {
+  const candidates = [it.totalUsd, it.subtotalUsd, it.total_usd, it.total, it.totalNeto, it.reng_neto];
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return resolveItemQty(it) * resolveItemUnitPriceUsd(it);
+}
+
 // =========================================================================
 // 8B. NOTA DE PEDIDO / PREVENTA INDIVIDUAL PARA VENDEDOR (RESERVA DE STOCK)
 // =========================================================================
@@ -2840,8 +2873,8 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
       const qty = Number(it.cantidad || it.qty || 1);
       const unitLitros = Number(it.litrosUnitarios || it.litrosPorUnidad || 0);
       const rowLitros = it.litrosTotales ? Number(it.litrosTotales) : qty * unitLitros;
-      const unitPrice = Number(it.precioUsd || it.precio || 0);
-      const rowSubtotal = it.subtotalUsd ? Number(it.subtotalUsd) : qty * unitPrice;
+      const unitPrice = resolveItemUnitPriceUsd(it);
+      const rowSubtotal = resolveItemSubtotalUsd(it);
 
       totalLitros += rowLitros;
       totalUsd += rowSubtotal;
@@ -2966,8 +2999,8 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
     const qty = Number(it.cantidad || it.qty || 1);
     const unitLitros = Number(it.litrosUnitarios || it.litrosPorUnidad || 0);
     const rowLitros = it.litrosTotales ? Number(it.litrosTotales) : qty * unitLitros;
-    const unitPrice = Number(it.precioUsd || it.precio || 0);
-    const rowSubtotal = it.subtotalUsd ? Number(it.subtotalUsd) : qty * unitPrice;
+    const unitPrice = resolveItemUnitPriceUsd(it);
+    const rowSubtotal = resolveItemSubtotalUsd(it);
 
     return [
       String(idx + 1),
@@ -3311,9 +3344,9 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
     );
 
     const tableData = items.slice(0, 22).map((it, idx) => {
-      const cant = Number(it.cantidad || it.cant || it.total_art || 1);
-      const precioU = Number(it.precio || it.precioUnitario || it.prec_vta || 0);
-      const subtotal = Number(it.total || it.totalNeto || it.reng_neto || (cant * precioU));
+      const cant = resolveItemQty(it);
+      const precioU = resolveItemUnitPriceUsd(it);
+      const subtotal = resolveItemSubtotalUsd(it);
       return [
         String(it.codigo || it.articuloId || it.co_art || idx + 1),
         it.descripcion || it.art_des || it.nombre || 'Lubricante Automotriz / Industrial',

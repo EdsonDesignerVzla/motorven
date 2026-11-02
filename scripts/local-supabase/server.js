@@ -136,10 +136,9 @@ async function initDatabase() {
           if (desc.includes('(paila)') || desc.includes('(pl)')) {
             p.unidad = 'Paila';
           }
-          const code = String(p.codigo || p.id || '').trim().toUpperCase();
           const curL = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 0);
           let realL = curL;
-          if (code === '100403' || code === '100502' || p.unidad === 'Paila') {
+          if (p.unidad === 'Paila') {
             realL = 19;
           } else if (p.unidad === 'Tambor') {
             realL = curL > 1 ? curL : 208;
@@ -148,7 +147,7 @@ async function initDatabase() {
           } else if (p.unidad === 'Litros') {
             realL = 1;
           } else if (p.unidad === 'Caja') {
-            realL = curL > 1 ? curL : 11.35;
+            realL = (curL > 1 && curL !== 19) ? curL : 11.35;
           }
           p.litrosPorUnidad = realL;
           p.litros_por_unidad = realL;
@@ -241,14 +240,70 @@ function saveDatabase() {
           fs.writeFileSync(tempUsersFile, JSON.stringify(cleanUsers, null, 2), 'utf8');
         }
       }
+      if (Array.isArray(database.profit_sellers)) {
+        const tempSellersFile = path.join(projectRoot, 'src', 'data', 'temp', 'profit_sellers.json');
+        if (fs.existsSync(path.dirname(tempSellersFile))) {
+          fs.writeFileSync(tempSellersFile, JSON.stringify(database.profit_sellers, null, 2), 'utf8');
+        }
+      }
     } catch (e) {
       console.error('[Supabase Local] Error guardando base de datos:', e);
     }
-  }, 300);
+  }, 250);
 }
 
-// Conexion con Profit Plus eliminada: Supabase local es la unica fuente de verdad.
-function forwardWriteToProfitBridge() {}
+// ============================================================================
+// MOTOR REALTIME MULTI-DISPOSITIVO Y MULTI-NAVEGADOR (SSE + DELTA POLLING)
+// ============================================================================
+let changeSeq = Date.now();
+const recentChanges = [];
+const MAX_RECENT_CHANGES = 500;
+const sseClients = new Set();
+
+function emitRealtimeChange({ table, tableId, eventType = 'UPDATE', action, key, item, clientId = null }) {
+  changeSeq += 1;
+  const resolvedTable = table || tableId || 'system';
+  const entry = {
+    seq: changeSeq,
+    timestamp: new Date().toISOString(),
+    table: resolvedTable,
+    tableId: tableId || resolvedTable,
+    eventType: eventType || action || 'UPDATE',
+    action: action || eventType || 'RECONCILE',
+    key: key ?? item?.id ?? item?.co_ven ?? item?.coVen ?? item?.codigo ?? null,
+    item: item || null,
+    clientId
+  };
+
+  recentChanges.push(entry);
+  if (recentChanges.length > MAX_RECENT_CHANGES) {
+    recentChanges.splice(0, recentChanges.length - MAX_RECENT_CHANGES);
+  }
+
+  const payloadStr = `data: ${JSON.stringify(entry)}\n\n`;
+  for (const clientRes of sseClients) {
+    try {
+      clientRes.write(payloadStr);
+    } catch (_) {
+      sseClients.delete(clientRes);
+    }
+  }
+  return entry;
+}
+
+// Heartbeat cada 15s para mantener conexiones vivas en Safari iOS, Android, tablets y laptops
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  const ping = `: heartbeat ${changeSeq} ${Date.now()}\n\n`;
+  for (const clientRes of sseClients) {
+    try {
+      clientRes.write(ping);
+    } catch (_) {
+      sseClients.delete(clientRes);
+    }
+  }
+}, 15000);
+
 
 // Helpers para evaluar filtros de PostgREST
 function matchFilter(value, operator, target) {
@@ -722,8 +777,27 @@ function renderLocalDashboardHtml() {
 </html>`;
 }
 
+// Evitar que desconexiones abruptas de clientes móviles/navegadores (ECONNRESET/EPIPE) detengan el servidor
+process.on('uncaughtException', (err) => {
+  if (err && (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ERR_STREAM_WRITE_AFTER_END')) {
+    return;
+  }
+  console.error('[Supabase Local] Excepción controlada:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Supabase Local] Promesa rechazada controlada:', reason?.message || reason);
+});
+
 // Servidor HTTP
 const server = http.createServer(async (req, res) => {
+  req.on('error', () => {
+    sseClients.delete(res);
+  });
+  res.on('error', () => {
+    sseClients.delete(res);
+  });
+
   // CORS Headers universales
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
@@ -757,10 +831,74 @@ const server = http.createServer(async (req, res) => {
       port: PORT,
       tables: tableNames.length,
       totalRecords,
+      seq: changeSeq,
+      connectedClients: sseClients.size,
       tokenRequired: false,
       timestamp: new Date().toISOString()
     }));
     return;
+  }
+
+  // 2.5. Realtime API v1: /realtime/v1/events (SSE), /realtime/v1/changes (Delta Poll), /realtime/v1/broadcast
+  if (pathname.startsWith('/realtime/v1/')) {
+    if (req.method === 'GET' && pathname === '/realtime/v1/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'Access-Control-Allow-Origin': '*'
+      });
+      if (req.socket) {
+        req.socket.setKeepAlive(true);
+        req.socket.setNoDelay(true);
+        req.socket.setTimeout(0);
+      }
+      res.write(`data: ${JSON.stringify({ type: 'CONNECTED', seq: changeSeq, timestamp: new Date().toISOString() })}\n\n`);
+      sseClients.add(res);
+      const cleanup = () => {
+        sseClients.delete(res);
+      };
+      req.on('close', cleanup);
+      res.on('close', cleanup);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/realtime/v1/changes') {
+      const since = Number(url.searchParams.get('since') || 0);
+      const changes = since > 0 ? recentChanges.filter(c => c.seq > since) : [];
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
+      });
+      res.end(JSON.stringify({
+        seq: changeSeq,
+        timestamp: new Date().toISOString(),
+        changes
+      }));
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/realtime/v1/broadcast') {
+      try {
+        const body = await parseBody(req);
+        const emitted = emitRealtimeChange({
+          table: body.table || body.tableId || 'system',
+          tableId: body.tableId || body.table || 'system',
+          eventType: body.eventType || body.action || 'RECONCILE',
+          action: body.action || body.eventType || 'RECONCILE',
+          key: body.key || null,
+          item: body.item || null,
+          clientId: body.clientId || null
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, seq: emitted.seq }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
   }
 
   // 3. Supabase Storage API v1: /storage/v1/object/...
@@ -986,9 +1124,26 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET') {
       let filtered = [...tableData];
 
+      // Enriquecer relaciones embebidas de orders con order_items
+      if (tableName === 'orders' && Array.isArray(database.order_items)) {
+        filtered = filtered.map(order => {
+          const joined = database.order_items.filter(
+            it => (it.order_id || it.orderId) === order.id
+          );
+          if (joined.length > 0) {
+            return { ...order, order_items: joined, items: joined };
+          }
+          return {
+            ...order,
+            order_items: order.order_items || order.items || [],
+            items: order.items || order.order_items || []
+          };
+        });
+      }
+
       // Aplicar filtros de query params
       for (const [key, value] of url.searchParams.entries()) {
-        if (key === 'select' || key === 'order' || key === 'limit' || key === 'offset') continue;
+        if (key === 'select' || key === 'order' || key === 'limit' || key === 'offset' || key === 'on_conflict') continue;
         
         // Formato operador: col=eq.val o col=ilike.*val*
         const dotIdx = value.indexOf('.');
@@ -1052,18 +1207,39 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // POST /rest/v1/:table (Insertar)
+    // POST /rest/v1/:table (Insertar / Upsert)
     if (req.method === 'POST') {
       try {
         const body = await parseBody(req);
         const rowsToInsert = Array.isArray(body) ? body : [body];
         
         const inserted = [];
+        let shouldPersist = false;
+
         for (const item of rowsToInsert) {
           const newRow = { ...item };
           if (newRow.id === undefined) {
             newRow.id = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
           }
+
+          // Evitar contaminar user_activity_logs con ruido de autotests
+          if (tableName === 'user_activity_logs') {
+            const uname = String(newRow.username || '').toLowerCase();
+            const uNombre = String(newRow.user_nombre || newRow.userNombre || '').toLowerCase();
+            const det = String(newRow.detalles || '').toLowerCase();
+            if (
+              uname.startsWith('autotest_') ||
+              uNombre.startsWith('autotest_') ||
+              det.includes('autotest_') ||
+              det.includes('usuario temporal de test') ||
+              det.includes('prueba automatizada') ||
+              det.includes('@undefined')
+            ) {
+              inserted.push(newRow);
+              continue;
+            }
+          }
+
           if (tableName === 'users') {
             const existingById = tableData.find(r => r && r.id && String(r.id).trim().toLowerCase() === String(newRow.id).trim().toLowerCase());
             if (existingById && !String(newRow.username || '').trim()) {
@@ -1075,7 +1251,6 @@ const server = http.createServer(async (req, res) => {
           }
 
           if (tableName === 'products') {
-            const code = String(newRow.codigo || newRow.id || '').trim();
             const desc = String(newRow.descripcion || newRow.nombre || '').toLowerCase();
             let u = newRow.unidad || 'Caja';
             if (u === '04' || u.toLowerCase() === 'paila' || desc.includes('(paila)') || desc.includes('(pl)')) u = 'Paila';
@@ -1086,7 +1261,7 @@ const server = http.createServer(async (req, res) => {
             newRow.unidad = u;
 
             let realL = Number(newRow.litrosPorUnidad || newRow.litros_por_unidad || 0);
-            if (code === '100403' || code === '100502' || u === 'Paila') {
+            if (u === 'Paila') {
               realL = 19;
             } else if (u === 'Tambor') {
               realL = 208;
@@ -1095,7 +1270,7 @@ const server = http.createServer(async (req, res) => {
             } else if (u === 'Litros') {
               realL = 1;
             } else if (u === 'Caja') {
-              realL = realL > 1 ? realL : 11.35;
+              realL = (realL > 1 && realL !== 19) ? realL : 11.35;
             }
             newRow.litrosPorUnidad = realL;
             newRow.litros_por_unidad = realL;
@@ -1132,12 +1307,32 @@ const server = http.createServer(async (req, res) => {
             }
             if (tableName === 'profit_bank_accounts') {
               const bNew = String(newRow.codCta || newRow.cod_cta || newRow.id || '').trim().toUpperCase();
-              const bOld = String(r.codCta || r.co_cta || r.id || '').trim().toUpperCase();
+              const bOld = String(r.codCta || r.cod_cta || r.id || '').trim().toUpperCase();
               return bNew && bOld && bNew === bOld;
             }
+            if (tableName === 'profit_cash_desks') {
+              const cNew = String(newRow.coCaja || newRow.co_caja || newRow.id || '').trim().toUpperCase();
+              const cOld = String(r.coCaja || r.co_caja || r.id || '').trim().toUpperCase();
+              return cNew && cOld && cNew === cOld;
+            }
+            if (tableName === 'profit_currencies') {
+              const mNew = String(newRow.coMone || newRow.co_mone || newRow.id || '').trim().toUpperCase();
+              const mOld = String(r.coMone || r.co_mone || r.id || '').trim().toUpperCase();
+              return mNew && mOld && mNew === mOld;
+            }
+            if (tableName === 'profit_transports') {
+              const tNew = String(newRow.coTran || newRow.co_tran || newRow.id || '').replace(/^TRAN-/, '').trim().toUpperCase();
+              const tOld = String(r.coTran || r.co_tran || r.id || '').replace(/^TRAN-/, '').trim().toUpperCase();
+              return tNew && tOld && tNew === tOld;
+            }
+            if (tableName === 'profit_zones') {
+              const zNew = String(newRow.coZon || newRow.co_zon || newRow.id || '').replace(/^ZON-/, '').trim().toUpperCase();
+              const zOld = String(r.coZon || r.co_zon || r.id || '').replace(/^ZON-/, '').trim().toUpperCase();
+              return zNew && zOld && zNew === zOld;
+            }
             if (tableName === 'profit_sellers') {
-              const sNew = String(newRow.coVen || newRow.co_ven || newRow.id || '').trim().toUpperCase();
-              const sOld = String(r.coVen || r.co_ven || r.id || '').trim().toUpperCase();
+              const sNew = String(newRow.coVen || newRow.co_ven || newRow.id || '').trim().replace(/^USR-SELLER-/i, '').toUpperCase();
+              const sOld = String(r.coVen || r.co_ven || r.id || '').trim().replace(/^USR-SELLER-/i, '').toUpperCase();
               return sNew && sOld && sNew === sOld;
             }
             if (tableName === 'profit_suppliers' || tableName === 'suppliers') {
@@ -1165,20 +1360,59 @@ const server = http.createServer(async (req, res) => {
               const sOld = String(r.coSubl || r.co_subl || r.co_sub || r.id || '').trim().toUpperCase();
               return sNew && sOld && sNew === sOld;
             }
+            if (tableName === 'profit_product_categories') {
+              const cNew = String(newRow.coCat || newRow.co_cat || newRow.id || '').trim().toUpperCase();
+              const cOld = String(r.coCat || r.co_cat || r.id || '').trim().toUpperCase();
+              return cNew && cOld && cNew === cOld;
+            }
             if (tableName === 'config' && (newRow.id === 1 || r.id === 1)) return true;
             return false;
           });
 
+          shouldPersist = true;
+          let savedRow;
           if (existingIdx >= 0) {
             tableData[existingIdx] = { ...tableData[existingIdx], ...newRow };
-            inserted.push(tableData[existingIdx]);
+            savedRow = tableData[existingIdx];
           } else {
             tableData.push(newRow);
-            inserted.push(newRow);
+            savedRow = newRow;
+          }
+          inserted.push(savedRow);
+
+          emitRealtimeChange({
+            table: tableName,
+            eventType: existingIdx >= 0 ? 'UPDATE' : 'INSERT',
+            key: savedRow.id || savedRow.co_ven || savedRow.coVen || savedRow.codigo,
+            item: savedRow
+          });
+        }
+
+        // Si se insertaron order_items, sincronizar también el pedido padre en database.orders
+        if (tableName === 'order_items' && Array.isArray(database.orders) && inserted.length > 0) {
+          const affectedOrderIds = new Set(inserted.map(it => it.order_id || it.orderId).filter(Boolean));
+          for (const ordId of affectedOrderIds) {
+            const ordIdx = database.orders.findIndex(o => o.id === ordId);
+            if (ordIdx >= 0) {
+              const allItems = database.order_items.filter(it => (it.order_id || it.orderId) === ordId);
+              database.orders[ordIdx] = {
+                ...database.orders[ordIdx],
+                items: allItems,
+                order_items: allItems
+              };
+              emitRealtimeChange({
+                table: 'orders',
+                eventType: 'UPDATE',
+                key: ordId,
+                item: database.orders[ordIdx]
+              });
+            }
           }
         }
 
-        saveDatabase();
+        if (shouldPersist) {
+          saveDatabase();
+        }
 
         const acceptHeader = req.headers['accept'] || '';
         const isSingleRequested = acceptHeader.includes('application/vnd.pgrst.object+json');
@@ -1208,14 +1442,28 @@ const server = http.createServer(async (req, res) => {
           for (const [key, value] of url.searchParams.entries()) {
             if (key === 'select' || key === 'order' || key === 'limit' || key === 'offset') continue;
             const dotIdx = value.indexOf('.');
+            const rowVal =
+              row[key] !== undefined
+                ? row[key]
+                : key === 'co_ven'
+                  ? (row.coVen ?? row.id)
+                  : key === 'coVen'
+                    ? (row.co_ven ?? row.id)
+                    : undefined;
             if (dotIdx > 0) {
               const operator = value.substring(0, dotIdx);
               const target = value.substring(dotIdx + 1);
-              if (!matchFilter(row[key], operator, target)) {
+              const directMatch = matchFilter(rowVal, operator, target);
+              const ciMatch =
+                operator === 'eq' &&
+                rowVal !== undefined &&
+                rowVal !== null &&
+                String(rowVal).trim().toLowerCase() === String(target).trim().toLowerCase();
+              if (!directMatch && !ciMatch) {
                 matches = false;
                 break;
               }
-            } else if (String(row[key]) !== String(value)) {
+            } else if (String(rowVal ?? '').trim().toLowerCase() !== String(value ?? '').trim().toLowerCase()) {
               matches = false;
               break;
             }
@@ -1224,13 +1472,25 @@ const server = http.createServer(async (req, res) => {
           if (matches) {
             tableData[i] = { ...row, ...body };
             updated.push(tableData[i]);
+            emitRealtimeChange({
+              table: tableName,
+              eventType: 'UPDATE',
+              key: tableData[i].id || tableData[i].co_ven || tableData[i].coVen || tableData[i].codigo,
+              item: tableData[i]
+            });
           }
         }
 
-        saveDatabase();
+        if (updated.length > 0) {
+          saveDatabase();
+        }
+
+        const acceptHeader = req.headers['accept'] || '';
+        const isSingleRequested = acceptHeader.includes('application/vnd.pgrst.object+json');
+        const responseData = isSingleRequested ? (updated[0] || {}) : updated;
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(updated));
+        res.end(JSON.stringify(responseData));
         return;
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1257,7 +1517,6 @@ const server = http.createServer(async (req, res) => {
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
               }
-              }
               if (!doesMatch) {
                 matches = false;
                 break;
@@ -1279,13 +1538,21 @@ const server = http.createServer(async (req, res) => {
 
           if (matches) {
             deleted.push(row);
+            emitRealtimeChange({
+              table: tableName,
+              eventType: 'DELETE',
+              key: row.id || row.co_ven || row.coVen || row.codigo,
+              item: row
+            });
           } else {
             remaining.push(row);
           }
         }
 
         database[tableName] = remaining;
-        saveDatabase();
+        if (deleted.length > 0) {
+          saveDatabase();
+        }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(deleted));

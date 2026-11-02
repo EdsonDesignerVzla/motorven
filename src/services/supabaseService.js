@@ -556,26 +556,38 @@ const mapClientFromDb = (c) => {
 
 const mapSupplierToDb = (s) => ({
   id: s.id,
-  codigo: s.codigo,
+  codigo: s.codigo || s.id,
   nombre: s.nombre,
   rif: s.rif,
-  telefono: s.telefono,
-  email: s.email,
-  direccion: s.direccion,
-  saldo_pendiente_usd: s.saldoPendienteUsd || s.saldo_pendiente_usd || 0
+  contacto: s.contacto || s.personaContacto || s.persona_contacto || '',
+  persona_contacto: s.personaContacto || s.persona_contacto || s.contacto || '',
+  telefono: s.telefono || '',
+  email: s.email || '',
+  direccion: s.direccion || '',
+  tipo_proveedor: s.tipoProveedor || s.tipo_proveedor || 'Nacional',
+  dias_credito: Number(s.diasCredito ?? s.dias_credito ?? 30),
+  saldo_pendiente_usd: Number(s.saldoPendienteUsd ?? s.saldo_pendiente_usd ?? 0)
 });
 
 const mapSupplierFromDb = (s) => {
   if (!s) return null;
+  const contacto = s.contacto || s.persona_contacto || s.personaContacto || '';
+  const tipoProveedor = s.tipo_proveedor || s.tipoProveedor || 'Nacional';
+  const saldoPendienteUsd = Number(s.saldo_pendiente_usd ?? s.saldoPendienteUsd ?? 0);
+  const diasCredito = Number(s.dias_credito ?? s.diasCredito ?? 30);
   return {
     id: s.id,
-    codigo: s.codigo,
-    nombre: s.nombre,
-    rif: s.rif,
-    telefono: s.telefono,
-    email: s.email,
-    direccion: s.direccion,
-    saldoPendienteUsd: Number(s.saldo_pendiente_usd)
+    codigo: s.codigo || s.id,
+    nombre: s.nombre || '',
+    rif: s.rif || '',
+    contacto,
+    personaContacto: contacto,
+    telefono: s.telefono || '',
+    email: s.email || '',
+    direccion: s.direccion || '',
+    tipoProveedor,
+    diasCredito,
+    saldoPendienteUsd
   };
 };
 
@@ -627,119 +639,138 @@ const mapSaleFromDb = (s) => {
   if (!s) return null;
   return {
     id: s.id,
-    numeroDoc: s.numero_doc,
-    numeroControl: s.numero_control || '00-000000',
-    tipoDoc: s.tipo_doc || 'FACTURA',
-    documentoAfectado: s.documento_afectado || '',
+    numeroDoc: s.numero_doc ?? s.numeroDoc,
+    numeroControl: s.numero_control || s.numeroControl || '00-000000',
+    tipoDoc: s.tipo_doc || s.tipoDoc || 'FACTURA',
+    documentoAfectado: s.documento_afectado || s.documentoAfectado || '',
     fecha: s.fecha,
-    clienteId: s.cliente_id,
-    clienteNombre: s.cliente_nombre,
-    clienteRif: s.cliente_rif,
-    tasaDolar: Number(s.tasa_dolar),
-    condicionPago: s.condicion_pago,
-    items: s.items,
-    subtotalUsd: Number(s.subtotal_usd),
-    baseExentaUsd: Number(s.base_exenta_usd || 0),
-    baseGeneralUsd: Number(s.base_general_usd || s.subtotal_usd || 0),
-    ivaGeneralUsd: Number(s.iva_general_usd || s.iva_usd || 0),
-    baseReducidaUsd: Number(s.base_reducida_usd || 0),
-    ivaReducidaUsd: Number(s.iva_reducida_usd || 0),
-    baseAdicionalUsd: Number(s.base_adicional_usd || 0),
-    ivaAdicionalUsd: Number(s.iva_adicional_usd || 0),
-    ivaUsd: Number(s.iva_usd),
-    igtfUsd: Number(s.igtf_usd || 0),
-    totalUsd: Number(s.total_usd),
-    subtotalBs: Number(s.subtotal_bs),
-    baseExentaBs: Number(s.base_exenta_bs || 0),
-    baseGeneralBs: Number(s.base_general_bs || s.subtotal_bs || 0),
-    ivaGeneralBs: Number(s.iva_general_bs || s.iva_bs || 0),
-    baseReducidaBs: Number(s.base_reducida_bs || 0),
-    ivaReducidaBs: Number(s.iva_reducida_bs || 0),
-    baseAdicionalBs: Number(s.base_adicional_bs || 0),
-    ivaAdicionalBs: Number(s.iva_adicional_bs || 0),
-    ivaBs: Number(s.iva_bs),
-    igtfBs: Number(s.igtf_bs || 0),
-    totalBs: Number(s.total_bs),
-    retencionIvaBs: Number(s.retencion_iva_bs || 0),
-    comprobanteRetencionIva: s.comprobante_retencion_iva || '',
-    estado: s.estado,
-    metodoPago: s.metodo_pago,
+    clienteId: s.cliente_id ?? s.clienteId,
+    clienteNombre: s.cliente_nombre ?? s.clienteNombre,
+    clienteRif: s.cliente_rif ?? s.clienteRif,
+    tasaDolar: Number(s.tasa_dolar ?? s.tasaDolar ?? s.tasa_bcv ?? 0),
+    condicionPago: s.condicion_pago ?? s.condicionPago,
+    items: s.items || [],
+    subtotalUsd: Number(s.subtotal_usd ?? s.subtotalUsd ?? s.base_imponible_usd ?? 0),
+    baseExentaUsd: Number(s.base_exenta_usd ?? s.baseExentaUsd ?? 0),
+    baseGeneralUsd: Number(s.base_general_usd ?? s.subtotal_usd ?? s.subtotalUsd ?? 0),
+    ivaGeneralUsd: Number(s.iva_general_usd ?? s.iva_usd ?? s.ivaUsd ?? 0),
+    baseReducidaUsd: Number(s.base_reducida_usd ?? s.baseReducidaUsd ?? 0),
+    ivaReducidaUsd: Number(s.iva_reducida_usd ?? s.ivaReducidaUsd ?? 0),
+    baseAdicionalUsd: Number(s.base_adicional_usd ?? s.baseAdicionalUsd ?? 0),
+    ivaAdicionalUsd: Number(s.iva_adicional_usd ?? s.ivaAdicionalUsd ?? 0),
+    ivaUsd: Number(s.iva_usd ?? s.ivaUsd ?? s.monto_iva_usd ?? 0),
+    igtfUsd: Number(s.igtf_usd ?? s.igtfUsd ?? s.monto_igtf_usd ?? 0),
+    totalUsd: Number(s.total_usd ?? s.totalUsd ?? 0),
+    subtotalBs: Number(s.subtotal_bs ?? s.subtotalBs ?? s.base_imponible_bs ?? 0),
+    baseExentaBs: Number(s.base_exenta_bs ?? s.baseExentaBs ?? 0),
+    baseGeneralBs: Number(s.base_general_bs ?? s.subtotal_bs ?? s.subtotalBs ?? 0),
+    ivaGeneralBs: Number(s.iva_general_bs ?? s.iva_bs ?? s.ivaBs ?? 0),
+    baseReducidaBs: Number(s.base_reducida_bs ?? s.baseReducidaBs ?? 0),
+    ivaReducidaBs: Number(s.iva_reducida_bs ?? s.ivaReducidaBs ?? 0),
+    baseAdicionalBs: Number(s.base_adicional_bs ?? s.baseAdicionalBs ?? 0),
+    ivaAdicionalBs: Number(s.iva_adicional_bs ?? s.ivaAdicionalBs ?? 0),
+    ivaBs: Number(s.iva_bs ?? s.ivaBs ?? s.monto_iva_bs ?? 0),
+    igtfBs: Number(s.igtf_bs ?? s.igtfBs ?? s.monto_igtf_bs ?? 0),
+    totalBs: Number(s.total_bs ?? s.totalBs ?? 0),
+    retencionIvaBs: Number(s.retencion_iva_bs ?? s.retencionIvaBs ?? 0),
+    comprobanteRetencionIva: s.comprobante_retencion_iva || s.comprobanteRetencionIva || '',
+    estado: s.estado || s.status || 'Procesada',
+    metodoPago: s.metodo_pago ?? s.metodoPago,
     vendedor: s.vendedor,
-    cierreZId: s.cierre_z_id || null,
+    cierreZId: s.cierre_z_id || s.cierreZId || null,
     cerrada: Boolean(s.cerrada)
   };
 };
 
 const mapPurchaseToDb = (p) => ({
   id: p.id,
-  numero_factura_prov: p.numeroFacturaProv || p.numero_factura_prov,
-  numero_control: p.numeroControl || p.numero_control || '00-000000',
+  numero_factura_prov: p.numeroFacturaProv || p.numero_factura_prov || p.nroFactura || p.nro_factura || '',
+  numero_control: p.numeroControl || p.numero_control || p.nroControl || p.nro_control || '00-000000',
   tipo_doc: p.tipoDoc || p.tipo_doc || 'FACTURA',
   documento_afectado: p.documentoAfectado || p.documento_afectado || '',
-  fecha: p.fecha,
+  fecha: p.fecha || p.fechaCompra || p.fecha_compra || p.fechaEmision || p.fecha_emision,
   proveedor_id: p.proveedorId || p.proveedor_id,
   proveedor_nombre: p.proveedorNombre || p.proveedor_nombre,
   proveedor_rif: p.proveedorRif || p.proveedor_rif,
   proveedor_direccion: p.proveedorDireccion || p.proveedor_direccion || '',
-  tasa_dolar: p.tasaDolar || p.tasa_dolar,
-  producto: p.producto,
-  cantidad: p.cantidad,
-  costo_unitario_usd: p.costoUnitarioUsd || p.costo_unitario_usd || 0,
-  subtotal_usd: p.subtotalUsd || p.subtotal_usd || 0,
-  base_exenta_usd: p.baseExentaUsd || p.base_exenta_usd || 0,
-  base_general_usd: p.baseGeneralUsd || p.base_general_usd || 0,
-  iva_general_usd: p.ivaGeneralUsd || p.iva_general_usd || 0,
-  total_usd: p.totalUsd || p.total_usd || 0,
-  subtotal_bs: p.subtotalBs || p.subtotal_bs || 0,
-  base_exenta_bs: p.baseExentaBs || p.base_exenta_bs || 0,
-  base_general_bs: p.baseGeneralBs || p.base_general_bs || 0,
-  iva_general_bs: p.ivaGeneralBs || p.iva_general_bs || 0,
-  total_bs: p.totalBs || p.total_bs || 0,
-  retencion_iva_usd: p.retencionIvaUsd || p.retencion_iva_usd || 0,
-  retencion_iva_bs: p.retencionIvaBs || p.retencion_iva_bs || 0,
-  retencion_islr_usd: p.retencionIslrUsd || p.retencion_islr_usd || 0,
-  retencion_islr_bs: p.retencionIslrBs || p.retencion_islr_bs || 0,
+  tasa_dolar: p.tasaDolar || p.tasa_dolar || p.tasaBcv || p.tasa_bcv || 0,
+  producto: p.producto || '',
+  cantidad: Number(p.cantidad || 0),
+  costo_unitario_usd: Number(p.costoUnitarioUsd ?? p.costo_unitario_usd ?? 0),
+  subtotal_usd: Number(p.subtotalUsd ?? p.subtotal_usd ?? p.baseImponibleUsd ?? p.base_imponible_usd ?? 0),
+  base_exenta_usd: Number(p.baseExentaUsd ?? p.base_exenta_usd ?? 0),
+  base_general_usd: Number(p.baseGeneralUsd ?? p.base_general_usd ?? 0),
+  iva_general_usd: Number(p.ivaGeneralUsd ?? p.iva_general_usd ?? p.ivaUsd ?? p.iva_usd ?? 0),
+  total_usd: Number(p.totalUsd ?? p.total_usd ?? 0),
+  subtotal_bs: Number(p.subtotalBs ?? p.subtotal_bs ?? p.baseImponibleBs ?? p.base_imponible_bs ?? 0),
+  base_exenta_bs: Number(p.baseExentaBs ?? p.base_exenta_bs ?? 0),
+  base_general_bs: Number(p.baseGeneralBs ?? p.base_general_bs ?? 0),
+  iva_general_bs: Number(p.ivaGeneralBs ?? p.iva_general_bs ?? p.montoIvaBs ?? p.monto_iva_bs ?? 0),
+  total_bs: Number(p.totalBs ?? p.total_bs ?? 0),
+  retencion_iva_usd: Number(p.retencionIvaUsd ?? p.retencion_iva_usd ?? 0),
+  retencion_iva_bs: Number(p.retencionIvaBs ?? p.retencion_iva_bs ?? 0),
+  retencion_islr_usd: Number(p.retencionIslrUsd ?? p.retencion_islr_usd ?? 0),
+  retencion_islr_bs: Number(p.retencionIslrBs ?? p.retencion_islr_bs ?? 0),
   numero_comprobante_retencion_iva: p.numeroComprobanteRetencionIva || p.numero_comprobante_retencion_iva || '',
   numero_comprobante_retencion_islr: p.numeroComprobanteRetencionIslr || p.numero_comprobante_retencion_islr || '',
   codigo_concepto_islr: p.codigoConceptoIslr || p.codigo_concepto_islr || '055',
-  receptor: p.receptor
+  receptor: p.receptor || ''
 });
 
 const mapPurchaseFromDb = (p) => {
   if (!p) return null;
+  const subtotalUsd = Number(p.subtotal_usd ?? p.subtotalUsd ?? p.base_imponible_usd ?? p.baseImponibleUsd ?? 0);
+  const totalUsd = Number(p.total_usd ?? p.totalUsd ?? 0);
+  const subtotalBs = Number(p.subtotal_bs ?? p.subtotalBs ?? p.base_imponible_bs ?? p.baseImponibleBs ?? 0);
+  const totalBs = Number(p.total_bs ?? p.totalBs ?? 0);
+  const ivaUsd = Number(p.iva_general_usd ?? p.iva_usd ?? p.ivaUsd ?? p.monto_iva_usd ?? p.montoIvaUsd ?? 0);
+  const ivaBs = Number(p.iva_general_bs ?? p.monto_iva_bs ?? p.montoIvaBs ?? 0);
+  const nroFactura = p.numero_factura_prov || p.numeroFacturaProv || p.nro_factura || p.nroFactura || p.numero_factura_proveedor || p.numeroFacturaProveedor || '';
+  const nroControl = p.numero_control || p.numeroControl || p.nro_control || p.nroControl || '00-000000';
+  const fecha = p.fecha || p.fecha_compra || p.fechaCompra || p.fecha_emision || p.fechaEmision || '';
+  const tasaDolar = Number(p.tasa_dolar ?? p.tasaDolar ?? p.tasa_bcv ?? p.tasaBcv ?? 0);
   return {
     id: p.id,
-    numeroFacturaProv: p.numero_factura_prov,
-    numeroControl: p.numero_control || '00-000000',
-    tipoDoc: p.tipo_doc || 'FACTURA',
-    documentoAfectado: p.documento_afectado || '',
-    fecha: p.fecha,
-    proveedorId: p.proveedor_id,
-    proveedorNombre: p.proveedor_nombre,
-    proveedorRif: p.proveedor_rif,
-    proveedorDireccion: p.proveedor_direccion,
-    tasaDolar: Number(p.tasa_dolar),
-    producto: p.producto,
-    cantidad: Number(p.cantidad),
-    costoUnitarioUsd: Number(p.costo_unitario_usd),
-    subtotalUsd: Number(p.subtotal_usd),
-    baseExentaUsd: Number(p.base_exenta_usd || 0),
-    baseGeneralUsd: Number(p.base_general_usd || p.subtotal_usd || 0),
-    ivaGeneralUsd: Number(p.iva_general_usd || 0),
-    totalUsd: Number(p.total_usd),
-    subtotalBs: Number(p.subtotal_bs),
-    baseExentaBs: Number(p.base_exenta_bs || 0),
-    baseGeneralBs: Number(p.base_general_bs || p.subtotal_bs || 0),
-    ivaGeneralBs: Number(p.iva_general_bs || 0),
-    totalBs: Number(p.total_bs),
-    retencionIvaUsd: Number(p.retencion_iva_usd || 0),
-    retencionIvaBs: Number(p.retencion_iva_bs || 0),
-    retencionIslrUsd: Number(p.retencion_islr_usd || 0),
-    retencionIslrBs: Number(p.retencion_islr_bs || 0),
-    numeroComprobanteRetencionIva: p.numero_comprobante_retencion_iva || '',
-    numeroComprobanteRetencionIslr: p.numero_comprobante_retencion_islr || '',
-    codigoConceptoIslr: p.codigo_concepto_islr || '055',
-    receptor: p.receptor
+    numeroFacturaProv: nroFactura,
+    nroFactura,
+    numeroControl: nroControl,
+    nroControl,
+    tipoDoc: p.tipo_doc || p.tipoDoc || 'FACTURA',
+    documentoAfectado: p.documento_afectado || p.documentoAfectado || '',
+    fecha,
+    fechaCompra: fecha,
+    fechaEmision: fecha,
+    proveedorId: p.proveedor_id || p.proveedorId || '',
+    proveedorNombre: p.proveedor_nombre || p.proveedorNombre || '',
+    proveedorRif: p.proveedor_rif || p.proveedorRif || '',
+    proveedorDireccion: p.proveedor_direccion || p.proveedorDireccion || '',
+    tasaDolar,
+    tasaBcv: tasaDolar,
+    producto: p.producto || '',
+    cantidad: Number(p.cantidad || 0),
+    costoUnitarioUsd: Number(p.costo_unitario_usd ?? p.costoUnitarioUsd ?? 0),
+    subtotalUsd,
+    baseImponibleUsd: subtotalUsd,
+    baseExentaUsd: Number(p.base_exenta_usd ?? p.baseExentaUsd ?? 0),
+    baseGeneralUsd: Number(p.base_general_usd ?? subtotalUsd),
+    ivaGeneralUsd: ivaUsd,
+    ivaUsd,
+    totalUsd,
+    subtotalBs,
+    baseImponibleBs: subtotalBs,
+    baseExentaBs: Number(p.base_exenta_bs ?? p.baseExentaBs ?? 0),
+    baseGeneralBs: Number(p.base_general_bs ?? subtotalBs),
+    ivaGeneralBs: ivaBs,
+    totalBs,
+    retencionIvaUsd: Number(p.retencion_iva_usd ?? p.retencionIvaUsd ?? 0),
+    retencionIvaBs: Number(p.retencion_iva_bs ?? p.retencionIvaBs ?? 0),
+    retencionIslrUsd: Number(p.retencion_islr_usd ?? p.retencionIslrUsd ?? 0),
+    retencionIslrBs: Number(p.retencion_islr_bs ?? p.retencionIslrBs ?? 0),
+    numeroComprobanteRetencionIva: p.numero_comprobante_retencion_iva || p.numeroComprobanteRetencionIva || '',
+    numeroComprobanteRetencionIslr: p.numero_comprobante_retencion_islr || p.numeroComprobanteRetencionIslr || '',
+    codigoConceptoIslr: p.codigo_concepto_islr || p.codigoConceptoIslr || '055',
+    receptor: p.receptor || '',
+    items: Array.isArray(p.items) ? p.items : []
   };
 };
 
@@ -747,162 +778,300 @@ const mapCashMovementToDb = (m) => ({
   id: m.id,
   fecha: m.fecha,
   tipo: m.tipo,
-  concepto: m.concepto,
-  monto_usd: m.montoUsd || m.monto_usd || 0,
-  monto_bs: m.montoBs || m.monto_bs || 0,
-  metodo: m.metodo,
-  usuario: m.usuario
+  categoria: m.categoria || 'VENTAS',
+  concepto: m.concepto || m.descripcion || '',
+  descripcion: m.descripcion || m.concepto || '',
+  monto_usd: Number(m.montoUsd ?? m.monto_usd ?? 0),
+  monto_bs: Number(m.montoBs ?? m.monto_bs ?? 0),
+  metodo: m.metodo || m.metodoPago || m.metodo_pago || m.cajaOBanco || m.caja_o_banco || 'Efectivo USD',
+  metodo_pago: m.metodoPago || m.metodo_pago || m.metodo || 'Efectivo USD',
+  referencia: m.referencia || m.id,
+  moneda: m.moneda || 'USD',
+  usuario: m.usuario || m.usuarioId || m.usuario_id || 'Sistema'
 });
 
 const mapCashMovementFromDb = (m) => {
   if (!m) return null;
+  const concepto = m.concepto || m.descripcion || '';
+  const metodo = m.metodo || m.metodo_pago || m.metodoPago || m.caja_o_banco || m.cajaOBanco || 'Efectivo USD';
   return {
     id: m.id,
     fecha: m.fecha,
-    tipo: m.tipo,
-    concepto: m.concepto,
-    montoUsd: Number(m.monto_usd),
-    montoBs: Number(m.monto_bs),
-    metodo: m.metodo,
-    usuario: m.usuario
+    tipo: m.tipo || 'INGRESO',
+    categoria: m.categoria || 'VENTAS',
+    concepto,
+    descripcion: concepto,
+    montoUsd: Number(m.monto_usd ?? m.montoUsd ?? 0),
+    montoBs: Number(m.monto_bs ?? m.montoBs ?? 0),
+    metodo,
+    metodoPago: metodo,
+    cajaOBanco: metodo,
+    referencia: m.referencia || m.id,
+    moneda: m.moneda || 'USD',
+    usuario: m.usuario || m.usuario_id || m.usuarioId || 'Sistema'
   };
 };
 
 const mapFiscalClosureToDb = (c) => ({
   id: c.id,
-  tipo: c.tipo,
-  numero_z: c.numeroZ || null,
-  fecha_apertura: c.fechaApertura,
-  fecha_cierre: c.fechaCierre,
-  primera_factura: c.primeraFactura,
-  ultima_factura: c.ultimaFactura,
-  primera_nc: c.primeraNc,
-  ultima_nc: c.ultimaNc,
-  primera_nd: c.primeraNd,
-  ultima_nd: c.ultimaNd,
-  cantidad_facturas: c.cantidadFacturas || 0,
-  cantidad_nc: c.cantidadNc || 0,
-  cantidad_nd: c.cantidadNd || 0,
-  total_documentos: c.totalDocumentos || 0,
-  ventas_exentas_bs: c.ventasExentasBs || 0,
-  base_general_bs: c.baseGeneralBs || 0,
-  debito_general_bs: c.debitoGeneralBs || 0,
-  base_reducida_bs: c.baseReducidaBs || 0,
-  debito_reducido_bs: c.debitoReducidoBs || 0,
-  base_adicional_bs: c.baseAdicionalBs || 0,
-  debito_adicional_bs: c.debitoAdicionalBs || 0,
-  total_debito_fiscal_bs: c.totalDebitoFiscalBs || 0,
-  base_igtf_bs: c.baseIgtfBs || 0,
-  total_igtf_bs: c.totalIgtfBs || 0,
-  total_ventas_bs: c.totalVentasBs || 0,
-  total_ventas_usd: c.totalVentasUsd || 0,
-  tasa_bcv: c.tasaBcv || 827.73,
-  gran_total_historico_bs: c.granTotalHistoricoBs || 0,
-  desglose_pagos: c.desglosePagos || {},
-  usuario_id: c.usuarioId,
-  usuario_nombre: c.usuarioNombre,
-  firma_hash_sha256: c.firmaHashSha256
+  tipo: c.tipo || 'Z',
+  numero_z: c.numeroZ || c.numero_z || null,
+  numero_cierre: Number(c.numeroCierre ?? c.numero_cierre ?? 0),
+  fecha: c.fecha || c.fechaCierre || c.fecha_cierre || new Date().toISOString(),
+  fecha_apertura: c.fechaApertura || c.fecha_apertura || c.fecha,
+  fecha_cierre: c.fechaCierre || c.fecha_cierre || c.fecha,
+  primera_factura: c.primeraFactura || c.primera_factura || '',
+  ultima_factura: c.ultimaFactura || c.ultima_factura || '',
+  primera_nc: c.primeraNc || c.primera_nc || '',
+  ultima_nc: c.ultimaNc || c.ultima_nc || '',
+  primera_nd: c.primeraNd || c.primera_nd || '',
+  ultima_nd: c.ultimaNd || c.ultima_nd || '',
+  cantidad_facturas: Number(c.cantidadFacturas ?? c.cantidad_facturas ?? c.facturasEmitidas ?? c.facturas_emitidas ?? 0),
+  cantidad_nc: Number(c.cantidadNc ?? c.cantidad_nc ?? 0),
+  cantidad_nd: Number(c.cantidadNd ?? c.cantidad_nd ?? 0),
+  total_documentos: Number(c.totalDocumentos ?? c.total_documentos ?? 0),
+  ventas_exentas_bs: Number(c.ventasExentasBs ?? c.ventas_exentas_bs ?? 0),
+  base_general_bs: Number(c.baseGeneralBs ?? c.base_general_bs ?? 0),
+  debito_general_bs: Number(c.debitoGeneralBs ?? c.debito_general_bs ?? 0),
+  base_reducida_bs: Number(c.baseReducidaBs ?? c.base_reducida_bs ?? 0),
+  debito_reducido_bs: Number(c.debitoReducidoBs ?? c.debito_reducido_bs ?? 0),
+  base_adicional_bs: Number(c.baseAdicionalBs ?? c.base_adicional_bs ?? 0),
+  debito_adicional_bs: Number(c.debitoAdicionalBs ?? c.debito_adicional_bs ?? 0),
+  total_debito_fiscal_bs: Number(c.totalDebitoFiscalBs ?? c.total_debito_fiscal_bs ?? c.totalIvaBs ?? c.total_iva_bs ?? 0),
+  base_igtf_bs: Number(c.baseIgtfBs ?? c.base_igtf_bs ?? 0),
+  total_igtf_bs: Number(c.totalIgtfBs ?? c.total_igtf_bs ?? 0),
+  total_ventas_bs: Number(c.totalVentasBs ?? c.total_ventas_bs ?? c.totalBs ?? c.total_bs ?? 0),
+  total_ventas_usd: Number(c.totalVentasUsd ?? c.total_ventas_usd ?? c.totalUsd ?? c.total_usd ?? 0),
+  tasa_bcv: Number(c.tasaBcv ?? c.tasa_bcv ?? 886.22),
+  gran_total_historico_bs: Number(c.granTotalHistoricoBs ?? c.gran_total_historico_bs ?? 0),
+  desglose_pagos: c.desglosePagos || c.desglose_pagos || {},
+  usuario_id: c.usuarioId || c.usuario_id || null,
+  usuario_nombre: c.usuarioNombre || c.usuario_nombre || c.cajero || 'Administrador Master',
+  firma_hash_sha256: c.firmaHashSha256 || c.firma_hash_sha256 || c.hashSeguridad || c.hash_seguridad || ''
 });
 
 const mapFiscalClosureFromDb = (c) => ({
   id: c.id,
-  tipo: c.tipo,
-  numeroZ: c.numero_z,
-  fechaApertura: c.fecha_apertura,
-  fechaCierre: c.fecha_cierre,
-  primeraFactura: c.primera_factura,
-  ultimaFactura: c.ultima_factura,
-  primeraNc: c.primera_nc,
-  ultimaNc: c.ultima_nc,
-  primeraNd: c.primera_nd,
-  ultimaNd: c.ultima_nd,
-  cantidadFacturas: Number(c.cantidad_facturas || 0),
-  cantidadNc: Number(c.cantidad_nc || 0),
-  cantidadNd: Number(c.cantidad_nd || 0),
-  totalDocumentos: Number(c.total_documentos || 0),
-  ventasExentasBs: Number(c.ventas_exentas_bs || 0),
-  baseGeneralBs: Number(c.base_general_bs || 0),
-  debitoGeneralBs: Number(c.debito_general_bs || 0),
-  baseReducidaBs: Number(c.base_reducida_bs || 0),
-  debitoReducidoBs: Number(c.debito_reducido_bs || 0),
-  baseAdicionalBs: Number(c.base_adicional_bs || 0),
-  debitoAdicionalBs: Number(c.debito_adicional_bs || 0),
-  totalDebitoFiscalBs: Number(c.total_debito_fiscal_bs || 0),
-  baseIgtfBs: Number(c.base_igtf_bs || 0),
-  totalIgtfBs: Number(c.total_igtf_bs || 0),
-  totalVentasBs: Number(c.total_ventas_bs || 0),
-  totalVentasUsd: Number(c.total_ventas_usd || 0),
-  tasaBcv: Number(c.tasa_bcv || 827.73),
-  granTotalHistoricoBs: Number(c.gran_total_historico_bs || 0),
-  desglosePagos: c.desglose_pagos || {},
-  usuarioId: c.usuario_id,
-  usuarioNombre: c.usuario_nombre,
-  firmaHashSha256: c.firma_hash_sha256
+  tipo: c.tipo || 'Z',
+  numeroZ: c.numero_z ?? c.numeroZ ?? String(c.numero_cierre ?? c.numeroCierre ?? 1).padStart(4, '0'),
+  numeroCierre: Number(c.numero_cierre ?? c.numeroCierre ?? 1),
+  fecha: c.fecha || c.fecha_cierre || c.fechaCierre || '',
+  fechaApertura: c.fecha_apertura || c.fechaApertura || c.fecha || '',
+  fechaCierre: c.fecha_cierre || c.fechaCierre || c.fecha || '',
+  primeraFactura: c.primera_factura || c.primeraFactura || '',
+  ultimaFactura: c.ultima_factura || c.ultimaFactura || '',
+  primeraNc: c.primera_nc || c.primeraNc || '',
+  ultimaNc: c.ultima_nc || c.ultimaNc || '',
+  primeraNd: c.primera_nd || c.primeraNd || '',
+  ultimaNd: c.ultima_nd || c.ultimaNd || '',
+  cantidadFacturas: Number(c.cantidad_facturas ?? c.cantidadFacturas ?? c.facturas_emitidas ?? c.facturasEmitidas ?? 0),
+  cantidadNc: Number(c.cantidad_nc ?? c.cantidadNc ?? 0),
+  cantidadNd: Number(c.cantidad_nd ?? c.cantidadNd ?? 0),
+  totalDocumentos: Number(c.total_documentos ?? c.totalDocumentos ?? 0),
+  ventasExentasBs: Number(c.ventas_exentas_bs ?? c.ventasExentasBs ?? 0),
+  baseGeneralBs: Number(c.base_general_bs ?? c.baseGeneralBs ?? 0),
+  debitoGeneralBs: Number(c.debito_general_bs ?? c.debitoGeneralBs ?? 0),
+  baseReducidaBs: Number(c.base_reducida_bs ?? c.baseReducidaBs ?? 0),
+  debitoReducidoBs: Number(c.debito_reducido_bs ?? c.debitoReducidoBs ?? 0),
+  baseAdicionalBs: Number(c.base_adicional_bs ?? c.baseAdicionalBs ?? 0),
+  debitoAdicionalBs: Number(c.debito_adicional_bs ?? c.debitoAdicionalBs ?? 0),
+  totalDebitoFiscalBs: Number(c.total_debito_fiscal_bs ?? c.totalDebitoFiscalBs ?? c.total_iva_bs ?? c.totalIvaBs ?? 0),
+  baseIgtfBs: Number(c.base_igtf_bs ?? c.baseIgtfBs ?? 0),
+  totalIgtfBs: Number(c.total_igtf_bs ?? c.totalIgtfBs ?? 0),
+  totalVentasBs: Number(c.total_ventas_bs ?? c.totalVentasBs ?? c.total_bs ?? c.totalBs ?? 0),
+  totalVentasUsd: Number(c.total_ventas_usd ?? c.totalVentasUsd ?? c.total_usd ?? c.totalUsd ?? 0),
+  tasaBcv: Number(c.tasa_bcv ?? c.tasaBcv ?? 886.22),
+  granTotalHistoricoBs: Number(c.gran_total_historico_bs ?? c.granTotalHistoricoBs ?? 0),
+  desglosePagos: c.desglose_pagos || c.desglosePagos || {},
+  usuarioId: c.usuario_id || c.usuarioId || null,
+  usuarioNombre: c.usuario_nombre || c.usuarioNombre || c.cajero || 'Administrador Master',
+  firmaHashSha256: c.firma_hash_sha256 || c.firmaHashSha256 || c.hash_seguridad || c.hashSeguridad || ''
 });
 
-const mapOrderToDb = (o) => ({
-  id: o.id,
-  numero_doc: o.numeroDoc || o.numero_doc,
-  tipo_doc: o.tipoDoc || o.tipo_doc || 'COTIZACION',
-  fecha_emision: o.fechaEmision || o.fecha_emision || new Date().toISOString(),
-  fecha_vencimiento: o.fechaVencimiento || o.fecha_vencimiento || null,
-  cliente_id: o.clienteId || o.cliente_id,
-  cliente_nombre: o.clienteNombre || o.cliente_nombre,
-  cliente_rif: o.clienteRif || o.cliente_rif,
-  vendedor_id: o.vendedorId || o.vendedor_id,
-  zona_venta: o.zonaVenta || o.zona_venta,
-  segmento: o.segmento,
-  total_bruto_usd: Number(o.totalBrutoUsd ?? o.total_bruto_usd ?? 0),
-  iva_usd: Number(o.ivaUsd ?? o.iva_usd ?? 0),
-  total_neto_usd: Number(o.totalNetoUsd ?? o.total_neto_usd ?? 0),
-  total_litros: Number(o.totalLitros ?? o.total_litros ?? 0),
-  total_cajas: Number(o.totalCajas ?? o.total_cajas ?? 0),
-  total_items: Number(o.totalItems ?? o.total_items ?? (o.items?.length || 0)),
-  status: o.status || 'PENDIENTE',
-  direccion_entrega: o.direccionEntrega || o.direccion_entrega || '',
-  forma_pago: o.formaPago || o.forma_pago || '',
-  comentarios: o.comentarios || '',
-  profit_origen: o.profitOrigen || o.profit_origen || 'GRUMOTOR'
-});
+const mapOrderToDb = (o) => {
+  const numeroPedido = o.numeroPedido || o.numero_pedido || o.numeroOrden || o.numero_orden || o.numeroDoc || o.numero_doc || o.id;
+  const fechaEmision = o.fechaEmision || o.fecha_emision || o.fechaCreacion || new Date().toISOString();
+  const fechaEntrega = o.fechaEntrega || o.fecha_entrega || o.fechaVencimiento || o.fecha_vencimiento || fechaEmision;
+  const subtotalUsd = Number(o.subtotalUsd ?? o.subtotal_usd ?? o.totalBrutoUsd ?? o.total_bruto_usd ?? o.totalUsd ?? o.total_usd ?? 0);
+  const ivaUsd = Number(o.ivaUsd ?? o.iva_usd ?? 0);
+  const totalUsd = Number(o.totalUsd ?? o.total_usd ?? o.totalNetoUsd ?? o.total_neto_usd ?? subtotalUsd);
+  const tasaCambio = Number(o.tasaCambio ?? o.tasa_cambio ?? o.tasaBcv ?? o.tasa_bcv ?? 886.22);
+  const totalBs = Number(o.totalBs ?? o.total_bs ?? (totalUsd * tasaCambio));
+  const estado = o.estado || o.status || 'Aprobado';
+  const condicionPago = o.condicionPago || o.condicion_pago || o.formaPago || o.forma_pago || 'Contado';
+  return {
+    id: o.id,
+    numero_pedido: numeroPedido,
+    numeroPedido,
+    numero_doc: numeroPedido,
+    tipo_doc: o.tipoDoc || o.tipo_doc || 'PEDIDO',
+    fecha_emision: fechaEmision,
+    fechaEmision,
+    fecha_entrega: fechaEntrega,
+    fechaEntrega,
+    fecha_vencimiento: fechaEntrega,
+    cliente_id: o.clienteId || o.cliente_id || '',
+    clienteId: o.clienteId || o.cliente_id || '',
+    cliente_nombre: o.clienteNombre || o.cliente_nombre || '',
+    clienteNombre: o.clienteNombre || o.cliente_nombre || '',
+    cliente_rif: o.clienteRif || o.cliente_rif || '',
+    clienteRif: o.clienteRif || o.cliente_rif || '',
+    vendedor_id: o.vendedorId || o.vendedor_id || '',
+    vendedorId: o.vendedorId || o.vendedor_id || '',
+    vendedor_nombre: o.vendedorNombre || o.vendedor_nombre || '',
+    vendedorNombre: o.vendedorNombre || o.vendedor_nombre || '',
+    almacen_id: o.almacenId || o.almacen_id || '01',
+    almacenId: o.almacenId || o.almacen_id || '01',
+    zona_venta: o.zonaVenta || o.zona_venta || '',
+    segmento: o.segmento || '',
+    condicion_pago: condicionPago,
+    condicionPago,
+    forma_pago: condicionPago,
+    dias_credito: Number(o.diasCredito ?? o.dias_credito ?? 0),
+    diasCredito: Number(o.diasCredito ?? o.dias_credito ?? 0),
+    moneda: o.moneda || 'USD',
+    tasa_cambio: tasaCambio,
+    tasaCambio,
+    subtotal_usd: subtotalUsd,
+    subtotalUsd,
+    total_bruto_usd: subtotalUsd,
+    descuento_global_pct: Number(o.descuentoGlobalPct ?? o.descuento_global_pct ?? 0),
+    descuento_usd: Number(o.descuentoUsd ?? o.descuento_usd ?? 0),
+    base_imponible_usd: Number(o.baseImponibleUsd ?? o.base_imponible_usd ?? subtotalUsd),
+    aplica_iva: Boolean(o.aplicaIva ?? o.aplica_iva ?? false),
+    iva_porcentaje: Number(o.ivaPorcentaje ?? o.iva_porcentaje ?? 16),
+    iva_usd: ivaUsd,
+    ivaUsd,
+    total_usd: totalUsd,
+    totalUsd,
+    total_neto_usd: totalUsd,
+    total_bs: totalBs,
+    totalBs,
+    total_litros: Number(o.totalLitros ?? o.total_litros ?? 0),
+    totalLitros: Number(o.totalLitros ?? o.total_litros ?? 0),
+    total_unidades: Number(o.totalUnidades ?? o.total_unidades ?? o.totalCajas ?? o.total_cajas ?? 0),
+    totalUnidades: Number(o.totalUnidades ?? o.total_unidades ?? o.totalCajas ?? o.total_cajas ?? 0),
+    total_cajas: Number(o.totalCajas ?? o.total_cajas ?? o.totalUnidades ?? o.total_unidades ?? 0),
+    total_items: Number(o.totalItems ?? o.total_items ?? (o.items?.length || 0)),
+    estado,
+    status: estado,
+    direccion_entrega: o.direccionEntrega || o.direccion_entrega || '',
+    observaciones: o.observaciones || o.comentarios || '',
+    comentarios: o.comentarios || o.observaciones || '',
+    creado_por: o.creadoPor || o.creado_por || o.vendedorNombre || o.vendedor_nombre || 'Sistema',
+    creadoPor: o.creadoPor || o.creado_por || o.vendedorNombre || o.vendedor_nombre || 'Sistema',
+    aprobado_por: o.aprobadoPor ?? o.aprobado_por ?? null,
+    aprobadoPor: o.aprobadoPor ?? o.aprobado_por ?? null,
+    fecha_aprobacion: o.fechaAprobacion ?? o.fecha_aprobacion ?? null,
+    fechaAprobacion: o.fechaAprobacion ?? o.fecha_aprobacion ?? null,
+    motivo_rechazo: o.motivoRechazo ?? o.motivo_rechazo ?? null,
+    motivoRechazo: o.motivoRechazo ?? o.motivo_rechazo ?? null,
+    factura_id: o.facturaId ?? o.factura_id ?? null,
+    facturaId: o.facturaId ?? o.factura_id ?? null,
+    profit_origen: o.profitOrigen || o.profit_origen || 'GRUMOTOR'
+  };
+};
 
 const mapOrderFromDb = (o) => {
   if (!o) return null;
+  const rawItems = Array.isArray(o.order_items) && o.order_items.length > 0
+    ? o.order_items
+    : (Array.isArray(o.items) ? o.items : []);
+  const mappedItems = rawItems.map((it, idx) => {
+    const artId = it.articulo_id || it.articuloId || it.producto_id || it.productoId || it.codigo || '';
+    const artDesc = it.articulo_descripcion || it.articuloDescripcion || it.descripcion || '';
+    const unidad = resolveProductUnit(it, 'Caja');
+    const cantidad = Number(it.cantidad || 0);
+    const litrosUnit = Number(it.litros_unitarios ?? it.litrosUnitarios ?? 12);
+    const litrosTot = Number(it.litros_totales ?? it.litrosTotales ?? (cantidad * litrosUnit));
+    const precioUnit = Number(it.precio_unitario_usd ?? it.precioUnitarioUsd ?? 0);
+    const totalItemUsd = Number(it.total_usd ?? it.totalUsd ?? (cantidad * precioUnit));
+    const rengNum = Number(it.reng_num ?? it.rengNum ?? (idx + 1));
+    return {
+      id: it.id || `${o.id}-R${rengNum}`,
+      orderId: it.order_id || it.orderId || o.id,
+      rengNum,
+      articuloId: artId,
+      productoId: artId,
+      codigo: artId,
+      articuloDescripcion: artDesc,
+      descripcion: artDesc,
+      unidadVenta: unidad,
+      cantidad,
+      litrosUnitarios: litrosUnit,
+      litrosTotales: litrosTot,
+      precioUnitarioUsd: precioUnit,
+      totalUsd: totalItemUsd
+    };
+  });
+
+  const numeroPedido = o.numero_pedido || o.numeroPedido || o.numeroOrden || o.numero_orden || o.numero_doc || o.numeroDoc || o.id;
+  const fechaEmision = o.fecha_emision || o.fechaEmision || o.fechaCreacion || o.created_at || '';
+  const fechaEntrega = o.fecha_entrega || o.fechaEntrega || o.fecha_vencimiento || o.fechaVencimiento || fechaEmision;
+  const subtotalUsd = Number(o.subtotal_usd ?? o.subtotalUsd ?? o.total_bruto_usd ?? o.totalBrutoUsd ?? o.total_usd ?? o.totalUsd ?? 0);
+  const ivaUsd = Number(o.iva_usd ?? o.ivaUsd ?? 0);
+  const totalUsd = Number(o.total_usd ?? o.totalUsd ?? o.total_neto_usd ?? o.totalNetoUsd ?? subtotalUsd);
+  const tasaCambio = Number(o.tasa_cambio ?? o.tasaCambio ?? o.tasaBcv ?? o.tasa_bcv ?? 886.22);
+  const totalBs = Number(o.total_bs ?? o.totalBs ?? (totalUsd * tasaCambio));
+  const totalLitros = Number(o.total_litros ?? o.totalLitros ?? mappedItems.reduce((s, i) => s + Number(i.litrosTotales || 0), 0));
+  const totalUnidades = Number(o.total_unidades ?? o.totalUnidades ?? o.total_cajas ?? o.totalCajas ?? mappedItems.reduce((s, i) => s + Number(i.cantidad || 0), 0));
+  const estado = o.estado || o.status || 'Aprobado';
+  const condicionPago = o.condicion_pago || o.condicionPago || o.forma_pago || o.formaPago || 'Contado';
+  const observaciones = o.observaciones || o.comentarios || '';
+
   return {
     id: o.id,
-    numeroDoc: o.numero_doc,
-    tipoDoc: o.tipo_doc || 'COTIZACION',
-    fechaEmision: o.fecha_emision,
-    fechaVencimiento: o.fecha_vencimiento,
-    clienteId: o.cliente_id,
-    clienteNombre: o.cliente_nombre,
-    clienteRif: o.cliente_rif,
-    vendedorId: o.vendedor_id,
-    zonaVenta: o.zona_venta,
-    segmento: o.segmento,
-    totalBrutoUsd: Number(o.total_bruto_usd || 0),
-    ivaUsd: Number(o.iva_usd || 0),
-    totalNetoUsd: Number(o.total_neto_usd || 0),
-    totalLitros: Number(o.total_litros || 0),
-    totalCajas: Number(o.total_cajas || 0),
-    totalItems: Number(o.total_items || (o.order_items?.length || 0)),
-    status: o.status || 'PENDIENTE',
-    direccionEntrega: o.direccion_entrega || '',
-    formaPago: o.forma_pago || '',
-    comentarios: o.comentarios || '',
-    profitOrigen: o.profit_origen || 'GRUMOTOR',
-    items: (o.order_items || []).map(it => ({
-      id: it.id,
-      orderId: it.order_id,
-      rengNum: it.reng_num,
-      articuloId: it.articulo_id,
-      articuloDescripcion: it.articulo_descripcion,
-      unidadVenta: resolveProductUnit(it, 'Caja'),
-      cantidad: Number(it.cantidad || 0),
-      litrosUnitarios: Number(it.litros_unitarios || 0),
-      litrosTotales: Number(it.litros_totales || 0),
-      precioUnitarioUsd: Number(it.precio_unitario_usd || 0),
-      totalUsd: Number(it.total_usd || 0)
-    }))
+    numeroPedido,
+    numeroOrden: numeroPedido,
+    numeroDoc: numeroPedido,
+    tipoDoc: o.tipo_doc || o.tipoDoc || 'PEDIDO',
+    fechaEmision,
+    fechaCreacion: fechaEmision,
+    fechaEntrega,
+    fechaVencimiento: fechaEntrega,
+    clienteId: o.cliente_id || o.clienteId || '',
+    clienteNombre: o.cliente_nombre || o.clienteNombre || '',
+    clienteRif: o.cliente_rif || o.clienteRif || '',
+    vendedorId: o.vendedor_id || o.vendedorId || '',
+    vendedorNombre: o.vendedor_nombre || o.vendedorNombre || '',
+    almacenId: o.almacen_id || o.almacenId || '01',
+    zonaVenta: o.zona_venta || o.zonaVenta || '',
+    segmento: o.segmento || '',
+    condicionPago,
+    formaPago: condicionPago,
+    diasCredito: Number(o.dias_credito ?? o.diasCredito ?? 0),
+    moneda: o.moneda || 'USD',
+    tasaCambio,
+    tasaBcv: tasaCambio,
+    subtotalUsd,
+    totalBrutoUsd: subtotalUsd,
+    descuentoGlobalPct: Number(o.descuento_global_pct ?? o.descuentoGlobalPct ?? 0),
+    descuentoUsd: Number(o.descuento_usd ?? o.descuentoUsd ?? 0),
+    baseImponibleUsd: Number(o.base_imponible_usd ?? o.baseImponibleUsd ?? subtotalUsd),
+    aplicaIva: Boolean(o.aplica_iva ?? o.aplicaIva ?? false),
+    ivaPorcentaje: Number(o.iva_porcentaje ?? o.ivaPorcentaje ?? 16),
+    ivaUsd,
+    totalUsd,
+    totalNetoUsd: totalUsd,
+    totalBs,
+    totalLitros,
+    totalUnidades,
+    totalCajas: totalUnidades,
+    totalItems: mappedItems.length,
+    estado,
+    status: estado,
+    direccionEntrega: o.direccion_entrega || o.direccionEntrega || '',
+    observaciones,
+    comentarios: observaciones,
+    creadoPor: o.creado_por || o.creadoPor || o.vendedor_nombre || o.vendedorNombre || 'Sistema',
+    aprobadoPor: o.aprobado_por ?? o.aprobadoPor ?? null,
+    fechaAprobacion: o.fecha_aprobacion ?? o.fechaAprobacion ?? null,
+    motivoRechazo: o.motivo_rechazo ?? o.motivoRechazo ?? null,
+    facturaId: o.factura_id ?? o.facturaId ?? null,
+    profitOrigen: o.profit_origen || o.profitOrigen || 'GRUMOTOR',
+    createdAt: o.created_at || o.createdAt || fechaEmision,
+    updatedAt: o.updated_at || o.updatedAt || fechaEmision,
+    items: mappedItems
   };
 };
 
@@ -2215,6 +2384,82 @@ const applyPendingUserSyncActions = (baseList) => {
   return sortUsersByHierarchy(finalUsers);
 };
 
+const stripAccents = (str) =>
+  String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+// Sincroniza automáticamente la foto de un usuario con su registro de asesor comercial (profit_sellers) si existe
+const syncSellerPhotoFromUser = async (userObj) => {
+  if (!userObj || userObj.foto === undefined) return;
+  try {
+    const sellers = getStorageSellers();
+    const rawUserCoVen = String(userObj.co_ven || userObj.coVen || '').trim();
+    const derivedFromId = String(userObj.id || '').toLowerCase().startsWith('usr-seller-')
+      ? String(userObj.id).replace(/^usr-seller-/i, '').trim().toUpperCase()
+      : '';
+    const candidateCoVen = (rawUserCoVen || derivedFromId).toUpperCase();
+    const userNameNorm = stripAccents(userObj.nombre);
+
+    const matchedSeller = sellers.find(s => {
+      const sCode = String(s.coVen || s.co_ven || s.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      const sName = stripAccents(s.venDes || s.ven_des);
+      if (candidateCoVen && !candidateCoVen.startsWith('USR-') && sCode === candidateCoVen) return true;
+      if (userNameNorm && sName && sName === userNameNorm) return true;
+      return false;
+    });
+
+    const targetCoVen = matchedSeller
+      ? String(matchedSeller.coVen || matchedSeller.co_ven || candidateCoVen).replace(/^usr-seller-/i, '').trim().toUpperCase()
+      : (!candidateCoVen.startsWith('USR-') ? candidateCoVen : '');
+
+    if (!targetCoVen) return;
+
+    const cleanPhoto = userObj.foto || '';
+    const sellerName = matchedSeller?.venDes || matchedSeller?.ven_des || userObj.nombre || targetCoVen;
+    const nowIso = new Date().toISOString();
+
+    saveStorageSeller({
+      coVen: targetCoVen,
+      co_ven: targetCoVen,
+      venDes: sellerName,
+      ven_des: sellerName,
+      foto: cleanPhoto
+    });
+
+    if (isNetworkOnline() && !isStaticCloudHost) {
+      try {
+        await withTimeout(
+          supabase
+            .from('profit_sellers')
+            .update({ foto: userObj.foto || null, updated_at: nowIso })
+            .eq('co_ven', targetCoVen),
+          3000
+        );
+      } catch (_) {}
+    }
+
+    broadcastReconcileChange({
+      tableId: 'sellers',
+      action: 'RECONCILE',
+      key: targetCoVen,
+      item: {
+        ...(matchedSeller || {}),
+        coVen: targetCoVen,
+        co_ven: targetCoVen,
+        venDes: sellerName,
+        ven_des: sellerName,
+        foto: cleanPhoto,
+        updatedAt: nowIso
+      }
+    });
+  } catch (err) {
+    console.warn('Error sincronizando foto de usuario con profit_sellers:', err);
+  }
+};
+
 export const getSupabaseUsers = async () => {
   const getCachedUsers = () => {
     const list = getUsersList();
@@ -2405,6 +2650,10 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
           }
         } catch (_) {}
 
+        if (userData.foto !== undefined) {
+          await syncSellerPhotoFromUser(savedFromDb);
+        }
+
         broadcastReconcileChange({
           tableId: 'users',
           action: existingIdx >= 0 ? 'RECONCILE' : 'CREATE',
@@ -2423,6 +2672,10 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
   // Fallback local/offline garantizado (no lanza error al usuario, mantiene los cambios en localStorage y encola)
   enqueueSyncAction('user', existingIdx >= 0 ? 'UPDATE' : 'INSERT', mappedUser);
   writeProfitUser(mappedUser, 'SAVE').catch(() => {});
+
+  if (userData.foto !== undefined) {
+    await syncSellerPhotoFromUser(mappedUser);
+  }
 
   addStorageUserLog({
     usuarioId: auditUser?.id || 'usr-sistema',
@@ -3011,29 +3264,66 @@ export const getSupabaseProfitSupplierPayments = async () => {
 
 export const getSupabaseProfitSellers = async () => {
   const localSellers = getStorageSellers();
+  let currentUsers = [];
   try {
-    const { data, error } = await withTimeout(
-      supabase.from('profit_sellers').select('*').order('ven_des', { ascending: true }),
-      4000
-    );
-    if (error) throw error;
-    isSupabaseAvailable = true;
-    const mapped = (data || []).map(s => {
-      const coVen = String(s.co_ven || s.coVen || s.id || '').trim();
+    currentUsers = getUsersList() || [];
+  } catch (_) {
+    currentUsers = [];
+  }
+
+  const enrichAndDedupeSellers = (rawList) => {
+    const photoByCode = new Map();
+    const photoByName = new Map();
+
+    // Recopilar fotos desde usuarios registrados
+    currentUsers.forEach(u => {
+      if (!u || !u.foto) return;
+      const uCode = String(u.co_ven || u.coVen || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      const uIdCode = String(u.id || '').toLowerCase().startsWith('usr-seller-')
+        ? String(u.id).replace(/^usr-seller-/i, '').trim().toUpperCase()
+        : '';
+      const code = uCode || uIdCode;
+      const uName = stripAccents(u.nombre);
+      if (code && !code.startsWith('USR-')) photoByCode.set(code, u.foto);
+      if (uName) photoByName.set(uName, u.foto);
+    });
+
+    // Recopilar fotos desde registros actuales (incluyendo filas USR-SELLER-* en rawList)
+    (rawList || []).forEach(s => {
+      if (!s) return;
+      const sPhoto = s.foto || '';
+      if (!sPhoto) return;
+      const sCode = String(s.co_ven || s.coVen || s.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      const sName = stripAccents(s.ven_des || s.venDes || s.nombre);
+      if (sCode) photoByCode.set(sCode, sPhoto);
+      if (sName) photoByName.set(sName, sPhoto);
+    });
+
+    const mapped = (rawList || []).map(s => {
+      const rawCoVen = String(s.co_ven || s.coVen || s.id || '').trim();
+      const cleanCode = rawCoVen.replace(/^usr-seller-/i, '').trim().toUpperCase();
       const venDes = String(s.ven_des || s.venDes || s.nombre || '').trim();
       const fallback = (REAL_PROFIT_SELLERS || []).find(
         r =>
-          (r.coVen && String(r.coVen).trim().toLowerCase() === coVen.toLowerCase()) ||
-          (r.venDes && venDes && String(r.venDes).trim().toLowerCase() === venDes.toLowerCase())
+          (r.coVen && String(r.coVen).trim().toLowerCase() === cleanCode.toLowerCase()) ||
+          (r.venDes && venDes && stripAccents(r.venDes) === stripAccents(venDes))
       );
       const coZon = String(s.co_zon || s.coZon || fallback?.coZon || fallback?.co_zon || '').trim();
       const zona = String(s.zona || fallback?.zona || '').trim();
+      const resolvedName = venDes || fallback?.venDes || cleanCode;
+      const resolvedPhoto =
+        s.foto ||
+        photoByCode.get(cleanCode) ||
+        photoByName.get(stripAccents(resolvedName)) ||
+        '';
+
       return {
-        id: s.id || coVen,
-        coVen,
-        co_ven: coVen,
-        venDes: venDes || fallback?.venDes || coVen,
-        ven_des: venDes || fallback?.venDes || coVen,
+        id: s.id || rawCoVen,
+        coVen: rawCoVen,
+        co_ven: rawCoVen,
+        _cleanCode: cleanCode,
+        venDes: resolvedName,
+        ven_des: resolvedName,
         cedula: s.cedula || fallback?.cedula || '',
         telefonos: s.telefonos || fallback?.telefonos || '',
         direccion: s.direccion || fallback?.direccion || '',
@@ -3041,7 +3331,7 @@ export const getSupabaseProfitSellers = async () => {
         comisionPct: Number(s.comision_pct ?? s.comisionPct ?? fallback?.comisionPct ?? 3.0),
         metaLitrosMes: Number(s.meta_litros_mes ?? s.metaLitrosMes ?? fallback?.metaLitrosMes ?? 3000),
         activo: s.activo !== undefined ? Boolean(s.activo) : true,
-        foto: s.foto || fallback?.foto || '',
+        foto: resolvedPhoto,
         avatar: s.avatar || fallback?.avatar || '',
         coZon,
         co_zon: coZon,
@@ -3049,16 +3339,48 @@ export const getSupabaseProfitSellers = async () => {
         createdAt: s.created_at || s.createdAt,
         updatedAt: s.updated_at || s.updatedAt
       };
-    }).filter(s => s.coVen || s.venDes);
+    }).filter(s => (s.coVen || s.venDes) && !String(s._cleanCode || '').startsWith('USR-'));
+
+    // Deduplicar filas USR-SELLER-* cuando existe el código corto canónico (CB, CM, FS, etc.)
+    const byCleanCode = new Map();
+    for (const item of mapped) {
+      const key = item._cleanCode || item.venDes.toUpperCase();
+      const existing = byCleanCode.get(key);
+      if (!existing) {
+        byCleanCode.set(key, item);
+      } else {
+        const existingIsPrefixed = /^usr-seller-/i.test(existing.coVen);
+        const itemIsPrefixed = /^usr-seller-/i.test(item.coVen);
+        const mergedPhoto = item.foto || existing.foto || '';
+        const mergedAvatar = item.avatar || existing.avatar || '';
+        if (existingIsPrefixed && !itemIsPrefixed) {
+          byCleanCode.set(key, { ...existing, ...item, foto: mergedPhoto, avatar: mergedAvatar });
+        } else {
+          byCleanCode.set(key, { ...item, ...existing, foto: mergedPhoto, avatar: mergedAvatar });
+        }
+      }
+    }
+
+    return Array.from(byCleanCode.values()).map(({ _cleanCode, ...rest }) => rest);
+  };
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('profit_sellers').select('*').order('ven_des', { ascending: true }),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = enrichAndDedupeSellers(data || []);
 
     if (mapped.length > 0) {
       saveStorageAllSellers(mapped);
       return mapped;
     }
-    return localSellers.length > 0 ? localSellers : [];
+    return localSellers.length > 0 ? enrichAndDedupeSellers(localSellers) : [];
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseProfitSellers');
-    return localSellers.length > 0 ? localSellers : [];
+    return localSellers.length > 0 ? enrichAndDedupeSellers(localSellers) : [];
   }
 };
 
@@ -3097,18 +3419,111 @@ export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
 };
 
 export const updateSupabaseSellerPhoto = async (coVen, photoUrl) => {
-  saveStorageSeller({ coVen, foto: photoUrl });
-  writeProfitSeller({ coVen, foto: photoUrl }, 'SAVE').catch(() => {});
+  resetSupabaseOnlineStatus();
+  const rawCoVen = String(coVen || '').trim();
+  const cleanCoVen = rawCoVen.replace(/^usr-seller-/i, '').trim() || rawCoVen;
+  const nowIso = new Date().toISOString();
+  const normalizedPhoto = photoUrl || '';
+
+  const currentSellers = getStorageSellers();
+  const existingSeller = currentSellers.find(s => {
+    const sCo = String(s.coVen || s.co_ven || s.id || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
+    return sCo === cleanCoVen.toLowerCase();
+  });
+  const sellerName = existingSeller?.venDes || existingSeller?.ven_des || '';
+
+  saveStorageSeller({
+    coVen: cleanCoVen,
+    co_ven: cleanCoVen,
+    ...(sellerName ? { venDes: sellerName, ven_des: sellerName } : {}),
+    foto: normalizedPhoto
+  });
+  writeProfitSeller({ coVen: cleanCoVen, foto: normalizedPhoto }, 'SAVE').catch(() => {});
+
+  broadcastReconcileChange({
+    tableId: 'sellers',
+    action: 'RECONCILE',
+    key: cleanCoVen,
+    item: {
+      ...(existingSeller || {}),
+      coVen: cleanCoVen,
+      co_ven: cleanCoVen,
+      ...(sellerName ? { venDes: sellerName, ven_des: sellerName } : {}),
+      foto: normalizedPhoto,
+      updatedAt: nowIso
+    }
+  });
+
+  // Sincronizar también con la tabla de usuarios (users) si el asesor tiene cuenta de usuario asociada
+  try {
+    const localUsers = getUsersList();
+    const matchedIdx = localUsers.findIndex(u => {
+      const uCo = String(u.co_ven || u.coVen || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
+      const uId = String(u.id || '').trim().toLowerCase();
+      const uName = stripAccents(u.nombre);
+      if (cleanCoVen && (uCo === cleanCoVen.toLowerCase() || uId === `usr-seller-${cleanCoVen.toLowerCase()}`)) return true;
+      if (sellerName && uName && uName === stripAccents(sellerName)) return true;
+      return false;
+    });
+
+    if (matchedIdx >= 0) {
+      const updatedUser = {
+        ...localUsers[matchedIdx],
+        foto: photoUrl || null,
+        updatedAt: nowIso,
+        updated_at: nowIso
+      };
+      localUsers[matchedIdx] = updatedUser;
+      const sortedUsers = sortUsersByHierarchy(localUsers);
+      try {
+        localStorage.setItem('signum_users_list', JSON.stringify(sortedUsers));
+        const rawActive = localStorage.getItem('signum_active_user');
+        if (rawActive) {
+          const activeObj = JSON.parse(rawActive);
+          if (activeObj && (activeObj.id === updatedUser.id || activeObj.username?.toLowerCase() === updatedUser.username?.toLowerCase())) {
+            localStorage.setItem('signum_active_user', JSON.stringify(updatedUser));
+          }
+        }
+      } catch (_) {}
+
+      if (isNetworkOnline() && !isStaticCloudHost) {
+        try {
+          await withTimeout(
+            supabase
+              .from('users')
+              .update({ foto: photoUrl || null, updated_at: nowIso })
+              .eq('id', updatedUser.id),
+            3000
+          );
+        } catch (_) {}
+      }
+
+      broadcastReconcileChange({
+        tableId: 'users',
+        action: 'RECONCILE',
+        key: updatedUser.id || updatedUser.username,
+        item: updatedUser
+      });
+    }
+  } catch (err) {
+    console.warn('Error sincronizando foto de asesor con usuario vinculado:', err);
+  }
+
   try {
     const { data, error } = await withTimeout(
-      supabase.from('profit_sellers').update({ foto: photoUrl, updated_at: new Date().toISOString() }).eq('co_ven', coVen).select().single(),
+      supabase
+        .from('profit_sellers')
+        .update({ foto: photoUrl || null, updated_at: nowIso })
+        .eq('co_ven', cleanCoVen)
+        .select()
+        .single(),
       4000
     );
     if (error) throw error;
-    return data;
+    return data || { co_ven: cleanCoVen, coVen: cleanCoVen, foto: normalizedPhoto };
   } catch (err) {
     console.warn('Error updating seller photo in Supabase:', err);
-    return { co_ven: coVen, foto: photoUrl };
+    return { co_ven: cleanCoVen, coVen: cleanCoVen, foto: normalizedPhoto };
   }
 };
 
@@ -3738,10 +4153,7 @@ export const saveSupabaseNotification = async (notificationData) => {
     return data;
   } catch (err) {
     markSupabaseOffline(err, 'saveSupabaseNotification');
-    enqueueSyncAction({
-      action: 'UPSERT_NOTIFICATION',
-      payload
-    });
+    enqueueSyncAction('notification', 'INSERT', payload);
     return payload;
   }
 };
@@ -3752,17 +4164,14 @@ export const markSupabaseNotificationRead = async (id) => {
 
   try {
     const { error } = await withTimeout(
-      supabase.from('notifications').update({ leida: true, fecha_leida: now }).eq('id', id),
+      supabase.from('notifications').update({ leida: true, leido: true, fecha_leida: now }).eq('id', id),
       3500
     );
     if (error) throw error;
     isSupabaseAvailable = true;
   } catch (err) {
     markSupabaseOffline(err, 'markSupabaseNotificationRead');
-    enqueueSyncAction({
-      action: 'UPDATE_NOTIFICATION',
-      payload: { id, leida: true, fecha_leida: now }
-    });
+    enqueueSyncAction('notification', 'UPDATE', { id, leida: true, leido: true, fecha_leida: now });
   }
 };
 
@@ -3772,17 +4181,14 @@ export const markAllSupabaseNotificationsRead = async () => {
 
   try {
     const { error } = await withTimeout(
-      supabase.from('notifications').update({ leida: true, fecha_leida: now }).eq('leida', false),
+      supabase.from('notifications').update({ leida: true, leido: true, fecha_leida: now }).eq('leida', false),
       3500
     );
     if (error) throw error;
     isSupabaseAvailable = true;
   } catch (err) {
     markSupabaseOffline(err, 'markAllSupabaseNotificationsRead');
-    enqueueSyncAction({
-      action: 'MARK_ALL_NOTIFICATIONS_READ',
-      payload: { fecha_leida: now }
-    });
+    enqueueSyncAction('notification', 'MARK_ALL_READ', { fecha_leida: now });
   }
 };
 

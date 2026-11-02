@@ -14,6 +14,10 @@ import {
   authenticate,
   getUsersList
 } from '../services/authService.js';
+import {
+  uploadUserProfilePhoto,
+  deleteUserProfilePhoto
+} from '../services/imageStorageService.js';
 
 console.log('--- INICIANDO BATERÍA DE PRUEBAS: PERSISTENCIA DE USUARIOS Y BITÁCORA ---');
 
@@ -149,6 +153,37 @@ try {
   const found = updatedList.find(u => u.id === testUser.id);
   assert.ok(found, 'El usuario recién guardado debe encontrarse en Supabase');
   console.log('  ✓ Usuario verificado en el listado de Supabase.');
+
+  // 5b. Verificación de subida, sincronización de sesión activa y eliminación de foto de perfil
+  console.log('5b. Verificando cambio y sincronización de foto de perfil...');
+  const sampleBase64Photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  let syncedActiveUser = { ...found };
+  const photoUploadRes = await uploadUserProfilePhoto({
+    userId: testUser.id,
+    username: testUser.username,
+    fileOrDataUrl: sampleBase64Photo,
+    currentUser: syncedActiveUser,
+    onUpdateCurrentUser: (u) => { syncedActiveUser = u; }
+  });
+  assert.strictEqual(photoUploadRes.success, true, 'La subida de foto de perfil debe ser exitosa');
+  assert.strictEqual(syncedActiveUser.foto, sampleBase64Photo, 'La sesión activa debe sincronizar la nueva foto inmediatamente');
+  const afterPhotoUsers = await getSupabaseUsers();
+  const userWithPhoto = afterPhotoUsers.find(u => u.id === testUser.id);
+  assert.strictEqual(userWithPhoto?.foto, sampleBase64Photo, 'La foto debe persistir en Supabase');
+
+  const photoDelRes = await deleteUserProfilePhoto({
+    userId: testUser.id,
+    username: testUser.username,
+    currentPhotoUrl: sampleBase64Photo,
+    currentUser: syncedActiveUser,
+    onUpdateCurrentUser: (u) => { syncedActiveUser = u; }
+  });
+  assert.strictEqual(photoDelRes.success, true, 'La eliminación de foto de perfil debe ser exitosa');
+  assert.strictEqual(syncedActiveUser.foto, null, 'La sesión activa debe limpiar la foto inmediatamente');
+  const afterDelUsers = await getSupabaseUsers();
+  const userWithoutPhoto = afterDelUsers.find(u => u.id === testUser.id);
+  assert.strictEqual(userWithoutPhoto?.foto, null, 'La eliminación de foto debe persistir en Supabase');
+  console.log('  ✓ Subida, sincronización en tiempo real y eliminación de foto de perfil verificadas.');
 
   // 6. Registro de evento de auditoría
   console.log('6. Verificando registro en bitácora de auditoría...');

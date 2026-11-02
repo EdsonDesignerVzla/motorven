@@ -203,6 +203,7 @@ export default function SellerAvatar({
           <input
             type="file"
             ref={fileInputRef}
+            onClick={(e) => e.stopPropagation()}
             onChange={handleFileChange}
             accept="image/*"
             style={{ display: 'none' }}

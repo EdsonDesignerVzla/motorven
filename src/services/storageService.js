@@ -65,7 +65,12 @@ export const initStorage = () => {
   try {
     const rawProds = localStorage.getItem(KEYS.PRODUCTS);
     const parsedProds = rawProds ? JSON.parse(rawProds) : [];
-    const hasValidPrices = Array.isArray(parsedProds) && parsedProds.length >= 40 && parsedProds.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0);
+    const hasStaleOilProds = Array.isArray(parsedProds) && parsedProds.some(p => String(p?.id || p?.codigo || '').startsWith('OIL-'));
+    const hasValidPrices =
+      Array.isArray(parsedProds) &&
+      parsedProds.length >= 25 &&
+      !hasStaleOilProds &&
+      parsedProds.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0);
     if (!hasValidPrices) {
       localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(REAL_PRODUCTS));
     }
@@ -86,9 +91,13 @@ export const initStorage = () => {
   try {
     const rawSellers = localStorage.getItem(KEYS.SELLERS);
     const parsedSellers = rawSellers ? JSON.parse(rawSellers) : [];
+    const hasOrphanedUsrSellers =
+      Array.isArray(parsedSellers) &&
+      parsedSellers.some(s => String(s?.coVen || s?.co_ven || s?.id || '').toUpperCase().startsWith('USR-'));
     const hasValidZones =
       Array.isArray(parsedSellers) &&
       parsedSellers.length >= 10 &&
+      !hasOrphanedUsrSellers &&
       parsedSellers.every(s => Boolean((s.venDes || s.ven_des) && (s.coZon || s.co_zon)));
     if (!hasValidZones) {
       localStorage.setItem(KEYS.SELLERS, JSON.stringify(REAL_PROFIT_SELLERS));
@@ -100,7 +109,14 @@ export const initStorage = () => {
   try {
     const rawOrders = localStorage.getItem(KEYS.ORDERS);
     const parsedOrders = rawOrders ? JSON.parse(rawOrders) : [];
-    if (!parsedOrders || parsedOrders.length < 15) {
+    const hasOrphanedOilOrderItems =
+      Array.isArray(parsedOrders) &&
+      parsedOrders.some(o =>
+        !Array.isArray(o?.items) ||
+        o.items.length === 0 ||
+        o.items.some(it => String(it?.articuloId || it?.productoId || it?.codigo || '').startsWith('OIL-'))
+      );
+    if (!Array.isArray(parsedOrders) || parsedOrders.length < 1 || hasOrphanedOilOrderItems) {
       localStorage.setItem(KEYS.ORDERS, JSON.stringify(REAL_ORDERS));
     }
   } catch (_) {
@@ -535,14 +551,40 @@ export const getStorageSellers = () => {
 export const saveStorageSeller = (sellerData) => {
   const current = getStorageSellers();
   const coVen = (sellerData?.coVen || sellerData?.co_ven || sellerData?.id || '').toString().trim();
-  const idx = current.findIndex(s => (s.coVen || s.co_ven || s.id || '').toString().trim() === coVen);
-  if (idx >= 0) {
-    current[idx] = { ...current[idx], ...sellerData, updatedAt: new Date().toISOString() };
-  } else {
-    current.push({ ...sellerData, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const coVenLower = coVen.toLowerCase();
+  const venDesLower = (sellerData?.venDes || sellerData?.ven_des || '').toString().trim().toLowerCase();
+  const nowIso = new Date().toISOString();
+  let matched = false;
+
+  const updated = current.map(s => {
+    const sCo = (s.coVen || s.co_ven || s.id || '').toString().trim().toLowerCase();
+    const sName = (s.venDes || s.ven_des || '').toString().trim().toLowerCase();
+    const isCodeMatch = coVenLower && (sCo === coVenLower || sCo === `usr-seller-${coVenLower}` || `usr-seller-${sCo}` === coVenLower);
+    const isNameMatch = venDesLower && sName && sName === venDesLower;
+    if (isCodeMatch || isNameMatch) {
+      matched = true;
+      return {
+        ...s,
+        ...sellerData,
+        coVen: s.coVen || s.co_ven || coVen,
+        co_ven: s.co_ven || s.coVen || coVen,
+        updatedAt: nowIso
+      };
+    }
+    return s;
+  });
+
+  if (!matched && coVen) {
+    updated.push({
+      ...sellerData,
+      coVen,
+      co_ven: coVen,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    });
   }
-  localStorage.setItem(KEYS.SELLERS, JSON.stringify(current));
-  return current;
+  localStorage.setItem(KEYS.SELLERS, JSON.stringify(updated));
+  return updated;
 };
 
 export const saveStorageAllSellers = (sellersList) => {

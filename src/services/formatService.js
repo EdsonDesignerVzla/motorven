@@ -101,18 +101,13 @@ export const resolveProductUnit = (unitOrProduct, fallback = 'Caja') => {
 /**
  * Resuelve los litros por unidad reales de un producto según su código y presentación:
  * - Paila: 19 L
- * - Códigos 100403 y 100502: Cajas de 19 L
- * - Caja estándar: 11.35 L (o el valor explícito > 1 configurado en el producto)
+ * - Caja estándar: 11.35 L
  * - Tambor: 208 L
  * - Totem: 1000 L
  * - Litros (Granel): 1 L
  */
 export const resolveProductLitersPerUnit = (product) => {
   if (!product || typeof product !== 'object') return 11.35;
-  const code = String(product.codigo || product.id || product.articuloId || '').trim().toUpperCase();
-  if (code === '100403' || code === '100502') {
-    return 19;
-  }
 
   const unit = resolveProductUnit(product, 'Caja');
   const rawLiters = Number(product.litrosPorUnidad ?? product.litros_por_unidad ?? product.litrosUnitarios ?? 0);
@@ -123,8 +118,8 @@ export const resolveProductLitersPerUnit = (product) => {
   if (unit === 'Litros') return 1;
   if (unit === 'N/A') return 0;
 
-  // Caja
-  return rawLiters > 1 ? rawLiters : 11.35;
+  // Caja (11.35 L; ignora 19 L heredado por error en códigos de caja como 100403/100502)
+  return (rawLiters > 1 && rawLiters !== 19) ? rawLiters : 11.35;
 };
 
 
