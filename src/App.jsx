@@ -775,6 +775,50 @@ function MainApp() {
             return [...prev, item];
           });
         }
+      } else if (tableId === 'users') {
+        if ((action === 'STORAGE_UPDATE' || action === 'SYNC_ALL') && Array.isArray(allTableData)) {
+          const sorted = sortUsersByHierarchy(allTableData);
+          setUsersList(sorted);
+          try { localStorage.setItem('signum_users_list', JSON.stringify(sorted)); } catch (_) {}
+          return;
+        }
+
+        if (action === 'DELETE') {
+          setUsersList(prev => {
+            const next = prev.filter(u => String(u.id).trim() !== String(key).trim() && String(u.username || '').toLowerCase() !== String(key).toLowerCase());
+            const sorted = sortUsersByHierarchy(next);
+            try { localStorage.setItem('signum_users_list', JSON.stringify(sorted)); } catch (_) {}
+            return sorted;
+          });
+          notify.info(`Usuario eliminado en tiempo real`);
+          return;
+        }
+
+        if (item) {
+          setUsersList(prev => {
+            const index = prev.findIndex(u => String(u.id).trim() === String(key).trim() || String(u.username || '').toLowerCase() === String(item.username || '').toLowerCase());
+            let next;
+            if (index >= 0) {
+              next = [...prev];
+              next[index] = { ...next[index], ...item };
+            } else {
+              next = [...prev, item];
+            }
+            const sorted = sortUsersByHierarchy(next);
+            try { localStorage.setItem('signum_users_list', JSON.stringify(sorted)); } catch (_) {}
+            return sorted;
+          });
+
+          // Si el usuario en sesión activa fue modificado, actualizar sesión de inmediato
+          if (currentUser && (currentUser.id === item.id || currentUser.username?.toLowerCase() === item.username?.toLowerCase())) {
+            setCurrentUser(prev => {
+              const updated = { ...prev, ...item };
+              try { localStorage.setItem('signum_active_user', JSON.stringify(updated)); } catch (_) {}
+              return updated;
+            });
+          }
+          notify.success(`⚡ Usuario @${item.username || key} sincronizado en tiempo real`);
+        }
       }
     });
 
@@ -891,6 +935,21 @@ function MainApp() {
   // Suscripción a Cambios en TIEMPO REAL (Supabase Realtime) para Supabase y base de datos
   useEffect(() => {
     const unsubscribe = subscribeToRealtimeChanges({
+      onUsersChange: async (payload) => {
+        console.log('⚡ [Realtime] Cambio detectado en usuarios desde Supabase:', payload?.eventType);
+        const updatedUsers = await getSupabaseUsers();
+        if (updatedUsers && updatedUsers.length > 0) {
+          setUsersList(updatedUsers);
+          const activeUser = getActiveUser();
+          if (activeUser) {
+            const matched = updatedUsers.find(u => u.id === activeUser.id || (u.username && activeUser.username && u.username.toLowerCase() === activeUser.username.toLowerCase()));
+            if (matched) {
+              setCurrentUser(matched);
+              try { localStorage.setItem('signum_active_user', JSON.stringify(matched)); } catch (_) {}
+            }
+          }
+        }
+      },
       onProductsChange: async () => {
         console.log('⚡ [Realtime] Recargando catálogo de productos...');
         const updatedProds = await getSupabaseProducts();

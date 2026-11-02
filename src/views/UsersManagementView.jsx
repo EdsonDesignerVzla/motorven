@@ -53,6 +53,7 @@ import {
 } from '../services/imageStorageService';
 import { generateUsersPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
+import { subscribeToRealtimeSync } from '../services/realtimeSyncBridge';
 
 export default function UsersManagementView({ currentUser, usersList = [], onUsersUpdated, onUpdateCurrentUser, config }) {
   const notify = useNotification();
@@ -101,6 +102,37 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Sincronizar usuarios cuando cambia la propiedad usersList desde App.jsx
+  useEffect(() => {
+    if (Array.isArray(usersList) && usersList.length > 0) {
+      setUsers(usersList);
+    }
+  }, [usersList]);
+
+  // Suscripción en tiempo real a cambios de usuarios (Crear, Modificar, Eliminar)
+  useEffect(() => {
+    const unsub = subscribeToRealtimeSync(({ tableId, action, key, item }) => {
+      if (tableId === 'users') {
+        if (action === 'DELETE') {
+          setUsers(prev => prev.filter(u => String(u.id).trim() !== String(key).trim() && String(u.username || '').toLowerCase() !== String(key).toLowerCase()));
+        } else if (item) {
+          setUsers(prev => {
+            const idx = prev.findIndex(u => String(u.id).trim() === String(key).trim() || String(u.username || '').toLowerCase() === String(item.username || '').toLowerCase());
+            let next;
+            if (idx >= 0) {
+              next = [...prev];
+              next[idx] = { ...next[idx], ...item };
+            } else {
+              next = [...prev, item];
+            }
+            return sortUsersByHierarchy(next);
+          });
+        }
+      }
+    });
+    return () => unsub();
   }, []);
 
   // Cierre accesible por teclado con tecla Escape (A11y)
@@ -490,10 +522,6 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       }
       const fresh = await getSupabaseUsers();
       setUsers(fresh);
-      try {
-        localStorage.setItem('signum_users_list', JSON.stringify(fresh));
-      } catch (_) {}
-      if (onUsersUpdated) onUsersUpdated(saved);
 
       setShowPasswordModal(false);
       showAlert('success', `Contraseña de @${selectedUser.username} actualizada correctamente en la nube.`);
@@ -542,11 +570,6 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       await deleteSupabaseUser(user.id, currentUser);
       const fresh = await getSupabaseUsers();
       setUsers(fresh);
-      try {
-        localStorage.setItem('signum_users_list', JSON.stringify(fresh));
-      } catch (_) {}
-      if (onUsersUpdated) onUsersUpdated();
-      showAlert('success', `Usuario @${user.username} eliminado correctamente.`);
       loadLogs();
     } catch (err) {
       showAlert('error', describeSupabaseError(err, 'Error al eliminar usuario.'));

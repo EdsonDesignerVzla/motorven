@@ -440735,6 +440735,36 @@
       "created_at": "2026-10-27T19:45:14.112Z"
     },
     {
+      "id": "LOG-1793130387446-L7GXE",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793130387436 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-27T19:46:27.446Z"
+    },
+    {
+      "id": "LOG-1793130388027-KN4D0",
+      "usuario_id": "usr-autotest-1793130387436",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-27T19:46:28.027Z"
+    },
+    {
+      "id": "LOG-1793130388040-MKWAD",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793130387436 (Operador Automatizado)",
+      "created_at": "2026-10-27T19:46:28.040Z"
+    },
+    {
       "id": "LOG-1793130942623-S815X",
       "usuario_id": "usr-muq3bdll",
       "usuario_nombre": "Edson Designer",
@@ -440743,6 +440773,1566 @@
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @manuel (Manuel Rosales) con rol TECNOLOGÍA & INFORMÁTICA",
       "created_at": "2026-10-27T19:55:42.623Z"
+    },
+    {
+      "id": "LOG-1793132262219-N31YC",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793132262210 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-27T20:17:42.219Z"
+    },
+    {
+      "id": "LOG-1793132262921-JRLBZ",
+      "usuario_id": "usr-autotest-1793132262210",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-27T20:17:42.921Z"
+    },
+    {
+      "id": "LOG-1793132262933-2LRMP",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793132262210 (Operador Automatizado)",
+      "created_at": "2026-10-27T20:17:42.933Z"
+    },
+    {
+      "id": "LOG-1793132969666-I796X",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793132969655 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-27T20:29:29.666Z"
+    },
+    {
+      "id": "LOG-1793132971481-D8C08",
+      "usuario_id": "usr-autotest-1793132969655",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-27T20:29:31.481Z"
+    },
+    {
+      "id": "LOG-1793132971491-PQ0R9",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793132969655 (Operador Automatizado)",
+      "created_at": "2026-10-27T20:29:31.491Z"
+    },
+    {
+      "id": "LOG-1793135006241-X75A4",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793135006231 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-27T21:03:26.241Z"
+    },
+    {
+      "id": "LOG-1793135007334-2LUCR",
+      "usuario_id": "usr-autotest-1793135006231",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-27T21:03:27.334Z"
+    },
+    {
+      "id": "LOG-1793135007344-V8DL5",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793135006231 (Operador Automatizado)",
+      "created_at": "2026-10-27T21:03:27.344Z"
+    },
+    {
+      "id": "LOG-1793135701726-LSCL5",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793135701715 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-27T21:15:01.726Z"
+    },
+    {
+      "id": "LOG-1793135702437-8OH3N",
+      "usuario_id": "usr-autotest-1793135701715",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-27T21:15:02.437Z"
+    },
+    {
+      "id": "LOG-1793135702446-OLGNB",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793135701715 (Operador Automatizado)",
+      "created_at": "2026-10-27T21:15:02.446Z"
+    },
+    {
+      "id": "LOG-1793204075867-P0Z3U",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793204075854 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T16:14:35.867Z"
+    },
+    {
+      "id": "LOG-1793204076143-F4U4P",
+      "usuario_id": "usr-autotest-1793204075854",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T16:14:36.143Z"
+    },
+    {
+      "id": "LOG-1793204076153-213LT",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793204075854 (Operador Automatizado)",
+      "created_at": "2026-10-28T16:14:36.153Z"
+    },
+    {
+      "id": "LOG-1793205256583-0JO83",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793205256573 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T16:34:16.583Z"
+    },
+    {
+      "id": "LOG-1793205257278-8JB7F",
+      "usuario_id": "usr-autotest-1793205256573",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T16:34:17.278Z"
+    },
+    {
+      "id": "LOG-1793205257288-4M7CD",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793205256573 (Operador Automatizado)",
+      "created_at": "2026-10-28T16:34:17.288Z"
+    },
+    {
+      "id": "LOG-1793205758459-ZJ1X9",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793205758445 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T16:42:38.459Z"
+    },
+    {
+      "id": "LOG-1793205758729-5S9J2",
+      "usuario_id": "usr-autotest-1793205758445",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T16:42:38.729Z"
+    },
+    {
+      "id": "LOG-1793205758741-MOWQS",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793205758445 (Operador Automatizado)",
+      "created_at": "2026-10-28T16:42:38.741Z"
+    },
+    {
+      "id": "LOG-1793206170173-Z1H90",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793206170162 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T16:49:30.173Z"
+    },
+    {
+      "id": "LOG-1793206170396-FQ6DH",
+      "usuario_id": "usr-autotest-1793206170162",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T16:49:30.396Z"
+    },
+    {
+      "id": "LOG-1793206170406-E6M4K",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793206170162 (Operador Automatizado)",
+      "created_at": "2026-10-28T16:49:30.406Z"
+    },
+    {
+      "id": "LOG-1793207082939-ND8IV",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793207082927 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T17:04:42.939Z"
+    },
+    {
+      "id": "LOG-1793207083190-ECQ2K",
+      "usuario_id": "usr-autotest-1793207082927",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T17:04:43.190Z"
+    },
+    {
+      "id": "LOG-1793207083199-UFTPF",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793207082927 (Operador Automatizado)",
+      "created_at": "2026-10-28T17:04:43.199Z"
+    },
+    {
+      "id": "LOG-1793207730630-J1V46",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793207730617 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T17:15:30.630Z"
+    },
+    {
+      "id": "LOG-1793207730905-DA5F1",
+      "usuario_id": "usr-autotest-1793207730617",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T17:15:30.905Z"
+    },
+    {
+      "id": "LOG-1793207730916-03WP2",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793207730617 (Operador Automatizado)",
+      "created_at": "2026-10-28T17:15:30.916Z"
+    },
+    {
+      "id": "LOG-1793208636122-8XZJ2",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793208636110 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T17:30:36.122Z"
+    },
+    {
+      "id": "LOG-1793208636411-T8UR4",
+      "usuario_id": "usr-autotest-1793208636109",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T17:30:36.411Z"
+    },
+    {
+      "id": "LOG-1793208636428-VZYTA",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793208636110 (Operador Automatizado)",
+      "created_at": "2026-10-28T17:30:36.428Z"
+    },
+    {
+      "id": "LOG-1793208807737-06OO1",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793208807724 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T17:33:27.737Z"
+    },
+    {
+      "id": "LOG-1793208807963-UQG73",
+      "usuario_id": "usr-autotest-1793208807724",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T17:33:27.963Z"
+    },
+    {
+      "id": "LOG-1793208807973-K22WJ",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793208807724 (Operador Automatizado)",
+      "created_at": "2026-10-28T17:33:27.973Z"
+    },
+    {
+      "id": "LOG-1793209102995-IWRQ6",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793209102985 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T17:38:22.995Z"
+    },
+    {
+      "id": "LOG-1793209103704-XBU4H",
+      "usuario_id": "usr-autotest-1793209102985",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T17:38:23.704Z"
+    },
+    {
+      "id": "LOG-1793209103715-TAGN3",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793209102985 (Operador Automatizado)",
+      "created_at": "2026-10-28T17:38:23.715Z"
+    },
+    {
+      "id": "LOG-1793210491303-X0Q2X",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793210491293 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T18:01:31.303Z"
+    },
+    {
+      "id": "LOG-1793210491965-3M2NV",
+      "usuario_id": "usr-autotest-1793210491293",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T18:01:31.965Z"
+    },
+    {
+      "id": "LOG-1793210491974-8E2QI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793210491293 (Operador Automatizado)",
+      "created_at": "2026-10-28T18:01:31.974Z"
+    },
+    {
+      "id": "LOG-1793214512581-D8G03",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793214512568 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T19:08:32.581Z"
+    },
+    {
+      "id": "LOG-1793214512816-ZFXU6",
+      "usuario_id": "usr-autotest-1793214512568",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T19:08:32.817Z"
+    },
+    {
+      "id": "LOG-1793214512827-75516",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793214512568 (Operador Automatizado)",
+      "created_at": "2026-10-28T19:08:32.827Z"
+    },
+    {
+      "id": "LOG-1793214912136-AT8XM",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793214912123 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T19:15:12.136Z"
+    },
+    {
+      "id": "LOG-1793214912391-VDXSC",
+      "usuario_id": "usr-autotest-1793214912123",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T19:15:12.391Z"
+    },
+    {
+      "id": "LOG-1793214912403-AJ9W5",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793214912123 (Operador Automatizado)",
+      "created_at": "2026-10-28T19:15:12.403Z"
+    },
+    {
+      "id": "LOG-1793215552039-7TC7E",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793215552027 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T19:25:52.039Z"
+    },
+    {
+      "id": "LOG-1793215552276-ATZ85",
+      "usuario_id": "usr-autotest-1793215552027",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T19:25:52.276Z"
+    },
+    {
+      "id": "LOG-1793215552287-Q24KF",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793215552027 (Operador Automatizado)",
+      "created_at": "2026-10-28T19:25:52.287Z"
+    },
+    {
+      "id": "LOG-1793216509438-VXYNV",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793216509428 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T19:41:49.438Z"
+    },
+    {
+      "id": "LOG-1793216510309-TJ70K",
+      "usuario_id": "usr-autotest-1793216509428",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T19:41:50.309Z"
+    },
+    {
+      "id": "LOG-1793216510525-PTASH",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793216509428 (Operador Automatizado)",
+      "created_at": "2026-10-28T19:41:50.525Z"
+    },
+    {
+      "id": "LOG-1793217584747-1KBY6",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793217584732 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-28T19:59:44.747Z"
+    },
+    {
+      "id": "LOG-1793217585136-3L61W",
+      "usuario_id": "usr-autotest-1793217584732",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-28T19:59:45.136Z"
+    },
+    {
+      "id": "LOG-1793217585146-M3ZK8",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793217584732 (Operador Automatizado)",
+      "created_at": "2026-10-28T19:59:45.146Z"
+    },
+    {
+      "id": "LOG-1793284849513-2NASP",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793284849496 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T14:40:49.513Z"
+    },
+    {
+      "id": "LOG-1793284849558-B44Y3",
+      "usuario_id": "usr-autotest-1793284849496",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T14:40:49.558Z"
+    },
+    {
+      "id": "LOG-1793284849581-APKIM",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793284849496 (Operador Automatizado)",
+      "created_at": "2026-10-29T14:40:49.581Z"
+    },
+    {
+      "id": "LOG-1793288307637-MVV5R",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793288307625 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T15:38:27.637Z"
+    },
+    {
+      "id": "LOG-1793288307667-8QR7J",
+      "usuario_id": "usr-autotest-1793288307625",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T15:38:27.667Z"
+    },
+    {
+      "id": "LOG-1793288307681-OJNQW",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793288307625 (Operador Automatizado)",
+      "created_at": "2026-10-29T15:38:27.681Z"
+    },
+    {
+      "id": "LOG-1793289921846-95FL4",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793289921836 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T16:05:21.847Z"
+    },
+    {
+      "id": "LOG-1793289921879-5G0OJ",
+      "usuario_id": "usr-autotest-1793289921836",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T16:05:21.879Z"
+    },
+    {
+      "id": "LOG-1793289921893-NIQKG",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793289921836 (Operador Automatizado)",
+      "created_at": "2026-10-29T16:05:21.893Z"
+    },
+    {
+      "id": "LOG-1793290744912-FTZXW",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793290744901 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T16:19:04.912Z"
+    },
+    {
+      "id": "LOG-1793290744939-C3U8J",
+      "usuario_id": "usr-autotest-1793290744901",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T16:19:04.939Z"
+    },
+    {
+      "id": "LOG-1793290744952-QN2G0",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793290744901 (Operador Automatizado)",
+      "created_at": "2026-10-29T16:19:04.952Z"
+    },
+    {
+      "id": "LOG-1793292010810-1Q57Q",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793292010800 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T16:40:10.810Z"
+    },
+    {
+      "id": "LOG-1793292010841-LYAW5",
+      "usuario_id": "usr-autotest-1793292010800",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T16:40:10.841Z"
+    },
+    {
+      "id": "LOG-1793292010855-5OC0T",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793292010800 (Operador Automatizado)",
+      "created_at": "2026-10-29T16:40:10.855Z"
+    },
+    {
+      "id": "LOG-1793292307960-2CJWO",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793292307947 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T16:45:07.960Z"
+    },
+    {
+      "id": "LOG-1793292307992-WZQLW",
+      "usuario_id": "usr-autotest-1793292307947",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T16:45:07.992Z"
+    },
+    {
+      "id": "LOG-1793292308005-6YPN8",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793292307947 (Operador Automatizado)",
+      "created_at": "2026-10-29T16:45:08.005Z"
+    },
+    {
+      "id": "LOG-1793295832942-PBKQY",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793295832930 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T17:43:52.942Z"
+    },
+    {
+      "id": "LOG-1793295833505-J3FJ2",
+      "usuario_id": "usr-autotest-1793295832930",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T17:43:53.505Z"
+    },
+    {
+      "id": "LOG-1793295833522-CZEFI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793295832930 (Operador Automatizado)",
+      "created_at": "2026-10-29T17:43:53.522Z"
+    },
+    {
+      "id": "LOG-1793296392014-9OCHF",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793296392002 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T17:53:12.014Z"
+    },
+    {
+      "id": "LOG-1793296392707-3SCAA",
+      "usuario_id": "usr-autotest-1793296392002",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T17:53:12.707Z"
+    },
+    {
+      "id": "LOG-1793296392723-60JE0",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793296392002 (Operador Automatizado)",
+      "created_at": "2026-10-29T17:53:12.723Z"
+    },
+    {
+      "id": "LOG-1793299432397-1G4RU",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793299432384 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T18:43:52.397Z"
+    },
+    {
+      "id": "LOG-1793299432465-Q9ZM8",
+      "usuario_id": "usr-autotest-1793299432384",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T18:43:52.465Z"
+    },
+    {
+      "id": "LOG-1793299432485-4BXC2",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793299432384 (Operador Automatizado)",
+      "created_at": "2026-10-29T18:43:52.485Z"
+    },
+    {
+      "id": "LOG-1793300873483-MEIAE",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793300873470 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T19:07:53.483Z"
+    },
+    {
+      "id": "LOG-1793300873531-T8T4P",
+      "usuario_id": "usr-autotest-1793300873470",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T19:07:53.531Z"
+    },
+    {
+      "id": "LOG-1793300873550-A0MDY",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793300873470 (Operador Automatizado)",
+      "created_at": "2026-10-29T19:07:53.550Z"
+    },
+    {
+      "id": "LOG-1793303663823-BKJAZ",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793303663808 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T19:54:23.823Z"
+    },
+    {
+      "id": "LOG-1793303663869-03GLQ",
+      "usuario_id": "usr-autotest-1793303663808",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T19:54:23.869Z"
+    },
+    {
+      "id": "LOG-1793303663888-WHZ6X",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793303663808 (Operador Automatizado)",
+      "created_at": "2026-10-29T19:54:23.888Z"
+    },
+    {
+      "id": "LOG-1793304575030-FTKPP",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793304575003 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T20:09:35.030Z"
+    },
+    {
+      "id": "LOG-1793304575072-08734",
+      "usuario_id": "usr-autotest-1793304575002",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T20:09:35.072Z"
+    },
+    {
+      "id": "LOG-1793304575089-1TPVD",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793304575003 (Operador Automatizado)",
+      "created_at": "2026-10-29T20:09:35.089Z"
+    },
+    {
+      "id": "LOG-1793304927515-H8H09",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793304927493 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T20:15:27.515Z"
+    },
+    {
+      "id": "LOG-1793304927561-8LTSP",
+      "usuario_id": "usr-autotest-1793304927493",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T20:15:27.562Z"
+    },
+    {
+      "id": "LOG-1793304927584-3YPG9",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793304927493 (Operador Automatizado)",
+      "created_at": "2026-10-29T20:15:27.584Z"
+    },
+    {
+      "id": "LOG-1793307171292-0A1KV",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793307171278 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T20:52:51.292Z"
+    },
+    {
+      "id": "LOG-1793307171313-EH27G",
+      "usuario_id": "usr-autotest-1793307171278",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T20:52:51.313Z"
+    },
+    {
+      "id": "LOG-1793307171331-YTZAH",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793307171278 (Operador Automatizado)",
+      "created_at": "2026-10-29T20:52:51.331Z"
+    },
+    {
+      "id": "LOG-1793309510364-UBW3V",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793309510354 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T21:31:50.364Z"
+    },
+    {
+      "id": "LOG-1793309510398-MGCU8",
+      "usuario_id": "usr-autotest-1793309510354",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T21:31:50.398Z"
+    },
+    {
+      "id": "LOG-1793309510415-LHNHT",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793309510354 (Operador Automatizado)",
+      "created_at": "2026-10-29T21:31:50.415Z"
+    },
+    {
+      "id": "LOG-1793309550796-GCUNI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793309550786 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T21:32:30.796Z"
+    },
+    {
+      "id": "LOG-1793309550823-JOL6O",
+      "usuario_id": "usr-autotest-1793309550786",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T21:32:30.823Z"
+    },
+    {
+      "id": "LOG-1793309550836-1I93W",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793309550786 (Operador Automatizado)",
+      "created_at": "2026-10-29T21:32:30.836Z"
+    },
+    {
+      "id": "LOG-1793310433607-3V3BG",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793310433596 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T21:47:13.607Z"
+    },
+    {
+      "id": "LOG-1793310433636-QPG5H",
+      "usuario_id": "usr-autotest-1793310433596",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T21:47:13.636Z"
+    },
+    {
+      "id": "LOG-1793310433649-ZTP4G",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793310433596 (Operador Automatizado)",
+      "created_at": "2026-10-29T21:47:13.649Z"
+    },
+    {
+      "id": "LOG-1793310780908-BCTL8",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793310780897 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T21:53:00.908Z"
+    },
+    {
+      "id": "LOG-1793310780937-GQ9HP",
+      "usuario_id": "usr-autotest-1793310780897",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T21:53:00.937Z"
+    },
+    {
+      "id": "LOG-1793310780950-CM9NP",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793310780897 (Operador Automatizado)",
+      "created_at": "2026-10-29T21:53:00.950Z"
+    },
+    {
+      "id": "LOG-1793311315528-84Q80",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793311315516 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T22:01:55.528Z"
+    },
+    {
+      "id": "LOG-1793311315556-VIG0F",
+      "usuario_id": "usr-autotest-1793311315516",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T22:01:55.556Z"
+    },
+    {
+      "id": "LOG-1793311315567-BQ03R",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793311315516 (Operador Automatizado)",
+      "created_at": "2026-10-29T22:01:55.567Z"
+    },
+    {
+      "id": "LOG-1793311909028-HCNEX",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793311909014 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T22:11:49.028Z"
+    },
+    {
+      "id": "LOG-1793311909070-4XZTH",
+      "usuario_id": "usr-autotest-1793311909014",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T22:11:49.070Z"
+    },
+    {
+      "id": "LOG-1793311909087-N4UHS",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793311909014 (Operador Automatizado)",
+      "created_at": "2026-10-29T22:11:49.087Z"
+    },
+    {
+      "id": "LOG-1793312696419-EXKAJ",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793312696407 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T22:24:56.419Z"
+    },
+    {
+      "id": "LOG-1793312696447-XURYQ",
+      "usuario_id": "usr-autotest-1793312696407",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T22:24:56.447Z"
+    },
+    {
+      "id": "LOG-1793312696461-R2RHB",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793312696407 (Operador Automatizado)",
+      "created_at": "2026-10-29T22:24:56.461Z"
+    },
+    {
+      "id": "LOG-1793313646835-X6ZZE",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793313646823 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-29T22:40:46.835Z"
+    },
+    {
+      "id": "LOG-1793313646892-ZCGS8",
+      "usuario_id": "usr-autotest-1793313646823",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-29T22:40:46.892Z"
+    },
+    {
+      "id": "LOG-1793313646905-5VYC9",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793313646823 (Operador Automatizado)",
+      "created_at": "2026-10-29T22:40:46.905Z"
+    },
+    {
+      "id": "LOG-1793322103474-9TB5A",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793322103444 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T01:01:43.474Z"
+    },
+    {
+      "id": "LOG-1793322108570-BAXLR",
+      "usuario_id": "usr-autotest-1793322103444",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T01:01:48.570Z"
+    },
+    {
+      "id": "LOG-1793322108586-7QHTB",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793322103444 (Operador Automatizado)",
+      "created_at": "2026-10-30T01:01:48.586Z"
+    },
+    {
+      "id": "LOG-1793323101908-N72PL",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793323101893 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T01:18:21.909Z"
+    },
+    {
+      "id": "LOG-1793323107309-I9AWQ",
+      "usuario_id": "usr-autotest-1793323101893",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T01:18:27.309Z"
+    },
+    {
+      "id": "LOG-1793323107324-SMFDS",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793323101893 (Operador Automatizado)",
+      "created_at": "2026-10-30T01:18:27.324Z"
+    },
+    {
+      "id": "LOG-1793323739286-D7ZRT",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793323739270 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T01:28:59.286Z"
+    },
+    {
+      "id": "LOG-1793323744355-HK4QA",
+      "usuario_id": "usr-autotest-1793323739270",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T01:29:04.355Z"
+    },
+    {
+      "id": "LOG-1793323744372-PLHRW",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793323739270 (Operador Automatizado)",
+      "created_at": "2026-10-30T01:29:04.372Z"
+    },
+    {
+      "id": "LOG-1793324772713-P5TLS",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793324772701 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T01:46:12.713Z"
+    },
+    {
+      "id": "LOG-1793324777778-N5LN6",
+      "usuario_id": "usr-autotest-1793324772701",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T01:46:17.778Z"
+    },
+    {
+      "id": "LOG-1793324777792-2WBJO",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793324772701 (Operador Automatizado)",
+      "created_at": "2026-10-30T01:46:17.792Z"
+    },
+    {
+      "id": "LOG-1793326024344-AIIK8",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793326024331 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T02:07:04.344Z"
+    },
+    {
+      "id": "LOG-1793326029426-1TFYI",
+      "usuario_id": "usr-autotest-1793326024331",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T02:07:09.426Z"
+    },
+    {
+      "id": "LOG-1793326029438-3UBNN",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793326024331 (Operador Automatizado)",
+      "created_at": "2026-10-30T02:07:09.438Z"
+    },
+    {
+      "id": "LOG-1793326221523-M0WUG",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793326221510 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T02:10:21.523Z"
+    },
+    {
+      "id": "LOG-1793326226642-U2Z9P",
+      "usuario_id": "usr-autotest-1793326221510",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T02:10:26.642Z"
+    },
+    {
+      "id": "LOG-1793326226653-IQBH8",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793326221510 (Operador Automatizado)",
+      "created_at": "2026-10-30T02:10:26.653Z"
+    },
+    {
+      "id": "LOG-1793329814981-7STA7",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793329814966 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T03:10:14.981Z"
+    },
+    {
+      "id": "LOG-1793329820101-747AO",
+      "usuario_id": "usr-autotest-1793329814966",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T03:10:20.101Z"
+    },
+    {
+      "id": "LOG-1793329820123-V2W73",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793329814966 (Operador Automatizado)",
+      "created_at": "2026-10-30T03:10:20.123Z"
+    },
+    {
+      "id": "LOG-1793331007926-U3OBV",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793331007915 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T03:30:07.926Z"
+    },
+    {
+      "id": "LOG-1793331013022-KJBWX",
+      "usuario_id": "usr-autotest-1793331007915",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T03:30:13.022Z"
+    },
+    {
+      "id": "LOG-1793331013035-ZZTB9",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793331007915 (Operador Automatizado)",
+      "created_at": "2026-10-30T03:30:13.035Z"
+    },
+    {
+      "id": "LOG-1793332760201-RO3LW",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793332760187 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T03:59:20.201Z"
+    },
+    {
+      "id": "LOG-1793332765405-3X8N5",
+      "usuario_id": "usr-autotest-1793332760187",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T03:59:25.405Z"
+    },
+    {
+      "id": "LOG-1793332765431-RZPHT",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793332760187 (Operador Automatizado)",
+      "created_at": "2026-10-30T03:59:25.431Z"
+    },
+    {
+      "id": "LOG-1793333725922-IHARH",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793333725912 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T04:15:25.922Z"
+    },
+    {
+      "id": "LOG-1793333731015-0AXZS",
+      "usuario_id": "usr-autotest-1793333725912",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T04:15:31.015Z"
+    },
+    {
+      "id": "LOG-1793333731029-E1W51",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793333725912 (Operador Automatizado)",
+      "created_at": "2026-10-30T04:15:31.029Z"
+    },
+    {
+      "id": "LOG-1793371888209-XMOC1",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793371888196 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T14:51:28.209Z"
+    },
+    {
+      "id": "LOG-1793371888241-76236",
+      "usuario_id": "usr-autotest-1793371888196",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T14:51:28.241Z"
+    },
+    {
+      "id": "LOG-1793371888255-A5ZV3",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793371888196 (Operador Automatizado)",
+      "created_at": "2026-10-30T14:51:28.255Z"
     },
     {
       "id": "LOG-1793372176675-SXZCM",
@@ -440785,6 +442375,126 @@
       "created_at": "2026-10-30T15:01:53.092Z"
     },
     {
+      "id": "LOG-1793375626881-2MBGC",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793375626863 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T15:53:46.881Z"
+    },
+    {
+      "id": "LOG-1793375626929-P09XD",
+      "usuario_id": "usr-autotest-1793375626863",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T15:53:46.929Z"
+    },
+    {
+      "id": "LOG-1793375626947-XSWOU",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793375626863 (Operador Automatizado)",
+      "created_at": "2026-10-30T15:53:46.947Z"
+    },
+    {
+      "id": "LOG-1793381271866-MTRJI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793381271856 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T17:27:51.866Z"
+    },
+    {
+      "id": "LOG-1793381271896-TNXF2",
+      "usuario_id": "usr-autotest-1793381271856",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T17:27:51.896Z"
+    },
+    {
+      "id": "LOG-1793381271908-GOFHO",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793381271856 (Operador Automatizado)",
+      "created_at": "2026-10-30T17:27:51.908Z"
+    },
+    {
+      "id": "LOG-1793384745332-WIW1H",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793384745320 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T18:25:45.332Z"
+    },
+    {
+      "id": "LOG-1793384745368-NL7KA",
+      "usuario_id": "usr-autotest-1793384745320",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T18:25:45.368Z"
+    },
+    {
+      "id": "LOG-1793384745383-SW8VV",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793384745320 (Operador Automatizado)",
+      "created_at": "2026-10-30T18:25:45.383Z"
+    },
+    {
+      "id": "LOG-1793384895130-KA795",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793384895118 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-30T18:28:15.130Z"
+    },
+    {
+      "id": "LOG-1793384895165-VK522",
+      "usuario_id": "usr-autotest-1793384895118",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-30T18:28:15.166Z"
+    },
+    {
+      "id": "LOG-1793384895179-L0KGV",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793384895118 (Operador Automatizado)",
+      "created_at": "2026-10-30T18:28:15.179Z"
+    },
+    {
       "id": "LOG-1793462131735-GMPAN",
       "usuario_id": "usr-muq3bdll",
       "usuario_nombre": "Edson Designer",
@@ -440793,6 +442503,306 @@
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
       "created_at": "2026-10-31T15:55:31.735Z"
+    },
+    {
+      "id": "LOG-1793462800056-2FLNG",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793462800046 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-31T16:06:40.056Z"
+    },
+    {
+      "id": "LOG-1793462800087-6M8MW",
+      "usuario_id": "usr-autotest-1793462800046",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-31T16:06:40.087Z"
+    },
+    {
+      "id": "LOG-1793462800103-JN9FR",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793462800046 (Operador Automatizado)",
+      "created_at": "2026-10-31T16:06:40.103Z"
+    },
+    {
+      "id": "LOG-1793463498168-5L0BX",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793463498156 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-31T16:18:18.168Z"
+    },
+    {
+      "id": "LOG-1793463503326-0990Q",
+      "usuario_id": "usr-autotest-1793463498156",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-31T16:18:23.326Z"
+    },
+    {
+      "id": "LOG-1793463503356-8VKUK",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793463498156 (Operador Automatizado)",
+      "created_at": "2026-10-31T16:18:23.356Z"
+    },
+    {
+      "id": "LOG-1793465712876-1S4WL",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793465712865 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-31T16:55:12.876Z"
+    },
+    {
+      "id": "LOG-1793465717932-87IP5",
+      "usuario_id": "usr-autotest-1793465712865",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-31T16:55:17.932Z"
+    },
+    {
+      "id": "LOG-1793465717945-9V28H",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793465712865 (Operador Automatizado)",
+      "created_at": "2026-10-31T16:55:17.945Z"
+    },
+    {
+      "id": "LOG-1793467188247-WNR6R",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793467188237 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-31T17:19:48.247Z"
+    },
+    {
+      "id": "LOG-1793467193336-WVZW2",
+      "usuario_id": "usr-autotest-1793467188237",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-31T17:19:53.336Z"
+    },
+    {
+      "id": "LOG-1793467193351-VLMUH",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793467188237 (Operador Automatizado)",
+      "created_at": "2026-10-31T17:19:53.351Z"
+    },
+    {
+      "id": "LOG-1793473398126-IY45J",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793473398115 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-31T19:03:18.126Z"
+    },
+    {
+      "id": "LOG-1793473403197-LCKQE",
+      "usuario_id": "usr-autotest-1793473398115",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-31T19:03:23.197Z"
+    },
+    {
+      "id": "LOG-1793473403221-5D88A",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793473398115 (Operador Automatizado)",
+      "created_at": "2026-10-31T19:03:23.221Z"
+    },
+    {
+      "id": "LOG-1793474747389-4GMC7",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793474747377 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-10-31T19:25:47.389Z"
+    },
+    {
+      "id": "LOG-1793474752443-U39E3",
+      "usuario_id": "usr-autotest-1793474747377",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-10-31T19:25:52.443Z"
+    },
+    {
+      "id": "LOG-1793474752457-KVFEN",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793474747377 (Operador Automatizado)",
+      "created_at": "2026-10-31T19:25:52.457Z"
+    },
+    {
+      "id": "LOG-1793493252619-06TDY",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793493252607 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T00:34:12.619Z"
+    },
+    {
+      "id": "LOG-1793493257728-ZUK6O",
+      "usuario_id": "usr-autotest-1793493252607",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T00:34:17.728Z"
+    },
+    {
+      "id": "LOG-1793493257744-ALJ88",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793493252607 (Operador Automatizado)",
+      "created_at": "2026-11-01T00:34:17.744Z"
+    },
+    {
+      "id": "LOG-1793497568495-RAUAI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793497568454 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T01:46:08.495Z"
+    },
+    {
+      "id": "LOG-1793497573702-QJAKT",
+      "usuario_id": "usr-autotest-1793497568454",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T01:46:13.702Z"
+    },
+    {
+      "id": "LOG-1793497573731-40MQW",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793497568454 (Operador Automatizado)",
+      "created_at": "2026-11-01T01:46:13.731Z"
+    },
+    {
+      "id": "LOG-1793498149056-SDI8L",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793498149042 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T01:55:49.056Z"
+    },
+    {
+      "id": "LOG-1793498154123-FXO5A",
+      "usuario_id": "usr-autotest-1793498149042",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T01:55:54.123Z"
+    },
+    {
+      "id": "LOG-1793498154138-XUWGK",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793498149042 (Operador Automatizado)",
+      "created_at": "2026-11-01T01:55:54.138Z"
+    },
+    {
+      "id": "LOG-1793547562046-GE16Q",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793547562040 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T15:39:22.046Z"
+    },
+    {
+      "id": "LOG-1793547562050-JDWOK",
+      "usuario_id": "usr-autotest-1793547562040",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T15:39:22.050Z"
+    },
+    {
+      "id": "LOG-1793547562056-DP86H",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793547562040 (Operador Automatizado)",
+      "created_at": "2026-11-01T15:39:22.056Z"
     },
     {
       "id": "LOG-1793548032522-GQ1WS",
@@ -440843,6 +442853,126 @@
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
       "created_at": "2026-11-01T15:55:15.658Z"
+    },
+    {
+      "id": "LOG-1793548633544-XGQG0",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793548633538 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T15:57:13.544Z"
+    },
+    {
+      "id": "LOG-1793548633548-HYH8X",
+      "usuario_id": "usr-autotest-1793548633538",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T15:57:13.548Z"
+    },
+    {
+      "id": "LOG-1793548633552-OW5UP",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793548633538 (Operador Automatizado)",
+      "created_at": "2026-11-01T15:57:13.552Z"
+    },
+    {
+      "id": "LOG-1793548984959-EIOJN",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793548984951 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T16:03:04.959Z"
+    },
+    {
+      "id": "LOG-1793548984964-J8UNV",
+      "usuario_id": "usr-autotest-1793548984951",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T16:03:04.964Z"
+    },
+    {
+      "id": "LOG-1793548984970-2E32G",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793548984951 (Operador Automatizado)",
+      "created_at": "2026-11-01T16:03:04.970Z"
+    },
+    {
+      "id": "LOG-1793565364594-S3NIQ",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793565364581 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-01T20:36:04.594Z"
+    },
+    {
+      "id": "LOG-1793565364608-IA562",
+      "usuario_id": "usr-autotest-1793565364581",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-01T20:36:04.608Z"
+    },
+    {
+      "id": "LOG-1793565364626-QJFB6",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793565364581 (Operador Automatizado)",
+      "created_at": "2026-11-01T20:36:04.626Z"
+    },
+    {
+      "id": "LOG-1793627755278-FJHHI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793627755273 (Operador Automatizado) con rol VENDEDOR",
+      "created_at": "2026-11-02T13:55:55.278Z"
+    },
+    {
+      "id": "LOG-1793627755282-EZIL0",
+      "usuario_id": "usr-autotest-1793627755273",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-02T13:55:55.282Z"
+    },
+    {
+      "id": "LOG-1793627755287-O8WIK",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793627755273 (Operador Automatizado)",
+      "created_at": "2026-11-02T13:55:55.287Z"
     },
     {
       "id": "LOG-1793628414038-T46MD",
@@ -440903,6 +443033,186 @@
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ALMACEN",
       "created_at": "2026-11-02T14:17:29.862Z"
+    },
+    {
+      "id": "LOG-1793633010183-N28QW",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793633010176 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:23:30.183Z"
+    },
+    {
+      "id": "LOG-1793633010188-G5T1L",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @autotest_1793633010176 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:23:30.188Z"
+    },
+    {
+      "id": "LOG-1793633010188-6ON7O",
+      "usuario_id": "usr-autotest-1793633010176",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-02T15:23:30.188Z"
+    },
+    {
+      "id": "LOG-1793633010194-LFJM4",
+      "usuario_id": "usr-sistema",
+      "usuario_nombre": "Sistema",
+      "usuario_rol": "ADMIN",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @autotest_1793633010176 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:23:30.194Z"
+    },
+    {
+      "id": "LOG-1793633010199-0RASQ",
+      "usuario_id": "usr-autotest-1793633010176",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-02T15:23:30.199Z"
+    },
+    {
+      "id": "LOG-1793633010208-R9R56",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793633010176 (Operador Automatizado)",
+      "created_at": "2026-11-02T15:23:30.208Z"
+    },
+    {
+      "id": "LOG-1793633140263-LOYI2",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793633140257 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:25:40.263Z"
+    },
+    {
+      "id": "LOG-1793633140267-YNUAA",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @autotest_1793633140257 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:25:40.267Z"
+    },
+    {
+      "id": "LOG-1793633140268-SECNI",
+      "usuario_id": "usr-autotest-1793633140257",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-02T15:25:40.268Z"
+    },
+    {
+      "id": "LOG-1793633140274-JP45H",
+      "usuario_id": "usr-sistema",
+      "usuario_nombre": "Sistema",
+      "usuario_rol": "ADMIN",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @autotest_1793633140257 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:25:40.274Z"
+    },
+    {
+      "id": "LOG-1793633140281-B0XI4",
+      "usuario_id": "usr-autotest-1793633140257",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-02T15:25:40.281Z"
+    },
+    {
+      "id": "LOG-1793633140291-8YBPG",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793633140257 (Operador Automatizado)",
+      "created_at": "2026-11-02T15:25:40.291Z"
+    },
+    {
+      "id": "LOG-1793633523522-L9EKI",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "CREAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Creación de nuevo usuario @autotest_1793633523516 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:32:03.522Z"
+    },
+    {
+      "id": "LOG-1793633523526-DYWMH",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @autotest_1793633523516 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:32:03.526Z"
+    },
+    {
+      "id": "LOG-1793633523527-E73YS",
+      "usuario_id": "usr-autotest-1793633523516",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-02T15:32:03.527Z"
+    },
+    {
+      "id": "LOG-1793633523533-AECAC",
+      "usuario_id": "usr-sistema",
+      "usuario_nombre": "Sistema",
+      "usuario_rol": "ADMIN",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @autotest_1793633523516 (Operador Automatizado) con rol VENTAS",
+      "created_at": "2026-11-02T15:32:03.533Z"
+    },
+    {
+      "id": "LOG-1793633523539-Z8CG9",
+      "usuario_id": "usr-autotest-1793633523516",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENDEDOR",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión de prueba automatizada",
+      "created_at": "2026-11-02T15:32:03.539Z"
+    },
+    {
+      "id": "LOG-1793633523544-7U7KM",
+      "usuario_id": "usr-admin",
+      "usuario_nombre": "Carlos Mendoza",
+      "usuario_rol": "ADMIN",
+      "accion": "ELIMINAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Eliminación permanente del usuario @autotest_1793633523516 (Operador Automatizado)",
+      "created_at": "2026-11-02T15:32:03.544Z"
     }
   ],
   "order_items": [

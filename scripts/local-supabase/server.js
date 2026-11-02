@@ -1257,11 +1257,6 @@ const server = http.createServer(async (req, res) => {
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
               }
-              if (!doesMatch && tableName === 'users' && (key === 'id' || key === 'username')) {
-                const tLower = String(target).trim().toLowerCase();
-                doesMatch =
-                  String(row.id || '').trim().toLowerCase() === tLower ||
-                  String(row.username || '').trim().toLowerCase() === tLower;
               }
               if (!doesMatch) {
                 matches = false;
@@ -1271,6 +1266,9 @@ const server = http.createServer(async (req, res) => {
               let doesMatch = String(row[key]) === String(value);
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = String(row.codigo) === String(value) || String(row.sku) === String(value);
+              }
+              if (!doesMatch && tableName === 'users' && key === 'id') {
+                doesMatch = String(row.username || '').toLowerCase() === String(value).toLowerCase();
               }
               if (!doesMatch) {
                 matches = false;
