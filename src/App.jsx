@@ -419,13 +419,14 @@ function MainApp() {
           setCashMovementsState(cash || []);
           setFiscalClosures(closures || []);
           if (usrs && usrs.length > 0) {
-            const hasSysAdmin = usrs.some(u => normalizeRole(u.rol) === 'ADMINISTRADOR DEL SISTEMA' || u.username?.toLowerCase() === 'sysadmin');
-            let combinedUsers = usrs;
-            if (!hasSysAdmin) {
-              const sysAdminDefault = DEFAULT_USERS.find(u => u.id === 'usr-sysadmin');
-              if (sysAdminDefault) {
-                combinedUsers = [sysAdminDefault, ...usrs];
-                saveSupabaseUser(sysAdminDefault, { id: 'usr-sysadmin', nombre: 'Administrador del Sistema', rol: 'ADMINISTRADOR DEL SISTEMA' }).catch(() => {});
+            const cleanUsrs = usrs.filter(u => u && u.username && u.username.toLowerCase() !== 'sysadmin' && u.id !== 'usr-sysadmin');
+            const hasMasterAdmin = cleanUsrs.some(u => normalizeRole(u.rol) === 'ADMINISTRADOR MASTER' || u.username?.toLowerCase() === 'edson designer');
+            let combinedUsers = cleanUsrs;
+            if (!hasMasterAdmin) {
+              const masterDefault = DEFAULT_USERS.find(u => u.username?.toLowerCase() === 'edson designer' || u.id === 'usr-muq3bdll');
+              if (masterDefault) {
+                combinedUsers = [masterDefault, ...cleanUsrs];
+                saveSupabaseUser(masterDefault, { id: 'usr-muq3bdll', nombre: 'Edson Designer', rol: 'ADMINISTRADOR MASTER' }).catch(() => {});
               }
             }
             const sortedUsers = sortUsersByHierarchy(combinedUsers);

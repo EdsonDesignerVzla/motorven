@@ -421914,7 +421914,9 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.838Z"
+    "updated_at": "2026-10-26T19:07:04.838Z",
+    "ultimo_acceso": "2026-11-01T15:55:15.657Z",
+    "foto": "https://api.dicebear.com/7.x/bottts/svg?seed=EdsonMaster&backgroundColor=0284c7"
   },
   {
     "id": "usr-muyb8kga",
@@ -421937,13 +421939,27 @@ export const REAL_USERS = [
       "auditoria",
       "usuarios",
       "notificaciones",
-      "configuracion"
+      "configuracion",
+      "pedidos",
+      "ventas",
+      "vendedores",
+      "rentabilidad",
+      "compras",
+      "caja",
+      "cxp",
+      "bases-datos",
+      "cxc"
     ],
     "descripcion": "Especialista en sistemas, infraestructura y bases de datos.",
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-27T19:55:42.887Z",
+    "seller_id": null,
+    "co_ven": "USR-MUYB8KGA",
+    "coVen": null,
+    "foto": null,
+    "ultimo_acceso": null
   },
   {
     "id": "usr-gerencia",
@@ -421979,7 +421995,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-admin",
@@ -422015,7 +422032,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-almacen",
@@ -422041,7 +422059,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-caja",
@@ -422068,7 +422087,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-cobranza",
@@ -422095,7 +422115,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-compras",
@@ -422121,7 +422142,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mvgse4to",
@@ -422148,7 +422170,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mvgsc0hv",
@@ -422181,7 +422204,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mvgshyhy",
@@ -422209,14 +422233,15 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mur9uazg",
     "username": "kenterbertf2",
-    "password": "Kenter123",
+    "password": "Valencia.11",
     "nombre": "Kenterbert Fernández",
-    "cargo": "Asistente de Almacén y Despacho",
+    "cargo": "Asistente de Cobranzas",
     "rol": "ALMACEN",
     "departamento": "OPE",
     "cedula": "V-24.567.890",
@@ -422228,14 +422253,21 @@ export const REAL_USERS = [
     "modulos": [
       "pedidos",
       "inventario",
+      "notificaciones",
+      "cxc",
       "compras",
-      "notificaciones"
+      "dashboard"
     ],
     "descripcion": "Preparación de despachos y acomodo de mercancía en racks.",
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-11-02T14:17:00.183Z",
+    "seller_id": null,
+    "co_ven": null,
+    "coVen": null,
+    "foto": null,
+    "ultimo_acceso": "2026-11-02T14:17:29.861Z"
   },
   {
     "id": "usr-mu5vswve",
@@ -422266,7 +422298,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-vv",
@@ -422297,7 +422330,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-cb",
@@ -422328,7 +422362,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-cm",
@@ -422359,7 +422394,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-fs",
@@ -422390,7 +422426,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-jr",
@@ -422421,7 +422458,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-kb",
@@ -422452,7 +422490,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-ms",
@@ -422483,7 +422522,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-vp",
@@ -422514,7 +422554,8 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-of",
@@ -422545,10 +422586,10 @@ export const REAL_USERS = [
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   }
 ];
-
 export const REAL_ORDERS = [
   {
     "id": "COT-1",

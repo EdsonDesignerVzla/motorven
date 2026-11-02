@@ -34,7 +34,9 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.838Z"
+    "updated_at": "2026-10-26T19:07:04.838Z",
+    "ultimo_acceso": "2026-11-01T15:55:15.657Z",
+    "foto": "https://api.dicebear.com/7.x/bottts/svg?seed=EdsonMaster&backgroundColor=0284c7"
   },
   {
     "id": "usr-muyb8kga",
@@ -57,13 +59,27 @@
       "auditoria",
       "usuarios",
       "notificaciones",
-      "configuracion"
+      "configuracion",
+      "pedidos",
+      "ventas",
+      "vendedores",
+      "rentabilidad",
+      "compras",
+      "caja",
+      "cxp",
+      "bases-datos",
+      "cxc"
     ],
     "descripcion": "Especialista en sistemas, infraestructura y bases de datos.",
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-27T19:55:42.887Z",
+    "seller_id": null,
+    "co_ven": "USR-MUYB8KGA",
+    "coVen": null,
+    "foto": null,
+    "ultimo_acceso": null
   },
   {
     "id": "usr-gerencia",
@@ -99,7 +115,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-admin",
@@ -135,7 +152,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-almacen",
@@ -161,7 +179,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-caja",
@@ -188,7 +207,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-cobranza",
@@ -215,7 +235,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-compras",
@@ -241,7 +262,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mvgse4to",
@@ -268,7 +290,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mvgsc0hv",
@@ -301,7 +324,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mvgshyhy",
@@ -329,14 +353,15 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-mur9uazg",
     "username": "kenterbertf2",
-    "password": "Kenter123",
+    "password": "Valencia.11",
     "nombre": "Kenterbert Fernández",
-    "cargo": "Asistente de Almacén y Despacho",
+    "cargo": "Asistente de Cobranzas",
     "rol": "ALMACEN",
     "departamento": "OPE",
     "cedula": "V-24.567.890",
@@ -348,14 +373,21 @@
     "modulos": [
       "pedidos",
       "inventario",
+      "notificaciones",
+      "cxc",
       "compras",
-      "notificaciones"
+      "dashboard"
     ],
     "descripcion": "Preparación de despachos y acomodo de mercancía en racks.",
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-11-02T14:17:00.183Z",
+    "seller_id": null,
+    "co_ven": null,
+    "coVen": null,
+    "foto": null,
+    "ultimo_acceso": "2026-11-02T14:17:29.861Z"
   },
   {
     "id": "usr-mu5vswve",
@@ -386,7 +418,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-vv",
@@ -417,7 +450,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-cb",
@@ -448,7 +482,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-cm",
@@ -479,7 +514,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-fs",
@@ -510,7 +546,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-jr",
@@ -541,7 +578,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-kb",
@@ -572,7 +610,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-ms",
@@ -603,7 +642,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-vp",
@@ -634,7 +674,8 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   },
   {
     "id": "usr-seller-of",
@@ -665,6 +706,7 @@
     "activo": true,
     "active": true,
     "created_at": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-10-26T19:07:04.839Z",
+    "foto": null
   }
 ]

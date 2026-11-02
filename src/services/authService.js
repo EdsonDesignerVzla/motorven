@@ -428,62 +428,81 @@ export function getUsersList() {
       return DEFAULT_USERS;
     }
 
-    // Filtrar 'sysadmin' si estaba almacenado previamente en localStorage
-    const filteredParsed = parsed.filter(u => u.username?.toLowerCase() !== 'sysadmin' && u.id !== 'usr-sysadmin');
+    let deletedIds = [];
+    try {
+      const rawDel = localStorage.getItem('signum_deleted_user_ids');
+      if (rawDel) deletedIds = JSON.parse(rawDel) || [];
+    } catch (_) {}
+
+    // Filtrar 'sysadmin', registros sin username, eliminados o restos de pruebas automatizadas
+    const filteredParsed = parsed.filter(u => {
+      if (!u || typeof u.username !== 'string') return false;
+      const uname = u.username.trim().toLowerCase();
+      if (!uname || uname === 'sysadmin' || u.id === 'usr-sysadmin' || uname === 'autotest_1793130314101') return false;
+      if (uname !== 'edson designer' && (deletedIds.includes(u.id) || deletedIds.includes(uname))) return false;
+      return true;
+    });
     let hasMergedTemp = filteredParsed.length !== parsed.length;
     let currentList = filteredParsed;
 
     if (Array.isArray(TEMPORARY_USERS) && TEMPORARY_USERS.length > 0) {
       for (const tUser of TEMPORARY_USERS) {
-        const found = currentList.find(u => (u.id && u.id === tUser.id) || (u.username && u.username.toLowerCase() === tUser.username.toLowerCase()));
+        if (!tUser || !tUser.username) continue;
+        const tUname = tUser.username.trim().toLowerCase();
+        const isDeleted = tUname !== 'edson designer' && (deletedIds.includes(tUser.id) || deletedIds.includes(tUname));
+        const found = currentList.find(u => (u.id && u.id === tUser.id) || (u.username && u.username.toLowerCase() === tUname));
         if (!found) {
-          currentList.push(tUser);
-          hasMergedTemp = true;
+          if (!isDeleted) {
+            currentList.push({ ...tUser });
+            hasMergedTemp = true;
+          }
         } else {
-          if ((!found.nombre || found.nombre === '') && tUser.nombre) {
-            found.nombre = tUser.nombre;
+          // Si la versión empaquetada (users.json) tiene fecha updated_at más reciente que la caché local, sincronizarla
+          const tUpdated = tUser.updated_at || tUser.updatedAt;
+          const fUpdated = found.updatedAt || found.updated_at;
+          if (tUpdated && (!fUpdated || new Date(tUpdated).getTime() > new Date(fUpdated).getTime())) {
+            const keepPhoto = found.foto && !String(found.foto).includes('user_kenterbertf2_1793628') ? found.foto : (tUser.foto || null);
+            Object.assign(found, tUser, { foto: keepPhoto });
             hasMergedTemp = true;
-          }
-          if ((!found.rol || found.rol === '') && tUser.rol) {
-            found.rol = tUser.rol;
-            hasMergedTemp = true;
-          }
-          if ((!found.password || found.password === '') && tUser.password !== undefined) {
-            found.password = tUser.password;
-            hasMergedTemp = true;
-          }
-          if (tUser.foto && !found.foto) {
-            found.foto = tUser.foto;
-            hasMergedTemp = true;
-          }
-          if (tUser.cargo && found.cargo !== tUser.cargo) {
-            found.cargo = tUser.cargo;
-            hasMergedTemp = true;
-          }
-          if (tUser.departamento && found.departamento !== tUser.departamento) {
-            found.departamento = tUser.departamento;
-            hasMergedTemp = true;
-          }
-          if (tUser.cedula && !found.cedula) {
-            found.cedula = tUser.cedula;
-            hasMergedTemp = true;
-          }
-          if (tUser.email && !found.email) {
-            found.email = tUser.email;
-            hasMergedTemp = true;
-          }
-          if (tUser.phone && !found.phone) {
-            found.phone = tUser.phone;
-            found.telefono = tUser.phone;
-            hasMergedTemp = true;
-          }
-          if (tUser.avatar && !found.avatar) {
-            found.avatar = tUser.avatar;
-            hasMergedTemp = true;
-          }
-          if (found.activo === undefined && tUser.activo !== undefined) {
-            found.activo = tUser.activo;
-            hasMergedTemp = true;
+          } else {
+            // Reparar únicamente campos obligatorios vacíos sin sobrescribir ediciones locales
+            if ((!found.nombre || found.nombre === '') && tUser.nombre) {
+              found.nombre = tUser.nombre;
+              hasMergedTemp = true;
+            }
+            if ((!found.rol || found.rol === '') && tUser.rol) {
+              found.rol = tUser.rol;
+              hasMergedTemp = true;
+            }
+            if ((!found.password || found.password === '') && tUser.password !== undefined) {
+              found.password = tUser.password;
+              hasMergedTemp = true;
+            }
+            if (typeof found.foto === 'string' && found.foto.includes('user_kenterbertf2_1793628')) {
+              found.foto = null;
+              hasMergedTemp = true;
+            }
+            if (tUser.cedula && !found.cedula) {
+              found.cedula = tUser.cedula;
+              hasMergedTemp = true;
+            }
+            if (tUser.email && !found.email) {
+              found.email = tUser.email;
+              hasMergedTemp = true;
+            }
+            if (tUser.phone && !found.phone) {
+              found.phone = tUser.phone;
+              found.telefono = tUser.phone;
+              hasMergedTemp = true;
+            }
+            if (tUser.avatar && !found.avatar) {
+              found.avatar = tUser.avatar;
+              hasMergedTemp = true;
+            }
+            if (found.activo === undefined && tUser.activo !== undefined) {
+              found.activo = tUser.activo;
+              hasMergedTemp = true;
+            }
           }
         }
       }
@@ -714,6 +733,10 @@ export function authenticate(username, password) {
 
   if (!user) {
     return { success: false, message: `Usuario "@${cleanUser}" no encontrado en el sistema.` };
+  }
+
+  if (user.activo === false || user.active === false) {
+    return { success: false, message: 'Esta cuenta de usuario se encuentra suspendida o inactiva. Contacte al Administrador.' };
   }
 
   // Si la contraseña es explícitamente vacía (''), no requiere contraseña o se valida como cadena vacía

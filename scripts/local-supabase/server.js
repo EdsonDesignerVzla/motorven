@@ -161,6 +161,14 @@ async function initDatabase() {
           if (it.unidadVenta) it.unidadVenta = normUnit(it.unidadVenta);
         });
       }
+      if (Array.isArray(database.users)) {
+        database.users = database.users.filter(u =>
+          u &&
+          typeof u.username === 'string' &&
+          u.username.trim().length > 0 &&
+          u.username.trim().toLowerCase() !== 'autotest_1793130314101'
+        );
+      }
       console.log(`[Supabase Local] Base de datos cargada: ${Object.keys(database).length} tablas activas.`);
       return;
     } catch (err) {
@@ -221,6 +229,18 @@ function saveDatabase() {
       const dir = path.dirname(DB_FILE);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(DB_FILE, JSON.stringify(database, null, 2), 'utf8');
+      if (Array.isArray(database.users)) {
+        const cleanUsers = database.users.filter(u =>
+          u &&
+          typeof u.username === 'string' &&
+          u.username.trim().length > 0 &&
+          !u.username.trim().toLowerCase().startsWith('autotest_')
+        );
+        const tempUsersFile = path.join(projectRoot, 'src', 'data', 'temp', 'users.json');
+        if (fs.existsSync(path.dirname(tempUsersFile))) {
+          fs.writeFileSync(tempUsersFile, JSON.stringify(cleanUsers, null, 2), 'utf8');
+        }
+      }
     } catch (e) {
       console.error('[Supabase Local] Error guardando base de datos:', e);
     }
@@ -314,18 +334,35 @@ function extractFileBufferFromMultipart(buffer, contentType) {
   if (startIdx === -1) return buffer;
 
   const headerEndBuf = Buffer.from('\r\n\r\n');
-  const headerEnd = buffer.indexOf(headerEndBuf, startIdx);
-  if (headerEnd === -1) return buffer;
+  let bestPart = null;
 
-  const fileStart = headerEnd + 4;
-  const nextBoundary = buffer.indexOf(boundaryBuf, fileStart);
-  if (nextBoundary === -1) return buffer.slice(fileStart);
+  while (startIdx !== -1) {
+    const headerEnd = buffer.indexOf(headerEndBuf, startIdx);
+    if (headerEnd === -1) break;
 
-  const fileEnd = nextBoundary >= 2 && buffer[nextBoundary - 2] === 13 && buffer[nextBoundary - 1] === 10
-    ? nextBoundary - 2
-    : nextBoundary;
+    const headerStr = buffer.slice(startIdx, headerEnd).toString('utf8');
+    const partStart = headerEnd + 4;
+    const nextBoundary = buffer.indexOf(boundaryBuf, partStart);
+    const rawEnd = nextBoundary === -1 ? buffer.length : nextBoundary;
+    const partEnd = rawEnd >= 2 && buffer[rawEnd - 2] === 13 && buffer[rawEnd - 1] === 10
+      ? rawEnd - 2
+      : rawEnd;
+    const partSlice = buffer.slice(partStart, partEnd);
 
-  return buffer.slice(fileStart, fileEnd);
+    const isCacheControl = /name="cacheControl"/i.test(headerStr);
+    const hasFileHeader = /filename=|Content-Type:/i.test(headerStr);
+    if (!isCacheControl && (hasFileHeader || partSlice.length > 16)) {
+      bestPart = partSlice;
+      if (hasFileHeader) break;
+    } else if (!bestPart) {
+      bestPart = partSlice;
+    }
+
+    if (nextBoundary === -1) break;
+    startIdx = nextBoundary;
+  }
+
+  return bestPart || buffer;
 }
 
 
@@ -1027,6 +1064,15 @@ const server = http.createServer(async (req, res) => {
           if (newRow.id === undefined) {
             newRow.id = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
           }
+          if (tableName === 'users') {
+            const existingById = tableData.find(r => r && r.id && String(r.id).trim().toLowerCase() === String(newRow.id).trim().toLowerCase());
+            if (existingById && !String(newRow.username || '').trim()) {
+              newRow.username = existingById.username;
+            }
+            if (!String(newRow.username || '').trim()) {
+              continue;
+            }
+          }
 
           if (tableName === 'products') {
             const code = String(newRow.codigo || newRow.id || '').trim();
@@ -1210,6 +1256,12 @@ const server = http.createServer(async (req, res) => {
               let doesMatch = matchFilter(row[key], operator, target);
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
+              }
+              if (!doesMatch && tableName === 'users' && (key === 'id' || key === 'username')) {
+                const tLower = String(target).trim().toLowerCase();
+                doesMatch =
+                  String(row.id || '').trim().toLowerCase() === tLower ||
+                  String(row.username || '').trim().toLowerCase() === tLower;
               }
               if (!doesMatch) {
                 matches = false;

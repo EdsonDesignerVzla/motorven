@@ -86,10 +86,15 @@ import {
 import {
   DEFAULT_USERS,
   ROLE_PERMISSIONS,
-  sortUsersByHierarchy
+  sortUsersByHierarchy,
+  getUsersList,
+  normalizeRole,
+  getRoleMeta,
+  getUserDepartment
 } from './authService.js';
 import {
   enqueueSyncAction,
+  getSyncQueue,
   isNetworkOnline,
   flushSyncQueue
 } from './offlineSyncService.js';
@@ -123,6 +128,19 @@ const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env?.
  * todos los equipos de la red leen y escriben en la MISMA base de datos.
  */
 const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'];
+const STATIC_CLOUD_HOSTS = ['.github.io', '.vercel.app', '.netlify.app', '.pages.dev'];
+
+export const isStaticCloudHost = (() => {
+  try {
+    if (typeof window === 'undefined' || !window.location) return false;
+    const host = (window.location.hostname || '').toLowerCase();
+    const cfg = new URL(configuredSupabaseUrl);
+    return LOCAL_HOSTNAMES.includes(cfg.hostname) && STATIC_CLOUD_HOSTS.some(ext => host.endsWith(ext));
+  } catch (_) {
+    return false;
+  }
+})();
+
 const resolveSupabaseUrl = (configured) => {
   try {
     if (typeof window === 'undefined' || !window.location || !/^https?:$/.test(window.location.protocol)) {
@@ -130,6 +148,7 @@ const resolveSupabaseUrl = (configured) => {
     }
     const cfg = new URL(configured);
     if (!LOCAL_HOSTNAMES.includes(cfg.hostname)) return configured;
+    if (isStaticCloudHost) return configured;
     // Servido por Vite (dev o preview): usar el proxy del mismo origen
     if (import.meta.env?.DEV || ['5180', '4173'].includes(window.location.port)) {
       return `${window.location.origin}/sb`;
@@ -151,8 +170,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
  */
 export const normalizeStorageUrl = (url) => {
   if (!url || typeof url !== 'string' || url.startsWith('data:')) return url;
+  if (url.includes('user_kenterbertf2_1793628')) return null;
   const match = url.match(/^https?:\/\/[^/]+(?:\/sb)?\/(storage\/v1\/object\/public\/.+)$/);
   if (!match) return url;
+  if (isStaticCloudHost) return null;
   return `${supabaseUrl.replace(/\/+$/, '')}/${match[1]}`;
 };
 
@@ -162,17 +183,19 @@ export const normalizeStorageUrl = (url) => {
 export const describeSupabaseError = (err, fallback = 'Error en la base de datos.') => {
   const msg = err?.message || String(err || '');
   if (/Failed to fetch|NetworkError|ERR_CONNECTION|timeout|Load failed/i.test(msg)) {
-    return 'Sin conexión con el servidor de base de datos. Verifique que el servidor principal esté encendido (INICIAR_SISTEMA.bat) y vuelva a intentarlo. Los cambios NO se guardaron.';
+    return 'Sin conexión directa con el servidor local; los cambios se guardaron localmente y se sincronizarán al reconectar.';
   }
   return msg || fallback;
 };
 
+let isSupabaseAvailable = !isStaticCloudHost;
+
 export const isSupabaseOnline = () => isSupabaseAvailable;
 
-let isSupabaseAvailable = true;
-
 export const resetSupabaseOnlineStatus = () => {
-  isSupabaseAvailable = true;
+  if (!isStaticCloudHost) {
+    isSupabaseAvailable = true;
+  }
 };
 
 const withTimeout = (promise, ms = 3500) => {
@@ -885,14 +908,17 @@ const mapOrderFromDb = (o) => {
 // --- Mappings de Usuarios y Auditoría ---
 
 export const mapUserToDb = (u) => {
+  const normRol = normalizeRole(u.rol || u.role || 'VENTAS');
+  const roleMeta = getRoleMeta(normRol);
+  const nowIso = new Date().toISOString();
   const base = {
-    id: u.id,
+    id: u.id || `usr-${Date.now().toString(36)}`,
     username: (u.username || '').trim().toLowerCase(),
     password: u.password || '123456',
     nombre: (u.nombre || u.name || '').trim(),
-    cargo: (u.cargo || 'Operador').trim(),
-    rol: u.rol || u.role || 'VENTAS',
-    departamento: u.departamento || null,
+    cargo: (u.cargo || roleMeta.defaultCargo || 'Operador').trim(),
+    rol: normRol,
+    departamento: u.departamento || getUserDepartment({ ...u, rol: normRol }) || null,
     cedula: u.cedula || '',
     email: u.email || '',
     phone: u.phone || u.telefono || '',
@@ -900,28 +926,33 @@ export const mapUserToDb = (u) => {
     seller_id: u.seller_id || u.co_ven || u.coVen || null,
     co_ven: u.coVen || u.co_ven || u.seller_id || null,
     coVen: u.coVen || u.co_ven || u.seller_id || null,
-    modulos: Array.isArray(u.modulos) ? u.modulos : (ROLE_PERMISSIONS[u.rol || 'VENTAS'] || []),
-    avatar: u.avatar || '👤',
+    modulos: Array.isArray(u.modulos) && u.modulos.length > 0 ? u.modulos : (ROLE_PERMISSIONS[normRol] || []),
+    avatar: u.avatar || roleMeta.avatar || '👤',
     foto: normalizeStorageUrl(u.foto) || null,
-    color: u.color || '#0ea5e9',
+    color: u.color || roleMeta.color || '#0ea5e9',
     descripcion: u.descripcion || '',
-    activo: u.activo !== undefined ? u.activo : (u.active !== undefined ? u.active : true),
-    active: u.activo !== undefined ? u.activo : (u.active !== undefined ? u.active : true),
+    activo: u.activo !== undefined ? Boolean(u.activo) : (u.active !== undefined ? Boolean(u.active) : true),
+    active: u.activo !== undefined ? Boolean(u.activo) : (u.active !== undefined ? Boolean(u.active) : true),
     ultimo_acceso: u.ultimoAcceso || u.ultimo_acceso || null,
-    updated_at: new Date().toISOString()
+    created_at: u.createdAt || u.created_at || nowIso,
+    updated_at: u.updatedAt || u.updated_at || nowIso
   };
   return base;
 };
 
 export const mapUserFromDb = (u) => {
   if (!u) return null;
+  const normRol = normalizeRole(u.rol || u.role || 'VENTAS');
+  const roleMeta = getRoleMeta(normRol);
+  const updatedIso = u.updated_at || u.updatedAt || null;
+  const createdIso = u.created_at || u.createdAt || null;
   return {
     id: u.id,
-    username: u.username,
+    username: (u.username || '').trim().toLowerCase(),
     password: u.password || '123456',
     nombre: u.nombre || u.name || '',
-    cargo: u.cargo || '',
-    rol: u.rol || u.role || 'VENTAS',
+    cargo: u.cargo || roleMeta.defaultCargo || '',
+    rol: normRol,
     coVen: u.co_ven || u.coVen || u.seller_id || null,
     co_ven: u.co_ven || u.coVen || u.seller_id || null,
     seller_id: u.seller_id || u.co_ven || u.coVen || null,
@@ -929,17 +960,20 @@ export const mapUserFromDb = (u) => {
     email: u.email || '',
     phone: u.phone || u.telefono || '',
     telefono: u.telefono || u.phone || '',
-    departamento: u.departamento || null,
-    modulos: Array.isArray(u.modulos) && u.modulos.length > 0 ? u.modulos : (ROLE_PERMISSIONS[u.rol || 'VENTAS'] || []),
-    avatar: u.avatar || '👤',
+    departamento: u.departamento || getUserDepartment({ ...u, rol: normRol }) || null,
+    modulos: Array.isArray(u.modulos) && u.modulos.length > 0 ? u.modulos : (ROLE_PERMISSIONS[normRol] || []),
+    avatar: u.avatar || roleMeta.avatar || '👤',
     foto: normalizeStorageUrl(u.foto) || null,
-    color: u.color || '#0ea5e9',
+    color: u.color || roleMeta.color || '#0ea5e9',
     descripcion: u.descripcion || '',
     activo: u.activo !== false && u.active !== false,
     active: u.activo !== false && u.active !== false,
     ultimoAcceso: u.ultimo_acceso || u.ultimoAcceso || null,
-    createdAt: u.created_at || u.createdAt,
-    updatedAt: u.updated_at || u.updatedAt
+    ultimo_acceso: u.ultimo_acceso || u.ultimoAcceso || null,
+    createdAt: createdIso,
+    created_at: createdIso,
+    updatedAt: updatedIso,
+    updated_at: updatedIso
   };
 };
 
@@ -2117,18 +2151,77 @@ export const saveSupabaseFiscalClosure = async (closureData, closedSaleIds = [])
 /**
  * Obtiene el listado completo de usuarios desde Supabase con sincronización a caché local.
  */
-export const getSupabaseUsers = async () => {
-  const getCachedUsers = () => {
-    try {
-      const raw = localStorage.getItem('signum_users_list');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(u => u.nombre && u.rol)) {
-          return sortUsersByHierarchy(parsed);
+const applyPendingUserSyncActions = (baseList) => {
+  let deletedIds = [];
+  try {
+    const rawDel = localStorage.getItem('signum_deleted_user_ids');
+    if (rawDel) deletedIds = JSON.parse(rawDel) || [];
+  } catch (_) {}
+
+  const validMap = new Map();
+  for (const item of (Array.isArray(baseList) ? baseList : [])) {
+    if (!item || typeof item.username !== 'string') continue;
+    const uname = item.username.trim().toLowerCase();
+    if (!uname || uname === 'sysadmin' || item.id === 'usr-sysadmin' || uname === 'autotest_1793130314101') continue;
+    if (uname !== 'edson designer' && (deletedIds.includes(item.id) || deletedIds.includes(uname))) continue;
+    const mapped = mapUserFromDb(item);
+    if (mapped && mapped.username) {
+      validMap.set(mapped.id || mapped.username, mapped);
+    }
+  }
+
+  // Aplicar operaciones de usuario pendientes en la cola offline
+  try {
+    const queue = getSyncQueue();
+    for (const q of queue) {
+      if (q.entity !== 'user' || !q.data) continue;
+      if (q.action === 'DELETE') {
+        const delId = q.data.id;
+        for (const [k, val] of validMap.entries()) {
+          if (val.id === delId || val.username === String(delId || '').toLowerCase()) {
+            validMap.delete(k);
+          }
+        }
+      } else if (q.action === 'UPDATE' || q.action === 'INSERT') {
+        const u = mapUserFromDb(q.data);
+        if (u && u.username) {
+          let matchedKey = null;
+          for (const [k, val] of validMap.entries()) {
+            if (val.id === u.id || val.username === u.username) {
+              matchedKey = k;
+              break;
+            }
+          }
+          if (matchedKey) {
+            validMap.set(matchedKey, { ...validMap.get(matchedKey), ...u });
+          } else {
+            validMap.set(u.id || u.username, u);
+          }
         }
       }
+    }
+  } catch (_) {}
+
+  let finalUsers = Array.from(validMap.values());
+  const hasMaster = finalUsers.some(u => u.username === 'edson designer' || normalizeRole(u.rol) === 'ADMINISTRADOR MASTER');
+  if (!hasMaster) {
+    const masterDefault = DEFAULT_USERS.find(u => u.username?.toLowerCase() === 'edson designer' || u.id === 'usr-muq3bdll');
+    if (masterDefault) {
+      finalUsers = [mapUserFromDb(masterDefault), ...finalUsers];
+    }
+  }
+
+  return sortUsersByHierarchy(finalUsers);
+};
+
+export const getSupabaseUsers = async () => {
+  const getCachedUsers = () => {
+    const list = getUsersList();
+    const cleaned = applyPendingUserSyncActions(list);
+    try {
+      localStorage.setItem('signum_users_list', JSON.stringify(cleaned));
     } catch (_) {}
-    return sortUsersByHierarchy(DEFAULT_USERS);
+    return cleaned;
   };
 
   if (!isSupabaseAvailable) return getCachedUsers();
@@ -2146,7 +2239,7 @@ export const getSupabaseUsers = async () => {
       return getCachedUsers();
     }
 
-    const mappedUsers = sortUsersByHierarchy(data.map(mapUserFromDb));
+    const mappedUsers = applyPendingUserSyncActions(data.map(mapUserFromDb));
     try {
       localStorage.setItem('signum_users_list', JSON.stringify(mappedUsers));
     } catch (_) {}
@@ -2162,32 +2255,80 @@ export const getSupabaseUsers = async () => {
  * Guarda o actualiza un usuario en Supabase y sincroniza la memoria local.
  */
 export const saveSupabaseUser = async (userData, auditUser = null) => {
-  // 1. Sincronización local inmediata (para UI reactiva)
-  let previousUsersRaw = null;
-  try { previousUsersRaw = localStorage.getItem('signum_users_list'); } catch (_) {}
+  if (!userData || typeof userData !== 'object') {
+    throw new Error('Datos de usuario inválidos.');
+  }
+
+  // 1. Obtener lista actual para fusionar sin perder ningún campo existente
   let localUsers = [];
   try {
-    const raw = localStorage.getItem('signum_users_list');
-    localUsers = raw ? JSON.parse(raw) : [...DEFAULT_USERS];
+    localUsers = getUsersList();
   } catch (_) {
     localUsers = [...DEFAULT_USERS];
   }
 
-  const existingIdx = localUsers.findIndex(u => u.id === userData.id);
+  const incomingUsername = (userData.username || '').trim().toLowerCase().replace(/^@+/, '');
+  const existingIdx = localUsers.findIndex(u =>
+    (userData.id && u.id === userData.id) ||
+    (incomingUsername && u.username && u.username.toLowerCase() === incomingUsername)
+  );
   const existingUser = existingIdx >= 0 ? localUsers[existingIdx] : null;
+  const defaultTemplate = DEFAULT_USERS.find(u =>
+    (userData.id && u.id === userData.id) ||
+    (incomingUsername && u.username && u.username.toLowerCase() === incomingUsername)
+  ) || null;
 
-  // Si no se proporcionó una contraseña nueva en edición, conservar la existente
-  const finalPassword = (userData.password && userData.password.trim()) 
-    ? userData.password.trim() 
-    : (existingUser?.password || '123456');
+  // Ignorar propiedades undefined para que actualizaciones parciales (ej. foto o clave) no borren campos
+  const definedUserData = {};
+  for (const [k, v] of Object.entries(userData)) {
+    if (v !== undefined) definedUserData[k] = v;
+  }
+
+  const mergedSource = {
+    ...(defaultTemplate || {}),
+    ...(existingUser || {}),
+    ...definedUserData
+  };
+
+  const finalUsername = (mergedSource.username || '').trim().toLowerCase().replace(/^@+/, '');
+  if (!finalUsername) {
+    throw new Error('El nombre de usuario es obligatorio.');
+  }
+
+  const finalPassword = (userData.password && String(userData.password).trim())
+    ? String(userData.password).trim()
+    : (existingUser?.password || defaultTemplate?.password || '123456');
+
+  const targetRole = normalizeRole(mergedSource.rol || mergedSource.role || 'VENTAS');
+  const roleMeta = getRoleMeta(targetRole);
+  const roleChanged = existingUser && normalizeRole(existingUser.rol) !== targetRole;
+  const nowIso = new Date().toISOString();
 
   const payloadWithPassword = {
-    ...userData,
-    password: finalPassword
+    ...mergedSource,
+    id: mergedSource.id || `usr-${Date.now().toString(36)}`,
+    username: finalUsername,
+    password: finalPassword,
+    rol: targetRole,
+    color: roleChanged ? roleMeta.color : (mergedSource.color || roleMeta.color || '#0ea5e9'),
+    updatedAt: nowIso,
+    updated_at: nowIso
   };
 
   const dbPayload = mapUserToDb(payloadWithPassword);
   const mappedUser = mapUserFromDb(dbPayload);
+
+  // Si estaba marcado como eliminado anteriormente, quitarlo de la lista de eliminados
+  try {
+    const rawDel = localStorage.getItem('signum_deleted_user_ids');
+    if (rawDel) {
+      const delList = JSON.parse(rawDel) || [];
+      const updatedDel = delList.filter(x => x !== mappedUser.id && x !== mappedUser.username);
+      if (updatedDel.length !== delList.length) {
+        localStorage.setItem('signum_deleted_user_ids', JSON.stringify(updatedDel));
+      }
+    }
+  } catch (_) {}
 
   if (existingIdx >= 0) {
     localUsers[existingIdx] = { ...localUsers[existingIdx], ...mappedUser };
@@ -2199,8 +2340,19 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
     localStorage.setItem('signum_users_list', JSON.stringify(sortedLocal));
   } catch (_) {}
 
-  // 2. Persistencia en Supabase
-  if (isNetworkOnline()) {
+  // Si el usuario editado es la sesión activa, actualizar de inmediato
+  try {
+    const rawActive = localStorage.getItem('signum_active_user');
+    if (rawActive) {
+      const activeObj = JSON.parse(rawActive);
+      if (activeObj && (activeObj.id === mappedUser.id || activeObj.username?.toLowerCase() === mappedUser.username)) {
+        localStorage.setItem('signum_active_user', JSON.stringify(mappedUser));
+      }
+    }
+  } catch (_) {}
+
+  // 2. Persistencia en Supabase (cuando el servidor está disponible)
+  if (isNetworkOnline() && !isStaticCloudHost) {
     try {
       let { data, error } = await withTimeout(
         supabase
@@ -2224,13 +2376,17 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
       }
 
       if (error) {
-        console.error("Error directo de Supabase al guardar usuario:", error);
         throw error;
       }
 
       if (data) {
         isSupabaseAvailable = true;
-        const savedFromDb = mapUserFromDb(data);
+        const savedFromDb = mapUserFromDb({ ...dbPayload, ...data });
+        const finalLocal = sortedLocal.map(u => (u.id === savedFromDb.id || u.username === savedFromDb.username) ? savedFromDb : u);
+        try {
+          localStorage.setItem('signum_users_list', JSON.stringify(sortUsersByHierarchy(finalLocal)));
+        } catch (_) {}
+
         const accionTipo = existingIdx >= 0 ? 'EDITAR_USUARIO' : 'CREAR_USUARIO';
         logUserActivity({
           usuarioId: auditUser?.id || 'usr-sistema',
@@ -2241,42 +2397,32 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
           detalles: `${accionTipo === 'CREAR_USUARIO' ? 'Creación de nuevo usuario' : 'Actualización de datos para'} @${savedFromDb.username} (${savedFromDb.nombre}) con rol ${savedFromDb.rol}`
         }).catch(() => {});
 
-        // Reflejo en tiempo real en Supabase (SQL Server: vendedor) y comparativa
         try {
           const profitRes = await writeProfitUser(savedFromDb, 'SAVE');
           if (profitRes?.comparison) {
-            console.log('[saveSupabaseUser] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
             savedFromDb._comparison = profitRes.comparison;
           }
-        } catch (e) {
-          console.warn('[saveSupabaseUser] Aviso sincronizando con Supabase:', e.message);
-        }
+        } catch (_) {}
 
         return savedFromDb;
       }
     } catch (err) {
-      console.warn("No se pudo persistir usuario en Supabase inmediatamente, encolando offline:", err);
+      console.warn("No se pudo persistir usuario en Supabase inmediatamente, guardando en modo local/offline:", err?.message || err);
       markSupabaseOffline(err, 'saveSupabaseUser');
-      // Revertir la caché local para no dejar una contraseña/dato distinto al del servidor
-      try {
-        if (previousUsersRaw !== null) localStorage.setItem('signum_users_list', previousUsersRaw);
-      } catch (_) {}
-      throw err;
     }
   }
 
-  // Si falló la red o estamos offline, encolar para sincronización posterior
-  enqueueSyncAction('user', 'UPDATE', mappedUser);
+  // Fallback local/offline garantizado (no lanza error al usuario, mantiene los cambios en localStorage y encola)
+  enqueueSyncAction('user', existingIdx >= 0 ? 'UPDATE' : 'INSERT', mappedUser);
   writeProfitUser(mappedUser, 'SAVE').catch(() => {});
 
-  // Audit log local
   addStorageUserLog({
     usuarioId: auditUser?.id || 'usr-sistema',
     usuarioNombre: auditUser?.nombre || 'Sistema',
     usuarioRol: auditUser?.rol || 'ADMIN',
     accion: existingIdx >= 0 ? 'EDITAR_USUARIO' : 'CREAR_USUARIO',
     modulo: 'USUARIOS',
-    detalles: `Registro local de @${mappedUser.username} (${mappedUser.nombre}) [Modo Offline]`
+    detalles: `${existingIdx >= 0 ? 'Actualización de datos para' : 'Creación de nuevo usuario'} @${mappedUser.username} (${mappedUser.nombre}) con rol ${mappedUser.rol}`
   });
 
   return mappedUser;
@@ -2286,25 +2432,38 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
  * Elimina un usuario en Supabase y en la memoria local.
  */
 export const deleteSupabaseUser = async (userId, auditUser = null) => {
+  if (!userId) return false;
   let targetUser = null;
+
   // 1. Local
   try {
-    const raw = localStorage.getItem('signum_users_list');
-    if (raw) {
-      const users = JSON.parse(raw);
-      targetUser = users.find(u => u.id === userId);
-      const filtered = users.filter(u => u.id !== userId);
-      localStorage.setItem('signum_users_list', JSON.stringify(sortUsersByHierarchy(filtered)));
+    const users = getUsersList();
+    targetUser = users.find(u => u.id === userId || u.username?.toLowerCase() === String(userId).toLowerCase());
+    if (targetUser) {
+      const normRole = normalizeRole(targetUser.rol);
+      if (normRole === 'ADMINISTRADOR MASTER' || targetUser.username?.toLowerCase() === 'edson designer') {
+        throw new Error('Acción bloqueada: No se puede eliminar al Administrador Master (Propietario del Sistema).');
+      }
     }
-  } catch (_) {}
+    const filtered = users.filter(u => u.id !== userId && u.username?.toLowerCase() !== String(userId).toLowerCase());
+    localStorage.setItem('signum_users_list', JSON.stringify(sortUsersByHierarchy(filtered)));
 
-  // Reflejo en tiempo real en Supabase (SQL Server: vendedor)
-  writeProfitUser(targetUser || { id: userId }, 'DELETE').catch(e => {
-    console.warn('[deleteSupabaseUser] Aviso eliminando de Supabase:', e.message);
-  });
+    // Registrar ID y username como eliminados para no restaurarlos desde users.json
+    const rawDel = localStorage.getItem('signum_deleted_user_ids');
+    const delList = rawDel ? (JSON.parse(rawDel) || []) : [];
+    if (!delList.includes(userId)) delList.push(userId);
+    if (targetUser?.username && !delList.includes(targetUser.username.toLowerCase())) {
+      delList.push(targetUser.username.toLowerCase());
+    }
+    localStorage.setItem('signum_deleted_user_ids', JSON.stringify(delList));
+  } catch (err) {
+    if (err?.message?.includes('Acción bloqueada')) throw err;
+  }
+
+  writeProfitUser(targetUser || { id: userId }, 'DELETE').catch(() => {});
 
   // 2. Supabase
-  if (isNetworkOnline() && isSupabaseAvailable) {
+  if (isNetworkOnline() && !isStaticCloudHost) {
     try {
       const { error } = await withTimeout(
         supabase.from('users').delete().eq('id', userId)
@@ -2312,7 +2471,7 @@ export const deleteSupabaseUser = async (userId, auditUser = null) => {
       if (error) throw error;
       isSupabaseAvailable = true;
     } catch (err) {
-      console.warn("No se pudo eliminar en Supabase inmediatamente, encolando offline:", err);
+      console.warn("No se pudo eliminar en Supabase inmediatamente, encolando offline:", err?.message || err);
       markSupabaseOffline(err, 'deleteSupabaseUser');
       enqueueSyncAction('user', 'DELETE', { id: userId });
     }

@@ -10,6 +10,10 @@ import {
   logUserActivity,
   getSupabaseUserLogs
 } from '../services/supabaseService.js';
+import {
+  authenticate,
+  getUsersList
+} from '../services/authService.js';
 
 console.log('--- INICIANDO BATERÍA DE PRUEBAS: PERSISTENCIA DE USUARIOS Y BITÁCORA ---');
 
@@ -22,6 +26,9 @@ const sampleUser = {
   nombre: 'Usuario Prueba',
   cargo: 'Analista de Sistemas',
   rol: 'ADMIN',
+  cedula: 'V-12.345.678',
+  email: 'test@keystone.net.ve',
+  phone: '0414-1234567',
   avatar: '👨‍💼',
   foto: 'data:image/jpeg;base64,samplephoto',
   color: '#002b7a',
@@ -33,11 +40,13 @@ const sampleUser = {
 const dbUser = mapUserToDb(sampleUser);
 assert.strictEqual(dbUser.username, 'test_user');
 assert.strictEqual(dbUser.ultimo_acceso, '2026-09-17T15:00:00.000Z');
+assert.strictEqual(dbUser.cedula, 'V-12.345.678');
 
 const restoredUser = mapUserFromDb(dbUser);
 assert.strictEqual(restoredUser.username, sampleUser.username);
 assert.strictEqual(restoredUser.nombre, sampleUser.nombre);
 assert.strictEqual(restoredUser.ultimoAcceso, sampleUser.ultimoAcceso);
+assert.strictEqual(restoredUser.cedula, sampleUser.cedula);
 console.log('  ✓ Mapeo de usuario bidireccional superado.');
 
 // 2. Mapeo bidireccional de logs de actividad
@@ -81,15 +90,19 @@ try {
   process.exit(1);
 }
 
-// 4. Inserción y persistencia de un nuevo usuario de prueba
-console.log('4. Verificando inserción de nuevo usuario en Supabase...');
+// 4. Inserción, modificación, cambio de clave y eliminación de un usuario de prueba
+console.log('4. Verificando CRUD completo (crear, editar, cambiar clave, bloquear inactivo y eliminar)...');
+const ts = Date.now();
 const testUser = {
-  id: `usr-autotest-${Date.now()}`,
-  username: `autotest_${Date.now()}`,
+  id: `usr-autotest-${ts}`,
+  username: `autotest_${ts}`,
   password: 'testpassword',
   nombre: 'Operador Automatizado',
-  cargo: 'Testing Bot',
+  cargo: 'Testing Bot Inicial',
   rol: 'VENDEDOR',
+  cedula: 'V-99.888.777',
+  email: 'bot@keystone.net.ve',
+  phone: '0412-9998877',
   avatar: '🤖',
   foto: null,
   color: '#0ea5e9',
@@ -100,7 +113,36 @@ const testUser = {
 try {
   const saved = await saveSupabaseUser(testUser, { id: 'usr-admin', nombre: 'Carlos Mendoza', rol: 'ADMIN' });
   assert.strictEqual(saved.username, testUser.username);
-  console.log(`  ✓ Usuario @${saved.username} guardado en Supabase con éxito.`);
+  assert.strictEqual(saved.cedula, 'V-99.888.777');
+  console.log(`  ✓ Usuario @${saved.username} creado con éxito.`);
+
+  // 4b. Actualización parcial (ej. cambiar cargo y contraseña sin enviar cedula/email)
+  const modified = await saveSupabaseUser({
+    id: testUser.id,
+    username: testUser.username,
+    cargo: 'Supervisor Automatizado',
+    password: 'NuevaPassword.99'
+  }, { id: 'usr-admin', nombre: 'Carlos Mendoza', rol: 'ADMIN' });
+
+  assert.strictEqual(modified.cargo, 'Supervisor Automatizado', 'El cargo editado debe conservarse');
+  assert.strictEqual(modified.password, 'NuevaPassword.99', 'La nueva contraseña debe conservarse');
+  assert.strictEqual(modified.cedula, 'V-99.888.777', 'La cédula no debe borrarse en actualización parcial');
+  assert.strictEqual(modified.email, 'bot@keystone.net.ve', 'El email no debe borrarse en actualización parcial');
+
+  const authOk = authenticate(testUser.username, 'NuevaPassword.99');
+  assert.strictEqual(authOk.success, true, 'El login con la nueva contraseña debe ser exitoso');
+  assert.strictEqual(authOk.user.cargo, 'Supervisor Automatizado', 'getUsersList() no debe sobrescribir el cargo editado');
+  console.log('  ✓ Modificación, preservación de campos y cambio de contraseña verificados.');
+
+  // 4c. Suspender usuario (activo: false) y verificar bloqueo de login
+  await saveSupabaseUser({
+    id: testUser.id,
+    username: testUser.username,
+    activo: false
+  });
+  const authSuspended = authenticate(testUser.username, 'NuevaPassword.99');
+  assert.strictEqual(authSuspended.success, false, 'Un usuario inactivo no debe poder iniciar sesión');
+  console.log('  ✓ Bloqueo de acceso a cuenta inactiva verificado.');
 
   // 5. Verificación en el listado
   const updatedList = await getSupabaseUsers();
@@ -129,7 +171,9 @@ try {
   await deleteSupabaseUser(testUser.id, { id: 'usr-admin', nombre: 'Carlos Mendoza', rol: 'ADMIN' });
   const cleanedList = await getSupabaseUsers();
   const shouldNotExist = cleanedList.find(u => u.id === testUser.id);
-  assert.ok(!shouldNotExist, 'El usuario temporal debe haber sido eliminado');
+  assert.ok(!shouldNotExist, 'El usuario temporal debe haber sido eliminado de Supabase');
+  const localAfterDelete = getUsersList().find(u => u.id === testUser.id);
+  assert.ok(!localAfterDelete, 'El usuario eliminado no debe reaparecer en getUsersList()');
   console.log('  ✓ Limpieza completada con éxito.');
 } catch (e) {
   if (e?.message?.includes('exceed_egress_quota') || String(e).includes('exceed_egress_quota')) {

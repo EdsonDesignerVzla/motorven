@@ -249,8 +249,8 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       let finalPhoto = base64Data;
       try {
         const storageRes = await uploadImageToStorage(base64Data, STORAGE_FOLDERS.USERS, `user_${username}`);
-        if (storageRes.success && storageRes.publicUrl) {
-          finalPhoto = storageRes.publicUrl;
+        if (storageRes.success && (storageRes.base64 || storageRes.publicUrl)) {
+          finalPhoto = storageRes.base64 || storageRes.publicUrl;
         }
       } catch (storageErr) {
         console.warn('Almacenamiento en Supabase Storage:', storageErr);
@@ -348,15 +348,17 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       : (ROLE_PERMISSIONS[normRol] ? [...ROLE_PERMISSIONS[normRol]] : [...(meta.defaultModules || ['ventas'])]);
 
     setFormData({
+      ...user,
       id: user.id,
-      nombre: user.nombre,
-      username: user.username,
+      nombre: user.nombre || '',
+      username: user.username || '',
       cargo: user.cargo || meta.defaultCargo,
       rol: normRol,
       departamento: getUserDepartment(user),
       modulos: userModulos,
       avatar: user.avatar || meta.avatar,
       foto: user.foto || null,
+      color: user.color || meta.color,
       password: '', // En blanco para conservar la actual salvo que el admin ingrese una nueva
       currentPassword: user.password || '123456',
       descripcion: user.descripcion || '',
@@ -424,7 +426,9 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
         password: cleanPassword ? cleanPassword : (formData.id ? undefined : '123456')
       };
 
-      const saved = await saveSupabaseUser(payload, currentUser);
+      resetSupabaseOnlineStatus();
+      const { currentPassword: _cp, ...cleanPayload } = payload;
+      const saved = await saveSupabaseUser(cleanPayload, currentUser);
 
       // Si editó su propio usuario en sesión (por ID o username), actualizar sesión activa de inmediato
       const isSelf = currentUser && (
@@ -473,10 +477,23 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       setIsSaving(true);
       resetSupabaseOnlineStatus();
       const updatedUser = { ...selectedUser, password: newPassword.trim() };
-      await saveSupabaseUser(updatedUser, currentUser);
+      const saved = await saveSupabaseUser(updatedUser, currentUser);
+      const isSelf = currentUser && (
+        currentUser.id === saved.id ||
+        (currentUser.username && saved.username && currentUser.username.toLowerCase() === saved.username.toLowerCase())
+      );
+      if (isSelf) {
+        try {
+          localStorage.setItem('signum_active_user', JSON.stringify(saved));
+        } catch (_) {}
+        if (onUpdateCurrentUser) onUpdateCurrentUser(saved);
+      }
       const fresh = await getSupabaseUsers();
       setUsers(fresh);
-      if (onUsersUpdated) onUsersUpdated();
+      try {
+        localStorage.setItem('signum_users_list', JSON.stringify(fresh));
+      } catch (_) {}
+      if (onUsersUpdated) onUsersUpdated(saved);
 
       setShowPasswordModal(false);
       showAlert('success', `Contraseña de @${selectedUser.username} actualizada correctamente en la nube.`);
@@ -521,14 +538,18 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
 
     try {
       setIsSaving(true);
+      resetSupabaseOnlineStatus();
       await deleteSupabaseUser(user.id, currentUser);
       const fresh = await getSupabaseUsers();
       setUsers(fresh);
+      try {
+        localStorage.setItem('signum_users_list', JSON.stringify(fresh));
+      } catch (_) {}
       if (onUsersUpdated) onUsersUpdated();
-      showAlert('success', `Usuario @${user.username} eliminado de la base de datos.`);
+      showAlert('success', `Usuario @${user.username} eliminado correctamente.`);
       loadLogs();
     } catch (err) {
-      showAlert('error', err.message || 'Error al eliminar usuario.');
+      showAlert('error', describeSupabaseError(err, 'Error al eliminar usuario.'));
     } finally {
       setIsSaving(false);
     }

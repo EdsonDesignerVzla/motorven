@@ -29,7 +29,7 @@ import {
   getDepartmentMeta,
   syncUsersWithSupabase
 } from '../services/authService';
-import { resetSupabaseOnlineStatus, isSupabaseOnline } from '../services/supabaseService';
+import { resetSupabaseOnlineStatus, isSupabaseOnline, isStaticCloudHost } from '../services/supabaseService';
 
 const DEPT_ICONS = {
   TI: Laptop,
@@ -107,7 +107,7 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
           if (latest && latest.length > 0) setUsers(latest);
           res = authenticate(selectedUsername, password);
         } catch (_) {}
-        if (!res.success && !isSupabaseOnline()) {
+        if (!res.success && !isSupabaseOnline() && !isStaticCloudHost) {
           res = {
             ...res,
             message: `${res.message} (Sin conexión con el servidor de base de datos: este equipo está usando datos locales que pueden estar desactualizados. Verifique que el servidor principal esté encendido.)`

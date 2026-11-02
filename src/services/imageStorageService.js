@@ -428,7 +428,7 @@ export async function uploadUserProfilePhoto({ userId, username, fileOrDataUrl, 
       throw new Error(uploadRes.error || 'Error al subir la foto a Supabase Storage.');
     }
 
-    const finalPhoto = uploadRes.publicUrl || uploadRes.base64;
+    const finalPhoto = uploadRes.base64 || uploadRes.publicUrl;
 
     // Actualizar usuario en Supabase (tabla users)
     const savedUser = await saveSupabaseUser({
