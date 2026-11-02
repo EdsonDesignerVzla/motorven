@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { X, Printer } from 'lucide-react';
-import { formatBs } from '../services/formatService';
+import { formatBs, resolveProductUnit } from '../services/formatService';
 import { generateInventoryPDF } from '../services/pdfReportService';
 
 export default function InventoryKardexModal({
@@ -106,7 +106,7 @@ export default function InventoryKardexModal({
         descripcion: p.descripcion,
         viscosidad: p.viscosidad,
         stockActual: p.stock || 0,
-        unidad: p.unidad || 'Caja (12L)',
+        unidad: resolveProductUnit(p, 'Caja'),
         entradasAjuste: 0,
         salidasAjuste: 0,
         traslados: 0
@@ -122,7 +122,7 @@ export default function InventoryKardexModal({
             descripcion: r.art_des || cArt,
             viscosidad: 'N/A',
             stockActual: 0,
-            unidad: r.uni_venta || 'Unidad',
+            unidad: resolveProductUnit(r, 'Caja'),
             entradasAjuste: 0,
             salidasAjuste: 0,
             traslados: 0
@@ -145,14 +145,18 @@ export default function InventoryKardexModal({
       });
     });
 
-    return Object.values(map).filter(p => {
-      if (!searchTerm) return true;
-      const term = searchTerm.toLowerCase();
-      return (
-        p.codigo.toLowerCase().includes(term) ||
-        p.descripcion.toLowerCase().includes(term)
+    return Object.values(map)
+      .filter(p => {
+        if (!searchTerm) return true;
+        const term = searchTerm.toLowerCase();
+        return (
+          String(p.codigo || '').toLowerCase().includes(term) ||
+          String(p.descripcion || '').toLowerCase().includes(term)
+        );
+      })
+      .sort((a, b) =>
+        String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
       );
-    });
   }, [products, adjustments, transfers, searchTerm]);
 
   const handleTriggerSync = async () => {

@@ -49,6 +49,7 @@ import {
   generateFiscalControlNumber,
   generateVatRetentionVoucherNumber
 } from './fiscalService.js';
+import { resolveProductUnit, resolveProductLitersPerUnit } from './formatService.js';
 import {
   getConfig as getStorageConfig,
   updateConfig as updateStorageConfig,
@@ -271,7 +272,7 @@ const mapProductToDb = (p) => {
   const precioUsdDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? 0) || 0;
   const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || 0;
-  const litrosPorUnidad = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 1) || 1;
+  const litrosPorUnidad = resolveProductLitersPerUnit(p);
   const stock = Number(p.stock ?? 0) || 0;
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stockMinimo ?? p.stock_minimo ?? 0) || 0;
@@ -291,7 +292,7 @@ const mapProductToDb = (p) => {
     normaApi: p.normaApi || p.norma_api || '',
     presentaciones_disponibles: p.presentacionesDisponibles || p.presentaciones_disponibles || [],
     presentacionesDisponibles: p.presentacionesDisponibles || p.presentaciones_disponibles || [],
-    unidad: p.unidad || 'UND',
+    unidad: resolveProductUnit(p, 'Caja'),
     litros_por_unidad: litrosPorUnidad,
     litrosPorUnidad,
     stock,
@@ -335,7 +336,7 @@ const mapProductFromDb = (p) => {
   const precioUsdDetal = Number(p.precio_usd_detal ?? p.precioUsdDetal ?? p.precio ?? p.precioVenta ?? 0) || 0;
   const precioUsdMayor = Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
   const costoUsd = Number(p.costo_usd ?? p.costoUsd ?? p.costo ?? 0) || 0;
-  const litrosPorUnidad = Number(p.litros_por_unidad ?? p.litrosPorUnidad ?? 1) || 1;
+  const litrosPorUnidad = resolveProductLitersPerUnit(p);
   const stock = Number(p.stock ?? 0) || 0;
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 0) || 0;
@@ -355,7 +356,7 @@ const mapProductFromDb = (p) => {
     norma_api: p.norma_api || p.normaApi || '',
     presentacionesDisponibles: p.presentaciones_disponibles || p.presentacionesDisponibles || [],
     presentaciones_disponibles: p.presentaciones_disponibles || p.presentacionesDisponibles || [],
-    unidad: p.unidad || 'UND',
+    unidad: resolveProductUnit(p, 'Caja'),
     litrosPorUnidad,
     litros_por_unidad: litrosPorUnidad,
     stock,
@@ -817,7 +818,7 @@ const mapOrderFromDb = (o) => {
       rengNum: it.reng_num,
       articuloId: it.articulo_id,
       articuloDescripcion: it.articulo_descripcion,
-      unidadVenta: it.unidad_venta,
+      unidadVenta: resolveProductUnit(it, 'Caja'),
       cantidad: Number(it.cantidad || 0),
       litrosUnitarios: Number(it.litros_unitarios || 0),
       litrosTotales: Number(it.litros_totales || 0),
@@ -1088,6 +1089,13 @@ export const updateSupabaseConfig = async (newConfig) => {
 
 // Products
 export const getSupabaseProducts = async () => {
+  const sortByCodeAsc = (list) =>
+    Array.isArray(list)
+      ? [...list].sort((a, b) =>
+          String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+        )
+      : [];
+
   // 1. FUENTE MAESTRA DE DATOS: Supabase Cloud (DB_SIGNUM_MOTORVEN)
   // Almacena productos íntegros con imágenes en Base64, viscosidades y especificaciones completas
   if (isNetworkOnline()) {
@@ -1098,7 +1106,7 @@ export const getSupabaseProducts = async () => {
 
       if (!error && Array.isArray(data) && data.length > 0) {
         isSupabaseAvailable = true;
-        const mapped = data.map(mapProductFromDb);
+        const mapped = sortByCodeAsc(data.map(mapProductFromDb));
         try {
           localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(mapped));
         } catch (_) {}
@@ -1111,14 +1119,22 @@ export const getSupabaseProducts = async () => {
   }
 
   // 2. Caché local en caso de estar offline
-  return getStorageProducts();
+  return sortByCodeAsc(getStorageProducts());
 };
 
 export const saveSupabaseProduct = async (product) => {
-  // 1. Guardar primero en almacenamiento local para respuesta instantánea de la UI
-  saveStorageProduct(product);
+  // 1. Normalizar presentación y factor de litros antes de guardar
+  const normalized = {
+    ...product,
+    unidad: resolveProductUnit(product, 'Caja'),
+    litrosPorUnidad: resolveProductLitersPerUnit(product),
+    litros_por_unidad: resolveProductLitersPerUnit(product)
+  };
+
+  // 2. Guardar en almacenamiento local para respuesta instantánea de la UI
+  saveStorageProduct(normalized);
   const currentProds = getStorageProducts();
-  const prodToSave = currentProds.find(p => (product.id && p.id === product.id) || p.codigo === product.codigo) || product;
+  const prodToSave = currentProds.find(p => (normalized.id && p.id === normalized.id) || p.codigo === normalized.codigo) || normalized;
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     enqueueSyncAction('product', 'UPDATE', prodToSave);
@@ -1157,36 +1173,36 @@ export const saveSupabaseProduct = async (product) => {
 };
 
 export const deleteSupabaseProduct = async (id) => {
+  const targetId = String(id).trim();
   const currentProds = getStorageProducts();
-  const target = currentProds.find(p => p.id === id || p.codigo === id);
-  const coArt = target?.codigo || id;
+  const target = currentProds.find(p => String(p.id).trim() === targetId || String(p.codigo).trim() === targetId);
+  const coArt = target?.codigo || targetId;
 
-  deleteStorageProduct(id);
+  deleteStorageProduct(targetId);
 
   // Reflejo en tiempo real en Supabase (SQL Server: art anulado=1)
-  writeProfitProduct({ id, codigo: coArt }, 'DELETE').catch(e => {
+  writeProfitProduct({ id: targetId, codigo: coArt }, 'DELETE').catch(e => {
     console.warn('[deleteSupabaseProduct] Aviso eliminando en Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
-    enqueueSyncAction('product', 'DELETE', { id });
+    enqueueSyncAction('product', 'DELETE', { id: targetId, codigo: coArt });
     return true;
   }
 
   try {
     const { error } = await withTimeout(
-      supabase.from('products').delete().eq('id', id)
+      supabase.from('products').delete().eq('id', targetId)
     );
 
     if (error) {
-      // Si tiene histórico o clave foránea, aplicar soft delete en Supabase
-      await supabase.from('products').update({ stock: 0, inactivo: true, anulado: true }).eq('id', id);
+      await supabase.from('products').delete().eq('codigo', coArt);
     }
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
     try {
-      await supabase.from('products').update({ stock: 0, inactivo: true, anulado: true }).eq('id', id);
+      await supabase.from('products').delete().eq('codigo', coArt);
     } catch (_) {}
     return true;
   }
@@ -1818,7 +1834,7 @@ export const saveSupabaseOrder = async (orderData) => {
         reng_num: it.rengNum || idx + 1,
         articulo_id: it.articuloId,
         articulo_descripcion: it.articuloDescripcion,
-        unidad_venta: it.unidadVenta || 'Caja (12L)',
+        unidad_venta: resolveProductUnit(it, 'Caja'),
         cantidad: Number(it.cantidad || 1),
         litros_unitarios: Number(it.litrosUnitarios || 1),
         litros_totales: Number(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1))),

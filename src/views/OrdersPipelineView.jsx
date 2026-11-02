@@ -30,7 +30,7 @@ import {
   ExternalLink,
   Lock
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit } from '../services/formatService';
 import DispatchRouteModal from '../components/DispatchRouteModal';
 import { isMasterOrGerencia } from '../services/authService';
 import { generateOrdersPDF, generateSellerOrderPDF } from '../services/pdfReportService';
@@ -1024,7 +1024,7 @@ export default function OrdersPipelineView({
                               {it.articuloId}
                             </td>
                             <td style={{ fontWeight: 600 }}>{it.articuloDescripcion}</td>
-                            <td style={{ color: 'var(--text-muted)' }}>{it.unidadVenta || 'Caja (12L)'}</td>
+                            <td style={{ color: 'var(--text-muted)' }}>{resolveProductUnit(it, 'Caja')}</td>
                             <td style={{ textAlign: 'right', fontWeight: 700 }}>{it.cantidad}</td>
                             <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>
                               {Number(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1))).toFixed(1)} L
@@ -1222,7 +1222,7 @@ export default function OrdersPipelineView({
                 const itemsToSave = validItems.map((it, idx) => {
                   const prod = safeProducts.find(p => p && (p.id === it.articuloId || p.codigo === it.articuloId));
                   const desc = prod?.descripcion || it.articuloId;
-                  const uni = prod?.unidad || it.unidad || 'Caja (12L)';
+                  const uni = resolveProductUnit(prod || it, 'Caja');
                   const litUnit = prod?.litros_por_unidad || prod?.litrosPorUnidad || 11.35;
                   const cant = Number(it.cantidad || 1);
                   const price = Number(it.precioUsd || prod?.precio_usd_mayor || prod?.precio_usd_detal || 0);
@@ -1333,7 +1333,7 @@ export default function OrdersPipelineView({
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
-                    onClick={() => setNewOrderItems(prev => [...prev, { articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja (12L)' }])}
+                    onClick={() => setNewOrderItems(prev => [...prev, { articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja' }])}
                     style={{ fontSize: '0.72rem', padding: '2px 8px' }}
                   >
                     + Agregar Renglón
@@ -1351,7 +1351,7 @@ export default function OrdersPipelineView({
                         const updated = [...newOrderItems];
                         updated[idx].articuloId = val;
                         updated[idx].precioUsd = p?.precio_usd_mayor || p?.precio_usd_detal || 0;
-                        updated[idx].unidad = p?.unidad || 'Caja (12L)';
+                        updated[idx].unidad = resolveProductUnit(p, 'Caja');
                         setNewOrderItems(updated);
                       }}
                       className="input"

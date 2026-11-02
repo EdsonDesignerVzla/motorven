@@ -11,7 +11,7 @@ import {
   AlertTriangle,
   Printer
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit } from '../services/formatService';
 import { generateSalesPOSPDF } from '../services/pdfReportService';
 
 export default function ProfitInvoiceModal({ invoice, onClose, config = {}, currentUser = null, tasaBcv = 827.73 }) {
@@ -182,7 +182,7 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
                           <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{item.descripcion}</div>
                           <div style={{ fontSize: '0.7rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>{item.articuloId}</div>
                         </td>
-                        <td><span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{item.unidadVenta}</span></td>
+                        <td><span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{resolveProductUnit(item, 'Caja')}</span></td>
                         <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-tech)' }}>{item.cantidad}</td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{item.litrosTotales} L</td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatBs(item.precioUnitario)}</td>

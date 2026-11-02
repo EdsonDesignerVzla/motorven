@@ -8,15 +8,15 @@ Este directorio `dist/` contiene la compilación estática de producción lista 
 * **`404.html`**: Redirección para Single Page Application (SPA), asegurando que al recargar páginas o rutas en GitHub Pages no aparezca error 404.
 * **`.nojekyll`**: Archivo clave para GitHub Pages que desactiva el procesamiento de Jekyll, permitiendo la carga de todos los archivos y subcarpetas.
 * **`assets/`**:
-  * `index-*.js`: Código fuente empaquetado de la aplicación con la base de datos real del año 2026 pre-cargada (2.493 facturas, 155.199,9 Litros, cobranzas e histórico completo) y el Centro de Ayuda actualizado.
+  * `index-*.js`: Código fuente empaquetado de la aplicación con la base de datos real del año 2026 pre-cargada (2.155 facturas, 13.559,15 Litros en inventario físico desglosado en Litros, Cajas, Pailas y Tambores, 632 clientes consolidados y cobranzas) y el Centro de Ayuda actualizado.
   * `index-*.css`: Estilos visuales corporativos oficiales de Grupo Motorven.
-  * `index.es-*.js`, `html2canvas-*.js`, `purify.es-*.js`: Librerías de generación y exportación de reportes PDF oficiales SENIAT.
+  * Librerías de generación y exportación de reportes PDF oficiales SENIAT.
   * Logos corporativos en alta definición.
 * **Iconos y Favicons**: `favicon.png`, `favicon.svg`, `icons.svg`.
 
 ---
 
-## 🚀 Pasos para Subir y Desplegar en GitHub vía Upload
+## 🚀 Pasos para Subir y Desplegar en GitHub vía Upload (Web)
 
 1. **Crear o abrir tu repositorio en GitHub:**
    * Entra a [github.com](https://github.com) e inicia sesión.

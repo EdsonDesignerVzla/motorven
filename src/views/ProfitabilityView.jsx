@@ -28,7 +28,7 @@ import {
   Zap,
   Info
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import SkuProfitabilityModal from '../components/SkuProfitabilityModal';
 import OperationalPandLModal from '../components/OperationalPandLModal';
 import MotorvenLogo from '../components/MotorvenLogo';
@@ -118,7 +118,7 @@ export default function ProfitabilityView({
       const precioB = Number(p.precioB || p.precio_b || 0);
       const precioC = Number(p.precioC || p.precio_c || 0);
       const stock = Number(p.stock || 0);
-      const litrosPorUnidad = Number(p.litrosPorUnidad || p.litros_por_unidad || 12);
+      const litrosPorUnidad = resolveProductLitersPerUnit(p);
 
       // Margen unitario Lista A
       const margenUnitarioUsd = precioA - costoUsd;

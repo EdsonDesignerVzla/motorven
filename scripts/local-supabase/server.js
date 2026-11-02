@@ -105,7 +105,62 @@ async function initDatabase() {
           s.metaLitrosMes = s.meta_litros_mes;
         });
       }
-      saveDatabase();
+      // Normalizar códigos co_uni a descripciones des_uni según profit_measurement_units
+      const unitMap = new Map([
+        ['01', 'Litros'], ['1', 'Litros'],
+        ['02', 'Totem'], ['2', 'Totem'],
+        ['03', 'Tambor'], ['3', 'Tambor'],
+        ['04', 'Paila'], ['4', 'Paila'],
+        ['05', 'Caja'], ['5', 'Caja'],
+        ['06', 'N/A'], ['6', 'N/A'],
+        ['Caja (12L)', 'Caja'],
+        ['Cuñete (19L)', 'Paila']
+      ]);
+      if (Array.isArray(database.profit_measurement_units)) {
+        database.profit_measurement_units.forEach(u => {
+          if (u && u.co_uni && u.des_uni) {
+            unitMap.set(String(u.co_uni).trim(), String(u.des_uni).trim());
+          }
+        });
+      }
+      const normUnit = (val) => {
+        if (!val) return val;
+        const s = String(val).trim();
+        return unitMap.get(s) || val;
+      };
+      if (Array.isArray(database.products)) {
+        database.products.forEach(p => {
+          if (!p) return;
+          if (p.unidad) p.unidad = normUnit(p.unidad);
+          const desc = String(p.descripcion || p.nombre || '').toLowerCase();
+          if (desc.includes('(paila)') || desc.includes('(pl)')) {
+            p.unidad = 'Paila';
+          }
+          const code = String(p.codigo || p.id || '').trim().toUpperCase();
+          const curL = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 0);
+          let realL = curL;
+          if (code === '100403' || code === '100502' || p.unidad === 'Paila') {
+            realL = 19;
+          } else if (p.unidad === 'Tambor') {
+            realL = curL > 1 ? curL : 208;
+          } else if (p.unidad === 'Totem') {
+            realL = curL > 1 ? curL : 1000;
+          } else if (p.unidad === 'Litros') {
+            realL = 1;
+          } else if (p.unidad === 'Caja') {
+            realL = curL > 1 ? curL : 11.35;
+          }
+          p.litrosPorUnidad = realL;
+          p.litros_por_unidad = realL;
+        });
+      }
+      if (Array.isArray(database.order_items)) {
+        database.order_items.forEach(it => {
+          if (!it) return;
+          if (it.unidad_venta) it.unidad_venta = normUnit(it.unidad_venta);
+          if (it.unidadVenta) it.unidadVenta = normUnit(it.unidadVenta);
+        });
+      }
       console.log(`[Supabase Local] Base de datos cargada: ${Object.keys(database).length} tablas activas.`);
       return;
     } catch (err) {
@@ -920,7 +975,11 @@ const server = http.createServer(async (req, res) => {
           if (valA === valB) return 0;
           if (valA === undefined || valA === null) return 1;
           if (valB === undefined || valB === null) return -1;
-          return asc ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
+          if (typeof valA === 'number' && typeof valB === 'number') {
+            return asc ? valA - valB : valB - valA;
+          }
+          const cmp = String(valA).trim().localeCompare(String(valB).trim(), undefined, { numeric: true, sensitivity: 'base' });
+          return asc ? cmp : -cmp;
         });
       }
 
@@ -968,6 +1027,33 @@ const server = http.createServer(async (req, res) => {
           if (newRow.id === undefined) {
             newRow.id = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
           }
+
+          if (tableName === 'products') {
+            const code = String(newRow.codigo || newRow.id || '').trim();
+            const desc = String(newRow.descripcion || newRow.nombre || '').toLowerCase();
+            let u = newRow.unidad || 'Caja';
+            if (u === '04' || u.toLowerCase() === 'paila' || desc.includes('(paila)') || desc.includes('(pl)')) u = 'Paila';
+            else if (u === '03' || u.toLowerCase() === 'tambor') u = 'Tambor';
+            else if (u === '02' || u.toLowerCase() === 'totem') u = 'Totem';
+            else if (u === '01' || u.toLowerCase() === 'litros') u = 'Litros';
+            else if (u === '05' || u.toLowerCase() === 'caja') u = 'Caja';
+            newRow.unidad = u;
+
+            let realL = Number(newRow.litrosPorUnidad || newRow.litros_por_unidad || 0);
+            if (code === '100403' || code === '100502' || u === 'Paila') {
+              realL = 19;
+            } else if (u === 'Tambor') {
+              realL = 208;
+            } else if (u === 'Totem') {
+              realL = 1000;
+            } else if (u === 'Litros') {
+              realL = 1;
+            } else if (u === 'Caja') {
+              realL = realL > 1 ? realL : 11.35;
+            }
+            newRow.litrosPorUnidad = realL;
+            newRow.litros_por_unidad = realL;
+          }
           
           const existingIdx = tableData.findIndex(r => {
             if (newRow.id && r.id && String(r.id).trim().toUpperCase() === String(newRow.id).trim().toUpperCase()) return true;
@@ -975,8 +1061,8 @@ const server = http.createServer(async (req, res) => {
               return String(r.username).trim().toLowerCase() === String(newRow.username).trim().toLowerCase();
             }
             if (tableName === 'products') {
-              const codeNew = String(newRow.codigo || newRow.id || '').trim().toUpperCase();
-              const codeOld = String(r.codigo || r.id || '').trim().toUpperCase();
+              const codeNew = String(newRow.codigo || newRow.sku || newRow.id || '').trim().toUpperCase();
+              const codeOld = String(r.codigo || r.sku || r.id || '').trim().toUpperCase();
               return codeNew && codeOld && codeNew === codeOld;
             }
             if (tableName === 'clients') {
@@ -1121,13 +1207,23 @@ const server = http.createServer(async (req, res) => {
             if (dotIdx > 0) {
               const operator = value.substring(0, dotIdx);
               const target = value.substring(dotIdx + 1);
-              if (!matchFilter(row[key], operator, target)) {
+              let doesMatch = matchFilter(row[key], operator, target);
+              if (!doesMatch && tableName === 'products' && key === 'id') {
+                doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
+              }
+              if (!doesMatch) {
                 matches = false;
                 break;
               }
-            } else if (String(row[key]) !== String(value)) {
-              matches = false;
-              break;
+            } else {
+              let doesMatch = String(row[key]) === String(value);
+              if (!doesMatch && tableName === 'products' && key === 'id') {
+                doesMatch = String(row.codigo) === String(value) || String(row.sku) === String(value);
+              }
+              if (!doesMatch) {
+                matches = false;
+                break;
+              }
             }
           }
 

@@ -44,7 +44,7 @@ import {
   Tablet,
   Monitor
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import {
   BarChart,
   Bar,
@@ -625,27 +625,49 @@ export default function DashboardView({
   }, [filteredProfitInvoices, totalFacturadoUsd]);
 
   // Métricas de Inventario, Valorización y Mix de Líneas de Producto
-  const { stockTotalLitros, stockTotalCajas, stockValorizadoUsd, productosEnRopCount, mixLineasData } = useMemo(() => {
+  const { stockTotalLitros, stockTotalUnidades, stockTotalCajas, stockValorizadoUsd, productosEnRopCount, mixLineasData, breakdownByUnit, stockBreakdownLabel } = useMemo(() => {
     let totalStockLts = 0;
+    let totalUnits = 0;
+    let totalCajas = 0;
     let valUsd = 0;
     let ropCount = 0;
     const linesMap = new Map();
+    const breakdown = { Caja: 0, Paila: 0, Tambor: 0, Totem: 0, Litros: 0 };
 
     (products || []).forEach(p => {
       const cant = Number(p.stock || p.existencia || 0);
-      const ltsUnidad = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 12);
+      const ltsUnidad = resolveProductLitersPerUnit(p);
       const lts = cant * ltsUnidad;
       totalStockLts += lts;
+      totalUnits += cant;
 
-      const costo = Number(p.costoUsd ?? p.costo ?? p.costo_unitario ?? 22.5);
+      const unit = resolveProductUnit(p, 'Caja');
+      if (breakdown[unit] !== undefined) {
+        breakdown[unit] += cant;
+      }
+      if (unit === 'Caja') {
+        totalCajas += cant;
+      }
+
+      const costo = Number(p.costoUsd ?? p.costo ?? p.costo_unitario ?? 0);
       valUsd += cant * costo;
 
-      const min = Number(p.puntoReorden ?? p.punto_reorden ?? p.stockMinimo ?? 10);
+      const min = Number(p.puntoReorden ?? p.punto_reorden ?? p.stockMinimo ?? 5);
       if (cant <= min) ropCount++;
 
       const linea = (p.linea || p.categoria || p.categoria_nombre || 'Lubricantes General').trim();
       linesMap.set(linea, (linesMap.get(linea) || 0) + lts);
     });
+
+    const breakdownItems = [
+      breakdown.Caja > 0 ? `${breakdown.Caja.toLocaleString('es-VE')} Cajas` : null,
+      breakdown.Paila > 0 ? `${breakdown.Paila.toLocaleString('es-VE')} Pailas` : null,
+      breakdown.Tambor > 0 ? `${breakdown.Tambor.toLocaleString('es-VE')} Tambores` : null,
+      breakdown.Totem > 0 ? `${breakdown.Totem.toLocaleString('es-VE')} Totem` : null,
+      breakdown.Litros > 0 ? `${breakdown.Litros.toLocaleString('es-VE')} L Granel` : null
+    ].filter(Boolean);
+
+    const stockBreakdownLabel = breakdownItems.join(' • ') || '0 Unidades';
 
     const lineColors = ['#002b7a', '#0284c7', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#ec4899'];
     const mixData = Array.from(linesMap.entries())
@@ -659,11 +681,14 @@ export default function DashboardView({
       .slice(0, 6);
 
     return {
-      stockTotalLitros: parseFloat(totalStockLts.toFixed(1)),
-      stockTotalCajas: parseFloat((totalStockLts / 11.35).toFixed(1)),
+      stockTotalLitros: parseFloat(totalStockLts.toFixed(2)),
+      stockTotalUnidades: totalUnits,
+      stockTotalCajas: totalCajas,
       stockValorizadoUsd: parseFloat(valUsd.toFixed(2)),
       productosEnRopCount: ropCount,
-      mixLineasData: mixData
+      mixLineasData: mixData,
+      breakdownByUnit: breakdown,
+      stockBreakdownLabel
     };
   }, [products]);
 
@@ -715,7 +740,7 @@ export default function DashboardView({
       const sku = String(p.codigo || p.id || '').trim();
       const s = salesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
       const cant = Number(p.stock || p.existencia || 0);
-      const ltsUnit = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 12);
+      const ltsUnit = resolveProductLitersPerUnit(p);
       const ltsStock = cant * ltsUnit;
       const costo = Number(p.costoUsd ?? p.costo ?? p.costo_unitario ?? 22.5);
       const valUsd = cant * costo;
@@ -2370,9 +2395,11 @@ export default function DashboardView({
                   <div>
                     <div style={{ fontSize: '0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Stock en Almacén</div>
                     <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.25rem', fontWeight: 900, color: 'var(--text-heading)' }}>
-                      {stockTotalLitros.toLocaleString('es-VE')} L
+                      {stockTotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>({stockTotalCajas} cajas disponibles)</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }} title={stockBreakdownLabel}>
+                      {stockBreakdownLabel}
+                    </div>
                   </div>
                 </div>
                 <ArrowUpRight size={16} color="#8b5cf6" />

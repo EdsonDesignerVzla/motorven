@@ -28,7 +28,7 @@ import {
   Layers,
   Info
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { generateSellerOrderPDF } from '../services/pdfReportService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { useNotification } from '../context/NotificationContext';
@@ -195,7 +195,7 @@ export default function SellerOrderPOSView({
 
     const qtyToAdd = Math.min(addQty, atpLibre);
     const precio = Number(product.precioUsdMayor ?? product.precioMayor ?? product.precioUsdDetal ?? product.precio ?? 0);
-    const litrosUnit = Number(product.litrosPorUnidad || 0);
+    const litrosUnit = resolveProductLitersPerUnit(product);
 
     if (inCartItem) {
       setCartItems(
@@ -245,7 +245,7 @@ export default function SellerOrderPOSView({
       return;
     }
 
-    const litrosUnit = Number(product.litrosPorUnidad || 0);
+    const litrosUnit = resolveProductLitersPerUnit(product);
     setCartItems(
       cartItems.map((it) => {
         if (it.product.id === productId) {
@@ -326,7 +326,7 @@ export default function SellerOrderPOSView({
         precioUnitarioUsd: it.precioUsd,
         precioUsd: it.precioUsd,
         subtotalUsd: it.subtotalUsd,
-        unidadVenta: it.product.unidad || 'Caja (12L)',
+        unidadVenta: resolveProductUnit(it.product, 'Caja'),
         litrosUnitarios: Number(it.product.litrosPorUnidad || 0),
         litrosTotales: it.litros
       }))
@@ -677,9 +677,6 @@ export default function SellerOrderPOSView({
                       title="Toca para ver Ficha Técnica ASTM y especificaciones oficiales"
                     >
                       <OilstoneProductImage product={p} productId={p.id} imagen={p.imagen} />
-                      <span className="badge badge-info" style={{ position: 'absolute', top: '7px', left: '7px', fontSize: '0.66rem', fontWeight: 700 }}>
-                        {p.viscosidad || 'Lubricante'}
-                      </span>
 
                       <button
                         type="button"
@@ -709,7 +706,7 @@ export default function SellerOrderPOSView({
                       </div>
 
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.68rem' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>{p.unidad || 'Caja (12L)'}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
                         <span style={{
                           color: isOutOfStock ? 'var(--motorven-red)' : 'var(--semaforo-verde)',
                           fontWeight: 800
@@ -831,7 +828,7 @@ export default function SellerOrderPOSView({
                           {it.product.descripcion}
                         </div>
                         <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                          {it.product.codigo} • {it.product.unidad || 'Caja (12L)'}
+                          {it.product.codigo} • {resolveProductUnit(it.product, 'Caja')}
                         </div>
                       </div>
                       <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.85rem', fontWeight: 800, color: 'var(--semaforo-verde)' }}>
@@ -1254,7 +1251,7 @@ export default function SellerOrderPOSView({
                   Norma: {selectedSpecProduct.normaApi || 'API SL / CI-4'}
                 </div>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                  Presentación: <strong style={{ color: 'var(--text-primary)' }}>{selectedSpecProduct.unidad || 'Caja (12L)'}</strong>
+                  Presentación: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductUnit(selectedSpecProduct, 'Caja')}</strong>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--semaforo-verde)', fontFamily: 'var(--font-tech)' }}>

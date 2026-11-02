@@ -28,7 +28,7 @@ import {
   RotateCcw,
   Download
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST } from '../services/formatService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { canManageProducts, canViewCosts } from '../services/authService';
 import InventoryKardexModal from '../components/InventoryKardexModal';
@@ -101,10 +101,26 @@ export default function InventoryView({
   const inventoryKpis = useMemo(() => {
     const totalSkus = products.length;
     const totalCajas = products.reduce((acc, p) => acc + (Number(p.stock) || 0), 0);
-    const totalLitros = products.reduce((acc, p) => acc + ((Number(p.stock) || 0) * (Number(p.litrosPorUnidad) || 1)), 0);
+    const totalLitros = products.reduce((acc, p) => acc + ((Number(p.stock) || 0) * resolveProductLitersPerUnit(p)), 0);
     const totalValorUsd = products.reduce((acc, p) => acc + ((Number(p.stock) || 0) * (Number(p.costoUsd) || 0)), 0);
     const tasa = Number(config?.tasaDolar || 827.73);
     const totalValorBs = totalValorUsd * tasa;
+
+    const breakdownByUnit = {
+      Litros: 0,
+      Caja: 0,
+      Paila: 0,
+      Tambor: 0,
+      Totem: 0
+    };
+
+    const breakdownLitersByUnit = {
+      Litros: 0,
+      Caja: 0,
+      Paila: 0,
+      Tambor: 0,
+      Totem: 0
+    };
 
     let countCriticos = 0;
     let countReorden = 0;
@@ -116,6 +132,15 @@ export default function InventoryView({
       if (s <= min) countCriticos++;
       else if (s <= min * 2) countReorden++;
       else countOptimos++;
+
+      const unit = resolveProductUnit(p, 'Caja');
+      const litersPerUnit = resolveProductLitersPerUnit(p);
+      const totalLts = s * litersPerUnit;
+
+      if (breakdownByUnit[unit] !== undefined) {
+        breakdownByUnit[unit] += s;
+        breakdownLitersByUnit[unit] += totalLts;
+      }
     });
 
     return {
@@ -126,38 +151,44 @@ export default function InventoryView({
       totalValorBs,
       countCriticos,
       countReorden,
-      countOptimos
+      countOptimos,
+      breakdownByUnit,
+      breakdownLitersByUnit
     };
   }, [products, config]);
 
-  // Filtrado de Productos
+  // Filtrado y Ordenamiento Creciente por Código de Productos
   const filteredProducts = useMemo(() => {
-    return products.filter(p => {
-      const searchLower = (searchTerm || globalSearch || '').toLowerCase();
-      const matchesSearch =
-        (p.codigo || '').toLowerCase().includes(searchLower) ||
-        (p.oem || '').toLowerCase().includes(searchLower) ||
-        (p.descripcion || '').toLowerCase().includes(searchLower) ||
-        (p.marca || '').toLowerCase().includes(searchLower) ||
-        (p.viscosidad && p.viscosidad.toLowerCase().includes(searchLower));
+    return products
+      .filter(p => {
+        const searchLower = (searchTerm || globalSearch || '').toLowerCase();
+        const matchesSearch =
+          (p.codigo || '').toLowerCase().includes(searchLower) ||
+          (p.oem || '').toLowerCase().includes(searchLower) ||
+          (p.descripcion || '').toLowerCase().includes(searchLower) ||
+          (p.marca || '').toLowerCase().includes(searchLower) ||
+          (p.viscosidad && p.viscosidad.toLowerCase().includes(searchLower));
 
-      const matchesCat = selectedCategory === 'TODAS' ||
-        p.categoria === selectedCategory ||
-        (p.categoria && p.categoria.toLowerCase().includes(selectedCategory.toLowerCase())) ||
-        (selectedCategory.toLowerCase().includes(p.categoria?.toLowerCase() || '___'));
+        const matchesCat = selectedCategory === 'TODAS' ||
+          p.categoria === selectedCategory ||
+          (p.categoria && p.categoria.toLowerCase().includes(selectedCategory.toLowerCase())) ||
+          (selectedCategory.toLowerCase().includes(p.categoria?.toLowerCase() || '___'));
 
-      const sem = getSemaforoStatus(Number(p.stock) || 0, Number(p.stockMinimo) || 5);
-      const matchesSemaforo = semaforoFilter === 'TODOS' || sem.level === semaforoFilter;
+        const sem = getSemaforoStatus(Number(p.stock) || 0, Number(p.stockMinimo) || 5);
+        const matchesSemaforo = semaforoFilter === 'TODOS' || sem.level === semaforoFilter;
 
-      const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').toLowerCase();
-      const matchesWarehouse = selectedWarehouse === 'TODOS' ||
-        normSelW === '01' ||
-        (p.almacen && p.almacen.toLowerCase().includes(normSelW)) ||
-        (p.coAlm && String(p.coAlm).toLowerCase().includes(normSelW)) ||
-        (p.ubicacion && p.ubicacion.toLowerCase().includes(normSelW));
+        const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').toLowerCase();
+        const matchesWarehouse = selectedWarehouse === 'TODOS' ||
+          normSelW === '01' ||
+          (p.almacen && p.almacen.toLowerCase().includes(normSelW)) ||
+          (p.coAlm && String(p.coAlm).toLowerCase().includes(normSelW)) ||
+          (p.ubicacion && p.ubicacion.toLowerCase().includes(normSelW));
 
-      return matchesSearch && matchesCat && matchesSemaforo && matchesWarehouse;
-    });
+        return matchesSearch && matchesCat && matchesSemaforo && matchesWarehouse;
+      })
+      .sort((a, b) =>
+        String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+      );
   }, [products, searchTerm, globalSearch, selectedCategory, semaforoFilter, selectedWarehouse]);
 
   // Sincronizar en tiempo real para Toma Física
@@ -174,22 +205,26 @@ export default function InventoryView({
     }
   };
 
-  // Filtrado de productos para Toma Física (por Almacén y Búsqueda interna)
+  // Filtrado de productos para Toma Física (por Almacén y Búsqueda interna, ordenados crecientemente por código)
   const targetPhysicalProducts = useMemo(() => {
-    return products.filter(p => {
-      const searchLower = (physicalTakeSearch || '').toLowerCase();
-      const matchesSearch = !searchLower ||
-        (p.codigo || '').toLowerCase().includes(searchLower) ||
-        (p.descripcion || '').toLowerCase().includes(searchLower) ||
-        (p.ubicacion && p.ubicacion.toLowerCase().includes(searchLower));
+    return products
+      .filter(p => {
+        const searchLower = (physicalTakeSearch || '').toLowerCase();
+        const matchesSearch = !searchLower ||
+          (p.codigo || '').toLowerCase().includes(searchLower) ||
+          (p.descripcion || '').toLowerCase().includes(searchLower) ||
+          (p.ubicacion && p.ubicacion.toLowerCase().includes(searchLower));
 
-      const matchesWh = physicalTakeWarehouse === 'TODOS' ||
-        (p.almacen && p.almacen.toLowerCase().includes(physicalTakeWarehouse.toLowerCase())) ||
-        (p.coAlm && p.coAlm === physicalTakeWarehouse) ||
-        (p.ubicacion && p.ubicacion.toLowerCase().includes(physicalTakeWarehouse.toLowerCase()));
+        const matchesWh = physicalTakeWarehouse === 'TODOS' ||
+          (p.almacen && p.almacen.toLowerCase().includes(physicalTakeWarehouse.toLowerCase())) ||
+          (p.coAlm && p.coAlm === physicalTakeWarehouse) ||
+          (p.ubicacion && p.ubicacion.toLowerCase().includes(physicalTakeWarehouse.toLowerCase()));
 
-      return matchesSearch && matchesWh;
-    });
+        return matchesSearch && matchesWh;
+      })
+      .sort((a, b) =>
+        String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+      );
   }, [products, physicalTakeSearch, physicalTakeWarehouse]);
 
   // Métricas y balance de la Toma Física en vivo
@@ -204,7 +239,7 @@ export default function InventoryView({
     targetPhysicalProducts.forEach(p => {
       const sysStock = Number(p.stock) || 0;
       totalCajasSistema += sysStock;
-      totalLitrosSistema += sysStock * (Number(p.litrosPorUnidad) || 12);
+      totalLitrosSistema += sysStock * resolveProductLitersPerUnit(p);
 
       const key = p.codigo || p.id;
       const count = physicalCounts[key];
@@ -295,7 +330,7 @@ export default function InventoryView({
 
     const rows = filteredProducts.map(p => {
       const sem = getSemaforoStatus(Number(p.stock) || 0, Number(p.stockMinimo) || 5);
-      const litros = ((Number(p.stock) || 0) * (Number(p.litrosPorUnidad) || 1)).toFixed(1);
+      const litros = ((Number(p.stock) || 0) * resolveProductLitersPerUnit(p)).toFixed(1);
       return [
         `"${p.codigo}"`,
         `"${p.oem || ''}"`,
@@ -305,7 +340,7 @@ export default function InventoryView({
         `"${p.marca || ''}"`,
         `"${p.ubicacion || ''}"`,
         p.stock,
-        `"${p.unidad || 'Caja'}"`,
+        `"${resolveProductUnit(p, 'Caja')}"`,
         litros,
         p.stockMinimo || 5,
         `"${sem.text}"`,
@@ -328,7 +363,11 @@ export default function InventoryView({
   const handleOpenModal = (product = null) => {
     if (!canManage) return;
     if (product) {
-      setEditingProduct(product);
+      setEditingProduct({
+        ...product,
+        unidad: resolveProductUnit(product, 'Caja'),
+        litrosPorUnidad: resolveProductLitersPerUnit(product)
+      });
     } else {
       setEditingProduct({
         codigo: '',
@@ -338,7 +377,7 @@ export default function InventoryView({
         categoria: 'Gasolina',
         viscosidad: '20W-50 Mineral',
         ubicacion: 'Pasillo A - Palet 01',
-        unidad: 'Caja (12L)',
+        unidad: 'Caja',
         litrosPorUnidad: 11.35,
         stock: 20,
         comprometido: 0,
@@ -527,41 +566,22 @@ export default function InventoryView({
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Oilstone ®</span>
-              <button
-                type="button"
-                onClick={() => {
-                  const link = document.createElement('a');
-                  link.href = './Ficha_Tecnica_KPI_Volumen_en_Bodega.pdf';
-                  link.download = 'Ficha_Tecnica_KPI_Volumen_en_Bodega.pdf';
-                  link.target = '_blank';
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
-                }}
-                className="btn btn-secondary btn-sm"
-                style={{
-                  padding: '2px 7px',
-                  fontSize: '0.65rem',
-                  fontWeight: 800,
-                  borderRadius: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '3px',
-                  background: 'rgba(2, 132, 199, 0.15)',
-                  border: '1px solid rgba(56, 189, 248, 0.4)',
-                  color: '#38bdf8'
-                }}
-                title="Descargar Ficha Técnica Oficial y Auditoría en PDF del KPI Volumen en Bodega"
-              >
-                <Download size={11} /> PDF
-              </button>
             </div>
           </div>
           <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-tech)' }}>
-            {inventoryKpis.totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 1 })} L
+            {inventoryKpis.totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
-            ≈ {inventoryKpis.totalCajas} Cajas ({inventoryKpis.totalSkus} SKUs activos)
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px', lineHeight: 1.35 }}>
+            <span>💧 <strong>{inventoryKpis.breakdownByUnit?.Litros || 0}</strong> Litros <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Litros || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 📦 <strong>{inventoryKpis.breakdownByUnit?.Caja || 0}</strong> Cajas <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Caja || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 🪣 <strong>{inventoryKpis.breakdownByUnit?.Paila || 0}</strong> Pailas <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Paila || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 🛢️ <strong>{inventoryKpis.breakdownByUnit?.Tambor || 0}</strong> Tambor <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Tambor || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            {(inventoryKpis.breakdownByUnit?.Totem || 0) > 0 && (
+              <span>• 🏗️ <strong>{inventoryKpis.breakdownByUnit.Totem}</strong> Totem <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Totem || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            )}
+          </div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '2px', opacity: 0.85 }}>
+            ({inventoryKpis.totalSkus} SKUs activos)
           </div>
         </div>
 
@@ -812,7 +832,7 @@ export default function InventoryView({
                   const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? p.precioMayor ?? precioUsdDetal);
                   const precioBsDetal = precioUsdDetal * (Number(config?.tasaDolar) || 886.22);
                   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0);
-                  const totalLitrosStock = ((Number(p.stock) || 0) * (Number(p.litrosPorUnidad) || 1)).toFixed(1);
+                  const totalLitrosStock = ((Number(p.stock) || 0) * resolveProductLitersPerUnit(p)).toFixed(1);
 
                   return (
                     <tr key={p.id || p.codigo}>
@@ -869,7 +889,7 @@ export default function InventoryView({
                           <strong style={{ fontSize: '1rem', color: sem.color, fontFamily: 'var(--font-tech)' }}>
                             {p.stock}
                           </strong>
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{p.unidad || 'Caj'}</span>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
                         </div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)', fontWeight: 600, fontFamily: 'var(--font-code)' }}>
                           ({totalLitrosStock} L Totales)
@@ -935,7 +955,7 @@ export default function InventoryView({
                             <Info size={13} />
                           </button>
                           {canManage && (
-                            <button className="btn btn-secondary btn-sm" onClick={() => onDeleteProduct(p.id)} title="Eliminar" style={{ color: 'var(--motorven-red)', padding: '3px 7px' }}>
+                            <button className="btn btn-secondary btn-sm" onClick={() => onDeleteProduct(p.id || p.codigo)} title="Eliminar" style={{ color: 'var(--motorven-red)', padding: '3px 7px' }}>
                               <Trash2 size={13} />
                             </button>
                           )}
@@ -1043,15 +1063,25 @@ export default function InventoryView({
                 </div>
                 <div className="form-group">
                   <label className="form-label">Presentación / Unidad</label>
-                  <input
-                    type="text"
+                  <select
                     className="form-control"
-                    value={editingProduct.unidad}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, unidad: e.target.value })}
-                  />
+                    value={resolveProductUnit(editingProduct.unidad, 'Caja')}
+                    onChange={(e) => {
+                      const newUnit = e.target.value;
+                      const defaultLitersMap = { Paila: 19, Tambor: 208, Totem: 1000, Litros: 1, 'N/A': 0, Caja: 11.35 };
+                      const nextLiters = (editingProduct.codigo === '100403' || editingProduct.codigo === '100502')
+                        ? 19
+                        : (defaultLitersMap[newUnit] ?? editingProduct.litrosPorUnidad);
+                      setEditingProduct({ ...editingProduct, unidad: newUnit, litrosPorUnidad: nextLiters });
+                    }}
+                  >
+                    {PRODUCT_UNITS_LIST.map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Litros por Unidad (Caja/Tambor)</label>
+                  <label className="form-label">Litros por Unidad (Caja/Paila/Tambor)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -1443,7 +1473,7 @@ export default function InventoryView({
                             {p.ubicacion || 'Palet A-01'}
                           </td>
                           <td style={{ textAlign: 'center', fontWeight: 800, color: '#0f172a', fontSize: '0.85rem' }}>
-                            {sysStock} <span style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600 }}>{p.unidad || 'Caj'}</span>
+                            {sysStock} <span style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600 }}>{resolveProductUnit(p, 'Caja')}</span>
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -1713,16 +1743,16 @@ export default function InventoryView({
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
                   <div>
-                    Presentación: <strong style={{ color: 'var(--text-primary)' }}>{selectedSpecProduct.unidad || 'Unidad'}</strong>
+                    Presentación: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductUnit(selectedSpecProduct, 'Caja')}</strong>
                   </div>
                   <div>
-                    Litros x Envase: <strong style={{ color: 'var(--text-primary)' }}>{selectedSpecProduct.litrosPorUnidad || 1} L</strong>
+                    Litros x Envase: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductLitersPerUnit(selectedSpecProduct)} L</strong>
                   </div>
                   <div>
                     Stock en Bodega: <strong style={{ color: 'var(--semaforo-verde, #10b981)' }}>{selectedSpecProduct.stock || 0} unid.</strong>
                   </div>
                   <div>
-                    Litros Totales: <strong style={{ color: 'var(--neon-cyan, #00f0ff)' }}>{((Number(selectedSpecProduct.stock) || 0) * (Number(selectedSpecProduct.litrosPorUnidad) || 1)).toFixed(1)} L</strong>
+                    Litros Totales: <strong style={{ color: 'var(--neon-cyan, #00f0ff)' }}>{((Number(selectedSpecProduct.stock) || 0) * resolveProductLitersPerUnit(selectedSpecProduct)).toFixed(1)} L</strong>
                   </div>
                 </div>
 

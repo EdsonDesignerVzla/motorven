@@ -143,7 +143,7 @@ import {
   subscribeToRealtimeChanges,
   triggerProfitSync
 } from './services/profitService';
-import { subscribeToRealtimeSync } from './services/realtimeSyncBridge';
+import { subscribeToRealtimeSync, broadcastReconcileChange } from './services/realtimeSyncBridge';
 
 
 function MainApp() {
@@ -210,16 +210,22 @@ function MainApp() {
     }
   }, [config]);
   const [products, setProductsState] = useState(() => {
+    const sortAsc = (arr) =>
+      Array.isArray(arr)
+        ? [...arr].sort((a, b) =>
+            String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+          )
+        : [];
     try {
       const cached = localStorage.getItem('sm_products_v4_fiscal');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length >= 40 && parsed.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0)) {
-          return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0)) {
+          return sortAsc(parsed);
         }
       }
     } catch (_) {}
-    return REAL_PRODUCTS;
+    return sortAsc(REAL_PRODUCTS);
   });
   const [clients, setClientsState] = useState(() => {
     try {
@@ -1157,16 +1163,28 @@ function MainApp() {
     try {
       const saved = await saveSupabaseProduct(productData);
       setProductsState(prev => {
-        const index = prev.findIndex(p => p.id === saved.id);
+        const index = prev.findIndex(p =>
+          (saved.id && p.id === saved.id) ||
+          (saved.codigo && p.codigo === saved.codigo)
+        );
+        let updated;
         if (index >= 0) {
-          const updated = [...prev];
+          updated = [...prev];
           updated[index] = saved;
-          return updated;
         } else {
-          return [saved, ...prev];
+          updated = [...prev, saved];
         }
+        return updated.sort((a, b) =>
+          String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+        );
       });
-      notify.success(`Producto "${saved.nombre || saved.codigo}" guardado en inventario.`);
+      broadcastReconcileChange({
+        tableId: 'products',
+        action: 'RECONCILE',
+        key: saved.codigo || saved.id,
+        item: saved
+      });
+      notify.success(`Producto "${saved.nombre || saved.descripcion || saved.codigo}" guardado en inventario.`);
       return saved;
     } catch (err) {
       console.error(err);
@@ -1187,8 +1205,17 @@ function MainApp() {
     if (!confirmed) return;
 
     try {
-      await deleteSupabaseProduct(id);
-      setProductsState(prev => prev.filter(p => p.id !== id));
+      const targetId = String(id).trim();
+      await deleteSupabaseProduct(targetId);
+      setProductsState(prev => prev.filter(p =>
+        String(p.id).trim() !== targetId &&
+        String(p.codigo || '').trim() !== targetId
+      ));
+      broadcastReconcileChange({
+        tableId: 'products',
+        action: 'DELETE',
+        key: targetId
+      });
       notify.success("Lubricante eliminado del inventario correctamente");
     } catch (err) {
       console.error(err);

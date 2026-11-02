@@ -143,22 +143,36 @@ export const getProducts = () => {
 
 export const saveProduct = (product) => {
   const products = getProducts();
-  const existingIndex = products.findIndex(p => p.id === product.id);
+  const targetId = String(product.id || product.codigo || '').trim().toUpperCase();
+  const existingIndex = products.findIndex(p =>
+    (product.id && String(p.id).trim().toUpperCase() === String(product.id).trim().toUpperCase()) ||
+    (product.codigo && String(p.codigo).trim().toUpperCase() === String(product.codigo).trim().toUpperCase())
+  );
   
   if (existingIndex >= 0) {
-    products[existingIndex] = product;
+    products[existingIndex] = { ...products[existingIndex], ...product };
   } else {
-    const newId = `OIL-${String(products.length + 1).padStart(3, '0')}`;
+    const newId = product.id || product.codigo || `OIL-${String(products.length + 1).padStart(3, '0')}`;
     products.push({ ...product, id: newId });
   }
   
   localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+  try {
+    localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(products));
+  } catch (_) {}
   return products;
 };
 
 export const deleteProduct = (id) => {
-  const products = getProducts().filter(p => p.id !== id);
+  const target = String(id || '').trim().toUpperCase();
+  const products = getProducts().filter(p =>
+    String(p.id || '').trim().toUpperCase() !== target &&
+    String(p.codigo || '').trim().toUpperCase() !== target
+  );
   localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+  try {
+    localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(products));
+  } catch (_) {}
   return products;
 };
 

@@ -24,7 +24,7 @@ import {
   ExternalLink,
   Building
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { generateInventoryPDF } from '../services/pdfReportService';
 import OilstoneProductImage from './OilstoneProductImage';
 
@@ -62,6 +62,7 @@ export default function SmartReorderMatrixModal({
     return products.map(prod => {
       const codigo = (prod.codigo || '').trim().toUpperCase();
       const descrip = (prod.descripcion || '').toLowerCase();
+      const litrosPorUnd = resolveProductLitersPerUnit(prod);
       
       // Intentar mapear ventas históricas desde facturas de Supabase y ventas locales
       let totalLitrosVendidos = 0;
@@ -72,7 +73,7 @@ export default function SmartReorderMatrixModal({
         (sale.items || []).forEach(item => {
           if ((item.codigo || '').trim().toUpperCase() === codigo || item.id === prod.id) {
             totalCajasVendidas += Number(item.cantidad || 0);
-            totalLitrosVendidos += Number(item.cantidad || 0) * (prod.litrosPorUnidad || 11.35);
+            totalLitrosVendidos += Number(item.cantidad || 0) * litrosPorUnd;
           }
         });
       });
@@ -97,12 +98,12 @@ export default function SmartReorderMatrixModal({
       // Período de análisis: 30 días representativos
       const diasAnalizados = 30;
       const consumoDiarioCajas = totalCajasVendidas / diasAnalizados;
-      const consumoDiarioLitros = consumoDiarioCajas * (prod.litrosPorUnidad || 11.35);
+      const consumoDiarioLitros = consumoDiarioCajas * litrosPorUnd;
 
       const stockActual = Number(prod.stock || 0);
       const stockComprometido = Number(prod.comprometido || 0);
       const stockDisponible = Math.max(0, stockActual - stockComprometido);
-      const litrosDisponibles = stockDisponible * (prod.litrosPorUnidad || 11.35);
+      const litrosDisponibles = stockDisponible * litrosPorUnd;
 
       // Días de inventario restantes (DOI)
       const diasInventario = consumoDiarioCajas > 0 
@@ -116,7 +117,7 @@ export default function SmartReorderMatrixModal({
       // Sugerencia de compra para alcanzar la cobertura objetivo
       const stockObjetivoCajas = Math.ceil(consumoDiarioCajas * targetCoverageDays);
       const cantidadSugeridaCajas = Math.max(0, stockObjetivoCajas - stockDisponible);
-      const cantidadSugeridaLitros = cantidadSugeridaCajas * (prod.litrosPorUnidad || 11.35);
+      const cantidadSugeridaLitros = cantidadSugeridaCajas * litrosPorUnd;
       
       const costoUnitarioUsd = Number(prod.costoUsd || 0);
       const inversionSugeridaUsd = cantidadSugeridaCajas * costoUnitarioUsd;
@@ -170,7 +171,9 @@ export default function SmartReorderMatrixModal({
         textoUrgencia,
         prioridad
       };
-    }).sort((a, b) => a.prioridad - b.prioridad || a.diasInventario - b.diasInventario);
+    }).sort((a, b) =>
+      String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+    );
   }, [products, sales, leadTimeDays, targetCoverageDays, safetyStockMultiplier, tasaBcv]);
 
   // 2. FILTRADO
@@ -231,7 +234,7 @@ export default function SmartReorderMatrixModal({
     
     let pedidoListado = '';
     itemsParaComprar.forEach((item, index) => {
-      pedidoListado += (index + 1) + '. *' + item.codigo + '* | ' + item.descripcion + '\n   • Cantidad: *' + item.cantidadSugeridaCajas + ' ' + (item.unidad || 'Cajas') + '* (~' + item.cantidadSugeridaLitros.toFixed(1) + ' L)\n   • Costo Ref: $ ' + (item.costoUsd ? item.costoUsd.toFixed(2) : '0.00') + ' USD | Subtotal: $ ' + item.inversionSugeridaUsd.toFixed(2) + ' USD\n\n';
+      pedidoListado += (index + 1) + '. *' + item.codigo + '* | ' + item.descripcion + '\n   • Cantidad: *' + item.cantidadSugeridaCajas + ' ' + resolveProductUnit(item, 'Caja') + '* (~' + item.cantidadSugeridaLitros.toFixed(1) + ' L)\n   • Costo Ref: $ ' + (item.costoUsd ? item.costoUsd.toFixed(2) : '0.00') + ' USD | Subtotal: $ ' + item.inversionSugeridaUsd.toFixed(2) + ' USD\n\n';
     });
 
     return '🏭 *SOLICITUD DE REPOSICIÓN & ORDEN DE COMPRA DE LUBRICANTES*\n' +
@@ -638,7 +641,7 @@ export default function SmartReorderMatrixModal({
 
                           <td style={{ textAlign: 'center' }}>
                             <div style={{ fontWeight: 800, fontFamily: 'var(--font-tech)', fontSize: '0.95rem' }}>
-                              {item.stockDisponible} <span style={{ fontSize: '0.68rem', fontWeight: 400 }}>{item.unidad || 'Caj'}</span>
+                              {item.stockDisponible} <span style={{ fontSize: '0.68rem', fontWeight: 400 }}>{resolveProductUnit(item, 'Caja')}</span>
                             </div>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
                               {item.litrosDisponibles.toFixed(1)} L
@@ -698,7 +701,7 @@ export default function SmartReorderMatrixModal({
                             {isNeedPurchase ? (
                               <div>
                                 <div style={{ fontWeight: 900, fontFamily: 'var(--font-tech)', fontSize: '0.95rem', color: 'var(--semaforo-verde)' }}>
-                                  + {item.cantidadSugeridaCajas} {item.unidad || 'Caj'}
+                                  + {item.cantidadSugeridaCajas} {resolveProductUnit(item, 'Caja')}
                                 </div>
                                 <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
                                   ~ {item.cantidadSugeridaLitros.toFixed(1)} L
@@ -770,7 +773,7 @@ export default function SmartReorderMatrixModal({
                             {item.descripcion}
                           </td>
                           <td style={{ textAlign: 'center', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--semaforo-verde)' }}>
-                            {item.cantidadSugeridaCajas} {item.unidad || 'Caj'}
+                            {item.cantidadSugeridaCajas} {resolveProductUnit(item, 'Caja')}
                           </td>
                           <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>
                             {formatUsd(item.costoUsd || 0)}
@@ -941,7 +944,7 @@ export default function SmartReorderMatrixModal({
                       <td style={{ padding: '8px 10px' }}>{item.descripcion}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center' }}>{item.stockDisponible}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 800, color: '#16a34a' }}>
-                        {item.cantidadSugeridaCajas} {item.unidad || 'Cajas'}
+                        {item.cantidadSugeridaCajas} {resolveProductUnit(item, 'Caja')}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace' }}>
                         ${(item.costoUsd || 0).toFixed(2)}

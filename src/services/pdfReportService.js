@@ -12,7 +12,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
-import { formatUsd, formatBs } from './formatService.js';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from './formatService.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -2485,8 +2485,21 @@ export function generateInventoryPDF({
   });
 
   const totalSkus = products.length;
-  const totalLitros = products.reduce((acc, p) => acc + (Number(p.stock || 0) * (p.litrosPorUnidad || 12)), 0);
-  const totalCajas = products.reduce((acc, p) => acc + Number(p.stock || 0), 0);
+  const totalLitros = products.reduce((acc, p) => acc + (Number(p.stock || 0) * resolveProductLitersPerUnit(p)), 0);
+  const breakdownByUnit = { Caja: 0, Paila: 0, Tambor: 0, Totem: 0, Litros: 0 };
+  products.forEach((p) => {
+    const u = resolveProductUnit(p, 'Caja');
+    if (breakdownByUnit[u] !== undefined) {
+      breakdownByUnit[u] += Number(p.stock || 0);
+    }
+  });
+  const breakdownLabel = [
+    breakdownByUnit.Caja > 0 ? `${breakdownByUnit.Caja.toLocaleString('es-VE')} Cajas` : null,
+    breakdownByUnit.Paila > 0 ? `${breakdownByUnit.Paila.toLocaleString('es-VE')} Pailas` : null,
+    breakdownByUnit.Tambor > 0 ? `${breakdownByUnit.Tambor.toLocaleString('es-VE')} Tambores` : null,
+    breakdownByUnit.Totem > 0 ? `${breakdownByUnit.Totem.toLocaleString('es-VE')} Totem` : null,
+    breakdownByUnit.Litros > 0 ? `${breakdownByUnit.Litros.toLocaleString('es-VE')} L Granel` : null,
+  ].filter(Boolean).join(' • ') || '0 Unidades';
   const totalValorUsd = products.reduce((acc, p) => acc + (Number(p.stock || 0) * Number(p.costoUsd || 0)), 0);
   const tasa = Number(config?.tasaDolar) || 827.73;
   const totalValorBs = totalValorUsd * tasa;
@@ -2510,14 +2523,14 @@ export function generateInventoryPDF({
 
     cards = [
       { label: 'Total SKUs a Contar', value: `${totalSkus} Productos`, subtext: warehouseName, color: COLORS.navy },
-      { label: 'Stock Total Sistema', value: `${totalCajas.toLocaleString()} Cajas`, subtext: `≈ ${totalLitros.toLocaleString()} Litros`, color: COLORS.cyan },
+      { label: 'Stock Total Sistema', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
       { label: 'SKUs Auditados', value: `${countAuditados} / ${totalSkus}`, subtext: `${countCuadrados} Cuadrados Exactos`, color: COLORS.emerald },
       { label: 'Discrepancias / Mermas', value: `${countDescuadres} SKUs`, subtext: countDescuadres > 0 ? 'Requiere Ajuste' : 'Inventario Conforme', color: countDescuadres > 0 ? COLORS.red : COLORS.emerald }
     ];
   } else {
     cards = [
       { label: 'Total SKUs Activos', value: `${totalSkus} Líneas`, subtext: 'Lubricantes Oilstone ®', color: COLORS.navy },
-      { label: 'Volumen en Bodega', value: `${totalCajas.toLocaleString()} Cajas`, subtext: `≈ ${totalLitros.toLocaleString()} Litros`, color: COLORS.cyan },
+      { label: 'Volumen en Bodega', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
       { label: 'Valoración al Costo', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.emerald },
       { label: 'Alertas de Quiebre', value: `${countCriticos} SKUs`, subtext: 'Punto Crítico ROP', color: COLORS.red }
     ];
@@ -2536,8 +2549,12 @@ export function generateInventoryPDF({
     base.startX
   );
 
+  const sortedProducts = [...products].sort((a, b) =>
+    String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
+  );
+
   if (isPhysicalTake) {
-    const tableData = products.map((p) => {
+    const tableData = sortedProducts.map((p) => {
       const stock = Number(p.stock || 0);
       const key = p.codigo || p.id;
       const rawCount = physicalCounts[key];
@@ -2555,8 +2572,8 @@ export function generateInventoryPDF({
         p.codigo || 'SKU-00',
         p.descripcion || 'Producto',
         p.ubicacion || 'Palet A-01',
-        `${stock} ${p.unidad || 'Caj'}`,
-        hasCount ? `${count} ${p.unidad || 'Caj'}` : '[               ]',
+        `${stock} ${resolveProductUnit(p, 'Caja')}`,
+        hasCount ? `${count} ${resolveProductUnit(p, 'Caja')}` : '[               ]',
         hasCount ? (diff > 0 ? `+${diff}` : `${diff}`) : '[       ]',
         estado
       ];
@@ -2618,7 +2635,7 @@ export function generateInventoryPDF({
     return;
   }
 
-  const tableData = products.slice(0, 18).map((p) => {
+  const tableData = sortedProducts.map((p) => {
     const stock = Number(p.stock || 0);
     const min = Number(p.stockMinimo || 5);
     const costo = Number(p.costoUsd || 0);
@@ -2630,7 +2647,7 @@ export function generateInventoryPDF({
       p.codigo || 'SKU-00',
       p.descripcion || 'Producto',
       p.categoria || 'Lubricantes',
-      `${stock} ${p.unidad || 'Caj'}`,
+      `${stock} ${resolveProductUnit(p, 'Caja')}`,
       formatUsd(costo),
       formatUsd(precio),
       formatUsd(valTotal),
@@ -2685,7 +2702,7 @@ export function generateInventoryPDF({
   const finalYInv = base.doc.lastAutoTable?.finalY || currentY;
   addGrandTotalBox(base.doc, finalYInv + 3.5, [
     { label: 'VALORIZACIÓN TOTAL', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy },
-    { label: 'STOCK CONSOLIDADO', value: `${totalCajas.toLocaleString()} Cajas`, subtext: `≈ ${totalLitros.toLocaleString()} Litros`, color: COLORS.emerald },
+    { label: 'VOLUMEN CONSOLIDADO', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.emerald },
     { label: 'ITEMS EN RIESGO', value: `${countCriticos} Productos`, subtext: 'Stock bajo o agotado', color: countCriticos > 0 ? COLORS.amber : COLORS.emerald }
   ], base.tableWidth, base.startX);
 
@@ -2956,7 +2973,7 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
       String(idx + 1),
       String(it.articuloId || it.co_art || it.codigo || 'LUB-01'),
       String(it.articuloDescripcion || it.descripcion || it.nombre || 'Lubricante SIGNUM'),
-      String(it.unidadVenta || it.unidad || 'Caja (12L)'),
+      String(resolveProductUnit(it, 'Caja')),
       String(qty),
       rowLitros > 0 ? `${rowLitros.toFixed(1)} L` : '-',
       formatUsd(unitPrice),
@@ -3171,7 +3188,7 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
     const unitLitros = Number(it.litrosUnitarios || it.litrosPorUnidad || 0);
     const rowLitros = it.litrosTotales ? Number(it.litrosTotales) : qty * unitLitros;
     const desc = it.descripcion || it.articuloDescripcion || 'Lubricante Motorven';
-    const presentacion = it.unidad || it.unidadVenta || 'Caja (12L)';
+    const presentacion = resolveProductUnit(it, 'Caja');
     const code = it.codigo || it.articuloId || `LUB-${idx + 1}`;
 
     return [
@@ -3300,7 +3317,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
       return [
         String(it.codigo || it.articuloId || it.co_art || idx + 1),
         it.descripcion || it.art_des || it.nombre || 'Lubricante Automotriz / Industrial',
-        it.unidad || it.unidadVenta || 'UND',
+        resolveProductUnit(it, 'Caja'),
         String(cant),
         formatUsd(precioU),
         formatUsd(subtotal),
@@ -3475,7 +3492,7 @@ export function generatePurchasesPDF({ purchases = [], suppliers = [], config = 
       return [
         String(it.codigo || it.articuloId || idx + 1),
         it.descripcion || it.nombre || 'Insumo / Lubricante Oilstone',
-        it.unidad || 'UND',
+        resolveProductUnit(it, 'Caja'),
         String(cant),
         formatUsd(costoU),
         formatUsd(subtotal),

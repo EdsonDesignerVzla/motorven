@@ -24,7 +24,7 @@ import {
   Inbox,
   Search
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { calculateFiscalTaxes, validateRif, validateCedula } from '../services/fiscalService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import SalesInvoiceModal from '../components/SalesInvoiceModal';
@@ -125,7 +125,7 @@ export default function SalesPOSView({
           oem: matchedProd?.oem || 'OILSTONE',
           descripcion: it.articuloDescripcion || matchedProd?.descripcion || 'Lubricante Automotriz',
           viscosidad: matchedProd?.viscosidad || 'N/A',
-          unidad: it.unidadVenta || matchedProd?.unidad || 'Caja (12L)',
+          unidad: resolveProductUnit(it.unidadVenta || matchedProd?.unidad, 'Caja'),
           litrosPorUnidad: litrosUnit,
           litros: cantidad * litrosUnit,
           cantidad: cantidad,
@@ -165,16 +165,8 @@ export default function SalesPOSView({
   ];
 
   const getReadableUnit = (product) => {
-    if (!product) return 'un.';
-    const desc = (product.descripcion || '').toLowerCase();
-    const rawUnit = (product.unidad || '').trim();
-    if (desc.includes('tambor') || rawUnit.toLowerCase().includes('tambor')) return 'Tambor';
-    if (desc.includes('totem') || rawUnit.toLowerCase().includes('totem')) return 'Tótem';
-    if (desc.includes('granel') || rawUnit.toLowerCase().includes('granel')) return 'Granel';
-    if (desc.includes('balde') || rawUnit.toLowerCase().includes('balde')) return 'Balde';
-    if (desc.includes('caja') || rawUnit.toLowerCase().includes('caja')) return 'Caja';
-    if (!rawUnit || /^\d+$/.test(rawUnit)) return 'un.';
-    return rawUnit;
+    if (!product) return 'Caja';
+    return resolveProductUnit(product, 'Caja');
   };
 
   // -------------------------------------------------------------------------
@@ -256,7 +248,7 @@ export default function SalesPOSView({
       if (updated[existingIndex].cantidad < maxAvailable) {
         updated[existingIndex].cantidad += 1;
         updated[existingIndex].subtotalUsd = updated[existingIndex].cantidad * updated[existingIndex].precioUsd;
-        updated[existingIndex].litros = updated[existingIndex].cantidad * (product.litrosPorUnidad || 0);
+        updated[existingIndex].litros = updated[existingIndex].cantidad * resolveProductLitersPerUnit(product);
         setCartItems(updated);
       } else {
         if (committedQty > 0) {
@@ -277,6 +269,7 @@ export default function SalesPOSView({
       const precioMayor = Number(product.precioUsdMayor ?? product.precio_usd_mayor ?? product.precioMayor ?? product.precioUsdDetal ?? product.precio ?? 0);
       const precioDetal = Number(product.precioUsdDetal ?? product.precio_usd_detal ?? product.precio ?? product.precioVenta ?? precioMayor);
       const precioUsd = (selectedClient?.tipoCliente === 'Mayorista' && precioMayor > 0) ? precioMayor : (precioDetal > 0 ? precioDetal : precioMayor);
+      const unitLts = resolveProductLitersPerUnit(product);
       setCartItems([
         ...cartItems,
         {
@@ -285,9 +278,9 @@ export default function SalesPOSView({
           oem: product.oem,
           descripcion: product.descripcion,
           viscosidad: product.viscosidad,
-          unidad: product.unidad,
-          litrosPorUnidad: product.litrosPorUnidad || 0,
-          litros: product.litrosPorUnidad || 0,
+          unidad: resolveProductUnit(product, 'Caja'),
+          litrosPorUnidad: unitLts,
+          litros: unitLts,
           cantidad: 1,
           precioUsd: precioUsd,
           subtotalUsd: precioUsd,
@@ -312,13 +305,14 @@ export default function SalesPOSView({
       notify.warning(`Supera la disponibilidad para venta libre (${maxAvailable} un. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} hasta 5:00 PM)`);
       return;
     }
+    const unitLts = product ? resolveProductLitersPerUnit(product) : 11.35;
     setCartItems(cartItems.map(item => {
       if (item.articuloId === articuloId) {
         return {
           ...item,
           cantidad: newQty,
           subtotalUsd: newQty * item.precioUsd,
-          litros: newQty * (item.litrosPorUnidad || 0)
+          litros: newQty * unitLts
         };
       }
       return item;
@@ -782,9 +776,6 @@ export default function SalesPOSView({
                         title="Clic para ver Ficha Técnica ASTM y especificaciones de calidad"
                       >
                         <OilstoneProductImage product={p} productId={p.id} imagen={p.imagen} />
-                        <span className="badge badge-info" style={{ position: 'absolute', top: '7px', left: '7px', fontSize: '0.66rem', fontWeight: 700 }}>
-                          {p.viscosidad}
-                        </span>
 
                         <button
                           type="button"

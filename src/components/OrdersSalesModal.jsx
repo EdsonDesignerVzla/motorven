@@ -31,7 +31,7 @@ import {
   ChevronDown,
   Info
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
 import { isMasterOrGerencia } from '../services/authService';
@@ -680,7 +680,7 @@ export default function OrdersSalesModal({
         validItemsCount++;
         const prod = safeProducts.find(p => p && (p.id === row.articuloId || p.codigo === row.articuloId));
         const cant = Number(row.cantidad) || 0;
-        const litUnit = Number(row.litrosUnitarios || prod?.litros_por_unidad || prod?.litrosPorUnidad || 11.35);
+        const litUnit = Number(row.litrosUnitarios || (prod ? resolveProductLitersPerUnit(prod) : 11.35));
         const price = Number(row.precioUsd || prod?.precio_usd_mayor || prod?.precio_usd_detal || 0);
 
         totalLitros += cant * litUnit;
@@ -706,7 +706,7 @@ export default function OrdersSalesModal({
   const handleAddRow = () => {
     setOrderRows(prev => [
       ...prev,
-      { articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja (12L)', litrosUnitarios: 11.35 }
+      { articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja', litrosUnitarios: 11.35 }
     ]);
   };
 
@@ -724,8 +724,8 @@ export default function OrdersSalesModal({
         const prod = safeProducts.find(p => p && (p.id === value || p.codigo === value));
         if (prod) {
           target.precioUsd = Number(prod.precio_usd_mayor || prod.precio_usd_detal || prod.precioUsdMayor || 0);
-          target.unidad = prod.unidad || 'Caja (12L)';
-          target.litrosUnitarios = Number(prod.litros_por_unidad || prod.litrosPorUnidad || 11.35);
+          target.unidad = resolveProductUnit(prod, 'Caja');
+          target.litrosUnitarios = resolveProductLitersPerUnit(prod);
         }
       }
 
@@ -771,7 +771,7 @@ export default function OrdersSalesModal({
       const itemsFormatted = validRows.map((row, idx) => {
         const prod = safeProducts.find(p => p && (p.id === row.articuloId || p.codigo === row.articuloId));
         const cant = Number(row.cantidad) || 1;
-        const litUnit = Number(row.litrosUnitarios || prod?.litros_por_unidad || prod?.litrosPorUnidad || 11.35);
+        const litUnit = Number(row.litrosUnitarios || (prod ? resolveProductLitersPerUnit(prod) : 11.35));
         const price = Number(row.precioUsd || prod?.precio_usd_mayor || 0);
 
         return {
@@ -780,7 +780,7 @@ export default function OrdersSalesModal({
           rengNum: idx + 1,
           articuloId: row.articuloId,
           articuloDescripcion: prod?.descripcion || prod?.nombre || row.articuloId,
-          unidadVenta: row.unidad || prod?.unidad || 'Caja (12L)',
+          unidadVenta: resolveProductUnit(row.unidad || prod?.unidad, 'Caja'),
           cantidad: cant,
           litrosUnitarios: litUnit,
           litrosTotales: cant * litUnit,
@@ -1579,7 +1579,7 @@ export default function OrdersSalesModal({
                           String(p.codigo || '').trim() === String(row.articuloId || '').trim() ||
                           String(p.co_art || '').trim() === String(row.articuloId || '').trim())
                     );
-                    const rowLitros = (Number(row.cantidad) || 0) * (Number(row.litrosUnitarios) || 11.35);
+                    const rowLitros = (Number(row.cantidad) || 0) * (Number(row.litrosUnitarios) || (matchedProd ? resolveProductLitersPerUnit(matchedProd) : 11.35));
                     const rowTotalUsd = (Number(row.cantidad) || 0) * (Number(row.precioUsd) || 0);
 
                     return (
@@ -1645,7 +1645,7 @@ export default function OrdersSalesModal({
                           <input
                             type="text"
                             className="form-control"
-                            value={row.unidad || 'Caja (12L)'}
+                            value={resolveProductUnit(row.unidad, 'Caja')}
                             onChange={(e) => handleRowChange(idx, 'unidad', e.target.value)}
                             placeholder="Presentación"
                             style={{ fontSize: '0.78rem', padding: '6px 8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
@@ -2237,7 +2237,7 @@ export default function OrdersSalesModal({
                                       </div>
                                       <div>
                                         <div style={{ fontWeight: 700 }}>{it.articuloDescripcion || it.articuloId}</div>
-                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{it.unidadVenta || 'Caja (12L)'}</div>
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{resolveProductUnit(it, 'Caja')}</div>
                                       </div>
                                     </div>
                                   </td>
@@ -2701,7 +2701,7 @@ export default function OrdersSalesModal({
                             <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0' }}>
                               <td style={{ padding: '6px 8px', fontWeight: 700 }}>{it.articuloId}</td>
                               <td style={{ padding: '6px 8px' }}>{it.articuloDescripcion}</td>
-                              <td style={{ padding: '6px 8px', textAlign: 'center' }}>{it.unidadVenta || 'Caja (12L)'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'center' }}>{resolveProductUnit(it, 'Caja')}</td>
                               <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 800 }}>{it.cantidad}</td>
                               <td style={{ padding: '6px 8px', textAlign: 'right' }}>{Number(it.litrosTotales || (it.cantidad * 11.35)).toFixed(1)} L</td>
                               <td style={{ padding: '6px 8px', textAlign: 'right' }}>{formatUsd(it.precioUnitarioUsd)}</td>
