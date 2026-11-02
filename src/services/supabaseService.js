@@ -106,6 +106,7 @@ import {
   writeProfitSupplier,
   writeProfitCashMovement
 } from './profitService.js';
+import { broadcastReconcileChange } from './realtimeSyncBridge.js';
 
 const DEFAULT_SUPABASE_URL = 'http://localhost:54321';
 const DEFAULT_SUPABASE_ANON_KEY = 'local-free-token';
@@ -2252,6 +2253,13 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
           console.warn('[saveSupabaseUser] Aviso sincronizando con Supabase:', e.message);
         }
 
+        broadcastReconcileChange({
+          tableId: 'users',
+          action: existingIdx >= 0 ? 'RECONCILE' : 'CREATE',
+          key: savedFromDb.id || savedFromDb.username,
+          item: savedFromDb
+        });
+
         return savedFromDb;
       }
     } catch (err) {
@@ -2277,6 +2285,13 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
     accion: existingIdx >= 0 ? 'EDITAR_USUARIO' : 'CREAR_USUARIO',
     modulo: 'USUARIOS',
     detalles: `Registro local de @${mappedUser.username} (${mappedUser.nombre}) [Modo Offline]`
+  });
+
+  broadcastReconcileChange({
+    tableId: 'users',
+    action: existingIdx >= 0 ? 'RECONCILE' : 'CREATE',
+    key: mappedUser.id || mappedUser.username,
+    item: mappedUser
   });
 
   return mappedUser;
@@ -2330,6 +2345,12 @@ export const deleteSupabaseUser = async (userId, auditUser = null) => {
     modulo: 'USUARIOS',
     detalles: `Eliminación permanente del usuario ${userDesc}`
   }).catch(() => {});
+
+  broadcastReconcileChange({
+    tableId: 'users',
+    action: 'DELETE',
+    key: userId
+  });
 
   return true;
 };

@@ -1211,6 +1211,9 @@ const server = http.createServer(async (req, res) => {
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
               }
+              if (!doesMatch && tableName === 'users' && key === 'id') {
+                doesMatch = matchFilter(row.username, operator, target);
+              }
               if (!doesMatch) {
                 matches = false;
                 break;
@@ -1219,6 +1222,9 @@ const server = http.createServer(async (req, res) => {
               let doesMatch = String(row[key]) === String(value);
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = String(row.codigo) === String(value) || String(row.sku) === String(value);
+              }
+              if (!doesMatch && tableName === 'users' && key === 'id') {
+                doesMatch = String(row.username || '').toLowerCase() === String(value).toLowerCase();
               }
               if (!doesMatch) {
                 matches = false;
