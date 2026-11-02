@@ -110,10 +110,64 @@ import {
 const DEFAULT_SUPABASE_URL = 'http://localhost:54321';
 const DEFAULT_SUPABASE_ANON_KEY = 'local-free-token';
 
-const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
+const configuredSupabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
 const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
 
+/**
+ * Resuelve la URL real del servidor Supabase según el equipo que abre el sistema.
+ *
+ * Si la URL configurada apunta a "localhost", en las computadoras de la oficina
+ * "localhost" sería su propio equipo (donde no hay base de datos) y todas las
+ * peticiones fallarían con "Failed to fetch". En ese caso se usa el proxy del
+ * servidor Vite (`/sb`) en el mismo origen desde el que se abrió la página, así
+ * todos los equipos de la red leen y escriben en la MISMA base de datos.
+ */
+const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'];
+const resolveSupabaseUrl = (configured) => {
+  try {
+    if (typeof window === 'undefined' || !window.location || !/^https?:$/.test(window.location.protocol)) {
+      return configured;
+    }
+    const cfg = new URL(configured);
+    if (!LOCAL_HOSTNAMES.includes(cfg.hostname)) return configured;
+    // Servido por Vite (dev o preview): usar el proxy del mismo origen
+    if (import.meta.env?.DEV || ['5180', '4173'].includes(window.location.port)) {
+      return `${window.location.origin}/sb`;
+    }
+    // Servido por otro servidor estático en la red: apuntar al host que sirvió la página
+    return `${window.location.protocol}//${window.location.hostname}:${cfg.port || '54321'}`;
+  } catch (_) {
+    return configured;
+  }
+};
+
+const supabaseUrl = resolveSupabaseUrl(configuredSupabaseUrl);
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+/**
+ * Corrige URLs públicas de Storage guardadas con otro host (p. ej. http://localhost:54321/...)
+ * para que las fotos se vean desde cualquier equipo de la red.
+ */
+export const normalizeStorageUrl = (url) => {
+  if (!url || typeof url !== 'string' || url.startsWith('data:')) return url;
+  const match = url.match(/^https?:\/\/[^/]+(?:\/sb)?\/(storage\/v1\/object\/public\/.+)$/);
+  if (!match) return url;
+  return `${supabaseUrl.replace(/\/+$/, '')}/${match[1]}`;
+};
+
+/**
+ * Traduce errores de red a un mensaje entendible para el usuario.
+ */
+export const describeSupabaseError = (err, fallback = 'Error en la base de datos.') => {
+  const msg = err?.message || String(err || '');
+  if (/Failed to fetch|NetworkError|ERR_CONNECTION|timeout|Load failed/i.test(msg)) {
+    return 'Sin conexión con el servidor de base de datos. Verifique que el servidor principal esté encendido (INICIAR_SISTEMA.bat) y vuelva a intentarlo. Los cambios NO se guardaron.';
+  }
+  return msg || fallback;
+};
+
+export const isSupabaseOnline = () => isSupabaseAvailable;
 
 let isSupabaseAvailable = true;
 
@@ -848,7 +902,7 @@ export const mapUserToDb = (u) => {
     coVen: u.coVen || u.co_ven || u.seller_id || null,
     modulos: Array.isArray(u.modulos) ? u.modulos : (ROLE_PERMISSIONS[u.rol || 'VENTAS'] || []),
     avatar: u.avatar || '👤',
-    foto: u.foto || null,
+    foto: normalizeStorageUrl(u.foto) || null,
     color: u.color || '#0ea5e9',
     descripcion: u.descripcion || '',
     activo: u.activo !== undefined ? u.activo : (u.active !== undefined ? u.active : true),
@@ -878,7 +932,7 @@ export const mapUserFromDb = (u) => {
     departamento: u.departamento || null,
     modulos: Array.isArray(u.modulos) && u.modulos.length > 0 ? u.modulos : (ROLE_PERMISSIONS[u.rol || 'VENTAS'] || []),
     avatar: u.avatar || '👤',
-    foto: u.foto || null,
+    foto: normalizeStorageUrl(u.foto) || null,
     color: u.color || '#0ea5e9',
     descripcion: u.descripcion || '',
     activo: u.activo !== false && u.active !== false,
@@ -2109,6 +2163,8 @@ export const getSupabaseUsers = async () => {
  */
 export const saveSupabaseUser = async (userData, auditUser = null) => {
   // 1. Sincronización local inmediata (para UI reactiva)
+  let previousUsersRaw = null;
+  try { previousUsersRaw = localStorage.getItem('signum_users_list'); } catch (_) {}
   let localUsers = [];
   try {
     const raw = localStorage.getItem('signum_users_list');
@@ -2201,6 +2257,10 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
     } catch (err) {
       console.warn("No se pudo persistir usuario en Supabase inmediatamente, encolando offline:", err);
       markSupabaseOffline(err, 'saveSupabaseUser');
+      // Revertir la caché local para no dejar una contraseña/dato distinto al del servidor
+      try {
+        if (previousUsersRaw !== null) localStorage.setItem('signum_users_list', previousUsersRaw);
+      } catch (_) {}
       throw err;
     }
   }

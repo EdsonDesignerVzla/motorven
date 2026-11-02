@@ -29,6 +29,7 @@ import {
   getDepartmentMeta,
   syncUsersWithSupabase
 } from '../services/authService';
+import { resetSupabaseOnlineStatus, isSupabaseOnline } from '../services/supabaseService';
 
 const DEPT_ICONS = {
   TI: Laptop,
@@ -94,8 +95,25 @@ export default function LoginView({ usersList = [], onLoginSuccess, theme, onTog
     setErrorMsg('');
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const res = authenticate(selectedUsername, password);
+    setTimeout(async () => {
+      let res = authenticate(selectedUsername, password);
+
+      // Si falla, puede que este equipo tenga una lista de usuarios desactualizada:
+      // volver a consultar el servidor central y reintentar antes de rechazar.
+      if (!res.success) {
+        try {
+          resetSupabaseOnlineStatus();
+          const latest = await syncUsersWithSupabase();
+          if (latest && latest.length > 0) setUsers(latest);
+          res = authenticate(selectedUsername, password);
+        } catch (_) {}
+        if (!res.success && !isSupabaseOnline()) {
+          res = {
+            ...res,
+            message: `${res.message} (Sin conexión con el servidor de base de datos: este equipo está usando datos locales que pueden estar desactualizados. Verifique que el servidor principal esté encendido.)`
+          };
+        }
+      }
       setIsSubmitting(false);
 
       if (res.success) {

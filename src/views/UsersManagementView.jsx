@@ -41,7 +41,7 @@ import {
   getSupabaseUsers,
   saveSupabaseUser,
   deleteSupabaseUser,
-  getSupabaseUserLogs
+  getSupabaseUserLogs, describeSupabaseError, resetSupabaseOnlineStatus,
 } from '../services/supabaseService';
 import { compressProfileImage } from '../services/imageCompression';
 import {
@@ -452,7 +452,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       );
       loadLogs();
     } catch (err) {
-      showAlert('error', err.message || 'Error al guardar el usuario en la base de datos.');
+      showAlert('error', describeSupabaseError(err, 'Error al guardar el usuario en la base de datos.'));
     } finally {
       setIsSaving(false);
     }
@@ -471,6 +471,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
 
     try {
       setIsSaving(true);
+      resetSupabaseOnlineStatus();
       const updatedUser = { ...selectedUser, password: newPassword.trim() };
       await saveSupabaseUser(updatedUser, currentUser);
       const fresh = await getSupabaseUsers();
@@ -481,7 +482,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       showAlert('success', `Contraseña de @${selectedUser.username} actualizada correctamente en la nube.`);
       loadLogs();
     } catch (err) {
-      showAlert('error', err.message || 'Error al cambiar contraseña.');
+      showAlert('error', describeSupabaseError(err, 'Error al cambiar contraseña.'));
     } finally {
       setIsSaving(false);
     }

@@ -36,13 +36,31 @@ const binanceP2pPlugin = () => ({
   }
 });
 
+// Proxy hacia el servidor local Supabase (puerto 54321).
+// Permite que las computadoras de la oficina usen la MISMA base de datos
+// entrando solo por http://IP-DEL-SERVIDOR:5180 (sin abrir el puerto 54321).
+const SUPABASE_LOCAL_TARGET = process.env.SUPABASE_LOCAL_TARGET || 'http://127.0.0.1:54321';
+const supabaseProxy = {
+  '/sb': {
+    target: SUPABASE_LOCAL_TARGET,
+    changeOrigin: true,
+    ws: true,
+    rewrite: (p) => p.replace(/^\/sb/, '') || '/'
+  }
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), binanceP2pPlugin()],
   base: './',
   server: {
     port: 5180,
-    host: true
+    host: true,
+    proxy: supabaseProxy
+  },
+  preview: {
+    host: true,
+    proxy: supabaseProxy
   },
   build: {
     chunkSizeWarningLimit: 2000,
@@ -75,4 +93,3 @@ export default defineConfig({
     }
   }
 })
-
