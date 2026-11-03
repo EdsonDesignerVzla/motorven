@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { calculateFiscalTaxes, validateRif, validateCedula } from '../services/fiscalService';
+import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import SalesInvoiceModal from '../components/SalesInvoiceModal';
 import CustomerReturnsModal from '../components/CustomerReturnsModal';
@@ -76,6 +77,29 @@ export default function SalesPOSView({
   const [ordersDrawerSearch, setOrdersDrawerSearch] = useState('');
   const [activeOrderInPOS, setActiveOrderInPOS] = useState(null);
 
+  // Buscador de clientes por palabras clave (nombre, RIF, tipo de cliente, domicilio)
+  const [clientSearch, setClientSearch] = useState('');
+  const normalizeText = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+  // Lista de clientes ordenada alfabéticamente y filtrada por palabras clave
+  const filteredSortedClients = useMemo(() => {
+    const sorted = [...(clients || [])].sort((a, b) =>
+      String(a?.nombre || '').localeCompare(String(b?.nombre || ''), 'es', { sensitivity: 'base' })
+    );
+    const keywords = normalizeText(clientSearch).split(/\s+/).filter(Boolean);
+    if (keywords.length === 0) return sorted;
+    return sorted.filter(c => {
+      const haystack = normalizeText(
+        [c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' ')
+      );
+      return keywords.every(k => haystack.includes(k));
+    });
+  }, [clients, clientSearch]);
+
   // Lista de pedidos de preventa vigentes por facturar
   const pendingSellerOrders = useMemo(() => {
     if (!Array.isArray(orders)) return [];
@@ -115,9 +139,11 @@ export default function SalesPOSView({
     if (Array.isArray(orderToLoad.items) && orderToLoad.items.length > 0) {
       const loadedCart = orderToLoad.items.map((it) => {
         const matchedProd = products.find((p) => p.id === it.articuloId || p.codigo === it.articuloId);
-        const precio = Number(it.precioUnitarioUsd || it.precioUsd || matchedProd?.precioUsdMayor || 0);
+        const precio = Number(it.precioUnitarioUsd) > 0
+          ? Number(it.precioUnitarioUsd)
+          : (Number(it.precioUsd) > 0 ? Number(it.precioUsd) : getProductWholesalePrice(matchedProd));
         const cantidad = Number(it.cantidad || 1);
-        const litrosUnit = Number(it.litrosUnitarios || matchedProd?.litrosPorUnidad || 0);
+        const litrosUnit = Number(it.litrosUnitarios) > 0 ? Number(it.litrosUnitarios) : (matchedProd ? resolveProductLitersPerUnit(matchedProd) : 0);
 
         return {
           articuloId: matchedProd?.id || it.articuloId,
@@ -130,7 +156,9 @@ export default function SalesPOSView({
           litros: cantidad * litrosUnit,
           cantidad: cantidad,
           precioUsd: precio,
-          subtotalUsd: cantidad * precio,
+          subtotalUsd: lineSubtotal(cantidad, precio),
+          // Precio pactado en la Nota de Pedido: no se recalcula al cambiar cliente/catálogo
+          precioPactado: true,
           tipoAlicuota: matchedProd?.tipoAlicuota || 'GENERAL_16',
           aplicaIva: matchedProd?.aplicaIva !== false
         };
@@ -244,12 +272,14 @@ export default function SalesPOSView({
     const existingIndex = cartItems.findIndex(item => item.articuloId === product.id);
 
     if (existingIndex >= 0) {
-      const updated = [...cartItems];
-      if (updated[existingIndex].cantidad < maxAvailable) {
-        updated[existingIndex].cantidad += 1;
-        updated[existingIndex].subtotalUsd = updated[existingIndex].cantidad * updated[existingIndex].precioUsd;
-        updated[existingIndex].litros = updated[existingIndex].cantidad * resolveProductLitersPerUnit(product);
-        setCartItems(updated);
+      const current = cartItems[existingIndex];
+      if (current.cantidad < maxAvailable) {
+        const newQty = current.cantidad + 1;
+        const unitLts = Number(current.litrosPorUnidad) > 0 ? Number(current.litrosPorUnidad) : resolveProductLitersPerUnit(product);
+        setCartItems(cartItems.map((item, idx) => idx === existingIndex
+          ? { ...item, cantidad: newQty, subtotalUsd: lineSubtotal(newQty, item.precioUsd), litros: newQty * unitLts }
+          : item
+        ));
       } else {
         if (committedQty > 0) {
           notify.warning(`Disponibilidad libre alcanzada (${maxAvailable} un. disponibles. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} hasta 5:00 PM)`);
@@ -266,9 +296,11 @@ export default function SalesPOSView({
         }
         return;
       }
-      const precioMayor = Number(product.precioUsdMayor ?? product.precio_usd_mayor ?? product.precioMayor ?? product.precioUsdDetal ?? product.precio ?? 0);
-      const precioDetal = Number(product.precioUsdDetal ?? product.precio_usd_detal ?? product.precio ?? product.precioVenta ?? precioMayor);
-      const precioUsd = (selectedClient?.tipoCliente === 'Mayorista' && precioMayor > 0) ? precioMayor : (precioDetal > 0 ? precioDetal : precioMayor);
+      const precioUsd = resolveUnitPrice(product, selectedClient, PRICE_CHANNEL.MOSTRADOR);
+      if (!(precioUsd > 0)) {
+        notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
+        return;
+      }
       const unitLts = resolveProductLitersPerUnit(product);
       setCartItems([
         ...cartItems,
@@ -283,13 +315,34 @@ export default function SalesPOSView({
           litros: unitLts,
           cantidad: 1,
           precioUsd: precioUsd,
-          subtotalUsd: precioUsd,
+          subtotalUsd: lineSubtotal(1, precioUsd),
+          precioPactado: false,
           tipoAlicuota: product.tipoAlicuota || (product.aplicaIva === false ? 'EXENTO_0' : 'GENERAL_16'),
           aplicaIva: product.aplicaIva !== false
         }
       ]);
     }
   };
+
+  // Sincronización automática de precios del carrito:
+  // si cambia el cliente (Mayorista ↔ Detal) o se actualiza el precio en Inventario,
+  // los renglones del carrito se recalculan con el precio oficial vigente.
+  // Los renglones cargados desde una Nota de Pedido conservan su precio pactado.
+  useEffect(() => {
+    setCartItems(prev => {
+      let changed = false;
+      const next = prev.map(item => {
+        if (item.precioPactado) return item;
+        const prod = products.find(p => p.id === item.articuloId);
+        if (!prod) return item;
+        const precio = resolveUnitPrice(prod, selectedClient, PRICE_CHANNEL.MOSTRADOR);
+        if (!(precio > 0) || precio === item.precioUsd) return item;
+        changed = true;
+        return { ...item, precioUsd: precio, subtotalUsd: lineSubtotal(item.cantidad, precio) };
+      });
+      return changed ? next : prev;
+    });
+  }, [products, selectedClient]);
 
   const updateQuantity = (articuloId, newQty) => {
     if (newQty <= 0) {
@@ -305,13 +358,15 @@ export default function SalesPOSView({
       notify.warning(`Supera la disponibilidad para venta libre (${maxAvailable} un. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} hasta 5:00 PM)`);
       return;
     }
-    const unitLts = product ? resolveProductLitersPerUnit(product) : 11.35;
     setCartItems(cartItems.map(item => {
       if (item.articuloId === articuloId) {
+        const unitLts = Number(item.litrosPorUnidad) > 0
+          ? Number(item.litrosPorUnidad)
+          : (product ? resolveProductLitersPerUnit(product) : 11.35);
         return {
           ...item,
           cantidad: newQty,
-          subtotalUsd: newQty * item.precioUsd,
+          subtotalUsd: lineSubtotal(newQty, item.precioUsd),
           litros: newQty * unitLts
         };
       }
@@ -730,9 +785,7 @@ export default function SalesPOSView({
                 const isLowStock = !isOutOfStock && maxAvailable <= stockMin;
                 const unitLabel = getReadableUnit(p);
 
-                const precioMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? p.precioMayor ?? p.precioUsdDetal ?? p.precio ?? 0);
-                const precioDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? precioMayor);
-                const precioUsd = (selectedClient?.tipoCliente === 'Mayorista' && precioMayor > 0) ? precioMayor : (precioDetal > 0 ? precioDetal : precioMayor);
+                const precioUsd = resolveUnitPrice(p, selectedClient, PRICE_CHANNEL.MOSTRADOR);
 
                 const stockConfig = isOutOfStock
                   ? { label: committedQty > 0 ? 'Comprometido' : 'Agotado', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.35)', dot: '#ef4444' }
@@ -992,6 +1045,47 @@ export default function SalesPOSView({
                 </span>
               )}
             </div>
+            {/* Buscador de clientes por palabras clave */}
+            <div style={{ position: 'relative', width: '100%', marginBottom: '5px' }}>
+              <Search size={13} color="#94a3b8" style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Buscar cliente por nombre, RIF, tipo o palabra clave..."
+                value={clientSearch}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setClientSearch(value);
+                  // Si hay una sola coincidencia, se selecciona automáticamente
+                  const kws = normalizeText(value).split(/\s+/).filter(Boolean);
+                  if (kws.length > 0) {
+                    const matches = (clients || []).filter(c => {
+                      const h = normalizeText([c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' '));
+                      return kws.every(k => h.includes(k));
+                    });
+                    if (matches.length === 1) setSelectedClient(matches[0]);
+                  }
+                }}
+                style={{ width: '100%', fontSize: '0.75rem', padding: '0.4rem 1.8rem 0.4rem 1.8rem' }}
+              />
+              {clientSearch && (
+                <button
+                  type="button"
+                  onClick={() => setClientSearch('')}
+                  title="Limpiar búsqueda"
+                  style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px', display: 'flex' }}
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            {clientSearch && (
+              <div style={{ fontSize: '0.64rem', color: filteredSortedClients.length ? 'var(--neon-cyan)' : 'var(--motorven-red)', marginBottom: '4px' }}>
+                {filteredSortedClients.length
+                  ? `${filteredSortedClients.length} cliente(s) encontrado(s)`
+                  : 'Sin coincidencias para la búsqueda'}
+              </div>
+            )}
             <select
               className="form-control"
               style={{ width: '100%', maxWidth: '100%', minWidth: 0, fontSize: '0.8rem', padding: '0.45rem 2rem 0.45rem 0.7rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}
@@ -1002,7 +1096,12 @@ export default function SalesPOSView({
               }}
             >
               {!selectedClient && <option value="">-- Seleccione un Cliente --</option>}
-              {clients.map(c => (
+              {selectedClient && !filteredSortedClients.some(c => c.id === selectedClient.id) && (
+                <option key={selectedClient.id} value={selectedClient.id}>
+                  {selectedClient.nombre} ({selectedClient.rif}) - [{selectedClient.tipoCliente}]
+                </option>
+              )}
+              {filteredSortedClients.map(c => (
                 <option key={c.id} value={c.id}>
                   {c.nombre} ({c.rif}) - [{c.tipoCliente}]
                 </option>
@@ -1261,10 +1360,13 @@ export default function SalesPOSView({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
-                    ${Number(selectedSpecProduct.precioUsdDetal || selectedSpecProduct.precio_usd_detal || 0).toFixed(2)}
+                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.MOSTRADOR))}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>
-                    Bs. {((selectedSpecProduct.precioUsdDetal || selectedSpecProduct.precio_usd_detal || 0) * (safeConfig.tasaDolar || 36)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.MOSTRADOR) * (Number(safeConfig.tasaDolar) || 0))}
+                  </span>
+                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                    ({isWholesaleClient(selectedClient) ? 'Precio Mayorista' : 'Precio Detal'})
                   </span>
                 </div>
 

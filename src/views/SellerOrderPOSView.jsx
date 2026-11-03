@@ -29,6 +29,7 @@ import {
   Info
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { resolveUnitPrice, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import { generateSellerOrderPDF } from '../services/pdfReportService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { useNotification } from '../context/NotificationContext';
@@ -194,7 +195,11 @@ export default function SellerOrderPOSView({
     }
 
     const qtyToAdd = Math.min(addQty, atpLibre);
-    const precio = Number(product.precioUsdMayor ?? product.precioMayor ?? product.precioUsdDetal ?? product.precio ?? 0);
+    const precio = resolveUnitPrice(product, selectedClient, PRICE_CHANNEL.PREVENTA);
+    if (!(precio > 0)) {
+      notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
+      return;
+    }
     const litrosUnit = resolveProductLitersPerUnit(product);
 
     if (inCartItem) {
@@ -204,8 +209,10 @@ export default function SellerOrderPOSView({
             const newQty = it.cantidad + qtyToAdd;
             return {
               ...it,
+              product,
               cantidad: newQty,
-              subtotalUsd: newQty * precio,
+              precioUsd: precio,
+              subtotalUsd: lineSubtotal(newQty, precio),
               litros: newQty * litrosUnit
             };
           }
@@ -219,12 +226,28 @@ export default function SellerOrderPOSView({
           product,
           cantidad: qtyToAdd,
           precioUsd: precio,
-          subtotalUsd: qtyToAdd * precio,
+          subtotalUsd: lineSubtotal(qtyToAdd, precio),
           litros: qtyToAdd * litrosUnit
         }
       ]);
     }
   };
+
+  // Sincronización automática: si el precio cambia en Inventario, el carrito de preventa se actualiza
+  useEffect(() => {
+    setCartItems(prev => {
+      let changed = false;
+      const next = prev.map(it => {
+        const fresh = (products || []).find(p => p && p.id === it.product?.id);
+        if (!fresh) return it;
+        const precio = resolveUnitPrice(fresh, selectedClient, PRICE_CHANNEL.PREVENTA);
+        if (!(precio > 0) || precio === it.precioUsd) return it;
+        changed = true;
+        return { ...it, product: fresh, precioUsd: precio, subtotalUsd: lineSubtotal(it.cantidad, precio) };
+      });
+      return changed ? next : prev;
+    });
+  }, [products, selectedClient]);
 
   const updateCartQty = (productId, newQty) => {
     if (newQty <= 0) {
@@ -252,7 +275,7 @@ export default function SellerOrderPOSView({
           return {
             ...it,
             cantidad: newQty,
-            subtotalUsd: newQty * it.precioUsd,
+            subtotalUsd: lineSubtotal(newQty, it.precioUsd),
             litros: newQty * litrosUnit
           };
         }
@@ -326,8 +349,9 @@ export default function SellerOrderPOSView({
         precioUnitarioUsd: it.precioUsd,
         precioUsd: it.precioUsd,
         subtotalUsd: it.subtotalUsd,
+        totalUsd: it.subtotalUsd,
         unidadVenta: resolveProductUnit(it.product, 'Caja'),
-        litrosUnitarios: Number(it.product.litrosPorUnidad || 0),
+        litrosUnitarios: resolveProductLitersPerUnit(it.product),
         litrosTotales: it.litros
       }))
     };
@@ -620,7 +644,7 @@ export default function SellerOrderPOSView({
                 const currentInCart = inCartItem ? inCartItem.cantidad : 0;
                 const atpLibre = Math.max(0, rawStock - committed - currentInCart);
                 const isOutOfStock = atpLibre <= 0;
-                const precioUsd = Number(p.precioUsdMayor ?? p.precioMayor ?? p.precioUsdDetal ?? p.precio ?? 0);
+                const precioUsd = resolveUnitPrice(p, selectedClient, PRICE_CHANNEL.PREVENTA);
                 const litrosUnit = Number(p.litrosPorUnidad || 0);
 
                 return (
@@ -1255,10 +1279,10 @@ export default function SellerOrderPOSView({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--semaforo-verde)', fontFamily: 'var(--font-tech)' }}>
-                    {formatUsd(selectedSpecProduct.precioUsdMayor || selectedSpecProduct.precioUsdDetal || 0)}
+                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.PREVENTA))}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>
-                    {formatBs((selectedSpecProduct.precioUsdMayor || selectedSpecProduct.precioUsdDetal || 0) * tasaBcv)}
+                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.PREVENTA) * tasaBcv)}
                   </span>
                 </div>
               </div>

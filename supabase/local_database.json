@@ -223,7 +223,7 @@
       "telefono": "(+58) 424-4742050 / (+58) 424-4557055",
       "email": "ventas@keystone.net.ve",
       "instagram": "@oilstone_vzla",
-      "tasa_dolar": 889.57,
+      "tasa_dolar": 891.1,
       "tasaDolar": 889.57,
       "tasa_keystone": 38.5,
       "tasaKeystone": 38.5,
@@ -430767,7 +430767,7 @@
         "bases-datos",
         "cxc"
       ],
-      "ultimo_acceso": null,
+      "ultimo_acceso": "2026-11-02T18:52:58.182Z",
       "ultimoAcceso": null,
       "last_login": null,
       "created_at": "2026-09-01T00:00:00.000Z",
@@ -430935,15 +430935,18 @@
         "ventas",
         "pedidos",
         "notificaciones",
-        "dashboard"
+        "dashboard",
+        "vendedores"
       ],
       "ultimo_acceso": null,
       "ultimoAcceso": null,
       "last_login": null,
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
-      "updated_at": "2026-11-02T17:33:29.729Z",
-      "updatedAt": "2026-11-02T17:33:29.729Z"
+      "updated_at": "2026-11-03T12:48:19.581Z",
+      "updatedAt": "2026-11-02T17:33:29.729Z",
+      "color": "#10b981",
+      "descripcion": ""
     },
     {
       "id": "usr-cobranza",
@@ -434467,6 +434470,26 @@
       "dispositivo": "Web Browser",
       "created_at": "2026-11-02T18:23:22.411Z",
       "fecha": "2026-11-02T18:23:22.411Z"
+    },
+    {
+      "id": "LOG-1793645569666-9RVVF",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGOUT",
+      "modulo": "SEGURIDAD",
+      "detalles": "Cierre de sesión de @edson designer",
+      "created_at": "2026-11-02T18:52:49.666Z"
+    },
+    {
+      "id": "LOG-1793645578182-ZLOAA",
+      "usuario_id": "usr-muyb8kga",
+      "usuario_nombre": "Manuel Rosales",
+      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
+      "created_at": "2026-11-02T18:52:58.182Z"
     }
   ],
   "order_items": [

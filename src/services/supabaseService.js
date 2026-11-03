@@ -2096,8 +2096,8 @@ export const saveSupabaseOrder = async (orderData) => {
         cantidad: Number(it.cantidad || 1),
         litros_unitarios: Number(it.litrosUnitarios || 1),
         litros_totales: Number(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1))),
-        precio_unitario_usd: Number(it.precioUnitarioUsd || 0),
-        total_usd: Number(it.totalUsd || 0)
+        precio_unitario_usd: Number(it.precioUnitarioUsd ?? it.precioUsd ?? it.precio_unitario_usd ?? 0),
+        total_usd: Number(it.totalUsd ?? it.subtotalUsd ?? it.total_usd ?? ((Number(it.cantidad || 1)) * Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0)))
       }));
       await supabase.from('order_items').upsert(itemsPayload, { onConflict: 'id' });
     }

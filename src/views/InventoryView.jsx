@@ -29,6 +29,7 @@ import {
   Download
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST } from '../services/formatService';
+import { getProductRetailPrice, getProductWholesalePrice } from '../services/pricingService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { canManageProducts, canViewCosts } from '../services/authService';
 import InventoryKardexModal from '../components/InventoryKardexModal';
@@ -828,8 +829,8 @@ export default function InventoryView({
               ) : (
                 filteredProducts.map((p) => {
                   const sem = getSemaforoStatus(Number(p.stock) || 0, Number(p.stockMinimo) || 5);
-                  const precioUsdDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? 0);
-                  const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? p.precioMayor ?? precioUsdDetal);
+                  const precioUsdDetal = getProductRetailPrice(p);
+                  const precioUsdMayor = getProductWholesalePrice(p);
                   const precioBsDetal = precioUsdDetal * (Number(config?.tasaDolar) || 886.22);
                   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0);
                   const totalLitrosStock = ((Number(p.stock) || 0) * resolveProductLitersPerUnit(p)).toFixed(1);
@@ -1759,20 +1760,20 @@ export default function InventoryView({
                   <div>
                     <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Precio Detal</div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--motorven-emerald, #10b981)', fontFamily: 'var(--font-tech)' }}>
-                      ${Number(selectedSpecProduct.precioUsdDetal || 0).toFixed(2)}
+                      {formatUsd(getProductRetailPrice(selectedSpecProduct))}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold, #f59e0b)' }}>
-                      {formatBs((Number(selectedSpecProduct.precioUsdDetal) || 0) * (Number(config?.tasaDolar) || 827.73))}
+                      {formatBs(getProductRetailPrice(selectedSpecProduct) * (Number(config?.tasaDolar) || 886.22))}
                     </div>
                   </div>
 
                   <div style={{ borderLeft: '1px solid var(--border-glass)', paddingLeft: '12px' }}>
                     <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Precio Mayorista</div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--motorven-cyan, #00f0ff)', fontFamily: 'var(--font-tech)' }}>
-                      ${Number(selectedSpecProduct.precioUsdMayor || selectedSpecProduct.precioUsdDetal || 0).toFixed(2)}
+                      {formatUsd(getProductWholesalePrice(selectedSpecProduct))}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      {formatBs((Number(selectedSpecProduct.precioUsdMayor || selectedSpecProduct.precioUsdDetal) || 0) * (Number(config?.tasaDolar) || 827.73))}
+                      {formatBs(getProductWholesalePrice(selectedSpecProduct) * (Number(config?.tasaDolar) || 886.22))}
                     </div>
                   </div>
                 </div>

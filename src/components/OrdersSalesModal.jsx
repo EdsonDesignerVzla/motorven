@@ -32,6 +32,7 @@ import {
   Info
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
 import { isMasterOrGerencia } from '../services/authService';
@@ -167,18 +168,8 @@ export default function OrdersSalesModal({
   };
 
   // Precio mayorista con cadena completa de respaldo (nunca devuelve 0 si existe algún precio)
-  const resolveProductWholesalePrice = (prod) => {
-    if (!prod) return 0;
-    const candidates = [
-      prod.precioUsdMayor, prod.precio_usd_mayor, prod.precioMayor,
-      prod.precioUsdDetal, prod.precio_usd_detal, prod.precioUsd, prod.precioVenta, prod.precio
-    ];
-    for (const c of candidates) {
-      const n = Number(c);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    return 0;
-  };
+  // Delegado al servicio central de precios para garantizar paridad con POS y Pipeline.
+  const resolveProductWholesalePrice = (prod) => getProductWholesalePrice(prod);
 
   // ---- Filtro de tipos de lubricantes (Renglones) ----
   const getLubricantType = (p) =>
@@ -750,13 +741,13 @@ export default function OrdersSalesModal({
         const prod = safeProducts.find(p => p && (p.id === row.articuloId || p.codigo === row.articuloId));
         const cant = Number(row.cantidad) || 0;
         const litUnit = Number(row.litrosUnitarios || (prod ? resolveProductLitersPerUnit(prod) : 11.35));
-        const price = Number(row.precioUsd || prod?.precio_usd_mayor || prod?.precio_usd_detal || 0);
+        const price = Number(row.precioUsd) > 0 ? Number(row.precioUsd) : resolveProductWholesalePrice(prod);
 
         totalLitros += cant * litUnit;
         if ((row.unidad || '').toUpperCase().includes('CAJA')) {
           totalCajas += cant;
         }
-        subtotalUsd += cant * price;
+        subtotalUsd += lineSubtotal(cant, price);
       }
     });
 
@@ -2512,14 +2503,18 @@ export default function OrdersSalesModal({
                                     rif: selectedOrder.clienteRif,
                                     direccion: selectedOrder.direccionEntrega
                                   },
-                                  items: (selectedOrder.items || []).map(it => ({
-                                    codigo: it.articuloId,
-                                    descripcion: it.articuloDescripcion,
-                                    cantidad: it.cantidad,
-                                    precioUsd: it.precioUnitarioUsd,
-                                    subtotalUsd: it.totalUsd,
-                                    litros: it.litrosTotales
-                                  })),
+                                  items: (selectedOrder.items || []).map(it => {
+                                    const precio = Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0);
+                                    const cant = Number(it.cantidad || 1);
+                                    return {
+                                      codigo: it.articuloId,
+                                      descripcion: it.articuloDescripcion,
+                                      cantidad: cant,
+                                      precioUsd: precio,
+                                      subtotalUsd: Number(it.totalUsd ?? it.subtotalUsd ?? lineSubtotal(cant, precio)),
+                                      litros: it.litrosTotales
+                                    };
+                                  }),
                                   totalUsd: selectedOrder.totalNetoUsd,
                                   totalBs: (Number(selectedOrder.totalNetoUsd) || 0) * tasaBcv,
                                   metodoPago: billingPaymentMethod,

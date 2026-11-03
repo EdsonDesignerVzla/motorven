@@ -30,7 +30,8 @@ import {
   ExternalLink,
   Lock
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
 import DispatchRouteModal from '../components/DispatchRouteModal';
 import { isMasterOrGerencia } from '../services/authService';
 import { generateOrdersPDF, generateSellerOrderPDF } from '../services/pdfReportService';
@@ -1223,9 +1224,9 @@ export default function OrdersPipelineView({
                   const prod = safeProducts.find(p => p && (p.id === it.articuloId || p.codigo === it.articuloId));
                   const desc = prod?.descripcion || it.articuloId;
                   const uni = resolveProductUnit(prod || it, 'Caja');
-                  const litUnit = prod?.litros_por_unidad || prod?.litrosPorUnidad || 11.35;
+                  const litUnit = prod ? resolveProductLitersPerUnit(prod) : 11.35;
                   const cant = Number(it.cantidad || 1);
-                  const price = Number(it.precioUsd || prod?.precio_usd_mayor || prod?.precio_usd_detal || 0);
+                  const price = Number(it.precioUsd) > 0 ? Number(it.precioUsd) : getProductWholesalePrice(prod);
 
                   return {
                     id: `${orderId}-${idx + 1}`,
@@ -1238,7 +1239,8 @@ export default function OrdersPipelineView({
                     litrosUnitarios: litUnit,
                     litrosTotales: cant * litUnit,
                     precioUnitarioUsd: price,
-                    totalUsd: cant * price
+                    precioUsd: price,
+                    totalUsd: lineSubtotal(cant, price)
                   };
                 });
 
@@ -1350,7 +1352,7 @@ export default function OrdersPipelineView({
                         const p = safeProducts.find(prod => prod && (prod.id === val || prod.codigo === val));
                         const updated = [...newOrderItems];
                         updated[idx].articuloId = val;
-                        updated[idx].precioUsd = p?.precio_usd_mayor || p?.precio_usd_detal || 0;
+                        updated[idx].precioUsd = getProductWholesalePrice(p);
                         updated[idx].unidad = resolveProductUnit(p, 'Caja');
                         setNewOrderItems(updated);
                       }}
@@ -1360,7 +1362,7 @@ export default function OrdersPipelineView({
                       <option value="">-- Seleccionar Lubricante --</option>
                       {safeProducts.map(p => (
                         <option key={p.id} value={p.id}>
-                          {p.codigo} - {p.descripcion} ({formatUsd(p.precio_usd_mayor || p.precio_usd_detal)})
+                          {p.codigo} - {p.descripcion} ({formatUsd(getProductWholesalePrice(p))})
                         </option>
                       ))}
                     </select>
