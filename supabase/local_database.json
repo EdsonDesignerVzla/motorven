@@ -430767,7 +430767,7 @@
         "bases-datos",
         "cxc"
       ],
-      "ultimo_acceso": "2026-11-02T18:52:58.182Z",
+      "ultimo_acceso": "2026-11-03T15:13:48.797Z",
       "ultimoAcceso": null,
       "last_login": null,
       "created_at": "2026-09-01T00:00:00.000Z",
@@ -434490,6 +434490,26 @@
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
       "created_at": "2026-11-02T18:52:58.182Z"
+    },
+    {
+      "id": "LOG-1793718822192-I2QPP",
+      "usuario_id": "usr-mur9uazg",
+      "usuario_nombre": "Kenterbert Fernández",
+      "usuario_rol": "ALMACEN",
+      "accion": "LOGOUT",
+      "modulo": "SEGURIDAD",
+      "detalles": "Cierre de sesión de @kenterbertf2",
+      "created_at": "2026-11-03T15:13:42.192Z"
+    },
+    {
+      "id": "LOG-1793718828800-40KJG",
+      "usuario_id": "usr-muyb8kga",
+      "usuario_nombre": "Manuel Rosales",
+      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
+      "created_at": "2026-11-03T15:13:48.800Z"
     }
   ],
   "order_items": [

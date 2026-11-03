@@ -22,11 +22,24 @@ import {
   Clock,
   X,
   Inbox,
-  Search
+  Search,
+  Lock,
+  Calendar,
+  Building2,
+  User
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { calculateFiscalTaxes, validateRif, validateCedula } from '../services/fiscalService';
 import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
+import {
+  resolveCreditDaysFromTerm,
+  resolveTermCodeFromDays,
+  calculateExpirationDate,
+  formatDateVe,
+  getClientAgreedCreditInfo,
+  evaluateClientCreditPolicy,
+  getAuthorizedApproverGroups
+} from '../services/creditPolicyService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import SalesInvoiceModal from '../components/SalesInvoiceModal';
 import CustomerReturnsModal from '../components/CustomerReturnsModal';
@@ -38,6 +51,8 @@ export default function SalesPOSView({
   products = [],
   clients = [],
   orders = [],
+  sales = [],
+  profitSellers = [],
   config = {},
   profitReturns = [],
   profitInvoices = [],
@@ -63,7 +78,12 @@ export default function SalesPOSView({
 
   const [cartItems, setCartItems] = useState([]);
   const [condicionPago, setCondicionPago] = useState('CONTADO');
+  const [creditTerm, setCreditTerm] = useState('15_DIAS');
   const [metodoPago, setMetodoPago] = useState('EFECTIVO_USD');
+  const [modalidadVenta, setModalidadVenta] = useState('MOSTRADOR'); // 'MOSTRADOR' | 'OFICINA'
+  const [officeSeller, setOfficeSeller] = useState(
+    currentUser?.nombre || 'Oficina Principal Motorven'
+  );
   const [documentoAfectado, setDocumentoAfectado] = useState('');
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showReturnsModal, setShowReturnsModal] = useState(false);
@@ -76,6 +96,42 @@ export default function SalesPOSView({
   const [showOrdersDrawer, setShowOrdersDrawer] = useState(false);
   const [ordersDrawerSearch, setOrdersDrawerSearch] = useState('');
   const [activeOrderInPOS, setActiveOrderInPOS] = useState(null);
+
+  // Restricción de NO MODIFICAR cuando un pedido es enviado a caja desde Nota de Pedido o Flujo Comercial
+  const isOrderLocked = Boolean(activeOrderInPOS);
+
+  // Estados de Evaluación y Aprobación Excepcional de Crédito en POS Mostrador / Oficina
+  const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
+  const [creditOverrideApproved, setCreditOverrideApproved] = useState(false);
+  const { authorizedApproverIds, approverGroups, defaultAuthorizer } = useMemo(
+    () => getAuthorizedApproverGroups(safeConfig),
+    [safeConfig]
+  );
+  const [creditOverrideAuthorizer, setCreditOverrideAuthorizer] = useState(defaultAuthorizer);
+  const [creditOverrideJustification, setCreditOverrideJustification] = useState('');
+
+  useEffect(() => {
+    if (!creditOverrideApproved && defaultAuthorizer) {
+      setCreditOverrideAuthorizer(defaultAuthorizer);
+    }
+  }, [defaultAuthorizer, creditOverrideApproved]);
+
+  const clientAgreedInfo = useMemo(
+    () => getClientAgreedCreditInfo(selectedClient),
+    [selectedClient]
+  );
+
+  // Sincronizar plazo de crédito del cliente cuando se selecciona otro cliente en modo libre
+  useEffect(() => {
+    if (isOrderLocked) return;
+    setCreditOverrideApproved(false);
+    setCreditOverrideJustification('');
+    if (clientAgreedInfo.termKey && clientAgreedInfo.termKey !== 'CONTADO') {
+      setCreditTerm(clientAgreedInfo.termKey);
+    } else {
+      setCreditTerm('15_DIAS');
+    }
+  }, [selectedClient?.id, isOrderLocked]);
 
   // Buscador de clientes por palabras clave (nombre, RIF, tipo de cliente, domicilio)
   const [clientSearch, setClientSearch] = useState('');
@@ -108,34 +164,61 @@ export default function SalesPOSView({
     );
   }, [orders]);
 
-  // Cargar una Nota de Pedido directamente al carrito del POS
+  // Cargar una Nota de Pedido directamente al carrito del POS (con restricción de NO MODIFICAR)
   const handleLoadOrderToCart = (orderToLoad) => {
     if (!orderToLoad) return;
     // 1. Vincular cliente
     const matchedClient = clients.find(
-      (c) => c.rif === orderToLoad.clienteRif || c.id === orderToLoad.clienteId || c.razonSocial?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase()
+      (c) =>
+        c.rif === orderToLoad.clienteRif ||
+        c.id === orderToLoad.clienteId ||
+        c.nombre?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase() ||
+        c.razonSocial?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase()
     );
+    const resolvedDays = resolveCreditDaysFromTerm(
+      orderToLoad.condicionPago,
+      matchedClient?.diasCredito ?? 15,
+      orderToLoad.diasCredito
+    );
+
     if (matchedClient) {
       setSelectedClient(matchedClient);
     } else {
       setSelectedClient({
         id: orderToLoad.clienteId || 'CLI-TEMP',
+        nombre: orderToLoad.clienteNombre || 'Cliente',
         razonSocial: orderToLoad.clienteNombre || 'Cliente',
         rif: orderToLoad.clienteRif || 'J-000000000',
         tipoCliente: 'Mayorista',
+        domicilioFiscal: orderToLoad.direccionEntrega || 'Venezuela',
         direccion: orderToLoad.direccionEntrega || 'Venezuela',
-        diasCredito: 15,
+        diasCredito: resolvedDays || 15,
         limiteCreditoUsd: 5000,
         saldoPendienteUsd: 0
       });
     }
 
-    // 2. Establecer condición de pago si viene del pedido
-    if (orderToLoad.condicionPago) {
-      setCondicionPago(orderToLoad.condicionPago === 'CONTADO' ? 'CONTADO' : 'CREDITO');
+    // 2. Establecer condición de pago y plazo exacto que viene de la Nota de Pedido
+    const isOrderCash = !orderToLoad.condicionPago || String(orderToLoad.condicionPago).toUpperCase() === 'CONTADO';
+    setCondicionPago(isOrderCash ? 'CONTADO' : 'CREDITO');
+    if (!isOrderCash) {
+      setCreditTerm(resolveTermCodeFromDays(resolvedDays, orderToLoad.condicionPago));
     }
 
-    // 3. Cargar renglones al carrito
+    // 3. Sincronizar estado de aprobación crediticia si el pedido viene aprobado
+    if (orderToLoad.creditOverrideApproved || orderToLoad.status === 'APROBADO') {
+      setCreditOverrideApproved(Boolean(orderToLoad.creditOverrideApproved || !isOrderCash));
+      if (orderToLoad.creditOverrideAuthorizer) {
+        setCreditOverrideAuthorizer(orderToLoad.creditOverrideAuthorizer);
+      }
+      if (orderToLoad.creditOverrideJustification) {
+        setCreditOverrideJustification(orderToLoad.creditOverrideJustification);
+      }
+    } else {
+      setCreditOverrideApproved(false);
+    }
+
+    // 4. Cargar renglones al carrito
     if (Array.isArray(orderToLoad.items) && orderToLoad.items.length > 0) {
       const loadedCart = orderToLoad.items.map((it) => {
         const matchedProd = products.find((p) => p.id === it.articuloId || p.codigo === it.articuloId);
@@ -166,12 +249,19 @@ export default function SalesPOSView({
       setCartItems(loadedCart);
     }
 
-    setActiveOrderInPOS(orderToLoad);
+    setActiveOrderInPOS({
+      ...orderToLoad,
+      diasCredito: resolvedDays,
+      fechaEmision: orderToLoad.fechaEmision || orderToLoad.fecha || new Date().toISOString(),
+      fechaVencimiento:
+        orderToLoad.fechaVencimiento ||
+        calculateExpirationDate(orderToLoad.fechaEmision || orderToLoad.fecha || new Date(), resolvedDays).toISOString()
+    });
     setShowOrdersDrawer(false);
-    notify.success(`Nota de Pedido ${orderToLoad.numeroDoc || orderToLoad.id} cargada exitosamente a caja.`);
+    notify.success(`Nota de Pedido ${orderToLoad.numeroDoc || orderToLoad.id} cargada en Caja (Modo Solo Lectura: NO MODIFICABLE).`);
   };
 
-  // Si se pasa un pedido desde el exterior (ej. Pipeline), cargarlo automáticamente
+  // Si se pasa un pedido desde el exterior (ej. Nota de Pedido o Flujo Comercial & Pedidos), cargarlo automáticamente
   useEffect(() => {
     if (pendingOrderToBill) {
       handleLoadOrderToCart(pendingOrderToBill);
@@ -266,6 +356,12 @@ export default function SalesPOSView({
   };
 
   const addToCart = (product) => {
+    if (isOrderLocked) {
+      notify.warning(
+        `🔒 RESTRICCIÓN DE CAJA: La Nota de Pedido ${activeOrderInPOS?.numeroDoc || ''} está bloqueada (NO MODIFICAR). No se permite agregar artículos.`
+      );
+      return;
+    }
     const rawStock = Number(product.stock ?? product.stockActual ?? product.existencia ?? 0);
     const committedQty = getProductCommittedQty(product);
     const maxAvailable = Math.max(0, rawStock - committedQty);
@@ -296,7 +392,8 @@ export default function SalesPOSView({
         }
         return;
       }
-      const precioUsd = resolveUnitPrice(product, selectedClient, PRICE_CHANNEL.MOSTRADOR);
+      const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.PREVENTA : PRICE_CHANNEL.MOSTRADOR;
+      const precioUsd = resolveUnitPrice(product, selectedClient, channel);
       if (!(precioUsd > 0)) {
         notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
         return;
@@ -331,20 +428,25 @@ export default function SalesPOSView({
   useEffect(() => {
     setCartItems(prev => {
       let changed = false;
+      const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.PREVENTA : PRICE_CHANNEL.MOSTRADOR;
       const next = prev.map(item => {
         if (item.precioPactado) return item;
         const prod = products.find(p => p.id === item.articuloId);
         if (!prod) return item;
-        const precio = resolveUnitPrice(prod, selectedClient, PRICE_CHANNEL.MOSTRADOR);
+        const precio = resolveUnitPrice(prod, selectedClient, channel);
         if (!(precio > 0) || precio === item.precioUsd) return item;
         changed = true;
         return { ...item, precioUsd: precio, subtotalUsd: lineSubtotal(item.cantidad, precio) };
       });
       return changed ? next : prev;
     });
-  }, [products, selectedClient]);
+  }, [products, selectedClient, modalidadVenta]);
 
   const updateQuantity = (articuloId, newQty) => {
+    if (isOrderLocked) {
+      notify.warning('🔒 RESTRICCIÓN DE CAJA: No se permite modificar las cantidades de una Nota de Pedido enviada a caja.');
+      return;
+    }
     if (newQty <= 0) {
       setCartItems(cartItems.filter(item => item.articuloId !== articuloId));
       return;
@@ -375,6 +477,10 @@ export default function SalesPOSView({
   };
 
   const removeItem = (articuloId) => {
+    if (isOrderLocked) {
+      notify.warning('🔒 RESTRICCIÓN DE CAJA: No se permite eliminar renglones de una Nota de Pedido enviada a caja.');
+      return;
+    }
     setCartItems(cartItems.filter(item => item.articuloId !== articuloId));
   };
 
@@ -400,6 +506,79 @@ export default function SalesPOSView({
   const ivaBs = fiscalTaxes.totalIvaBs;
   const igtfBs = fiscalTaxes.igtfBs;
 
+  // -------------------------------------------------------------------------
+  // CÁLCULO DE FECHA DE EMISIÓN Y FECHA DE VENCIMIENTO
+  // Regla solicitada: Fecha de Vencimiento = Fecha de Emisión + Cantidad de días de Crédito
+  // -------------------------------------------------------------------------
+  const diasCreditoActual = useMemo(() => {
+    if (condicionPago === 'CONTADO') return 0;
+    if (activeOrderInPOS) {
+      return resolveCreditDaysFromTerm(
+        activeOrderInPOS.condicionPago,
+        selectedClient?.diasCredito ?? 15,
+        activeOrderInPOS.diasCredito
+      );
+    }
+    return resolveCreditDaysFromTerm(creditTerm, selectedClient?.diasCredito ?? 15);
+  }, [condicionPago, activeOrderInPOS, creditTerm, selectedClient]);
+
+  const fechaEmisionActual = useMemo(() => {
+    if (activeOrderInPOS?.fechaEmision || activeOrderInPOS?.fecha) {
+      const parsed = new Date(activeOrderInPOS.fechaEmision || activeOrderInPOS.fecha);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    return new Date();
+  }, [activeOrderInPOS]);
+
+  const fechaVencimientoActual = useMemo(
+    () => calculateExpirationDate(fechaEmisionActual, diasCreditoActual),
+    [fechaEmisionActual, diasCreditoActual]
+  );
+
+  // -------------------------------------------------------------------------
+  // EVALUACIÓN DE NORMAS DE CRÉDITO COMERCIAL EN POS MOSTRADOR Y OFICINA
+  // -------------------------------------------------------------------------
+  const clientCreditEvaluation = useMemo(
+    () =>
+      evaluateClientCreditPolicy({
+        client: selectedClient,
+        profitInvoices,
+        sales,
+        tasaBcv,
+        montoOrdenUsd: totalUsd
+      }),
+    [selectedClient, profitInvoices, sales, tasaBcv, totalUsd]
+  );
+
+  const isTermRequiresMandatoryApproval = condicionPago === 'CREDITO' && creditTerm === '30_DIAS';
+
+  const effectiveIsAprobado =
+    creditOverrideApproved ||
+    Boolean(activeOrderInPOS && activeOrderInPOS.status === 'APROBADO') ||
+    (Boolean(clientCreditEvaluation.isAprobado) && !isTermRequiresMandatoryApproval);
+
+  const effectiveStatusLabel = creditOverrideApproved
+    ? 'APROBADO (AUTORIZADO)'
+    : activeOrderInPOS && activeOrderInPOS.status === 'APROBADO'
+    ? 'APROBADO (PEDIDO VALIDADO)'
+    : isTermRequiresMandatoryApproval
+    ? 'NEGADO (REQUIERE APROBACIÓN 30D)'
+    : clientCreditEvaluation.statusLabel;
+
+  const isCreditNegado = Boolean(
+    condicionPago === 'CREDITO' && (!clientCreditEvaluation?.evaluado || !effectiveIsAprobado)
+  );
+
+  const effectiveMotivo = creditOverrideApproved
+    ? `Autorización Excepcional Otorgada por: ${creditOverrideAuthorizer}. Justificación: ${creditOverrideJustification || 'Autorizado por Gerencia'}.`
+    : activeOrderInPOS && activeOrderInPOS.status === 'APROBADO'
+    ? `Crédito validado en origen para la Nota de Pedido ${activeOrderInPOS.numeroDoc || activeOrderInPOS.id}.${activeOrderInPOS.creditOverrideAuthorizer ? ` Autorizado por: ${activeOrderInPOS.creditOverrideAuthorizer}.` : ''}`
+    : isTermRequiresMandatoryApproval
+    ? !clientCreditEvaluation.isAprobado
+      ? `${clientCreditEvaluation.motivo} Además, el plazo a 30 Días siempre requiere aprobación obligatoria de Gerencia.`
+      : 'Política Comercial Estricta: Todo crédito a 30 Días requiere obligatoriamente solicitar y obtener aprobación de Gerencia.'
+    : clientCreditEvaluation.motivo;
+
   const handleFinalizeSale = async () => {
     if (cartItems.length === 0) {
       notify.warning('El carrito de facturación está vacío. Agregue lubricantes para continuar.');
@@ -411,26 +590,37 @@ export default function SalesPOSView({
       return;
     }
 
-    if (condicionPago === 'CREDITO') {
-      const limite = Number(selectedClient?.limiteCreditoUsd) || 5000;
-      const deuda = Number(selectedClient?.saldoDeudorUsd) || 0;
-      const creditoDisponible = limite - deuda;
-      if (totalUsd > creditoDisponible) {
-        notify.error(`Límite de crédito excedido. Crédito disponible del cliente: ${formatUsd(creditoDisponible)}`);
-        return;
-      }
+    if (condicionPago === 'CREDITO' && isCreditNegado) {
+      notify.error(
+        `Operación a Crédito Retenida por Normas de Crédito: ${effectiveMotivo} Solicite aprobación excepcional para facturar.`
+      );
+      setShowCreditApprovalModal(true);
+      return;
     }
+
+    const resolvedVendedor = activeOrderInPOS
+      ? (activeOrderInPOS.vendedorId || currentUser?.nombre || 'Ricardo Sánchez')
+      : modalidadVenta === 'OFICINA'
+      ? (officeSeller || currentUser?.nombre || 'Oficina Principal Motorven')
+      : (currentUser?.nombre || 'Ricardo Sánchez');
 
     const salePayload = {
       tipoDoc,
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim() : '',
       pedidoOrigenId: activeOrderInPOS?.id || null,
       pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
+      modalidadVenta: activeOrderInPOS?.modalidadVenta || modalidadVenta,
       clienteId: selectedClient?.id || 'CLI-003',
-      clienteNombre: selectedClient?.nombre || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
+      clienteNombre: selectedClient?.nombre || selectedClient?.razonSocial || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
       clienteRif: selectedClient?.rif || 'V-18456789-6',
-      condicionPago,
+      condicionPago: condicionPago === 'CREDITO' ? creditTerm : 'CONTADO',
+      diasCredito: diasCreditoActual,
+      fechaEmision: fechaEmisionActual.toISOString(),
+      fechaVencimiento: fechaVencimientoActual.toISOString(),
       metodoPago: condicionPago === 'CREDITO' ? 'CREDITO' : metodoPago,
+      creditOverrideApproved,
+      creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : (activeOrderInPOS?.creditOverrideAuthorizer || null),
+      creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : (activeOrderInPOS?.creditOverrideJustification || null),
       items: cartItems,
       subtotalUsd,
       baseExentaUsd: fiscalTaxes.baseExentaUsd,
@@ -455,7 +645,7 @@ export default function SalesPOSView({
       igtfBs,
       totalBs,
       retencionIvaBs: fiscalTaxes.retencionIvaBs,
-      vendedor: activeOrderInPOS?.vendedorId || currentUser?.nombre || 'Ricardo Sánchez'
+      vendedor: resolvedVendedor
     };
 
     try {
@@ -464,6 +654,10 @@ export default function SalesPOSView({
         setLastSaleDoc({
           ...createdSale,
           pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
+          modalidadVenta: salePayload.modalidadVenta,
+          diasCredito: diasCreditoActual,
+          fechaEmision: salePayload.fechaEmision,
+          fechaVencimiento: salePayload.fechaVencimiento,
           totalLitros: totalLitrosCarrito,
           transportista: activeOrderInPOS?.transporteId || activeOrderInPOS?.chofer || 'Transporte Motorven',
           zonaDespacho: activeOrderInPOS?.zonaVenta || '01 - Valencia'
@@ -966,18 +1160,39 @@ export default function SalesPOSView({
                       <button
                         className="btn btn-primary btn-sm"
                         onClick={() => addToCart(p)}
-                        disabled={disponibleReal <= 0}
+                        disabled={disponibleReal <= 0 || isOrderLocked}
+                        title={
+                          isOrderLocked
+                            ? 'Bloqueado: Pedido enviado a caja en modo NO MODIFICAR'
+                            : undefined
+                        }
                         style={{
-                          opacity: disponibleReal <= 0 ? 0.5 : 1,
+                          opacity: disponibleReal <= 0 || isOrderLocked ? 0.5 : 1,
                           fontSize: '0.73rem',
                           fontWeight: 700,
                           padding: '5px 10px',
                           whiteSpace: 'nowrap',
                           flexShrink: 0,
-                          marginLeft: 'auto'
+                          marginLeft: 'auto',
+                          cursor: disponibleReal <= 0 || isOrderLocked ? 'not-allowed' : 'pointer'
                         }}
                       >
-                        <Plus size={14} /> {isOutOfStock ? (committedQty > 0 ? 'En O.C.' : 'Agotado') : (disponibleReal <= 0 ? 'Sin Cupo' : 'Añadir')}
+                        {isOrderLocked ? (
+                          <>
+                            <Lock size={12} /> Orden en Caja
+                          </>
+                        ) : (
+                          <>
+                            <Plus size={14} />{' '}
+                            {isOutOfStock
+                              ? committedQty > 0
+                                ? 'En O.C.'
+                                : 'Agotado'
+                              : disponibleReal <= 0
+                              ? 'Sin Cupo'
+                              : 'Añadir'}
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -989,39 +1204,187 @@ export default function SalesPOSView({
 
         {/* LADO DERECHO: Carrito & Totales Bimoneda */}
         <div className="card pos-cart-col">
-          {activeOrderInPOS && (
+          {/* Selector de Modalidad de Venta (Mostrador vs Venta por Oficina) cuando no hay un pedido bloqueado */}
+          {!isOrderLocked && (
             <div style={{
-              background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(37, 99, 235, 0.15))',
-              border: '1.5px solid var(--motorven-gold)',
+              marginBottom: '0.55rem',
+              padding: '6px 8px',
               borderRadius: '10px',
-              padding: '6px 10px',
-              marginBottom: '0.6rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '8px',
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid var(--border-glass)',
               flexShrink: 0
             }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 800, fontSize: '0.78rem', color: 'var(--motorven-gold)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <FileText size={13} /> Facturando: {activeOrderInPOS.numeroDoc || activeOrderInPOS.id}
-                </div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Asesor: <strong style={{ color: 'var(--text-primary)' }}>{activeOrderInPOS.vendedorId || 'Asesor'}</strong> • {Number(activeOrderInPOS.totalLitros || 0).toFixed(1)} Lts
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setModalidadVenta('MOSTRADOR')}
+                  className="btn btn-sm"
+                  style={{
+                    background: modalidadVenta === 'MOSTRADOR' ? 'linear-gradient(135deg, var(--motorven-navy), #00205b)' : 'transparent',
+                    color: modalidadVenta === 'MOSTRADOR' ? '#fff' : 'var(--text-muted)',
+                    border: modalidadVenta === 'MOSTRADOR' ? '1px solid var(--neon-cyan)' : '1px solid transparent',
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    padding: '4px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '5px'
+                  }}
+                >
+                  <ShoppingCart size={12} /> POS Mostrador
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalidadVenta('OFICINA')}
+                  className="btn btn-sm"
+                  style={{
+                    background: modalidadVenta === 'OFICINA' ? 'linear-gradient(135deg, #1e40af, #0284c7)' : 'transparent',
+                    color: modalidadVenta === 'OFICINA' ? '#fff' : 'var(--text-muted)',
+                    border: modalidadVenta === 'OFICINA' ? '1px solid #38bdf8' : '1px solid transparent',
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    padding: '4px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '5px'
+                  }}
+                >
+                  <Building2 size={12} /> Venta por Oficina
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveOrderInPOS(null);
-                  notify.info('Nota de Pedido desvinculada de la factura.');
-                }}
-                className="btn btn-secondary btn-sm"
-                style={{ fontSize: '0.65rem', padding: '3px 7px', flexShrink: 0 }}
-                title="Desvincular orden origen"
-              >
-                ✕ Desvincular
-              </button>
+              {modalidadVenta === 'OFICINA' && (
+                <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '0.66rem', color: '#38bdf8', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    🏢 Ejecutivo Oficina:
+                  </span>
+                  <select
+                    className="form-control form-control-sm"
+                    value={officeSeller}
+                    onChange={(e) => setOfficeSeller(e.target.value)}
+                    style={{ fontSize: '0.72rem', padding: '2px 6px', height: '26px', flex: 1 }}
+                  >
+                    <option value={currentUser?.nombre || 'Oficina Principal Motorven'}>
+                      {currentUser?.nombre || 'Oficina Principal Motorven'} (Oficina)
+                    </option>
+                    <option value="Oficina Comercial Planta Motorven">Oficina Comercial Planta Motorven</option>
+                    {(profitSellers || []).map((s, idx) => {
+                      const val = s.venDes || s.ven_des || s.nombre || s.coVen || s.co_ven || `Vendedor ${idx + 1}`;
+                      return (
+                        <option key={s.id || s.coVen || idx} value={val}>
+                          {val}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* FICHA DE PEDIDO ENVIADO A CAJA CON RESTRICCIÓN DE NO MODIFICAR Y DATOS REQUERIDOS */}
+          {activeOrderInPOS && (
+            <div style={{
+              background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(30, 58, 138, 0.28))',
+              border: '1.5px solid var(--motorven-gold)',
+              borderRadius: '10px',
+              padding: '8px 10px',
+              marginBottom: '0.6rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              flexShrink: 0
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                  <span style={{
+                    background: 'rgba(239, 68, 68, 0.22)',
+                    border: '1px solid #ef4444',
+                    color: '#fca5a5',
+                    fontSize: '0.62rem',
+                    fontWeight: 900,
+                    padding: '2px 6px',
+                    borderRadius: '6px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    <Lock size={10} /> NO MODIFICAR
+                  </span>
+                  <div style={{ fontWeight: 900, fontSize: '0.78rem', color: 'var(--motorven-gold)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {activeOrderInPOS.numeroDoc || activeOrderInPOS.id}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveOrderInPOS(null);
+                    setCartItems([]);
+                    notify.info('Nota de Pedido desvinculada de la caja.');
+                  }}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.64rem', padding: '2px 7px', flexShrink: 0 }}
+                  title="Desvincular orden de caja"
+                >
+                  ✕ Desvincular
+                </button>
+              </div>
+
+              {/* Datos Requeridos del Pedido enviado a Caja */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '4px 8px',
+                fontSize: '0.67rem',
+                background: 'rgba(0, 0, 0, 0.25)',
+                padding: '6px 8px',
+                borderRadius: '8px',
+                border: '1px solid rgba(255, 255, 255, 0.08)'
+              }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Cliente: </span>
+                  <strong style={{ color: 'var(--text-primary)' }}>{activeOrderInPOS.clienteNombre || selectedClient?.nombre}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>RIF: </span>
+                  <strong style={{ color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)' }}>{activeOrderInPOS.clienteRif || selectedClient?.rif}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Vendedor: </span>
+                  <strong style={{ color: 'var(--text-primary)' }}>{activeOrderInPOS.vendedorId || 'Asesor Comercial'}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Zona / Canal: </span>
+                  <strong style={{ color: 'var(--text-primary)' }}>
+                    {activeOrderInPOS.zonaVenta || 'General'}{activeOrderInPOS.modalidadVenta === 'OFICINA' ? ' (Oficina)' : ''}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Condición: </span>
+                  <strong style={{ color: condicionPago === 'CONTADO' ? '#34d399' : '#fbbf24' }}>
+                    {condicionPago === 'CONTADO' ? 'CONTADO (0 Días)' : `CRÉDITO (${diasCreditoActual} Días)`}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Volumen: </span>
+                  <strong style={{ color: 'var(--neon-cyan)' }}>
+                    {Number(activeOrderInPOS.totalLitros || totalLitrosCarrito || 0).toFixed(2)} Lts ({cartItems.length} ítem{cartItems.length === 1 ? '' : 's'})
+                  </strong>
+                </div>
+                {(activeOrderInPOS.direccionEntrega || selectedClient?.domicilioFiscal) && (
+                  <div style={{ gridColumn: '1 / -1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Entrega: </span>
+                    <strong style={{ color: '#cbd5e1' }}>{activeOrderInPOS.direccionEntrega || selectedClient?.domicilioFiscal}</strong>
+                  </div>
+                )}
+                {activeOrderInPOS.observaciones && (
+                  <div style={{ gridColumn: '1 / -1', color: '#fde68a', fontSize: '0.65rem' }}>
+                    📝 {activeOrderInPOS.observaciones}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1030,6 +1393,11 @@ export default function SalesPOSView({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
               <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '5px', margin: 0, fontSize: '0.72rem' }}>
                 <UserCheck size={14} color="var(--neon-cyan)" /> Cliente Seleccionado
+                {isOrderLocked && (
+                  <span style={{ fontSize: '0.62rem', color: '#fbbf24', fontWeight: 800 }}>
+                    (🔒 Bloqueado por Pedido)
+                  </span>
+                )}
               </label>
               {selectedClient && (
                 <span style={{
@@ -1046,40 +1414,43 @@ export default function SalesPOSView({
               )}
             </div>
             {/* Buscador de clientes por palabras clave */}
-            <div style={{ position: 'relative', width: '100%', marginBottom: '5px' }}>
-              <Search size={13} color="#94a3b8" style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-              <input
-                type="text"
-                className="form-control"
-                placeholder="Buscar cliente por nombre, RIF, tipo o palabra clave..."
-                value={clientSearch}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setClientSearch(value);
-                  // Si hay una sola coincidencia, se selecciona automáticamente
-                  const kws = normalizeText(value).split(/\s+/).filter(Boolean);
-                  if (kws.length > 0) {
-                    const matches = (clients || []).filter(c => {
-                      const h = normalizeText([c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' '));
-                      return kws.every(k => h.includes(k));
-                    });
-                    if (matches.length === 1) setSelectedClient(matches[0]);
-                  }
-                }}
-                style={{ width: '100%', fontSize: '0.75rem', padding: '0.4rem 1.8rem 0.4rem 1.8rem' }}
-              />
-              {clientSearch && (
-                <button
-                  type="button"
-                  onClick={() => setClientSearch('')}
-                  title="Limpiar búsqueda"
-                  style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px', display: 'flex' }}
-                >
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-            {clientSearch && (
+            {!isOrderLocked && (
+              <div style={{ position: 'relative', width: '100%', marginBottom: '5px' }}>
+                <Search size={13} color="#94a3b8" style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="Buscar cliente por nombre, RIF, tipo o palabra clave..."
+                  value={clientSearch}
+                  disabled={isOrderLocked}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setClientSearch(value);
+                    // Si hay una sola coincidencia, se selecciona automáticamente
+                    const kws = normalizeText(value).split(/\s+/).filter(Boolean);
+                    if (kws.length > 0) {
+                      const matches = (clients || []).filter(c => {
+                        const h = normalizeText([c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' '));
+                        return kws.every(k => h.includes(k));
+                      });
+                      if (matches.length === 1) setSelectedClient(matches[0]);
+                    }
+                  }}
+                  style={{ width: '100%', fontSize: '0.75rem', padding: '0.4rem 1.8rem 0.4rem 1.8rem' }}
+                />
+                {clientSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setClientSearch('')}
+                    title="Limpiar búsqueda"
+                    style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px', display: 'flex' }}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+            )}
+            {clientSearch && !isOrderLocked && (
               <div style={{ fontSize: '0.64rem', color: filteredSortedClients.length ? 'var(--neon-cyan)' : 'var(--motorven-red)', marginBottom: '4px' }}>
                 {filteredSortedClients.length
                   ? `${filteredSortedClients.length} cliente(s) encontrado(s)`
@@ -1088,9 +1459,22 @@ export default function SalesPOSView({
             )}
             <select
               className="form-control"
-              style={{ width: '100%', maxWidth: '100%', minWidth: 0, fontSize: '0.8rem', padding: '0.45rem 2rem 0.45rem 0.7rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}
+              disabled={isOrderLocked}
+              style={{
+                width: '100%',
+                maxWidth: '100%',
+                minWidth: 0,
+                fontSize: '0.8rem',
+                padding: '0.45rem 2rem 0.45rem 0.7rem',
+                textOverflow: 'ellipsis',
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+                opacity: isOrderLocked ? 0.85 : 1,
+                cursor: isOrderLocked ? 'not-allowed' : 'pointer'
+              }}
               value={selectedClient?.id || ''}
               onChange={(e) => {
+                if (isOrderLocked) return;
                 const c = clients.find(cl => cl.id === e.target.value);
                 if (c) setSelectedClient(c);
               }}
@@ -1098,7 +1482,7 @@ export default function SalesPOSView({
               {!selectedClient && <option value="">-- Seleccione un Cliente --</option>}
               {selectedClient && !filteredSortedClients.some(c => c.id === selectedClient.id) && (
                 <option key={selectedClient.id} value={selectedClient.id}>
-                  {selectedClient.nombre} ({selectedClient.rif}) - [{selectedClient.tipoCliente}]
+                  {selectedClient.nombre || selectedClient.razonSocial} ({selectedClient.rif}) - [{selectedClient.tipoCliente}]
                 </option>
               )}
               {filteredSortedClients.map(c => (
@@ -1117,6 +1501,51 @@ export default function SalesPOSView({
                 🏛️ Agente Retención IVA ({selectedClient.porcentajeRetencionIva || 75}%)
               </div>
             )}
+
+            {/* BLOQUE DE FECHA DE EMISIÓN Y FECHA DE VENCIMIENTO (= EMISIÓN + DÍAS DE CRÉDITO) */}
+            <div style={{
+              marginTop: '6px',
+              padding: '6px 8px',
+              borderRadius: '8px',
+              background: 'rgba(15, 23, 42, 0.65)',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              display: 'grid',
+              gridTemplateColumns: '1fr auto 1fr',
+              alignItems: 'center',
+              gap: '6px'
+            }}>
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  <Calendar size={10} color="var(--neon-cyan)" /> Fecha de Emisión
+                </div>
+                <div style={{ fontSize: '0.76rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>
+                  {formatDateVe(fechaEmisionActual)}
+                </div>
+              </div>
+
+              <div style={{
+                padding: '2px 7px',
+                borderRadius: '10px',
+                background: diasCreditoActual > 0 ? 'rgba(245, 158, 11, 0.18)' : 'rgba(16, 185, 129, 0.18)',
+                border: `1px solid ${diasCreditoActual > 0 ? 'var(--motorven-gold)' : 'var(--motorven-emerald)'}`,
+                color: diasCreditoActual > 0 ? '#fbbf24' : '#34d399',
+                fontSize: '0.64rem',
+                fontWeight: 800,
+                textAlign: 'center',
+                whiteSpace: 'nowrap'
+              }}>
+                {diasCreditoActual > 0 ? `+${diasCreditoActual} Días Crédito` : '0 Días (Contado)'}
+              </div>
+
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                  Fecha de Vencimiento
+                </div>
+                <div style={{ fontSize: '0.76rem', fontWeight: 900, color: diasCreditoActual > 0 ? 'var(--motorven-gold)' : 'var(--neon-cyan)', fontFamily: 'var(--font-code)' }}>
+                  {formatDateVe(fechaVencimientoActual)}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Lista de Ítems en Carrito */}
@@ -1159,14 +1588,35 @@ export default function SalesPOSView({
                       </div>
                     </div>
                     
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '2px 7px', minHeight: '26px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad - 1)}>-</button>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, minWidth: '18px', textAlign: 'center' }}>{item.cantidad}</span>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '2px 7px', minHeight: '26px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad + 1)}>+</button>
-                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px', minHeight: '26px', color: 'var(--motorven-red)', marginLeft: '2px' }} onClick={() => removeItem(item.articuloId)}>
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
+                    {isOrderLocked ? (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '3px 8px',
+                          borderRadius: '8px',
+                          background: 'rgba(245, 158, 11, 0.14)',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          color: '#fbbf24',
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          flexShrink: 0
+                        }}
+                        title="Cantidad bloqueada por Nota de Pedido en Caja (NO MODIFICAR)"
+                      >
+                        <Lock size={11} /> Cant: {item.cantidad}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '2px 7px', minHeight: '26px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad - 1)}>-</button>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, minWidth: '18px', textAlign: 'center' }}>{item.cantidad}</span>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '2px 7px', minHeight: '26px' }} onClick={() => updateQuantity(item.articuloId, item.cantidad + 1)}>+</button>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '4px', minHeight: '26px', color: 'var(--motorven-red)', marginLeft: '2px' }} onClick={() => removeItem(item.articuloId)}>
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                   );
                 })}
@@ -1174,29 +1624,43 @@ export default function SalesPOSView({
             )}
           </div>
 
-          {/* Formas de Pago */}
+          {/* Formas de Pago y Normas de Crédito */}
           <div style={{ marginBottom: '0.65rem', minWidth: 0, width: '100%', flexShrink: 0 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem', marginBottom: '0.45rem' }}>
               <button
+                type="button"
                 className="btn btn-sm"
-                onClick={() => setCondicionPago('CONTADO')}
+                disabled={isOrderLocked}
+                onClick={() => {
+                  if (isOrderLocked) return;
+                  setCondicionPago('CONTADO');
+                }}
                 style={{
                   background: condicionPago === 'CONTADO' ? 'var(--motorven-emerald)' : 'var(--bg-btn-secondary)',
                   color: condicionPago === 'CONTADO' ? '#fff' : 'var(--text-primary)',
                   padding: '0.4rem 0.5rem',
-                  fontSize: '0.76rem'
+                  fontSize: '0.76rem',
+                  opacity: isOrderLocked && condicionPago !== 'CONTADO' ? 0.5 : 1,
+                  cursor: isOrderLocked ? 'not-allowed' : 'pointer'
                 }}
               >
                 Pago Contado
               </button>
               <button
+                type="button"
                 className="btn btn-sm"
-                onClick={() => setCondicionPago('CREDITO')}
+                disabled={isOrderLocked}
+                onClick={() => {
+                  if (isOrderLocked) return;
+                  setCondicionPago('CREDITO');
+                }}
                 style={{
                   background: condicionPago === 'CREDITO' ? 'var(--motorven-gold)' : 'var(--bg-btn-secondary)',
                   color: condicionPago === 'CREDITO' ? '#fff' : 'var(--text-primary)',
                   padding: '0.4rem 0.5rem',
-                  fontSize: '0.76rem'
+                  fontSize: '0.76rem',
+                  opacity: isOrderLocked && condicionPago !== 'CREDITO' ? 0.5 : 1,
+                  cursor: isOrderLocked ? 'not-allowed' : 'pointer'
                 }}
               >
                 Venta Crédito
@@ -1216,6 +1680,116 @@ export default function SalesPOSView({
                 <option value="PUNTO_DE_VENTA">💳 Punto de Venta (Débito/Crédito)</option>
                 <option value="ZELLE">💲 Zelle / Transferencia USD [+3% IGTF]</option>
               </select>
+            )}
+
+            {/* Plazos y Evaluación de Normas de Crédito en POS Mostrador / Oficina */}
+            {condicionPago === 'CREDITO' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px' }}>
+                  {[
+                    { key: '7_DIAS', label: '7 Días' },
+                    { key: '15_DIAS', label: '15 Días' },
+                    { key: '21_DIAS', label: '21 Días' },
+                    { key: '30_DIAS', label: '30 Días', reqApproval: true }
+                  ].map((t) => {
+                    const active = creditTerm === t.key;
+                    const isAgreed = clientAgreedInfo.termKey === t.key;
+                    return (
+                      <button
+                        key={t.key}
+                        type="button"
+                        disabled={isOrderLocked}
+                        onClick={() => {
+                          if (isOrderLocked) return;
+                          if (t.key === '30_DIAS' && creditTerm !== '30_DIAS') {
+                            setCreditOverrideApproved(false);
+                          }
+                          setCreditTerm(t.key);
+                        }}
+                        style={{
+                          padding: '4px 4px',
+                          borderRadius: '7px',
+                          border: active
+                            ? '1.5px solid var(--motorven-gold)'
+                            : isAgreed
+                            ? '1px dashed rgba(56, 189, 248, 0.5)'
+                            : '1px solid var(--border-glass)',
+                          background: active ? 'rgba(245, 158, 11, 0.22)' : 'rgba(255, 255, 255, 0.03)',
+                          color: active ? '#fbbf24' : 'var(--text-primary)',
+                          fontSize: '0.68rem',
+                          fontWeight: active ? 800 : 600,
+                          cursor: isOrderLocked ? 'not-allowed' : 'pointer',
+                          opacity: isOrderLocked && !active ? 0.45 : 1,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          lineHeight: 1.15
+                        }}
+                      >
+                        <span>{t.label}</span>
+                        {t.reqApproval && (
+                          <span style={{ fontSize: '0.54rem', color: '#fca5a5', fontWeight: 700 }}>
+                            🔒 Gerencia
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Tarjeta de Diagnóstico de Normas de Crédito */}
+                <div style={{
+                  padding: '6px 8px',
+                  borderRadius: '8px',
+                  background: effectiveIsAprobado
+                    ? 'rgba(16, 185, 129, 0.12)'
+                    : 'rgba(239, 68, 68, 0.14)',
+                  border: `1px solid ${effectiveIsAprobado ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.45)'}`,
+                  fontSize: '0.67rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '3px' }}>
+                    <span style={{
+                      fontWeight: 900,
+                      color: effectiveIsAprobado ? '#10b981' : '#f87171',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      {effectiveIsAprobado ? '✓ CRÉDITO ' : '⚠ CRÉDITO '}
+                      {effectiveStatusLabel}
+                    </span>
+
+                    {!isOrderLocked && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCreditApprovalModal(true)}
+                        className="btn btn-sm"
+                        style={{
+                          padding: '2px 7px',
+                          fontSize: '0.63rem',
+                          fontWeight: 800,
+                          background: creditOverrideApproved
+                            ? 'rgba(16, 185, 129, 0.22)'
+                            : 'linear-gradient(135deg, #f59e0b, #d97706)',
+                          color: creditOverrideApproved ? '#34d399' : '#fff',
+                          border: creditOverrideApproved ? '1px solid #10b981' : 'none',
+                          borderRadius: '6px'
+                        }}
+                      >
+                        {creditOverrideApproved ? '✓ Autorizado' : '🛡️ Aprobar Crédito'}
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ color: 'var(--text-muted)', lineHeight: 1.25 }}>
+                    {effectiveMotivo}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px', fontSize: '0.62rem', color: '#94a3b8' }}>
+                    <span>Fact. Abiertas: <strong style={{ color: clientCreditEvaluation.masDeDosFacturas ? '#f87171' : '#e2e8f0' }}>{clientCreditEvaluation.facturasPendientesCount}/2</strong></span>
+                    <span>N.E. Abiertas: <strong style={{ color: clientCreditEvaluation.dosOMasNotasEntrega ? '#f87171' : '#e2e8f0' }}>{clientCreditEvaluation.notasEntregaPendientesCount}/1</strong></span>
+                    <span>Vencidas: <strong style={{ color: clientCreditEvaluation.tieneVencidas ? '#f87171' : '#10b981' }}>{clientCreditEvaluation.vencidasCount}</strong></span>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 
@@ -1294,7 +1868,7 @@ export default function SalesPOSView({
             onClick={handleFinalizeSale}
             disabled={cartItems.length === 0}
           >
-            <CheckCircle size={18} /> REALIZAR PEDIDO
+            <CheckCircle size={18} /> REALIZAR FACTURA
           </button>
         </div>
       </div>
@@ -1623,7 +2197,17 @@ export default function SalesPOSView({
                             )}
                           </div>
                           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            Emisión: {ord.fechaEmision ? new Date(ord.fechaEmision).toLocaleDateString('es-VE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Hoy'}
+                            Emisión: {formatDateVe(ord.fechaEmision || ord.fecha || ord.created_at || new Date())}
+                            {' • '}
+                            Vencimiento: <strong style={{ color: 'var(--motorven-gold)' }}>
+                              {formatDateVe(
+                                ord.fechaVencimiento ||
+                                calculateExpirationDate(
+                                  ord.fechaEmision || ord.fecha || ord.created_at || new Date(),
+                                  resolveCreditDaysFromTerm(ord.condicionPago, client?.diasCredito, ord.diasCredito)
+                                )
+                              )}
+                            </strong>
                             {ord.vendedorId && ` • Asesor: ${ord.vendedorId}`}
                           </div>
                         </div>
@@ -1693,6 +2277,179 @@ export default function SalesPOSView({
               <button className="btn btn-secondary btn-sm" onClick={() => setShowOrdersDrawer(false)}>
                 Cerrar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE AUDITORÍA & APROBACIÓN EXCEPCIONAL DE CRÉDITO EN POS / OFICINA */}
+      {showCreditApprovalModal && selectedClient && (
+        <div
+          className="clients-modal-backdrop"
+          style={{ zIndex: 2400 }}
+          onClick={() => setShowCreditApprovalModal(false)}
+        >
+          <div
+            className="clients-modal-container"
+            style={{
+              maxWidth: '580px',
+              width: '94%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              border: '1.5px solid var(--motorven-gold)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="clients-modal-header" style={{ borderBottom: '1px solid var(--border-glass)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  background: 'rgba(245, 158, 11, 0.2)',
+                  border: '1.5px solid var(--motorven-gold)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--motorven-gold)'
+                }}>
+                  <ShieldCheck size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Auditoría & Aprobación de Crédito ({modalidadVenta === 'OFICINA' ? 'Venta por Oficina' : 'POS Mostrador'})
+                  </h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Evaluación de normas crediticias para {selectedClient.nombre || selectedClient.razonSocial} ({selectedClient.rif})
+                  </div>
+                </div>
+              </div>
+              <button type="button" onClick={() => setShowCreditApprovalModal(false)} className="btn btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              {/* Checklist de las 5 Normas de Crédito */}
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.65)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '10px',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                fontSize: '0.76rem'
+              }}>
+                <div style={{ fontWeight: 800, color: 'var(--neon-cyan)', marginBottom: '2px' }}>
+                  📋 Diagnóstico de Normas de Crédito Motorven:
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>1. Documentos vencidos (Facturas o N.E.):</span>
+                  <strong style={{ color: clientCreditEvaluation.tieneVencidas ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.tieneVencidas ? `✕ ${clientCreditEvaluation.vencidasCount} Vencido(s)` : '✓ 0 Vencidos'}
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>2. Máximo 2 Facturas pendientes:</span>
+                  <strong style={{ color: clientCreditEvaluation.masDeDosFacturas ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.facturasPendientesCount} / 2 Factura(s)
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>3. Menos de 2 Notas de Entrega pendientes:</span>
+                  <strong style={{ color: clientCreditEvaluation.dosOMasNotasEntrega ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.notasEntregaPendientesCount} / 1 N.E.
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>4. Sin documentos combinados (1 Fact + 1 N.E.):</span>
+                  <strong style={{ color: clientCreditEvaluation.dosCombinadas ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.dosCombinadas ? '✕ Posee Combinados' : '✓ Cumple'}
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>5. Plazo solicitado ({diasCreditoActual} Días):</span>
+                  <strong style={{ color: isTermRequiresMandatoryApproval ? '#f59e0b' : '#10b981' }}>
+                    {isTermRequiresMandatoryApproval ? '🔒 30 Días (Req. Gerencia)' : `${diasCreditoActual} Días`}
+                  </strong>
+                </div>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  Directivo / Responsable Autorizado que Aprueba el Crédito:
+                </label>
+                <select
+                  className="form-control"
+                  value={creditOverrideAuthorizer}
+                  onChange={(e) => setCreditOverrideAuthorizer(e.target.value)}
+                  style={{ fontSize: '0.82rem' }}
+                >
+                  {approverGroups.map((grp) => (
+                    <optgroup key={grp.department} label={grp.department}>
+                      {grp.people.map((person) => (
+                        <option key={person.id} value={person.id}>
+                          ✓ {person.name} — {person.role}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  Justificación / Observación de Auditoría:
+                </label>
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  placeholder="Ej: Autorizado por Gerencia bajo compromiso de pago..."
+                  value={creditOverrideJustification}
+                  onChange={(e) => setCreditOverrideJustification(e.target.value)}
+                  style={{ fontSize: '0.8rem' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+                {creditOverrideApproved && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setCreditOverrideApproved(false);
+                      setShowCreditApprovalModal(false);
+                      notify.info('Autorización excepcional de crédito revocada.');
+                    }}
+                  >
+                    Revocar Aprobación
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCreditApprovalModal(false)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 800 }}
+                  onClick={() => {
+                    if (!authorizedApproverIds.has(creditOverrideAuthorizer)) {
+                      notify.error('Seleccione un aprobador autorizado en Configuración.');
+                      return;
+                    }
+                    setCreditOverrideApproved(true);
+                    setShowCreditApprovalModal(false);
+                    notify.success(`Crédito aprobado por ${creditOverrideAuthorizer}.`);
+                  }}
+                >
+                  ✓ Otorgar Aprobación de Crédito
+                </button>
+              </div>
             </div>
           </div>
         </div>

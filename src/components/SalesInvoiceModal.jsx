@@ -116,9 +116,14 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     });
   };
 
-  const fechaObj = new Date(sale.fecha || new Date());
+  const fechaObj = new Date(sale.fechaEmision || sale.fecha || new Date());
   const fechaStr = fechaObj.toLocaleDateString('es-VE');
   const horaStr = fechaObj.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const diasCreditoDoc = sale.condicionPago === 'CONTADO' ? 0 : Number(sale.diasCredito ?? 0);
+  const fechaVencObj = sale.fechaVencimiento
+    ? new Date(sale.fechaVencimiento)
+    : new Date(fechaObj.getTime() + (diasCreditoDoc * 24 * 60 * 60 * 1000));
+  const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
 
   // Paginación para formato Carta Vertical
   const pages = splitInvoiceItemsIntoPages(sale.items);
@@ -537,11 +542,11 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
               {/* Datos de la Venta y Receptor */}
               <div style={{ fontSize: '0.72rem', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>FECHA: {fechaStr}</span>
-                  <span>HORA: {horaStr}</span>
+                  <span>EMISIÓN: {fechaStr}</span>
+                  <span>VENCIMIENTO: {fechaVencStr}</span>
                 </div>
                 <div>CAJERO: {sale.vendedor || 'CAJA MOSTRADOR'}</div>
-                <div>CONDICIÓN: {sale.condicionPago || 'CONTADO'} ({sale.metodoPago || 'EFECTIVO USD'})</div>
+                <div>CONDICIÓN: {sale.condicionPago || 'CONTADO'} ({diasCreditoDoc} DÍAS) - {sale.metodoPago || 'EFECTIVO USD'}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span>TASA BCV:</span>
                   <strong>Bs. {tasaBcv.toFixed(2)} / USD</strong>
@@ -779,6 +784,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
                                   <span style={{ color: '#64748b' }}>Fecha de Emisión:</span>
                                   <strong>{fechaStr} {horaStr}</strong>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
+                                  <span style={{ color: '#64748b' }}>Fecha de Vencimiento:</span>
+                                  <strong style={{ color: '#002b7a' }}>{fechaVencStr} ({diasCreditoDoc} Días)</strong>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
                                   <span style={{ color: '#64748b' }}>Condición de Pago:</span>

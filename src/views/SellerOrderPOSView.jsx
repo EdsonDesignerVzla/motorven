@@ -26,10 +26,19 @@ import {
   Sparkles,
   Calendar,
   Layers,
-  Info
+  Info,
+  Building2,
+  Zap
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { resolveUnitPrice, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
+import {
+  resolveCreditDaysFromTerm,
+  calculateExpirationDate,
+  formatDateVe,
+  evaluateClientCreditPolicy,
+  getAuthorizedApproverGroups
+} from '../services/creditPolicyService';
 import { generateSellerOrderPDF } from '../services/pdfReportService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { useNotification } from '../context/NotificationContext';
@@ -38,10 +47,14 @@ export default function SellerOrderPOSView({
   products = [],
   clients = [],
   orders = [],
+  profitInvoices = [],
+  sales = [],
+  profitSellers = [],
   config = {},
   profitZones = [],
   currentUser,
   onSaveOrder,
+  onProceedToPOS,
   onSyncProfit
 }) {
   const notify = useNotification();
@@ -52,7 +65,8 @@ export default function SellerOrderPOSView({
   const sellerName = currentUser?.nombre || 'Asesor Comercial';
   const sellerCode = currentUser?.co_ven || currentUser?.coVen || currentUser?.username || 'V01';
 
-  // Estados principales de la preventa
+  // Estados principales de la preventa / venta por oficina
+  const [modalidadVenta, setModalidadVenta] = useState('PREVENTA'); // 'PREVENTA' | 'OFICINA'
   const [selectedClient, setSelectedClient] = useState(null);
   const [clientSearchText, setClientSearchText] = useState('');
   const [isClientDropdownOpen, setIsClientDropdownOpen] = useState(false);
@@ -67,6 +81,22 @@ export default function SellerOrderPOSView({
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [lastEmittedOrder, setLastEmittedOrder] = useState(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+
+  // Estados de Aprobación Excepcional de Crédito
+  const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
+  const [creditOverrideApproved, setCreditOverrideApproved] = useState(false);
+  const { authorizedApproverIds, approverGroups, defaultAuthorizer } = useMemo(
+    () => getAuthorizedApproverGroups(safeConfig),
+    [safeConfig]
+  );
+  const [creditOverrideAuthorizer, setCreditOverrideAuthorizer] = useState(defaultAuthorizer);
+  const [creditOverrideJustification, setCreditOverrideJustification] = useState('');
+
+  useEffect(() => {
+    if (!creditOverrideApproved && defaultAuthorizer) {
+      setCreditOverrideAuthorizer(defaultAuthorizer);
+    }
+  }, [defaultAuthorizer, creditOverrideApproved]);
 
   // Lista de categorías para filtros táctiles
   const categories = [
@@ -154,6 +184,8 @@ export default function SellerOrderPOSView({
   // Selección automática de dirección al cambiar cliente
   const handleSelectClient = (client) => {
     setSelectedClient(client);
+    setCreditOverrideApproved(false);
+    setCreditOverrideJustification('');
     setDeliveryAddress(client?.domicilioFiscal || client?.direccion || 'Zona Industrial Valencia, Edo. Carabobo');
     if (client?.diasCredito && client.diasCredito > 0) {
       setCondicionPago(client.diasCredito >= 30 ? '30_DIAS' : (client.diasCredito >= 21 ? '21_DIAS' : (client.diasCredito >= 15 ? '15_DIAS' : '7_DIAS')));
@@ -299,16 +331,61 @@ export default function SellerOrderPOSView({
   const totalUsd = cartItems.reduce((acc, it) => acc + (it.subtotalUsd || 0), 0);
   const totalBs = totalUsd * tasaBcv;
 
-  // Validación de riesgo crediticio del cliente
-  const creditLimit = Number(selectedClient?.limiteCreditoUsd) || 0;
-  const currentDebt = Number(selectedClient?.saldoDeudorUsd) || 0;
-  const availableCredit = Math.max(0, creditLimit - currentDebt);
-  const isCreditDenied = condicionPago !== 'CONTADO' && (selectedClient?.sinCredito || totalUsd > availableCredit);
+  // Cálculo de Fecha de Emisión y Fecha de Vencimiento (= Emisión + Días de Crédito)
+  const diasCreditoActual = useMemo(
+    () => resolveCreditDaysFromTerm(condicionPago, selectedClient?.diasCredito ?? 15),
+    [condicionPago, selectedClient]
+  );
+  const fechaEmisionActual = useMemo(() => new Date(), [cartItems.length, condicionPago, selectedClient?.id]);
+  const fechaVencimientoActual = useMemo(
+    () => calculateExpirationDate(fechaEmisionActual, diasCreditoActual),
+    [fechaEmisionActual, diasCreditoActual]
+  );
 
-  // Enviar preventa a facturación (Paso a Caja)
-  const handleSubmitOrder = async () => {
+  // Evaluación completa de las Normas de Crédito Comercial (idéntica en Preventa, Oficina y POS)
+  const clientCreditEvaluation = useMemo(
+    () =>
+      evaluateClientCreditPolicy({
+        client: selectedClient,
+        profitInvoices,
+        sales,
+        tasaBcv,
+        montoOrdenUsd: totalUsd
+      }),
+    [selectedClient, profitInvoices, sales, tasaBcv, totalUsd]
+  );
+
+  const isTermRequiresMandatoryApproval = condicionPago === '30_DIAS';
+
+  const effectiveIsAprobado =
+    creditOverrideApproved ||
+    (Boolean(clientCreditEvaluation.isAprobado) && !isTermRequiresMandatoryApproval);
+
+  const effectiveStatusLabel = creditOverrideApproved
+    ? 'APROBADO (AUTORIZADO)'
+    : isTermRequiresMandatoryApproval
+    ? 'NEGADO (REQUIERE APROBACIÓN 30D)'
+    : clientCreditEvaluation.statusLabel;
+
+  const isCreditDenied =
+    condicionPago !== 'CONTADO' && (!clientCreditEvaluation.evaluado || !effectiveIsAprobado);
+
+  const effectiveMotivo = creditOverrideApproved
+    ? `Autorizado por: ${creditOverrideAuthorizer}. ${creditOverrideJustification || ''}`
+    : isTermRequiresMandatoryApproval
+    ? !clientCreditEvaluation.isAprobado
+      ? `${clientCreditEvaluation.motivo} Además, el plazo a 30 Días siempre requiere aprobación obligatoria de Gerencia.`
+      : 'Política Comercial Estricta: Todo crédito a 30 Días requiere obligatoriamente solicitar y obtener aprobación de Gerencia.'
+    : clientCreditEvaluation.motivo;
+
+  const creditLimit = clientCreditEvaluation.limiteCreditoUsd || Number(selectedClient?.limiteCreditoUsd) || 0;
+  const currentDebt = clientCreditEvaluation.saldoDeudorUsd || Number(selectedClient?.saldoDeudorUsd) || 0;
+  const availableCredit = Math.max(0, creditLimit - currentDebt);
+
+  // Enviar preventa / venta por oficina a facturación (Paso a Caja)
+  const handleSubmitOrder = async (openDirectlyInPOS = false) => {
     if (!selectedClient) {
-      notify.error('Debe seleccionar el cliente destinatario de la preventa.');
+      notify.error('Debe seleccionar el cliente destinatario de la orden.');
       return;
     }
 
@@ -320,11 +397,14 @@ export default function SellerOrderPOSView({
     setIsSubmitting(true);
     const orderCorrelativo = `PED-${Date.now().toString().slice(-6)}`;
     const effectiveStatus = isCreditDenied ? 'RETENIDO_CREDITO' : 'APROBADO';
+    const nowIso = new Date().toISOString();
+    const expIso = calculateExpirationDate(nowIso, diasCreditoActual).toISOString();
 
     const orderPayload = {
       id: orderCorrelativo,
       numeroDoc: orderCorrelativo,
       correlativo: orderCorrelativo,
+      modalidadVenta,
       clienteId: selectedClient.id || selectedClient.codigo || 'CLI-TEMP',
       clienteNombre: selectedClient.nombre || selectedClient.razonSocial || 'Cliente',
       clienteRif: selectedClient.rif || 'J-000000000',
@@ -332,9 +412,15 @@ export default function SellerOrderPOSView({
       zonaVenta: selectedClient.zona || '01 - Valencia',
       vendedorId: sellerName,
       vendedorCoVen: sellerCode,
-      fechaEmision: new Date().toISOString(),
+      fechaEmision: nowIso,
+      diasCredito: diasCreditoActual,
+      fechaVencimiento: expIso,
       condicionPago,
-      notas: orderNotes || 'Preventa móvil levantada en campo por asesor comercial.',
+      creditOverrideApproved,
+      creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : null,
+      creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : null,
+      observaciones: orderNotes || (modalidadVenta === 'OFICINA' ? 'Venta por Oficina enviada a Caja.' : 'Preventa móvil levantada en campo por asesor comercial.'),
+      notas: orderNotes || (modalidadVenta === 'OFICINA' ? 'Venta por Oficina enviada a Caja.' : 'Preventa móvil levantada en campo por asesor comercial.'),
       status: effectiveStatus,
       totalLitros,
       totalCajas,
@@ -357,13 +443,21 @@ export default function SellerOrderPOSView({
     };
 
     try {
+      let savedOrder = orderPayload;
       if (onSaveOrder) {
-        await onSaveOrder(orderPayload);
+        const res = await onSaveOrder(orderPayload);
+        if (res && typeof res === 'object') {
+          savedOrder = { ...orderPayload, ...res, items: orderPayload.items };
+        }
       }
-      setLastEmittedOrder(orderPayload);
-      setShowSuccessModal(true);
+      setLastEmittedOrder(savedOrder);
       clearCart();
-      notify.success(`¡Nota de Pedido ${orderCorrelativo} enviada a Caja exitosamente!`);
+      if (openDirectlyInPOS && onProceedToPOS && effectiveStatus === 'APROBADO') {
+        onProceedToPOS(savedOrder);
+      } else {
+        setShowSuccessModal(true);
+        notify.success(`¡Nota de Pedido ${orderCorrelativo} enviada a Caja exitosamente!`);
+      }
     } catch (err) {
       console.error('Error emitiendo pedido:', err);
       notify.error('Error al registrar la preventa: ' + (err.message || 'Error de conexión'));
@@ -801,12 +895,54 @@ export default function SellerOrderPOSView({
           
           <div className="bento-card" style={{ padding: '0.9rem', background: 'var(--bg-card-glass)', display: 'flex', flexDirection: 'column', gap: '0.65rem', minWidth: 0 }}>
             
+            {/* Selector de Modalidad: Preventa Móvil vs Venta por Oficina */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <button
+                type="button"
+                onClick={() => setModalidadVenta('PREVENTA')}
+                className="btn btn-sm"
+                style={{
+                  background: modalidadVenta === 'PREVENTA' ? 'linear-gradient(135deg, var(--motorven-red), #b91c1c)' : 'rgba(255,255,255,0.03)',
+                  color: modalidadVenta === 'PREVENTA' ? '#fff' : 'var(--text-muted)',
+                  border: modalidadVenta === 'PREVENTA' ? '1px solid var(--motorven-red)' : '1px solid var(--border-glass)',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '5px 8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Smartphone size={13} /> Preventa Calle
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalidadVenta('OFICINA')}
+                className="btn btn-sm"
+                style={{
+                  background: modalidadVenta === 'OFICINA' ? 'linear-gradient(135deg, #1e40af, #0284c7)' : 'rgba(255,255,255,0.03)',
+                  color: modalidadVenta === 'OFICINA' ? '#fff' : 'var(--text-muted)',
+                  border: modalidadVenta === 'OFICINA' ? '1px solid #38bdf8' : '1px solid var(--border-glass)',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '5px 8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Building2 size={13} /> Venta por Oficina
+              </button>
+            </div>
+
             {/* Header del Carrito */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
                 <ShoppingCart size={17} color="var(--motorven-red)" style={{ flexShrink: 0 }} />
                 <span style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
-                  Resumen de la Preventa ({cartItems.length})
+                  Resumen de Nota de Pedido ({cartItems.length})
                 </span>
               </div>
               {cartItems.length > 0 && (
@@ -901,7 +1037,7 @@ export default function SellerOrderPOSView({
               )}
             </div>
 
-            {/* CONDICIONES COMERCIALES */}
+            {/* CONDICIONES COMERCIALES, FECHAS Y NORMAS DE CRÉDITO */}
             <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div>
                 <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px', display: 'block' }}>
@@ -910,16 +1046,102 @@ export default function SellerOrderPOSView({
                 <select
                   className="form-control"
                   value={condicionPago}
-                  onChange={(e) => setCondicionPago(e.target.value)}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    if (nextVal === '30_DIAS' && condicionPago !== '30_DIAS') {
+                      setCreditOverrideApproved(false);
+                    }
+                    setCondicionPago(nextVal);
+                  }}
                   style={{ fontSize: '0.82rem' }}
                 >
-                  <option value="CONTADO">Contado / Pago Inmediato en Caja</option>
+                  <option value="CONTADO">Contado / Pago Inmediato en Caja (0 Días)</option>
                   <option value="7_DIAS">Crédito 7 Días</option>
                   <option value="15_DIAS">Crédito 15 Días</option>
                   <option value="21_DIAS">Crédito 21 Días</option>
-                  <option value="30_DIAS">Crédito 30 Días (Requiere Aprobación)</option>
+                  <option value="30_DIAS">Crédito 30 Días (🔒 Requiere Aprobación Gerencia)</option>
                 </select>
               </div>
+
+              {/* TARJETA DE FECHA DE EMISIÓN Y FECHA DE VENCIMIENTO (= EMISIÓN + DÍAS CRÉDITO) */}
+              <div style={{
+                padding: '7px 10px',
+                borderRadius: '8px',
+                background: 'rgba(15, 23, 42, 0.65)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                display: 'grid',
+                gridTemplateColumns: '1fr auto 1fr',
+                alignItems: 'center',
+                gap: '6px'
+              }}>
+                <div>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                    <Calendar size={10} color="var(--neon-cyan)" /> Fecha de Emisión
+                  </div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>
+                    {formatDateVe(fechaEmisionActual)}
+                  </div>
+                </div>
+
+                <div style={{
+                  padding: '2px 7px',
+                  borderRadius: '10px',
+                  background: diasCreditoActual > 0 ? 'rgba(245, 158, 11, 0.18)' : 'rgba(16, 185, 129, 0.18)',
+                  border: `1px solid ${diasCreditoActual > 0 ? 'var(--motorven-gold)' : 'var(--motorven-emerald)'}`,
+                  color: diasCreditoActual > 0 ? '#fbbf24' : '#34d399',
+                  fontSize: '0.64rem',
+                  fontWeight: 800,
+                  textAlign: 'center',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {diasCreditoActual > 0 ? `+${diasCreditoActual} Días Crédito` : '0 Días (Contado)'}
+                </div>
+
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                    Fecha de Vencimiento
+                  </div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 900, color: diasCreditoActual > 0 ? 'var(--motorven-gold)' : 'var(--neon-cyan)', fontFamily: 'var(--font-code)' }}>
+                    {formatDateVe(fechaVencimientoActual)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Diagnóstico de Normas de Crédito cuando se selecciona Crédito */}
+              {condicionPago !== 'CONTADO' && selectedClient && (
+                <div style={{
+                  padding: '7px 9px',
+                  borderRadius: '8px',
+                  background: effectiveIsAprobado ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.14)',
+                  border: `1px solid ${effectiveIsAprobado ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.45)'}`,
+                  fontSize: '0.68rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                    <strong style={{ color: effectiveIsAprobado ? '#10b981' : '#f87171' }}>
+                      {effectiveIsAprobado ? '✓ CRÉDITO ' : '⚠ CRÉDITO '}
+                      {effectiveStatusLabel}
+                    </strong>
+                    <button
+                      type="button"
+                      onClick={() => setShowCreditApprovalModal(true)}
+                      className="btn btn-sm"
+                      style={{
+                        padding: '2px 7px',
+                        fontSize: '0.63rem',
+                        fontWeight: 800,
+                        background: creditOverrideApproved ? 'rgba(16, 185, 129, 0.22)' : 'linear-gradient(135deg, #f59e0b, #d97706)',
+                        color: creditOverrideApproved ? '#34d399' : '#fff',
+                        borderRadius: '6px'
+                      }}
+                    >
+                      {creditOverrideApproved ? '✓ Autorizado' : '🛡️ Aprobar Crédito'}
+                    </button>
+                  </div>
+                  <div style={{ color: 'var(--text-muted)', lineHeight: 1.25 }}>
+                    {effectiveMotivo}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px', display: 'block' }}>
@@ -965,7 +1187,9 @@ export default function SellerOrderPOSView({
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>Total Preventa:</span>
+                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  Total {modalidadVenta === 'OFICINA' ? 'Venta Oficina' : 'Preventa'}:
+                </span>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: 'var(--semaforo-verde)', lineHeight: 1 }}>
                     {formatUsd(totalUsd)}
@@ -977,30 +1201,55 @@ export default function SellerOrderPOSView({
               </div>
             </div>
 
-            {/* BOTÓN DE ACCIÓN PRINCIPAL */}
-            <button
-              type="button"
-              disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
-              onClick={handleSubmitOrder}
-              className="btn btn-primary"
-              style={{
-                padding: '12px',
-                fontSize: '0.92rem',
-                fontWeight: 900,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                background: isCreditDenied
-                  ? 'linear-gradient(135deg, #d97706, #b45309)'
-                  : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
-                boxShadow: '0 4px 16px rgba(220, 38, 38, 0.4)',
-                opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
-              }}
-            >
-              <Send size={18} />
-              <span>{isCreditDenied ? 'SOLICITAR APROBACIÓN A CAJA' : '🚀 EMITIR Y ENVIAR A CAJA'}</span>
-            </button>
+            {/* BOTONES DE ACCIÓN PRINCIPAL */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <button
+                type="button"
+                disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
+                onClick={() => handleSubmitOrder(false)}
+                className="btn btn-primary"
+                style={{
+                  padding: '11px',
+                  fontSize: '0.88rem',
+                  fontWeight: 900,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: isCreditDenied
+                    ? 'linear-gradient(135deg, #d97706, #b45309)'
+                    : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
+                  boxShadow: '0 4px 16px rgba(220, 38, 38, 0.4)',
+                  opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
+                }}
+              >
+                <Send size={17} />
+                <span>{isCreditDenied ? 'SOLICITAR APROBACIÓN A CAJA' : '🚀 EMITIR NOTA DE PEDIDO A CAJA'}</span>
+              </button>
+
+              {!isCreditDenied && onProceedToPOS && (
+                <button
+                  type="button"
+                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
+                  onClick={() => handleSubmitOrder(true)}
+                  className="btn btn-secondary"
+                  style={{
+                    padding: '9px',
+                    fontSize: '0.8rem',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    border: '1px solid var(--neon-cyan)',
+                    color: 'var(--neon-cyan)',
+                    opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
+                  }}
+                >
+                  <Zap size={15} /> Emitir y Abrir Directamente en POS de Caja
+                </button>
+              )}
+            </div>
 
             {/* Aviso de Reserva */}
             <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
@@ -1047,12 +1296,51 @@ export default function SellerOrderPOSView({
               N° {lastEmittedOrder.numeroDoc || lastEmittedOrder.id}
             </div>
 
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '10px 0 16px', lineHeight: '1.5' }}>
-              La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({lastEmittedOrder.totalLitros.toFixed(1)} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd)}) ya se encuentra en la <strong>bandeja de entrada de la Cajera en planta</strong> lista para ser facturada.
+            <div style={{
+              margin: '10px auto',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              background: 'rgba(15, 23, 42, 0.6)',
+              border: '1px solid var(--border-glass)',
+              fontSize: '0.76rem',
+              display: 'flex',
+              justifyContent: 'space-around',
+              gap: '8px'
+            }}>
+              <span>Emisión: <strong>{formatDateVe(lastEmittedOrder.fechaEmision)}</strong></span>
+              <span>Plazo: <strong>{lastEmittedOrder.diasCredito || 0} Días</strong></span>
+              <span>Vencimiento: <strong style={{ color: 'var(--motorven-gold)' }}>{formatDateVe(lastEmittedOrder.fechaVencimiento)}</strong></span>
+            </div>
+
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '8px 0 14px', lineHeight: '1.5' }}>
+              La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({lastEmittedOrder.totalLitros.toFixed(1)} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd)}) ya se encuentra en la <strong>bandeja de entrada de la Cajera en planta</strong> con restricción de <strong>NO MODIFICAR</strong>.
             </p>
 
             {/* Botones de Documento */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {onProceedToPOS && lastEmittedOrder.status !== 'RETENIDO_CREDITO' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSuccessModal(false);
+                    onProceedToPOS(lastEmittedOrder);
+                  }}
+                  className="btn btn-primary"
+                  style={{
+                    padding: '10px',
+                    fontSize: '0.88rem',
+                    fontWeight: 900,
+                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <Zap size={16} /> Abrir en POS de Caja para Facturar (Modo No Modificar)
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -1080,7 +1368,7 @@ export default function SellerOrderPOSView({
               <button
                 type="button"
                 onClick={() => {
-                  const textMsg = `*SIGNUM MOTORVEN* - Nota de Pedido ${lastEmittedOrder.numeroDoc}\nCliente: ${lastEmittedOrder.clienteNombre}\nVolumen: ${lastEmittedOrder.totalLitros.toFixed(1)} Litros\nTotal: ${formatUsd(lastEmittedOrder.totalNetoUsd)} (Bs. ${formatBs(lastEmittedOrder.totalBs)})\nAsesor: ${sellerName}\n_Reserva activa en almacén hasta las 5:00 PM._`;
+                  const textMsg = `*SIGNUM MOTORVEN* - Nota de Pedido ${lastEmittedOrder.numeroDoc}\nCliente: ${lastEmittedOrder.clienteNombre}\nEmisión: ${formatDateVe(lastEmittedOrder.fechaEmision)} | Vencimiento: ${formatDateVe(lastEmittedOrder.fechaVencimiento)}\nVolumen: ${lastEmittedOrder.totalLitros.toFixed(1)} Litros\nTotal: ${formatUsd(lastEmittedOrder.totalNetoUsd)} (Bs. ${formatBs(lastEmittedOrder.totalBs)})\nAsesor: ${sellerName}\n_Reserva activa en almacén hasta las 5:00 PM._`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(textMsg)}`, '_blank');
                 }}
                 className="btn btn-secondary"
@@ -1343,6 +1631,145 @@ export default function SellerOrderPOSView({
               >
                 <Plus size={14} style={{ marginRight: '4px' }} /> Agregar a Preventa
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE APROBACIÓN EXCEPCIONAL DE CRÉDITO EN NOTA DE PEDIDO */}
+      {showCreditApprovalModal && selectedClient && (
+        <div
+          className="clients-modal-backdrop"
+          style={{ zIndex: 2400 }}
+          onClick={() => setShowCreditApprovalModal(false)}
+        >
+          <div
+            className="clients-modal-container"
+            style={{
+              maxWidth: '560px',
+              width: '94%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              border: '1.5px solid var(--motorven-gold)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="clients-modal-header" style={{ borderBottom: '1px solid var(--border-glass)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ShieldCheck size={22} color="var(--motorven-gold)" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Auditoría & Aprobación de Crédito ({modalidadVenta === 'OFICINA' ? 'Venta por Oficina' : 'Nota de Pedido'})
+                  </h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Cliente: {selectedClient.nombre || selectedClient.razonSocial} ({selectedClient.rif})
+                  </div>
+                </div>
+              </div>
+              <button type="button" onClick={() => setShowCreditApprovalModal(false)} className="btn btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.65)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '10px',
+                padding: '10px 12px',
+                fontSize: '0.76rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '5px'
+              }}>
+                <div style={{ fontWeight: 800, color: 'var(--neon-cyan)' }}>📋 Normas de Crédito Motorven:</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>1. Documentos vencidos:</span>
+                  <strong style={{ color: clientCreditEvaluation.tieneVencidas ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.tieneVencidas ? `✕ ${clientCreditEvaluation.vencidasCount} Vencido(s)` : '✓ 0 Vencidos'}
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>2. Facturas pendientes (máx. 2):</span>
+                  <strong style={{ color: clientCreditEvaluation.masDeDosFacturas ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.facturasPendientesCount} / 2
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>3. Notas de Entrega pendientes (máx. 1):</span>
+                  <strong style={{ color: clientCreditEvaluation.dosOMasNotasEntrega ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.notasEntregaPendientesCount} / 1
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>4. Sin documentos combinados (1 Fact + 1 N.E.):</span>
+                  <strong style={{ color: clientCreditEvaluation.dosCombinadas ? '#ef4444' : '#10b981' }}>
+                    {clientCreditEvaluation.dosCombinadas ? '✕ Posee Combinados' : '✓ Cumple'}
+                  </strong>
+                </div>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  Responsable Autorizado que Aprueba el Crédito:
+                </label>
+                <select
+                  className="form-control"
+                  value={creditOverrideAuthorizer}
+                  onChange={(e) => setCreditOverrideAuthorizer(e.target.value)}
+                  style={{ fontSize: '0.82rem' }}
+                >
+                  {approverGroups.map((grp) => (
+                    <optgroup key={grp.department} label={grp.department}>
+                      {grp.people.map((person) => (
+                        <option key={person.id} value={person.id}>
+                          ✓ {person.name} — {person.role}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  Justificación de Aprobación:
+                </label>
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  placeholder="Ej: Autorizado por Gerencia..."
+                  value={creditOverrideJustification}
+                  onChange={(e) => setCreditOverrideJustification(e.target.value)}
+                  style={{ fontSize: '0.8rem' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCreditApprovalModal(false)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 800 }}
+                  onClick={() => {
+                    if (!authorizedApproverIds.has(creditOverrideAuthorizer)) {
+                      notify.error('Seleccione un aprobador autorizado.');
+                      return;
+                    }
+                    setCreditOverrideApproved(true);
+                    setShowCreditApprovalModal(false);
+                    notify.success(`Crédito aprobado por ${creditOverrideAuthorizer}.`);
+                  }}
+                >
+                  ✓ Otorgar Aprobación
+                </button>
+              </div>
             </div>
           </div>
         </div>

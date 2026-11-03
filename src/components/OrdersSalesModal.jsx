@@ -33,6 +33,11 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
+import {
+  resolveCreditDaysFromTerm,
+  calculateExpirationDate,
+  formatDateVe
+} from '../services/creditPolicyService';
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
 import { isMasterOrGerencia } from '../services/authService';
@@ -294,6 +299,7 @@ export default function OrdersSalesModal({
       return [c.codigo, c.id, c.nombre, c.razonSocial, c.rif].some(v => v && String(v).toLowerCase().includes(q));
     });
   }, [safeClients, clientSearchText, clientTypeFilter, selectedClientId]);
+  const [modalidadVenta, setModalidadVenta] = useState('PREVENTA'); // 'PREVENTA' | 'OFICINA'
   const [selectedSeller, setSelectedSeller] = useState(currentUser?.nombre || 'Vendedor Directo');
   const [selectedZone, setSelectedZone] = useState('01');
   const [deliveryAddress, setDeliveryAddress] = useState('');
@@ -323,6 +329,17 @@ export default function OrdersSalesModal({
       c => c && (c.id === selectedClientId || c.codigo === selectedClientId || c.rif === selectedClientId)
     );
   }, [selectedClientId, safeClients]);
+
+  // Cálculo de Fecha de Emisión y Fecha de Vencimiento (= Fecha Emisión + Días de Crédito)
+  const diasCreditoForm = useMemo(
+    () => resolveCreditDaysFromTerm(paymentTerm, activeClientObj?.diasCredito ?? 15),
+    [paymentTerm, activeClientObj]
+  );
+  const fechaEmisionForm = useMemo(() => new Date(), [paymentTerm, selectedClientId, orderRows.length]);
+  const fechaVencimientoForm = useMemo(
+    () => calculateExpirationDate(fechaEmisionForm, diasCreditoForm),
+    [fechaEmisionForm, diasCreditoForm]
+  );
 
   // Evaluación de Estatus de Crédito Comercial (APROBADO vs NEGADO)
   // Regla: No tener facturas o notas de entrega vencidas, ni más de 2 facturas pendientes, ni 2 notas de entrega pendientes, ni combinadas (1 factura + 1 nota de entrega)
@@ -794,8 +811,8 @@ export default function OrdersSalesModal({
     });
   };
 
-  // Guardar / Emitir Nota de Pedido (Vendedor)
-  const handleSaveOrderForm = async (targetStatus = 'APROBADO', autoPrintPDF = false) => {
+  // Guardar / Emitir Nota de Pedido (Vendedor / Oficina)
+  const handleSaveOrderForm = async (targetStatus = 'APROBADO', autoPrintPDF = false, sendToPOSDirectly = false) => {
     if (!selectedClientId && !clientSearchText) {
       setFeedbackMsg({ type: 'error', text: 'Debe seleccionar o indicar un cliente destinatario.' });
       return;
@@ -857,17 +874,26 @@ export default function OrdersSalesModal({
         }
       }
 
+      const nowIso = new Date().toISOString();
+      const expIso = calculateExpirationDate(nowIso, diasCreditoForm).toISOString();
+
       const orderPayload = {
         id: orderId,
         numeroDoc: orderId,
         tipoDoc: 'ORDEN_COMPRA',
-        fechaEmision: new Date().toISOString(),
+        modalidadVenta,
+        fechaEmision: nowIso,
+        diasCredito: diasCreditoForm,
+        fechaVencimiento: expIso,
         clienteId: activeClientObj?.id || activeClientObj?.codigo || selectedClientId || 'CLI-001',
         clienteNombre: clientName,
         clienteRif: clientRif,
         vendedorId: selectedSeller,
         zonaVenta: selectedZone,
         condicionPago: paymentTerm,
+        creditOverrideApproved,
+        creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : null,
+        creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : null,
         totalBrutoUsd: newOrderCalculations.subtotalUsd,
         ivaUsd: 0,
         totalNetoUsd: newOrderCalculations.subtotalUsd,
@@ -876,6 +902,7 @@ export default function OrdersSalesModal({
         totalItems: itemsFormatted.length,
         status: finalStatus,
         direccionEntrega: deliveryAddress,
+        observaciones: orderNotes,
         comentarios: creditOverrideApproved
           ? `${orderNotes ? orderNotes + '\n' : ''}[CRÉDITO AUTORIZADO EXCEPCIONALMENTE por ${creditOverrideAuthorizer}: ${creditOverrideJustification || 'Aprobación de Gerencia'}]`
           : orderNotes,
@@ -915,6 +942,11 @@ export default function OrdersSalesModal({
       setOrderNotes('');
       setOrderRows([{ articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja (12L)', litrosUnitarios: 11.35 }]);
       setSelectedOrder(orderPayload);
+
+      if (sendToPOSDirectly && finalStatus === 'APROBADO' && onProceedToPOS) {
+        onProceedToPOS(orderPayload);
+        return;
+      }
 
       setTimeout(() => {
         setFeedbackMsg(null);
@@ -1518,6 +1550,75 @@ export default function OrdersSalesModal({
                       </option>
                     </select>
 
+                    {/* Tarjeta de Fecha de Emisión y Fecha de Vencimiento (= Emisión + Días de Crédito) y Modalidad */}
+                    <div style={{
+                      marginTop: '6px',
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      background: 'rgba(15, 23, 42, 0.55)',
+                      border: '1px solid rgba(56, 189, 248, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                      fontSize: '0.72rem'
+                    }}>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)' }}>📅 Emisión: </span>
+                        <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>
+                          {formatDateVe(fechaEmisionForm)}
+                        </strong>
+                      </div>
+                      <span style={{
+                        padding: '1px 7px',
+                        borderRadius: '10px',
+                        fontWeight: 800,
+                        fontSize: '0.66rem',
+                        background: diasCreditoForm > 0 ? 'rgba(245, 158, 11, 0.18)' : 'rgba(16, 185, 129, 0.18)',
+                        color: diasCreditoForm > 0 ? '#fbbf24' : '#34d399',
+                        border: `1px solid ${diasCreditoForm > 0 ? '#f59e0b' : '#10b981'}`
+                      }}>
+                        {diasCreditoForm > 0 ? `+${diasCreditoForm} Días Crédito` : '0 Días (Contado)'}
+                      </span>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)' }}>⏳ Vencimiento: </span>
+                        <strong style={{ color: diasCreditoForm > 0 ? 'var(--motorven-gold)' : 'var(--neon-cyan)', fontFamily: 'var(--font-code)' }}>
+                          {formatDateVe(fechaVencimientoForm)}
+                        </strong>
+                      </div>
+                      <div style={{ display: 'inline-flex', gap: '4px', marginLeft: 'auto' }}>
+                        <button
+                          type="button"
+                          onClick={() => setModalidadVenta('PREVENTA')}
+                          className="btn btn-sm"
+                          style={{
+                            padding: '2px 7px',
+                            fontSize: '0.64rem',
+                            fontWeight: 800,
+                            background: modalidadVenta === 'PREVENTA' ? 'var(--motorven-red)' : 'rgba(255,255,255,0.05)',
+                            color: modalidadVenta === 'PREVENTA' ? '#fff' : 'var(--text-muted)'
+                          }}
+                        >
+                          Preventa
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModalidadVenta('OFICINA')}
+                          className="btn btn-sm"
+                          style={{
+                            padding: '2px 7px',
+                            fontSize: '0.64rem',
+                            fontWeight: 800,
+                            background: modalidadVenta === 'OFICINA' ? '#0284c7' : 'rgba(255,255,255,0.05)',
+                            color: modalidadVenta === 'OFICINA' ? '#fff' : 'var(--text-muted)'
+                          }}
+                        >
+                          🏢 Venta Oficina
+                        </button>
+                      </div>
+                    </div>
+
                     {/* Fila informativa de condición acordada vs plazo seleccionado */}
                     {activeClientObj && (
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', fontSize: '0.69rem', color: 'var(--text-muted)' }}>
@@ -1912,7 +2013,7 @@ export default function OrdersSalesModal({
                     <button
                       type="button"
                       disabled={isSaving}
-                      onClick={() => handleSaveOrderForm('APROBADO', false)}
+                      onClick={() => handleSaveOrderForm('APROBADO', false, !isCreditNegado)}
                       className="btn btn-primary"
                       style={{
                         display: 'flex',
@@ -1929,7 +2030,7 @@ export default function OrdersSalesModal({
                           ? '0 4px 14px rgba(217, 119, 6, 0.4)'
                           : '0 4px 14px rgba(220, 38, 38, 0.35)'
                       }}
-                      title={isCreditNegado ? 'Solicitar aprobación de crédito a Gerencia' : 'Emitir nota de pedido para facturación en caja'}
+                      title={isCreditNegado ? 'Solicitar aprobación de crédito a Gerencia' : 'Emitir nota de pedido y enviarla al POS de Caja (Modo No Modificar)'}
                     >
                       {isCreditNegado ? <ShieldAlert size={16} /> : <Send size={16} />}
                       <span>{isCreditNegado ? 'SOLICITAR APROBACIÓN' : '🚀 Emitir a Caja'}</span>
@@ -2279,7 +2380,7 @@ export default function OrdersSalesModal({
                 <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '1.25rem' }}>
                   
                   <div style={{ background: 'var(--surface-input, rgba(255, 255, 255, 0.03))', border: '1px solid var(--border-glass)', borderRadius: '14px', padding: '1.25rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', flexWrap: 'wrap', gap: '8px' }}>
                       <div>
                         <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-heading)' }}>
                           Nota de Pedido: {selectedOrder.numeroDoc || selectedOrder.id}
@@ -2287,15 +2388,41 @@ export default function OrdersSalesModal({
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                           Cliente: <strong>{selectedOrder.clienteNombre}</strong> ({selectedOrder.clienteRif || 'S/R'}) • Vendedor: <strong>{selectedOrder.vendedorId || 'No asignado'}</strong> • Condición: <strong style={{ color: 'var(--motorven-gold)' }}>{formatCondicionPago(selectedOrder.condicionPago)}</strong>
                         </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--neon-cyan)', marginTop: '3px', fontFamily: 'var(--font-code)' }}>
+                          📅 Fecha Emisión: <strong>{formatDateVe(selectedOrder.fechaEmision || selectedOrder.fecha || new Date())}</strong>
+                          {' • '}
+                          ⏳ Fecha Vencimiento: <strong style={{ color: 'var(--motorven-gold)' }}>
+                            {formatDateVe(
+                              selectedOrder.fechaVencimiento ||
+                              calculateExpirationDate(
+                                selectedOrder.fechaEmision || selectedOrder.fecha || new Date(),
+                                resolveCreditDaysFromTerm(selectedOrder.condicionPago, 15, selectedOrder.diasCredito)
+                              )
+                            )}
+                          </strong>
+                          {' '}({resolveCreditDaysFromTerm(selectedOrder.condicionPago, 15, selectedOrder.diasCredito)} Días Crédito)
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedOrder(null)}
-                        className="btn btn-secondary btn-sm"
-                        style={{ fontSize: '0.72rem' }}
-                      >
-                        Cambiar Orden
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {onProceedToPOS && selectedOrder.status !== 'RETENIDO_CREDITO' && (
+                          <button
+                            type="button"
+                            onClick={() => onProceedToPOS(selectedOrder)}
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '0.72rem', fontWeight: 800, background: 'linear-gradient(135deg, #10b981, #059669)' }}
+                          >
+                            🚀 Abrir en POS de Caja (Modo No Modificar)
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrder(null)}
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.72rem' }}
+                        >
+                          Cambiar Orden
+                        </button>
+                      </div>
                     </div>
 
                     <div className="table-container" style={{ border: '1px solid var(--border-glass)', borderRadius: '8px', marginBottom: '1rem' }}>

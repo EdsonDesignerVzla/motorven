@@ -1514,18 +1514,31 @@ function MainApp() {
   const handleSaveOrder = async (orderData) => {
     try {
       const saved = await saveSupabaseOrder(orderData);
+      const enrichedSaved = {
+        ...orderData,
+        ...saved,
+        items: Array.isArray(saved?.items) && saved.items.length > 0 ? saved.items : (orderData.items || []),
+        diasCredito: orderData.diasCredito ?? saved?.diasCredito ?? 0,
+        fechaEmision: orderData.fechaEmision || saved?.fechaEmision || new Date().toISOString(),
+        fechaVencimiento: orderData.fechaVencimiento || saved?.fechaVencimiento,
+        modalidadVenta: orderData.modalidadVenta || saved?.modalidadVenta || 'PREVENTA',
+        creditOverrideApproved: orderData.creditOverrideApproved ?? saved?.creditOverrideApproved,
+        creditOverrideAuthorizer: orderData.creditOverrideAuthorizer ?? saved?.creditOverrideAuthorizer,
+        creditOverrideJustification: orderData.creditOverrideJustification ?? saved?.creditOverrideJustification,
+        observaciones: orderData.observaciones || orderData.notas || saved?.comentarios || ''
+      };
       setOrdersState(prev => {
-        const index = prev.findIndex(o => o.id === saved.id);
+        const index = prev.findIndex(o => o.id === enrichedSaved.id);
         if (index >= 0) {
           const updated = [...prev];
-          updated[index] = saved;
+          updated[index] = enrichedSaved;
           return updated;
         } else {
-          return [saved, ...prev];
+          return [enrichedSaved, ...prev];
         }
       });
-      notify.success(`Pedido #${saved.orderNumber || ''} guardado exitosamente`);
-      return saved;
+      notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado exitosamente`);
+      return enrichedSaved;
     } catch (err) {
       console.error('Error guardando pedido:', err);
       notify.error('Error al guardar el pedido en la base de datos');
@@ -1680,10 +1693,14 @@ function MainApp() {
                 products={products}
                 clients={clients}
                 orders={orders}
+                profitInvoices={profitInvoices}
+                sales={sales}
+                profitSellers={profitSellers}
                 config={config}
                 profitZones={profitZones}
                 currentUser={currentUser}
                 onSaveOrder={handleSaveOrder}
+                onProceedToPOS={handleProceedToInvoiceFromOrder}
                 onSyncProfit={handleSyncProfit}
               />
             </ModuleErrorBoundary>
@@ -1737,6 +1754,8 @@ function MainApp() {
               products={products}
               clients={clients}
               orders={orders}
+              sales={sales}
+              profitSellers={profitSellers}
               config={config}
               profitReturns={profitReturns}
               profitInvoices={profitInvoices}
