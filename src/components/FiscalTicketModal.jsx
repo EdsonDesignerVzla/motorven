@@ -71,10 +71,19 @@ export default function FiscalTicketModal({ closure, config = {}, currentUser = 
           margin: 0;
         }
         @media print {
+          :root, html, body {
+            color-scheme: light !important;
+          }
+          *, *::before, *::after {
+            box-shadow: none !important;
+            text-shadow: none !important;
+          }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
-            background: #fff !important;
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #000000 !important;
             width: 100% !important;
             height: auto !important;
             overflow: visible !important;

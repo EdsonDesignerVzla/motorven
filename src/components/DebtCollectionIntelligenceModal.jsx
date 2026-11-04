@@ -50,7 +50,29 @@ export default function DebtCollectionIntelligenceModal({
   const [customPhone, setCustomPhone] = useState('');
 
   const targetInvoices = useMemo(() => {
-    return (Array.isArray(invoices) && invoices.length > 0) ? invoices : (profitInvoices || []);
+    const list = [];
+    const seen = new Set();
+    if (Array.isArray(invoices)) {
+      for (const inv of invoices) {
+        if (!inv) continue;
+        const key = String(inv.numeroDoc || inv.numero_doc || inv.id || inv.factNum || inv.fact_num);
+        if (!seen.has(key)) {
+          seen.add(key);
+          list.push(inv);
+        }
+      }
+    }
+    if (Array.isArray(profitInvoices)) {
+      for (const pinv of profitInvoices) {
+        if (!pinv) continue;
+        const key = String(pinv.factNum || pinv.fact_num || pinv.numeroDoc || pinv.id);
+        if (!seen.has(key)) {
+          seen.add(key);
+          list.push(pinv);
+        }
+      }
+    }
+    return list;
   }, [invoices, profitInvoices]);
 
   const targetSellers = useMemo(() => {
@@ -97,22 +119,51 @@ export default function DebtCollectionIntelligenceModal({
 
     // B. Integrar facturas activas con saldo pendiente
     const activeInvoices = targetInvoices.filter(inv => {
-      if (inv?.anulado || inv?.status === 'ANULADA') return false;
-      const saldo = Number(inv?.saldoUsd || (inv?.saldoBs ? inv.saldoBs / (inv.tasa || tasaBcv) : inv?.saldo || 0));
+      if (!inv || inv?.anulado || inv?.status === 'ANULADA') return false;
+      const isCreditSale = (inv?.condicionPago && inv.condicionPago !== 'CONTADO') ||
+                           (inv?.condicion_pago && inv.condicion_pago !== 'CONTADO') ||
+                           inv?.metodoPago === 'CREDITO' || inv?.metodo_pago === 'CREDITO' ||
+                           inv?.estado === 'PENDIENTE';
+      let saldo = Number(inv?.saldoUsd ?? inv?.saldo_usd ?? 0);
+      if (saldo <= 0.01 && (inv?.saldoBs || inv?.saldo_bs)) {
+        saldo = Number(inv.saldoBs || inv.saldo_bs) / (inv.tasa || inv.tasaDolar || inv.tasa_dolar || tasaBcv);
+      }
+      if (saldo <= 0.01 && isCreditSale && inv?.estado !== 'PAGADO') {
+        saldo = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || 0);
+      }
       return saldo > 0.01;
     });
 
     activeInvoices.forEach(inv => {
-      const coCli = (inv.coCli || inv.co_cli || inv.clienteCod || '').toString().trim();
-      const rif = (inv.clienteRif || inv.rif || '').toString().trim().toUpperCase();
-      const cliNombre = (inv.clienteNombre || inv.cli_des || '').trim();
-      const fNum = inv.factNum || inv.nroDoc || inv.id;
-      const fEmis = inv.fechaEmision || inv.fec_emis ? new Date(inv.fechaEmision || inv.fec_emis) : hoy;
-      const fVenc = inv.fechaVencimiento || inv.fec_venc ? new Date(inv.fechaVencimiento || inv.fec_venc) : fEmis;
+      const coCli = (inv.coCli || inv.co_cli || inv.clienteId || inv.cliente_id || inv.clienteCod || '').toString().trim();
+      const rif = (inv.clienteRif || inv.cliente_rif || inv.rif || '').toString().trim().toUpperCase();
+      const cliNombre = (inv.clienteNombre || inv.cliente_nombre || inv.cli_des || '').trim();
+      const fNum = inv.factNum || inv.fact_num || inv.numeroDoc || inv.numero_doc || inv.nroDoc || inv.id;
+      const fEmisRaw = inv.fechaEmision || inv.fecha_emision || inv.fec_emis || inv.fecha;
+      const fEmis = fEmisRaw ? new Date(fEmisRaw) : hoy;
+      const fVencRaw = inv.fechaVencimiento || inv.fecha_vencimiento || inv.fec_venc;
+      const fVenc = fVencRaw ? new Date(fVencRaw) : fEmis;
 
-      const saldoUsd = Number(inv.saldoUsd || (inv.saldoBs ? inv.saldoBs / (inv.tasa || tasaBcv) : inv.saldo || 0));
-      const saldoBs = Number(inv.saldoBs || saldoUsd * tasaBcv);
-      const coVen = (inv.coVen || inv.co_ven || inv.vendedorId || '01').toString().trim();
+      const isCreditSale = (inv?.condicionPago && inv.condicionPago !== 'CONTADO') ||
+                           (inv?.condicion_pago && inv.condicion_pago !== 'CONTADO') ||
+                           inv?.metodoPago === 'CREDITO' || inv?.metodo_pago === 'CREDITO' ||
+                           inv?.estado === 'PENDIENTE';
+
+      let rawSaldoUsd = inv?.saldoUsd ?? inv?.saldo_usd;
+      if (rawSaldoUsd === undefined || rawSaldoUsd === null || (isCreditSale && inv?.estado !== 'PAGADO' && Number(rawSaldoUsd) <= 0.01)) {
+        if (inv?.saldoBs || inv?.saldo_bs) {
+          rawSaldoUsd = Number(inv.saldoBs || inv.saldo_bs) / (inv.tasa || inv.tasaDolar || inv.tasa_dolar || tasaBcv);
+        } else if (inv?.saldo !== undefined && inv?.saldo !== null) {
+          rawSaldoUsd = Number(inv.saldo);
+        } else if (isCreditSale) {
+          rawSaldoUsd = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || 0);
+        } else {
+          rawSaldoUsd = 0;
+        }
+      }
+      const saldoUsd = Number(rawSaldoUsd) || 0;
+      const saldoBs = Number(inv.saldoBs || inv.saldo_bs || saldoUsd * tasaBcv);
+      const coVen = (inv.coVen || inv.co_ven || inv.vendedorId || inv.vendedor_id || inv.vendedor || '01').toString().trim();
 
       const diffMs = hoy - fVenc;
       const diasVencido = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));

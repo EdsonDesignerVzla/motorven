@@ -1,4 +1,38 @@
-import { CREDIT_APPROVERS_CATALOG } from '../components/AppConfigModal';
+export const CREDIT_APPROVERS_CATALOG = [
+  {
+    category: 'GERENCIA GENERAL & DIRECCIÓN',
+    icon: '👔',
+    people: [
+      { id: 'Edson Designer (Administrador Master / Dirección)', name: 'Edson Designer', role: 'Administrador Master / Dirección' },
+      { id: 'Ricardo Sánchez (Gerente General / Dirección)', name: 'Ricardo Sánchez', role: 'Gerente General / Dirección' }
+    ]
+  },
+  {
+    category: 'ADMINISTRACIÓN & FINANZAS',
+    icon: '👨‍💼',
+    people: [
+      { id: 'Luiggy Silva (Administración & Finanzas)', name: 'Luiggy Silva', role: 'Administración & Finanzas' },
+      { id: 'José Martínez (Analista de Cobranzas y Crédito)', name: 'José Martínez', role: 'Analista de Cobranzas y Crédito' }
+    ]
+  },
+  {
+    category: 'SUPERVISIÓN & VENTAS',
+    icon: '👩‍💼',
+    people: [
+      { id: 'Yheyson Calderón (Supervisor / Ventas)', name: 'Yheyson Calderón', role: 'Supervisor de Ventas' },
+      { id: 'Carlos Becerra (Vendedor Senior)', name: 'Carlos Becerra', role: 'Asesor Comercial Senior' },
+      { id: 'Ana Rivas (Asesor de Ventas)', name: 'Ana Rivas', role: 'Asesor de Ventas' }
+    ]
+  }
+];
+
+export const ALL_APPROVER_IDS = CREDIT_APPROVERS_CATALOG.flatMap(g => g.people.map(p => p.id));
+export const DEFAULT_APPROVER_IDS = [
+  'Edson Designer (Administrador Master / Dirección)',
+  'Ricardo Sánchez (Gerente General / Dirección)',
+  'Luiggy Silva (Administración & Finanzas)',
+  'José Martínez (Analista de Cobranzas y Crédito)'
+];
 
 /**
  * Resuelve la cantidad de días de crédito según la condición de pago y/o los días pactados.
@@ -57,6 +91,17 @@ export function calculateExpirationDate(fechaEmisionInput, diasCreditoInput = 0)
   const dias = Math.max(0, Number(diasCreditoInput) || 0);
   const expTime = safeBaseDate.getTime() + (dias * 24 * 60 * 60 * 1000);
   return new Date(expTime);
+}
+
+/**
+ * Determina inequívocamente si una condición o método de pago representa una venta a crédito
+ */
+export function isCreditPaymentCondition(condicionPago, metodoPago = '') {
+  if (metodoPago === 'CREDITO') return true;
+  if (!condicionPago) return false;
+  const term = String(condicionPago).trim().toUpperCase();
+  if (term === 'CONTADO' || term === 'PAGO_INMEDIATO') return false;
+  return resolveCreditDaysFromTerm(term) > 0 || term.includes('CREDITO') || term.includes('CRÉDITO') || term.includes('DIAS');
 }
 
 /**

@@ -106,13 +106,22 @@ const supabaseProxy = {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [autoStartSupabasePlugin(), react(), binanceP2pPlugin()],
+  json: {
+    stringify: true
+  },
   base: './',
   server: {
     port: 5180,
     host: true,
     proxy: supabaseProxy,
     watch: {
-      ignored: ['**/supabase/**', '**/dist/**', '**/docs/**']
+      ignored: [
+        '**/supabase/**',
+        '**/dist/**',
+        '**/docs/**',
+        '**/src/data/supabaseRealData.js',
+        '**/SERVIDOR_EMPRESA_26.229.220.202/**'
+      ]
     }
   },
   preview: {
@@ -124,7 +133,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('supabaseRealData')) {
+          if (id.includes('supabaseRealData') || id.includes('/dump/') || id.includes('\\dump\\')) {
             return 'real-data-dump';
           }
           if (id.includes('node_modules')) {

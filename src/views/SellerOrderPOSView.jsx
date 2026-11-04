@@ -112,35 +112,25 @@ export default function SellerOrderPOSView({
 
   // -------------------------------------------------------------------------
   // CÁLCULO DE DISPONIBILIDAD ATP (Available-To-Promise)
-  // Fórmula: D = max(0, Stock Físico - Comprometido Hoy - En Carrito)
+  // Fórmula: D = max(0, Stock Físico - Comprometido Vigente (72h) - En Carrito)
   // -------------------------------------------------------------------------
   const committedStockMap = useMemo(() => {
     const map = {};
-    const now = new Date();
-    // Corte estricto a las 17:00:00 (5:00 PM)
-    if (now.getHours() >= 17) {
-      return map;
-    }
-
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const todayLocal = `${year}-${month}-${day}`;
-    const todayIso = now.toISOString().slice(0, 10);
+    const now = Date.now();
+    const HOURS_72_MS = 72 * 60 * 60 * 1000;
 
     if (!Array.isArray(orders)) return map;
 
     orders.forEach((ord) => {
       if (!ord) return;
       const st = (ord.status || '').toUpperCase();
-      if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO') return;
+      if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'RETENIDO_CREDITO') return;
 
-      let orderDate = '';
-      if (ord.fechaEmision) orderDate = String(ord.fechaEmision).slice(0, 10);
-      else if (ord.fecha) orderDate = String(ord.fecha).slice(0, 10);
-      else if (ord.created_at) orderDate = String(ord.created_at).slice(0, 10);
-
-      if (orderDate && orderDate !== todayLocal && orderDate !== todayIso) return;
+      const rawDate = ord.fechaEmision || ord.fecha || ord.created_at;
+      if (rawDate) {
+        const orderTime = new Date(rawDate).getTime();
+        if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) return;
+      }
 
       const items = ord.items || ord.renglones || [];
       if (Array.isArray(items)) {
@@ -493,7 +483,7 @@ export default function SellerOrderPOSView({
           </h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
             <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-              Toma ágil de pedidos en calle • Reserva ATP garantizada hasta 5:00 PM • Cero retipeo en Caja
+              Toma ágil de pedidos en calle • Reserva ATP garantizada por 72 horas • Cero retipeo en Caja
             </span>
             <span className="badge" style={{ fontSize: '0.72rem', padding: '2px 8px', background: 'rgba(0, 43, 122, 0.15)', color: 'var(--neon-cyan)', border: '1px solid var(--border-glass)' }}>
               Asesor: <strong>{sellerName}</strong> ({sellerCode})
@@ -1254,7 +1244,7 @@ export default function SellerOrderPOSView({
             {/* Aviso de Reserva */}
             <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
               <Clock size={11} />
-              <span>Reserva stock automáticamente hasta las 5:00 PM de hoy.</span>
+              <span>Reserva stock automáticamente durante 72 horas desde su emisión.</span>
             </div>
 
           </div>
@@ -1368,7 +1358,7 @@ export default function SellerOrderPOSView({
               <button
                 type="button"
                 onClick={() => {
-                  const textMsg = `*SIGNUM MOTORVEN* - Nota de Pedido ${lastEmittedOrder.numeroDoc}\nCliente: ${lastEmittedOrder.clienteNombre}\nEmisión: ${formatDateVe(lastEmittedOrder.fechaEmision)} | Vencimiento: ${formatDateVe(lastEmittedOrder.fechaVencimiento)}\nVolumen: ${lastEmittedOrder.totalLitros.toFixed(1)} Litros\nTotal: ${formatUsd(lastEmittedOrder.totalNetoUsd)} (Bs. ${formatBs(lastEmittedOrder.totalBs)})\nAsesor: ${sellerName}\n_Reserva activa en almacén hasta las 5:00 PM._`;
+                  const textMsg = `*SIGNUM MOTORVEN* - Nota de Pedido ${lastEmittedOrder.numeroDoc}\nCliente: ${lastEmittedOrder.clienteNombre}\nEmisión: ${formatDateVe(lastEmittedOrder.fechaEmision)} | Vencimiento: ${formatDateVe(lastEmittedOrder.fechaVencimiento)}\nVolumen: ${lastEmittedOrder.totalLitros.toFixed(1)} Litros\nTotal: ${formatUsd(lastEmittedOrder.totalNetoUsd)} (Bs. ${formatBs(lastEmittedOrder.totalBs)})\nAsesor: ${sellerName}\n_Reserva activa en almacén durante 72 horas._`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(textMsg)}`, '_blank');
                 }}
                 className="btn btn-secondary"

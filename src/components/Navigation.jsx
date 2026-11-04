@@ -202,6 +202,49 @@ export default function Navigation({
               )}
             </div>
           )}
+
+          {/* Botón Cerrar Sesión / Salida del Sistema */}
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="nav-logout-btn"
+              title="Cerrar Sesión y Salir del Sistema"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                gap: '8px',
+                width: '100%',
+                padding: sidebarCollapsed ? '0.65rem' : '0.65rem 0.85rem',
+                borderRadius: '10px',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                color: '#ef4444',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                textAlign: 'left'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.16)';
+                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.45)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
+                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
+              }}
+            >
+              <LogOut size={16} />
+              {!sidebarCollapsed && <span style={{ flex: 1 }}>Cerrar Sesión</span>}
+              {!sidebarCollapsed && (
+                <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', fontWeight: 800 }}>
+                  SALIR
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </aside>
     </>

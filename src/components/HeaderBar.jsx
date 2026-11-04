@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { formatBs, formatUsd } from '../services/formatService';
 import { canModifyRates, getRoleMeta, isMasterOrGerencia, isMasterAdmin, canAccessModule } from '../services/authService';
-import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails } from '../services/supabaseService';
+import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails, getActiveBackendUrl, setCustomBackendUrl } from '../services/supabaseService';
 import { subscribeSyncStatus, flushSyncQueue } from '../services/offlineSyncService';
 import { uploadUserProfilePhoto, deleteUserProfilePhoto } from '../services/imageStorageService';
 import { compressProfileImage } from '../services/imageCompression';
@@ -117,6 +117,8 @@ export default function HeaderBar({
     isSyncing: false,
     pendingCount: 0
   });
+  const [showServerModal, setShowServerModal] = useState(false);
+  const [customServerInput, setCustomServerInput] = useState(() => getActiveBackendUrl());
 
   useEffect(() => {
     const unsubscribe = subscribeSyncStatus((status) => {
@@ -390,47 +392,26 @@ export default function HeaderBar({
   };
 
 
-  // Función de Salida Total del Sistema — Limpia caché, cierra pestaña o redirige a about:blank
+  // Función de Salida del Sistema — Cierra la sesión activa de forma segura y regresa a la pantalla de Login
   const handleSystemExit = async () => {
+    setShowExitModal(false);
+    setDropdownMenuOpen(false);
     try {
-      if (onLogout) await onLogout();
-    } catch (_) {}
+      if (onLogout) {
+        await onLogout();
+      }
+    } catch (err) {
+      console.warn('Error durante onLogout:', err);
+    }
     try {
-      localStorage.clear();
+      localStorage.removeItem('signum_active_user');
       sessionStorage.clear();
     } catch (_) {}
     try {
-      if ('caches' in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map(k => caches.delete(k)));
+      if (typeof window !== 'undefined' && (window.location.hash || window.location.search)) {
+        window.history.replaceState(null, '', window.location.pathname);
       }
-      if ('serviceWorker' in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map(r => r.unregister()));
-      }
-      // Limpiar cookies
-      document.cookie.split(";").forEach((c) => {
-        document.cookie = c
-          .replace(/^ +/, "")
-          .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-      });
     } catch (_) {}
-
-    // 1. Intentar cerrar la pestaña del navegador
-    try {
-      window.open('', '_self', '');
-      window.close();
-    } catch (_) {}
-
-    // 2. Reemplazar la historia para prevenir botón 'atrás'
-    try {
-      window.history.replaceState(null, '', 'about:blank');
-    } catch (_) {}
-
-    // 3. Salir completamente y eliminar la aplicación navegando a una página en blanco
-    setTimeout(() => {
-      window.location.replace('about:blank');
-    }, 100);
   };
 
 
@@ -512,14 +493,12 @@ export default function HeaderBar({
               {/* 1.5 Conectividad y Estado Sync Supabase */}
               <div
                 className={`sync-connectivity-badge ${syncStatus.isOnline ? 'online' : 'offline'} ${syncStatus.pendingCount > 0 ? 'has-pending' : ''}`}
-                onClick={syncStatus.isOnline ? handleManualSync : undefined}
-                title={
-                  !syncStatus.isOnline
-                    ? `Modo Offline activo. Las operaciones se guardan de inmediato en tu equipo y se sincronizan al volver el internet. (${syncStatus.pendingCount} pendientes)`
-                    : syncStatus.pendingCount > 0
-                    ? `${syncStatus.pendingCount} cambios pendientes por sincronizar con Supabase. Clic para forzar sincronización ahora.`
-                    : 'Conectado a la nube Supabase. Base de datos sincronizada.'
-                }
+                onClick={() => {
+                  setCustomServerInput(getActiveBackendUrl());
+                  setShowServerModal(true);
+                }}
+                style={{ cursor: 'pointer' }}
+                title="Conectividad con la base de datos y túnel HTTPS. Clic para ver detalles o configurar."
               >
                 {syncStatus.isSyncing ? (
                   <>
@@ -615,9 +594,12 @@ export default function HeaderBar({
                   {onLogout && (
                     <button
                       type="button"
-                      onClick={onLogout}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowExitModal(true);
+                      }}
                       className="user-logout-btn"
-                      title="Cerrar sesión / Cambiar de usuario"
+                      title="Cerrar sesión / Salida del Sistema"
                     >
                       <LogOut size={13} />
                     </button>
@@ -1615,147 +1597,251 @@ export default function HeaderBar({
               </div>
             </div>
 
-            {exitStep === 1 ? (
-              <>
-                <h2 style={{ textAlign: 'center', fontSize: '1.25rem', fontWeight: 900, color: '#ef4444', marginBottom: '0.5rem' }}>
-                  ¿Salir del Sistema?
-                </h2>
-                <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                  Está a punto de cerrar sesión y salir de <strong style={{ color: 'var(--text-main)' }}>SIGNUM MOTORVEN</strong>.
-                  Se borrará el caché del dispositivo y deberá ingresar sus credenciales nuevamente.
-                </p>
+            <h2 style={{ textAlign: 'center', fontSize: '1.25rem', fontWeight: 900, color: '#ef4444', marginBottom: '0.5rem' }}>
+              ¿Cerrar Sesión y Salir?
+            </h2>
+            <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem', lineHeight: 1.6 }}>
+              Está a punto de cerrar la sesión activa de <strong style={{ color: 'var(--text-main)' }}>SIGNUM MOTORVEN</strong> para regresar a la pantalla de inicio.
+            </p>
 
-                {/* Advertencias */}
-                <div
-                  style={{
-                    background: 'rgba(239,68,68,0.07)',
-                    border: '1px solid rgba(239,68,68,0.25)',
-                    borderRadius: '10px',
-                    padding: '0.9rem 1rem',
-                    marginBottom: '1.5rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px'
-                  }}
-                >
-                  {[
-                    '🔒 Se cerrará la sesión activa de forma segura.',
-                    '🗑️ Se eliminará el caché y datos locales del dispositivo.',
-                    '🔑 Necesitará sus credenciales para volver a entrar.',
-                    '⚡ Cualquier dato no guardado podría perderse.'
-                  ].map((msg, i) => (
-                    <div key={i} style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
-                      <span>{msg}</span>
-                    </div>
-                  ))}
-                </div>
+            {/* Ficha de Usuario Activo */}
+            <div
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.3)',
+                borderRadius: '12px',
+                padding: '0.9rem',
+                marginBottom: '1.5rem',
+                textAlign: 'center'
+              }}
+            >
+              <div style={{ fontSize: '0.72rem', color: '#ef4444', fontWeight: 700, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Usuario Activo
+              </div>
+              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                {currentUser?.nombre || currentUser?.username || 'Usuario'}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                @{currentUser?.username || 'usuario'} • {currentUser?.rol || 'Sin rol'}
+              </div>
+            </div>
 
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowExitModal(false)}
-                    style={{
-                      flex: 1, padding: '0.7rem', borderRadius: '10px',
-                      border: '1px solid var(--border-glass)',
-                      background: 'var(--bg-secondary, rgba(255,255,255,0.05))',
-                      color: 'var(--text-main)', fontSize: '0.85rem', fontWeight: 700,
-                      cursor: 'pointer', transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'var(--bg-secondary, rgba(255,255,255,0.05))'}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExitStep(2)}
-                    style={{
-                      flex: 1, padding: '0.7rem', borderRadius: '10px',
-                      border: '1px solid rgba(239,68,68,0.5)',
-                      background: 'rgba(239,68,68,0.15)',
-                      color: '#ef4444', fontSize: '0.85rem', fontWeight: 800,
-                      cursor: 'pointer', transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239,68,68,0.25)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239,68,68,0.15)'}
-                  >
-                    Continuar →
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h2 style={{ textAlign: 'center', fontSize: '1.1rem', fontWeight: 900, color: '#ef4444', marginBottom: '0.5rem' }}>
-                  Confirmación Final
-                </h2>
-                <p style={{ textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                  Esta acción <strong style={{ color: '#ef4444' }}>no se puede deshacer</strong>.
-                  Al confirmar se cerrará la sesión y se limpiará el caché por completo.
-                </p>
-
-                <div
-                  style={{
-                    background: 'rgba(239,68,68,0.1)',
-                    border: '2px solid rgba(239,68,68,0.4)',
-                    borderRadius: '12px',
-                    padding: '1rem',
-                    marginBottom: '1.5rem',
-                    textAlign: 'center'
-                  }}
-                >
-                  <div style={{ fontSize: '0.78rem', color: '#ef4444', fontWeight: 700, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Usuario activo
-                  </div>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                    {currentUser?.nombre || currentUser?.username || 'Usuario'}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {currentUser?.rol || 'Sin rol'}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setExitStep(1)}
-                    style={{
-                      flex: 1, padding: '0.7rem', borderRadius: '10px',
-                      border: '1px solid var(--border-glass)',
-                      background: 'var(--bg-secondary, rgba(255,255,255,0.05))',
-                      color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 700,
-                      cursor: 'pointer', transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'var(--bg-secondary, rgba(255,255,255,0.05))'}
-                  >
-                    ← Volver
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSystemExit}
-                    style={{
-                      flex: 2, padding: '0.7rem', borderRadius: '10px',
-                      border: 'none',
-                      background: 'linear-gradient(135deg, #dc2626, #991b1b)',
-                      color: '#fff', fontSize: '0.85rem', fontWeight: 900,
-                      cursor: 'pointer', transition: 'all 0.2s ease',
-                      boxShadow: '0 4px 15px rgba(239,68,68,0.4)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
-                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                  >
-                    ⏻ SALIR Y LIMPIAR CACHÉ
-                  </button>
-                </div>
-              </>
-            )}
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setShowExitModal(false)}
+                style={{
+                  flex: 1, padding: '0.75rem', borderRadius: '10px',
+                  border: '1px solid var(--border-glass)',
+                  background: 'var(--bg-secondary, rgba(255,255,255,0.05))',
+                  color: 'var(--text-main)', fontSize: '0.85rem', fontWeight: 700,
+                  cursor: 'pointer', transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'var(--bg-secondary, rgba(255,255,255,0.05))'}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSystemExit}
+                style={{
+                  flex: 1.5, padding: '0.75rem', borderRadius: '10px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+                  color: '#fff', fontSize: '0.85rem', fontWeight: 900,
+                  cursor: 'pointer', transition: 'all 0.2s ease',
+                  boxShadow: '0 4px 15px rgba(239,68,68,0.4)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+                onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                ⏻ Cerrar Sesión y Salir
+              </button>
+            </div>
           </div>
         </div>
       )}
       {/* ========================================================================= */}
-      {/* MODAL: GESTIÓN DE PERFIL Y FOTO DE USUARIO EN SUPABASE STORAGE */}
+      {/* MODAL: ESTADO DE CONEXIÓN Y CONFIGURACIÓN DE TÚNEL / SERVIDOR LOCAL */}
       {/* ========================================================================= */}
+      {showServerModal && (
+        <div
+          className="operator-modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowServerModal(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+          style={{ zIndex: 9999999 }}
+        >
+          <div
+            className="operator-modal-card"
+            style={{
+              maxWidth: '520px',
+              width: '95%',
+              background: 'var(--bg-modal, #111827)',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              borderRadius: '16px',
+              padding: '1.5rem',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.75)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Server size={20} color="#38bdf8" />
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  Conexión de Base de Datos & Túnel
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowServerModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Estado actual */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0.85rem 1rem',
+              borderRadius: '10px',
+              background: syncStatus.isOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+              border: `1px solid ${syncStatus.isOnline ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+              marginBottom: '1rem'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {syncStatus.isOnline ? <Cloud size={20} color="#34d399" /> : <CloudOff size={20} color="#f87171" />}
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: syncStatus.isOnline ? '#34d399' : '#f87171' }}>
+                    {syncStatus.isOnline ? 'Servidor Conectado en Tiempo Real' : 'Modo Desconectado (Offline)'}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {syncStatus.isOnline
+                      ? 'Todas las operaciones se sincronizan al instante en la base de datos central.'
+                      : `${syncStatus.pendingCount} operaciones guardadas en este dispositivo encoladas para sincronizar.`
+                    }
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Explicación didáctica */}
+            <div style={{
+              background: 'rgba(56, 189, 248, 0.06)',
+              border: '1px solid rgba(56, 189, 248, 0.2)',
+              borderRadius: '10px',
+              padding: '0.85rem 1rem',
+              fontSize: '0.78rem',
+              lineHeight: 1.45,
+              color: 'var(--text-secondary, #cbd5e1)',
+              marginBottom: '1.25rem'
+            }}>
+              💡 <strong>¿Cómo funciona la sincronización multi-dispositivo?</strong>
+              <div style={{ marginTop: '4px' }}>
+                Tu base de datos con todas las tablas reside en tu <strong>Servidor Local (Laptop)</strong>. Para que tu teléfono, tablet u otros equipos puedan ver y reflejar los cambios en tiempo real desde GitHub Pages, se comunican con tu laptop mediante el <strong>Túnel Seguro Cloudflare HTTPS</strong>.
+              </div>
+            </div>
+
+            {/* Campo URL del Túnel / Servidor */}
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '6px' }}>
+                URL del Servidor / Túnel HTTPS en este dispositivo:
+              </label>
+              <input
+                type="text"
+                value={customServerInput}
+                onChange={(e) => setCustomServerInput(e.target.value)}
+                placeholder="https://xxxx.trycloudflare.com"
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  background: 'rgba(0, 0, 0, 0.25)',
+                  color: 'var(--text-main, #fff)',
+                  fontSize: '0.82rem',
+                  fontFamily: 'monospace',
+                  boxSizing: 'border-box'
+                }}
+              />
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Tip: También puedes abrir en tu celular o tablet el enlace con <code>?server=URL_DEL_TUNEL</code> para sincronizarlo automáticamente.
+              </div>
+            </div>
+
+            {/* Botones de acción */}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {syncStatus.pendingCount > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await handleManualSync();
+                    notify.info('Procesando cola de sincronización...');
+                  }}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    color: '#fbbf24',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <RefreshCw size={13} style={{ marginRight: '5px', verticalAlign: 'middle' }} />
+                  Sincronizar Pendientes ({syncStatus.pendingCount})
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomBackendUrl('');
+                }}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-glass)',
+                  background: 'transparent',
+                  color: 'var(--text-muted)',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Restaurar por Defecto
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (customServerInput && !customServerInput.startsWith('http')) {
+                    notify.warning('La URL debe comenzar con http:// o https://');
+                    return;
+                  }
+                  setCustomBackendUrl(customServerInput);
+                }}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #0284c7, #0369a1)',
+                  color: '#fff',
+                  fontSize: '0.8rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                Guardar y Reconectar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showProfileModal && currentUser && (
         <div
           className="operator-modal-backdrop"

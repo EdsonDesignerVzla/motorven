@@ -31,41 +31,17 @@ import { formatBs } from '../services/formatService';
 import { generateConfigPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
-export const CREDIT_APPROVERS_CATALOG = [
-  {
-    category: 'GERENCIA GENERAL & DIRECCIÓN',
-    icon: '👔',
-    people: [
-      { id: 'Edson Designer (Administrador Master / Dirección)', name: 'Edson Designer', role: 'Administrador Master / Dirección' },
-      { id: 'Ricardo Sánchez (Gerente General / Dirección)', name: 'Ricardo Sánchez', role: 'Gerente General / Dirección' }
-    ]
-  },
-  {
-    category: 'ADMINISTRACIÓN & FINANZAS',
-    icon: '👨‍💼',
-    people: [
-      { id: 'Luiggy Silva (Administración & Finanzas)', name: 'Luiggy Silva', role: 'Administración & Finanzas' },
-      { id: 'José Martínez (Analista de Cobranzas y Crédito)', name: 'José Martínez', role: 'Analista de Cobranzas y Crédito' }
-    ]
-  },
-  {
-    category: 'SUPERVISIÓN & VENTAS',
-    icon: '👩‍💼',
-    people: [
-      { id: 'Yheyson Calderón (Supervisor / Ventas)', name: 'Yheyson Calderón', role: 'Supervisor de Ventas' },
-      { id: 'Carlos Becerra (Vendedor Senior)', name: 'Carlos Becerra', role: 'Asesor Comercial Senior' },
-      { id: 'Ana Rivas (Asesor de Ventas)', name: 'Ana Rivas', role: 'Asesor de Ventas' }
-    ]
-  }
-];
+import {
+  CREDIT_APPROVERS_CATALOG,
+  ALL_APPROVER_IDS,
+  DEFAULT_APPROVER_IDS
+} from '../services/creditPolicyService';
 
-export const ALL_APPROVER_IDS = CREDIT_APPROVERS_CATALOG.flatMap(g => g.people.map(p => p.id));
-export const DEFAULT_APPROVER_IDS = [
-  'Edson Designer (Administrador Master / Dirección)',
-  'Ricardo Sánchez (Gerente General / Dirección)',
-  'Luiggy Silva (Administración & Finanzas)',
-  'José Martínez (Analista de Cobranzas y Crédito)'
-];
+export {
+  CREDIT_APPROVERS_CATALOG,
+  ALL_APPROVER_IDS,
+  DEFAULT_APPROVER_IDS
+};
 
 export default function AppConfigModal({
   isOpen,

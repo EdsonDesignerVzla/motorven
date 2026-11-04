@@ -4027,6 +4027,10 @@ select optgroup {
 }
 
 @media print {
+  :root, html, body {
+    color-scheme: light !important;
+  }
+
   /* 1. RESET GLOBAL & ALTA FIDELIDAD CROMÁTICA */
   *,
   *::before,
@@ -4039,7 +4043,9 @@ select optgroup {
 
   html,
   body {
+    color-scheme: light !important;
     background: #ffffff !important;
+    background-color: #ffffff !important;
     color: #000000 !important;
     margin: 0 !important;
     padding: 0 !important;

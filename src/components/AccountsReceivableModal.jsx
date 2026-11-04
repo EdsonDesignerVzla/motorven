@@ -16,10 +16,14 @@ import {
   ChevronRight,
   ShieldAlert,
   Send,
-  MessageSquare
+  MessageSquare,
+  Trash2,
+  Lock,
+  ShieldCheck
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { useNotification } from '../context/NotificationContext';
 
 export default function AccountsReceivableModal({
   isOpen,
@@ -31,19 +35,72 @@ export default function AccountsReceivableModal({
   profitSellers = [],
   config = {},
   currentUser,
-  onOpenCollectionIntelligence
+  onOpenCollectionIntelligence,
+  onDeleteSale
 }) {
+  const notify = useNotification();
   const [searchFilter, setSearchFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'VIGENTE' | 'VENCIDO' | 'VENCIDO_1_15' | 'VENCIDO_16_30' | 'VENCIDO_OVER_30'
   const [sellerFilter, setSellerFilter] = useState('ALL');
 
+  // Estados para Eliminación con Doble Seguridad (Exclusivo Administradores)
+  const [invoiceToDelete, setInvoiceToDelete] = useState(null);
+  const [confirmKeyword, setConfirmKeyword] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [localDeletedKeys, setLocalDeletedKeys] = useState(new Set());
+
+  // Validación estricta de privilegios de Administrador
+  const isAdmin = useMemo(() => {
+    if (!currentUser) return false;
+    const r = (currentUser.rol || currentUser.role || '').toUpperCase();
+    const uname = (currentUser.username || currentUser.name || '').toLowerCase();
+    return (
+      r.includes('ADMIN') ||
+      r.includes('MASTER') ||
+      r.includes('GERENCIA') ||
+      r.includes('TECNOLOGÍA') ||
+      r.includes('INFORMÁTICA') ||
+      uname === 'edson designer' ||
+      uname === 'admin' ||
+      uname === 'gerencia' ||
+      uname === 'manuel'
+    );
+  }, [currentUser]);
+
   const tasaBcv = Number(config?.tasaDolar) || 827.73;
 
   const targetInvoices = useMemo(() => {
-    return (Array.isArray(profitInvoices) && profitInvoices.length > 0)
-      ? profitInvoices
-      : (Array.isArray(invoices) ? invoices : []);
-  }, [invoices, profitInvoices]);
+    const list = [];
+    const seen = new Set();
+
+    // 1. Facturas locales / Supabase generadas en el sistema (sales)
+    if (Array.isArray(invoices)) {
+      for (const inv of invoices) {
+        if (!inv) continue;
+        const key = String(inv.numeroDoc || inv.numero_doc || inv.id || inv.factNum || inv.fact_num);
+        if (localDeletedKeys.has(key) || localDeletedKeys.has(String(inv.id)) || localDeletedKeys.has(String(inv.numeroDoc))) continue;
+        if (!seen.has(key)) {
+          seen.add(key);
+          list.push(inv);
+        }
+      }
+    }
+
+    // 2. Facturas de Profit Plus ERP
+    if (Array.isArray(profitInvoices)) {
+      for (const pinv of profitInvoices) {
+        if (!pinv) continue;
+        const key = String(pinv.factNum || pinv.fact_num || pinv.numeroDoc || pinv.id);
+        if (localDeletedKeys.has(key) || localDeletedKeys.has(String(pinv.id))) continue;
+        if (!seen.has(key)) {
+          seen.add(key);
+          list.push(pinv);
+        }
+      }
+    }
+
+    return list;
+  }, [invoices, profitInvoices, localDeletedKeys]);
 
   const targetSellers = useMemo(() => {
     return (Array.isArray(profitSellers) && profitSellers.length > 0)
@@ -58,18 +115,46 @@ export default function AccountsReceivableModal({
 
     return targetInvoices
       .filter(inv => {
+        if (!inv) return false;
         if (inv?.anulado || inv?.status === 'ANULADA') return false;
-        const saldo = Number(inv?.saldoUsd || (inv?.saldoBs ? inv.saldoBs / (inv.tasa || tasaBcv) : inv?.saldo || 0));
+        const isCreditSale = (inv?.condicionPago && inv.condicionPago !== 'CONTADO') ||
+                             (inv?.condicion_pago && inv.condicion_pago !== 'CONTADO') ||
+                             inv?.metodoPago === 'CREDITO' || inv?.metodo_pago === 'CREDITO' ||
+                             inv?.estado === 'PENDIENTE';
+        let saldo = Number(inv?.saldoUsd ?? inv?.saldo_usd ?? 0);
+        if (saldo <= 0.01 && (inv?.saldoBs || inv?.saldo_bs)) {
+          saldo = Number(inv.saldoBs || inv.saldo_bs) / (inv.tasa || inv.tasaDolar || inv.tasa_dolar || tasaBcv);
+        }
+        if (saldo <= 0.01 && isCreditSale && inv?.estado !== 'PAGADO') {
+          saldo = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || 0);
+        }
         return saldo > 0.01;
       })
       .map(inv => {
-        const saldoUsd = Number(inv?.saldoUsd || (inv?.saldoBs ? inv.saldoBs / (inv.tasa || tasaBcv) : inv?.saldo || 0));
-        const saldoBs = Number(inv?.saldoBs || (saldoUsd * (inv?.tasa || tasaBcv)));
-        const totNetoUsd = Number(inv?.totNetoUsd || inv?.tot_neto_usd || inv?.totalUsd || saldoUsd);
+        const isCreditSale = (inv?.condicionPago && inv.condicionPago !== 'CONTADO') ||
+                             (inv?.condicion_pago && inv.condicion_pago !== 'CONTADO') ||
+                             inv?.metodoPago === 'CREDITO' || inv?.metodo_pago === 'CREDITO' ||
+                             inv?.estado === 'PENDIENTE';
+
+        let rawSaldoUsd = inv?.saldoUsd ?? inv?.saldo_usd;
+        if (rawSaldoUsd === undefined || rawSaldoUsd === null || (isCreditSale && inv?.estado !== 'PAGADO' && Number(rawSaldoUsd) <= 0.01)) {
+          if (inv?.saldoBs || inv?.saldo_bs) {
+            rawSaldoUsd = Number(inv.saldoBs || inv.saldo_bs) / (inv.tasa || inv.tasaDolar || inv.tasa_dolar || tasaBcv);
+          } else if (inv?.saldo !== undefined && inv?.saldo !== null) {
+            rawSaldoUsd = Number(inv.saldo);
+          } else if (isCreditSale) {
+            rawSaldoUsd = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || 0);
+          } else {
+            rawSaldoUsd = 0;
+          }
+        }
+        const saldoUsd = Number(rawSaldoUsd) || 0;
+        const saldoBs = Number(inv?.saldoBs || inv?.saldo_bs || (saldoUsd * (inv?.tasa || inv?.tasaDolar || inv?.tasa_dolar || tasaBcv)));
+        const totNetoUsd = Number(inv?.totNetoUsd || inv?.tot_neto_usd || inv?.totalUsd || inv?.total_usd || saldoUsd);
 
         // Fechas
-        const fecEmis = inv?.fechaEmision || inv?.fec_emis;
-        const fecVenc = inv?.fechaVencimiento || inv?.fec_venc || fecEmis;
+        const fecEmis = inv?.fechaEmision || inv?.fecha_emision || inv?.fec_emis || inv?.fecha;
+        const fecVenc = inv?.fechaVencimiento || inv?.fecha_vencimiento || inv?.fec_venc || fecEmis;
         const dueDate = fecVenc ? new Date(fecVenc) : today;
         dueDate.setHours(0, 0, 0, 0);
 
@@ -84,12 +169,14 @@ export default function AccountsReceivableModal({
           else tramo = 'OVER_30';
         }
 
+        const resolvedFactNum = inv.factNum || inv.fact_num || inv.numeroDoc || inv.numero_doc || inv.id || 'S/N';
+
         return {
-          id: inv.id || `FAC-${inv.factNum || inv.fact_num}`,
-          factNum: inv.factNum || inv.fact_num || 'S/N',
+          id: inv.id || `FAC-${resolvedFactNum}`,
+          factNum: resolvedFactNum,
           clienteNombre: inv.clienteNombre || inv.cliente_nombre || inv.cliente || 'Cliente General',
-          clienteRif: inv.clienteRif || inv.cliente_rif || 'V-00000000',
-          vendedorId: inv.vendedorId || inv.vendedor_id || inv.co_ven || '01',
+          clienteRif: inv.clienteRif || inv.cliente_rif || inv.rif || 'V-00000000',
+          vendedorId: inv.vendedorId || inv.vendedor_id || inv.co_ven || inv.vendedor || '01',
           fecEmis: fecEmis ? new Date(fecEmis).toLocaleDateString() : 'N/A',
           fecVenc: fecVenc ? new Date(fecVenc).toLocaleDateString() : 'N/A',
           totNetoUsd,
@@ -129,6 +216,40 @@ export default function AccountsReceivableModal({
       return true;
     });
   }, [processedInvoices, searchFilter, sellerFilter, statusFilter]);
+
+  const isKeywordMatched = useMemo(() => {
+    if (!invoiceToDelete) return false;
+    const clean = confirmKeyword.trim().toUpperCase();
+    const factNumClean = String(invoiceToDelete.factNum || '').trim().toUpperCase();
+    return clean === 'ELIMINAR' || clean === factNumClean;
+  }, [confirmKeyword, invoiceToDelete]);
+
+  const handleConfirmDelete = async () => {
+    if (!invoiceToDelete) return;
+    const key = String(invoiceToDelete.id || invoiceToDelete.factNum || invoiceToDelete.numeroDoc);
+    setIsDeleting(true);
+    try {
+      if (onDeleteSale) {
+        await onDeleteSale(key);
+      }
+      setLocalDeletedKeys(prev => {
+        const next = new Set(prev);
+        next.add(key);
+        next.add(String(invoiceToDelete.id));
+        next.add(String(invoiceToDelete.factNum));
+        next.add(String(invoiceToDelete.numeroDoc));
+        return next;
+      });
+      notify.success(`Factura #${invoiceToDelete.factNum} eliminada con éxito de la base de datos.`);
+      setInvoiceToDelete(null);
+      setConfirmKeyword('');
+    } catch (err) {
+      console.error('Error al eliminar factura:', err);
+      notify.error('Error al eliminar factura: ' + (err.message || 'Error del servidor'));
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // Métricas Consolidadas
   const totalCarteraUsd = useMemo(() => {
@@ -406,6 +527,11 @@ export default function AccountsReceivableModal({
                     <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Estatus / Aging</th>
                     <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Total Factura</th>
                     <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo Pendiente</th>
+                    {isAdmin && (
+                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: '#ef4444', textAlign: 'center', width: '110px' }}>
+                        Acciones
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -475,6 +601,36 @@ export default function AccountsReceivableModal({
                             {formatBs(inv.saldoBs)}
                           </div>
                         </td>
+                        {isAdmin && (
+                          <td style={{ padding: '0.85rem 1rem', textAlign: 'center' }}>
+                            <button
+                              onClick={() => {
+                                setInvoiceToDelete(inv);
+                                setConfirmKeyword('');
+                              }}
+                              className="btn btn-sm"
+                              style={{
+                                background: 'rgba(239, 68, 68, 0.12)',
+                                color: '#ef4444',
+                                border: '1px solid rgba(239, 68, 68, 0.35)',
+                                borderRadius: '7px',
+                                padding: '5px 11px',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                fontWeight: 700,
+                                fontSize: '0.78rem',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 2px 6px rgba(239, 68, 68, 0.15)'
+                              }}
+                              title="Eliminar factura de la base de datos (Requiere doble confirmación)"
+                            >
+                              <Trash2 size={13} />
+                              <span>Eliminar</span>
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -483,6 +639,203 @@ export default function AccountsReceivableModal({
             </div>
           )}
         </div>
+
+        {/* MODAL DE ELIMINACIÓN CON DOBLE SEGURIDAD (EXCLUSIVO ADMINISTRADORES) */}
+        {invoiceToDelete && (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.8)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10000,
+              padding: '1rem'
+            }}
+            onClick={() => !isDeleting && setInvoiceToDelete(null)}
+          >
+            <div
+              className="modal-content"
+              style={{
+                maxWidth: '520px',
+                width: '100%',
+                background: 'var(--bg-card, #111827)',
+                borderRadius: '16px',
+                border: '1.5px solid rgba(239, 68, 68, 0.5)',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.75), 0 0 30px rgba(239, 68, 68, 0.25)',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* ENCABEZADO MODAL */}
+              <div style={{
+                padding: '1.25rem 1.5rem',
+                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.22) 0%, rgba(185, 28, 28, 0.12) 100%)',
+                borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '10px',
+                    background: 'rgba(239, 68, 68, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#ef4444'
+                  }}>
+                    <ShieldAlert size={24} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: '#ef4444', letterSpacing: '-0.01em' }}>
+                      Eliminación con Doble Seguridad
+                    </h3>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      Privilegio de Administrador • Acción Permanente
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !isDeleting && setInvoiceToDelete(null)}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* CUERPO MODAL */}
+              <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                <div style={{
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  borderRadius: '10px',
+                  padding: '1rem',
+                  fontSize: '0.85rem',
+                  color: 'var(--text-primary)',
+                  lineHeight: 1.5
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: '#ef4444', marginBottom: '0.35rem' }}>
+                    <AlertTriangle size={16} /> ⚠️ ADVERTENCIA DE CONTROL FISCAL Y FINANCIERO
+                  </div>
+                  Esta acción eliminará de forma irreversible la <strong>Factura #{invoiceToDelete.factNum}</strong> de la base de datos de Ventas y revertirá su saldo en Cuentas por Cobrar.
+                </div>
+
+                {/* DETALLES DE LA FACTURA */}
+                <div style={{
+                  background: 'var(--bg-surface, rgba(255, 255, 255, 0.03))',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: '10px',
+                  padding: '0.9rem 1.1rem',
+                  fontSize: '0.84rem',
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '0.75rem'
+                }}>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>N° Factura:</span>
+                    <strong style={{ color: 'var(--brand-blue)', fontSize: '0.98rem' }}>#{invoiceToDelete.factNum}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>Cliente:</span>
+                    <strong style={{ color: 'var(--text-primary)', fontSize: '0.88rem' }}>{invoiceToDelete.clienteNombre}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>Total Facturado:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{formatUsd(invoiceToDelete.totNetoUsd)}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>Saldo en Deuda (CxC):</span>
+                    <strong style={{ color: '#ef4444' }}>{formatUsd(invoiceToDelete.saldoUsd)}</strong>
+                  </div>
+                </div>
+
+                {/* DOBLE SEGURIDAD: PALABRA O FACTURA DE VALIDACIÓN */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.45rem' }}>
+                    🔒 Segundo Factor de Seguridad: Escriba <span style={{ color: '#ef4444', fontWeight: 800 }}>ELIMINAR</span> o el número <span style={{ color: 'var(--brand-blue)', fontWeight: 800 }}>{invoiceToDelete.factNum}</span> para desbloquear:
+                  </label>
+                  <input
+                    type="text"
+                    className="input-modern"
+                    placeholder={`Escriba ELIMINAR o ${invoiceToDelete.factNum}`}
+                    value={confirmKeyword}
+                    onChange={(e) => setConfirmKeyword(e.target.value)}
+                    disabled={isDeleting}
+                    style={{
+                      width: '100%',
+                      padding: '0.7rem 0.9rem',
+                      fontSize: '0.95rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.05em',
+                      textAlign: 'center',
+                      borderRadius: '8px',
+                      border: isKeywordMatched ? '2px solid #ef4444' : '1px solid var(--border-glass)'
+                    }}
+                    autoFocus
+                  />
+                  {isKeywordMatched && (
+                    <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <CheckCircle2 size={13} /> Doble seguridad verificada. Botón de eliminación desbloqueado.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* PIE DE PÁGINA */}
+              <div style={{
+                padding: '1rem 1.5rem',
+                background: 'var(--bg-card-header, rgba(255, 255, 255, 0.02))',
+                borderTop: '1px solid var(--border-glass)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '0.75rem'
+              }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setInvoiceToDelete(null)}
+                  disabled={isDeleting}
+                  style={{ padding: '0.6rem 1.15rem', fontSize: '0.85rem' }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={!isKeywordMatched || isDeleting}
+                  style={{
+                    background: isKeywordMatched ? 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)' : 'rgba(255, 255, 255, 0.08)',
+                    color: isKeywordMatched ? '#ffffff' : 'var(--text-muted)',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '0.6rem 1.35rem',
+                    fontWeight: 800,
+                    fontSize: '0.85rem',
+                    cursor: isKeywordMatched && !isDeleting ? 'pointer' : 'not-allowed',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: isKeywordMatched ? '0 4px 14px rgba(239, 68, 68, 0.4)' : 'none',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <Trash2 size={16} />
+                  {isDeleting ? 'Eliminando...' : 'Confirmar Eliminación Definitiva'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
     </section>
   );
 }

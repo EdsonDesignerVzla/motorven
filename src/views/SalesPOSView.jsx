@@ -29,7 +29,7 @@ import {
   User
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
-import { calculateFiscalTaxes, validateRif, validateCedula } from '../services/fiscalService';
+import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber } from '../services/fiscalService';
 import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -291,23 +291,13 @@ export default function SalesPOSView({
   // CÁLCULO DE DISPONIBILIDAD ATP (Available-To-Promise)
   // Fórmula: Disponibilidad = Stock Físico Almacén - Comprometido Vigente - En Carrito
   // Política: Las órdenes de compra montadas por vendedores comprometen stock
-  // temporalmente y caducan el mismo día a las 5:00 PM (17:00:00).
+  // temporalmente y caducan a las 72 horas de su emisión.
   // El stock real de almacén no se debita hasta que se emite la factura formal.
   // -------------------------------------------------------------------------
   const committedStockMap = useMemo(() => {
     const map = {};
-    const now = new Date();
-    // Corte a las 17:00:00 (5:00 PM hora local)
-    if (now.getHours() >= 17) {
-      // Pasadas las 5:00 PM, todas las órdenes diarias no facturadas caducan su reserva
-      return map;
-    }
-
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const todayLocal = `${year}-${month}-${day}`;
-    const todayIso = now.toISOString().slice(0, 10);
+    const now = Date.now();
+    const HOURS_72_MS = 72 * 60 * 60 * 1000;
 
     if (!Array.isArray(orders)) return map;
 
@@ -315,19 +305,15 @@ export default function SalesPOSView({
       if (!order) return;
       const st = (order.status || '').toUpperCase();
       // Órdenes activas en pipeline que comprometen stock (no facturadas ni anuladas)
-      if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO') return;
+      if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'RETENIDO_CREDITO') return;
 
-      // Verificar fecha de emisión
-      let orderDate = '';
-      if (order.fecha) {
-        orderDate = String(order.fecha).slice(0, 10);
-      } else if (order.created_at) {
-        orderDate = String(order.created_at).slice(0, 10);
-      }
-
-      // Si tiene fecha y no es hoy, ya caducó a las 5:00 PM de su día
-      if (orderDate && orderDate !== todayLocal && orderDate !== todayIso) {
-        return;
+      // Verificar tiempo de emisión (caduca a las 72 horas)
+      const rawDate = order.fechaEmision || order.fecha || order.created_at;
+      if (rawDate) {
+        const orderTime = new Date(rawDate).getTime();
+        if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) {
+          return;
+        }
       }
 
       const items = order.items || order.renglones || [];
@@ -378,7 +364,7 @@ export default function SalesPOSView({
         ));
       } else {
         if (committedQty > 0) {
-          notify.warning(`Disponibilidad libre alcanzada (${maxAvailable} un. disponibles. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} hasta 5:00 PM)`);
+          notify.warning(`Disponibilidad libre alcanzada (${maxAvailable} un. disponibles. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} con reserva 72h)`);
         } else {
           notify.warning(`Stock máximo alcanzado (${rawStock} unidades disponibles para este producto)`);
         }
@@ -386,7 +372,7 @@ export default function SalesPOSView({
     } else {
       if (maxAvailable <= 0) {
         if (committedQty > 0) {
-          notify.warning(`Este lubricante tiene existencia física (${rawStock} un.) pero está totalmente comprometido en órdenes de preventa activas hasta las 5:00 PM.`);
+          notify.warning(`Este lubricante tiene existencia física (${rawStock} un.) pero está totalmente comprometido en órdenes de preventa activas (reserva 72 horas).`);
         } else {
           notify.warning('Este lubricante no tiene existencia disponible en planta actualmente.');
         }
@@ -457,7 +443,7 @@ export default function SalesPOSView({
     const maxAvailable = Math.max(0, rawStock - committedQty);
 
     if (product && newQty > maxAvailable) {
-      notify.warning(`Supera la disponibilidad para venta libre (${maxAvailable} un. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} hasta 5:00 PM)`);
+      notify.warning(`Supera la disponibilidad para venta libre (${maxAvailable} un. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} con reserva 72h)`);
       return;
     }
     setCartItems(cartItems.map(item => {
@@ -604,8 +590,17 @@ export default function SalesPOSView({
       ? (officeSeller || currentUser?.nombre || 'Oficina Principal Motorven')
       : (currentUser?.nombre || 'Ricardo Sánchez');
 
+    const resolvedNextCorrelativo = (tipoDoc === 'FACTURA' || !tipoDoc)
+      ? getNextInvoiceCorrelativo(sales)
+      : undefined;
+    if (resolvedNextCorrelativo) {
+      commitInvoiceCorrelativo(resolvedNextCorrelativo);
+    }
+
     const salePayload = {
       tipoDoc,
+      numeroDoc: resolvedNextCorrelativo,
+      numeroControl: resolvedNextCorrelativo ? generateFiscalControlNumber(parseInt(resolvedNextCorrelativo, 10) + 1) : undefined,
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim() : '',
       pedidoOrigenId: activeOrderInPOS?.id || null,
       pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
@@ -651,8 +646,10 @@ export default function SalesPOSView({
     try {
       const createdSale = await onProcessSale(salePayload);
       if (createdSale) {
+        notify.success("FACTURA REALIZADA CON EXITO");
         setLastSaleDoc({
           ...createdSale,
+          numeroDoc: createdSale.numeroDoc || resolvedNextCorrelativo,
           pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
           modalidadVenta: salePayload.modalidadVenta,
           diasCredito: diasCreditoActual,
@@ -1127,7 +1124,7 @@ export default function SalesPOSView({
                             {committedQty > 0 && (
                               <span
                                 style={{ color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '2px', fontWeight: 600 }}
-                                title="Órdenes de preventa vigentes hoy. Caducan y se liberan automáticamente a las 5:00 PM"
+                                title="Órdenes de preventa vigentes. Caducan y se liberan automáticamente a las 72 horas de su emisión"
                               >
                                 <Clock size={10} /> O.C.: <strong>{committedQty}</strong>
                               </span>
@@ -1979,7 +1976,7 @@ export default function SalesPOSView({
                       {specCommitted > 0 && (
                         <div style={{ fontSize: '0.67rem', color: '#f59e0b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', borderTop: '1px dashed rgba(245, 158, 11, 0.3)', paddingTop: '4px', marginTop: '2px' }}>
                           <Clock size={11} color="#f59e0b" />
-                          <span>Físico: <strong>{specRaw}</strong> | Comprometido en O.C.: <strong>{specCommitted}</strong> (vence 5:00 PM)</span>
+                          <span>Físico: <strong>{specRaw}</strong> | Comprometido en O.C.: <strong>{specCommitted}</strong> (reserva 72h)</span>
                         </div>
                       )}
                     </div>
@@ -2190,9 +2187,9 @@ export default function SalesPOSView({
                                   alignItems: 'center',
                                   gap: '3px'
                                 }}
-                                title="Esta nota de pedido superó las 5:00 PM sin facturarse; su reserva de stock se liberó automáticamente."
+                                title="Esta nota de pedido superó las 72 horas desde su emisión sin facturarse; su reserva de stock se liberó automáticamente."
                               >
-                                <Clock size={10} /> Reserva Liberada (5 PM)
+                                <Clock size={10} /> Reserva Liberada (72h)
                               </span>
                             )}
                           </div>
@@ -2272,7 +2269,7 @@ export default function SalesPOSView({
             <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0, 0, 0, 0.2)' }}>
               <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <Clock size={13} />
-                <span>Las notas de pedido no facturadas liberan su stock automáticamente a las 5:00 PM.</span>
+                <span>Las notas de pedido no facturadas liberan su stock automáticamente a las 72 horas de su emisión.</span>
               </div>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowOrdersDrawer(false)}>
                 Cerrar

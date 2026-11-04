@@ -47,9 +47,12 @@ import {
 import {
   calculateFiscalTaxes,
   generateFiscalControlNumber,
-  generateVatRetentionVoucherNumber
+  generateVatRetentionVoucherNumber,
+  getNextInvoiceCorrelativo,
+  commitInvoiceCorrelativo
 } from './fiscalService.js';
 import { resolveProductUnit, resolveProductLitersPerUnit } from './formatService.js';
+import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import {
   getConfig as getStorageConfig,
   updateConfig as updateStorageConfig,
@@ -81,7 +84,9 @@ import {
   saveStorageNotification,
   markStorageNotificationRead,
   markAllStorageNotificationsRead,
-  deleteStorageNotification
+  deleteStorageNotification,
+  deleteStorageOrder,
+  deleteStorageSale
 } from './storageService.js';
 import {
   DEFAULT_USERS,
@@ -147,6 +152,26 @@ const resolveSupabaseUrl = (configured) => {
     if (typeof window === 'undefined' || !window.location || !/^https?:$/.test(window.location.protocol)) {
       return configured;
     }
+
+    // 1. Prioridad: Parámetro de URL (?server= o ?backend=) para sincronizar dispositivos al instante
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramUrl = urlParams.get('server') || urlParams.get('backend');
+    if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
+      const cleanParam = paramUrl.trim().replace(/\/+$/, '');
+      try {
+        window.localStorage.setItem('signum_custom_backend_url', cleanParam);
+      } catch (_) {}
+      return cleanParam;
+    }
+
+    // 2. Prioridad: URL personalizada guardada en el dispositivo
+    try {
+      const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
+      if (savedCustom && /^https?:\/\//i.test(savedCustom.trim())) {
+        return savedCustom.trim().replace(/\/+$/, '');
+      }
+    } catch (_) {}
+
     const cfg = new URL(configured);
     if (!LOCAL_HOSTNAMES.includes(cfg.hostname)) return configured;
     if (isStaticCloudHost) return configured;
@@ -162,6 +187,19 @@ const resolveSupabaseUrl = (configured) => {
 };
 
 const supabaseUrl = resolveSupabaseUrl(configuredSupabaseUrl);
+
+export const getActiveBackendUrl = () => supabaseUrl;
+
+export const setCustomBackendUrl = (url) => {
+  try {
+    if (!url || typeof url !== 'string' || !url.trim()) {
+      localStorage.removeItem('signum_custom_backend_url');
+    } else {
+      localStorage.setItem('signum_custom_backend_url', url.trim().replace(/\/+$/, ''));
+    }
+    window.location.reload();
+  } catch (_) {}
+};
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
@@ -628,6 +666,11 @@ const mapSaleToDb = (s) => ({
   total_bs: s.totalBs || s.total_bs,
   retencion_iva_bs: s.retencionIvaBs || s.retencion_iva_bs || 0,
   comprobante_retencion_iva: s.comprobanteRetencionIva || s.comprobante_retencion_iva || '',
+  saldo_usd: Number(s.saldoUsd ?? s.saldo_usd ?? (s.estado === 'PENDIENTE' ? (s.totalUsd || s.total_usd || 0) : 0)),
+  saldo_bs: Number(s.saldoBs ?? s.saldo_bs ?? (s.estado === 'PENDIENTE' ? (s.totalBs || s.total_bs || 0) : 0)),
+  dias_credito: Number(s.diasCredito ?? s.dias_credito ?? 0),
+  fecha_emision: s.fechaEmision || s.fecha_emision || s.fecha,
+  fecha_vencimiento: s.fechaVencimiento || s.fecha_vencimiento || null,
   estado: s.estado,
   metodo_pago: s.metodoPago || s.metodo_pago,
   vendedor: s.vendedor,
@@ -674,6 +717,11 @@ const mapSaleFromDb = (s) => {
     totalBs: Number(s.total_bs ?? s.totalBs ?? 0),
     retencionIvaBs: Number(s.retencion_iva_bs ?? s.retencionIvaBs ?? 0),
     comprobanteRetencionIva: s.comprobante_retencion_iva || s.comprobanteRetencionIva || '',
+    saldoUsd: Number(s.saldo_usd ?? s.saldoUsd ?? (s.estado === 'PENDIENTE' || s.metodo_pago === 'CREDITO' || (s.condicion_pago && s.condicion_pago !== 'CONTADO') ? (s.total_usd ?? s.totalUsd ?? 0) : 0)),
+    saldoBs: Number(s.saldo_bs ?? s.saldoBs ?? (s.estado === 'PENDIENTE' || s.metodo_pago === 'CREDITO' || (s.condicion_pago && s.condicion_pago !== 'CONTADO') ? (s.total_bs ?? s.totalBs ?? 0) : 0)),
+    diasCredito: Number(s.dias_credito ?? s.diasCredito ?? 0),
+    fechaEmision: s.fecha_emision || s.fechaEmision || s.fecha,
+    fechaVencimiento: s.fecha_vencimiento || s.fechaVencimiento || null,
     estado: s.estado || s.status || 'Procesada',
     metodoPago: s.metodo_pago ?? s.metodoPago,
     vendedor: s.vendedor,
@@ -1771,7 +1819,22 @@ export const processSupabaseSale = async (saleData) => {
       supabase.from('sales').select('*', { count: 'exact', head: true })
     );
     if (countErr) throw countErr;
-    const numSecuencia = String((count || 0) + 1043).padStart(6, '0');
+    const isCredit = isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago);
+    const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+
+    let resolvedNumeroDoc = saleData.numeroDoc;
+    if (!resolvedNumeroDoc) {
+      if (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) {
+        const { data: dbSales } = await supabase.from('sales').select('numero_doc,tipo_doc');
+        const mappedSales = (dbSales || []).map(s => ({ numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
+        resolvedNumeroDoc = getNextInvoiceCorrelativo(mappedSales);
+      } else {
+        resolvedNumeroDoc = `${docPrefix}-${String((count || 0) + 1).padStart(6, '0')}`;
+      }
+    }
+    if (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) {
+      commitInvoiceCorrelativo(resolvedNumeroDoc);
+    }
 
     const itemsConLitros = (saleData.items || []).map(item => ({
       ...item,
@@ -1786,18 +1849,24 @@ export const processSupabaseSale = async (saleData) => {
       porcentajeRetencionIva: saleData.porcentajeRetencionIva || 75
     });
 
-    const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+    const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 7) : 0);
+    const effectiveFechaEmision = saleData.fechaEmision || saleData.fecha || new Date().toISOString();
+    const effectiveFechaVencimiento = saleData.fechaVencimiento || (isCredit ? calculateExpirationDate(effectiveFechaEmision, effectiveDiasCredito).toISOString() : null);
 
     const newSale = {
-      id: `${docPrefix}-${numSecuencia}`,
-      numeroDoc: saleData.numeroDoc || `${docPrefix}-${numSecuencia}`,
-      numeroControl: saleData.numeroControl || generateFiscalControlNumber((count || 0) + 1043),
+      id: (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) ? resolvedNumeroDoc : `${docPrefix}-${resolvedNumeroDoc}`,
+      numeroDoc: resolvedNumeroDoc,
+      numeroControl: saleData.numeroControl || generateFiscalControlNumber(parseInt(resolvedNumeroDoc.replace(/[^0-9]/g, ''), 10) || ((count || 0) + 1)),
       tipoDoc: saleData.tipoDoc || 'FACTURA',
       documentoAfectado: saleData.documentoAfectado || '',
-      fecha: saleData.fecha || new Date().toISOString(),
+      fecha: effectiveFechaEmision,
+      fechaEmision: effectiveFechaEmision,
+      fechaVencimiento: effectiveFechaVencimiento,
+      diasCredito: effectiveDiasCredito,
       clienteId: saleData.clienteId || 'CLI-003',
       clienteNombre: saleData.clienteNombre || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
       clienteRif: saleData.clienteRif || 'V-18456789-6',
+      clienteDireccion: saleData.clienteDireccion || saleData.direccion || '',
       tasaDolar: config.tasaDolar,
       condicionPago: saleData.condicionPago || 'CONTADO',
       items: itemsConLitros,
@@ -1823,11 +1892,15 @@ export const processSupabaseSale = async (saleData) => {
       ivaBs: taxes.totalIvaBs,
       igtfBs: taxes.igtfBs,
       totalBs: taxes.totalFacturaBs,
+      saldoUsd: isCredit ? (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd) : 0,
+      saldoBs: isCredit ? (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs) : 0,
       retencionIvaBs: taxes.retencionIvaBs,
       comprobanteRetencionIva: saleData.comprobanteRetencionIva || '',
-      estado: saleData.condicionPago === 'CREDITO' ? 'PENDIENTE' : 'PAGADO',
+      estado: isCredit ? 'PENDIENTE' : 'PAGADO',
       metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
-      vendedor: saleData.vendedor || 'Usuario Sistema'
+      vendedor: saleData.vendedor || 'Usuario Sistema',
+      pedidoOrigenId: saleData.pedidoOrigenId || saleData.orderId || null,
+      pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
     };
 
     // 1. If Factura, Nota de Entrega or Nota de Débito, reduce stock; if Nota de Crédito, increment stock
@@ -1920,6 +1993,12 @@ export const processSupabaseSale = async (saleData) => {
     // Sincronizar en almacenamiento local
     saveStorageSale(mapped);
 
+    broadcastReconcileChange({
+      tableId: 'sales',
+      action: 'CREATE',
+      data: mapped
+    });
+
     // Reflejo en tiempo real simultáneo en Supabase (SQL Server: factura & reng_fac)
     writeProfitSale(mapped, 'SAVE').catch(e => {
       console.warn('[processSupabaseSale] Aviso sincronizando venta en Supabase:', e.message);
@@ -1931,6 +2010,11 @@ export const processSupabaseSale = async (saleData) => {
     markSupabaseOffline(err, 'processSupabaseSale');
     const localSale = saveStorageSale(saleData);
     enqueueSyncAction('sale', 'INSERT', localSale);
+    broadcastReconcileChange({
+      tableId: 'sales',
+      action: 'CREATE',
+      data: localSale
+    });
     writeProfitSale(localSale, 'SAVE').catch(() => {});
     return localSale;
   }
@@ -2126,11 +2210,75 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
       supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId)
     );
     if (error) throw error;
-    isSupabaseAvailable = true;
-    return true;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseOrderStatus');
     return false;
+  }
+};
+
+export const deleteSupabaseOrder = async (orderId) => {
+  if (!orderId) return false;
+  deleteStorageOrder(orderId);
+
+  // Reflejo en tiempo real simultáneo en Profit Plus
+  writeProfitOrder({ id: orderId }, 'DELETE').catch(() => {});
+
+  broadcastReconcileChange({
+    tableId: 'orders',
+    action: 'DELETE',
+    key: orderId
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('orders', 'DELETE', { id: orderId });
+    return true;
+  }
+  try {
+    // Eliminar renglones asociados
+    await withTimeout(
+      supabase.from('order_items').delete().or(`order_id.eq.${orderId},order_doc.eq.${orderId}`)
+    ).catch(() => {});
+
+    const { error } = await withTimeout(
+      supabase.from('orders').delete().or(`id.eq.${orderId},numero_doc.eq.${orderId}`)
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return true;
+  } catch (err) {
+    console.warn('[deleteSupabaseOrder] Error eliminando orden en Supabase:', err.message);
+    markSupabaseOffline(err, 'deleteSupabaseOrder');
+    enqueueSyncAction('orders', 'DELETE', { id: orderId });
+    return true;
+  }
+};
+
+export const deleteSupabaseSale = async (saleId) => {
+  if (!saleId) return false;
+  deleteStorageSale(saleId);
+
+  broadcastReconcileChange({
+    tableId: 'sales',
+    action: 'DELETE',
+    key: saleId
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('sales', 'DELETE', { id: saleId });
+    return true;
+  }
+  try {
+    const { error } = await withTimeout(
+      supabase.from('sales').delete().or(`id.eq.${saleId},numero_doc.eq.${saleId}`)
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return true;
+  } catch (err) {
+    console.warn('[deleteSupabaseSale] Error eliminando venta en Supabase:', err.message);
+    markSupabaseOffline(err, 'deleteSupabaseSale');
+    enqueueSyncAction('sales', 'DELETE', { id: saleId });
+    return true;
   }
 };
 

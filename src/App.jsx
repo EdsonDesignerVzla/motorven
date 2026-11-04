@@ -121,13 +121,16 @@ import {
   getSupabaseFiscalClosures,
   saveSupabaseFiscalClosure,
   getSupabaseUsers,
-  saveSupabaseUser
+  saveSupabaseUser,
+  deleteSupabaseOrder,
+  deleteSupabaseSale
 } from './services/supabaseService';
 import {
   initOfflineSyncListeners,
   flushSyncQueue
 } from './services/offlineSyncService';
 import { formatBs } from './services/formatService';
+import { deleteStorageOrder, deleteStorageSale } from './services/storageService';
 import {
   getActiveUser,
   getUsersList,
@@ -817,9 +820,18 @@ function MainApp() {
           setSalesState(allTableData);
           return;
         }
+        if (action === 'DELETE') {
+          setSalesState(prev => prev.filter(s => String(s.id) !== String(key) && String(s.numeroDoc || '') !== String(key)));
+          return;
+        }
         if (item) {
           setSalesState(prev => {
-            const index = prev.findIndex(s => String(s.id) === String(key || item.id) || (item.facturaNumero && s.facturaNumero === item.facturaNumero));
+            const targetKey = String(key || item.id || item.numeroDoc || item.numero_doc);
+            const index = prev.findIndex(s => 
+              String(s.id) === targetKey || 
+              String(s.numeroDoc || s.numero_doc) === targetKey || 
+              (item.numeroDoc && s.numeroDoc === item.numeroDoc)
+            );
             if (index >= 0) {
               const next = [...prev];
               next[index] = { ...next[index], ...item };
@@ -1439,15 +1451,26 @@ function MainApp() {
       setClientsState(clis);
       setSalesState(sls);
 
-      // Si la venta se originó de una Nota de Pedido de Preventa, actualizar su estatus a FACTURADO
-      if (saleData.pedidoOrigenId) {
+      // Si la venta se originó de una Nota de Pedido de Preventa, eliminar la orden del pipeline y de la base de datos
+      const originOrderId = saleData.pedidoOrigenId || saleData.pedidoOrigenDoc;
+      if (originOrderId) {
         try {
-          await updateSupabaseOrderStatus(saleData.pedidoOrigenId, 'FACTURADO');
+          await deleteSupabaseOrder(originOrderId);
+          if (saleData.pedidoOrigenDoc && saleData.pedidoOrigenDoc !== originOrderId) {
+            await deleteSupabaseOrder(saleData.pedidoOrigenDoc);
+          }
+          deleteStorageOrder(originOrderId);
+          if (saleData.pedidoOrigenDoc) deleteStorageOrder(saleData.pedidoOrigenDoc);
           setOrdersState(prev =>
-            prev.map(o => (o.id === saleData.pedidoOrigenId ? { ...o, status: 'FACTURADO' } : o))
+            prev.filter(o =>
+              o.id !== originOrderId &&
+              o.numeroDoc !== originOrderId &&
+              o.id !== saleData.pedidoOrigenId &&
+              o.numeroDoc !== saleData.pedidoOrigenDoc
+            )
           );
         } catch (statusErr) {
-          console.warn('[handleProcessSale] No se pudo actualizar estatus del pedido origen:', statusErr);
+          console.warn('[handleProcessSale] Error eliminando orden origen facturada:', statusErr);
         }
       }
       
@@ -1558,6 +1581,46 @@ function MainApp() {
     } catch (err) {
       console.error('Error actualizando estado de pedido:', err);
       notify.error('Error actualizando el estado del pedido');
+      throw err;
+    }
+  };
+
+  // Eliminar Pedido / Preventa / Orden de Entrega
+  const handleDeleteOrder = async (orderId) => {
+    try {
+      await deleteSupabaseOrder(orderId);
+      deleteStorageOrder(orderId);
+      setOrdersState(prev => prev.filter(o => o.id !== orderId && o.numeroDoc !== orderId));
+      notify.success('Orden / Pedido eliminado correctamente');
+      return true;
+    } catch (err) {
+      console.error('Error eliminando pedido:', err);
+      notify.error('Error al eliminar el pedido');
+      throw err;
+    }
+  };
+
+  // Eliminar Factura / Venta
+  const handleDeleteSale = async (saleId) => {
+    try {
+      await deleteSupabaseSale(saleId);
+      const remainingSales = deleteStorageSale(saleId);
+      setSalesState(remainingSales);
+      // Filtrar de facturas locales y de Profit si coincidiese
+      setProfitInvoices(prev => (prev || []).filter(p => {
+        const pKey = String(p.factNum || p.fact_num || p.id || p.numeroDoc || '');
+        return pKey !== String(saleId);
+      }));
+      // Actualizar inventario sincronizado
+      const updatedProducts = await getSupabaseProducts();
+      if (updatedProducts && updatedProducts.length > 0) {
+        setProductsState(updatedProducts);
+      }
+      notify.success('Factura eliminada y saldo actualizado con éxito');
+      return true;
+    } catch (err) {
+      console.error('Error eliminando factura:', err);
+      notify.error('Error al eliminar la factura');
       throw err;
     }
   };
@@ -1720,6 +1783,8 @@ function MainApp() {
               onSaveOrder={handleSaveOrder}
               onUpdateOrderStatus={handleUpdateOrderStatus}
               onProcessSale={handleProcessSale}
+              onDeleteOrder={handleDeleteOrder}
+              onDeleteSale={handleDeleteSale}
               onSyncProfit={handleSyncProfit}
               currentUser={currentUser}
               initialTab={ordersSalesModalTab}
@@ -1967,6 +2032,7 @@ function MainApp() {
               config={config}
               currentUser={currentUser}
               onOpenCollectionIntelligence={() => setShowDebtCollectionModal(true)}
+              onDeleteSale={handleDeleteSale}
             />
           )}
 

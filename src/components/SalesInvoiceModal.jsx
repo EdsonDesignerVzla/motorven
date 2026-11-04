@@ -18,13 +18,14 @@ import {
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { formatBs, formatUsd } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
- * Función que divide los renglones facturados en páginas tamaño Carta.
- * Si todos caben en 1 sola hoja (hasta 5 renglones con totales y firma), genera 1 sola página.
- * Si no caben, distribuye de manera balanceada dejando en la última hoja espacio para los totales y firma.
+ * Función que divide los renglones facturados en páginas tamaño Carta
+ * respetando el margen superior de 4.5 cm y margen inferior de 4.5 cm (área útil: 189.4 mm).
+ * - Si todos caben en 1 sola hoja (hasta 5 renglones con totales y firma), genera 1 sola página.
+ * - Si rebasan la capacidad, divide en múltiples páginas mostrando la numeración "1/2", "2/2".
  */
 function splitInvoiceItemsIntoPages(items) {
   const allItems = items || [];
@@ -34,8 +35,8 @@ function splitInvoiceItemsIntoPages(items) {
 
   const pages = [];
   const totalItems = allItems.length;
-  // La primera hoja con membrete oficial y datos del cliente lleva hasta 5 ítems
-  const firstPageCount = Math.min(5, totalItems - 1);
+  // Con márgenes de 4.5 cm superior e inferior, la primera página lleva hasta 5 ítems si son pocos o 6 si son muchos
+  const firstPageCount = totalItems <= 8 ? Math.min(5, totalItems - 1) : 6;
   pages.push(allItems.slice(0, firstPageCount));
 
   let currentIndex = firstPageCount;
@@ -99,7 +100,161 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     URL.revokeObjectURL(url);
   };
 
+  const correlativoDisplay = String(sale.numeroDoc || sale.nroFactura || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
+
   const handlePrint = () => {
+    if (viewMode === 'CARTA') {
+      generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
+      return;
+    }
+
+    const printableEl = document.getElementById('printable-sale-invoice');
+    if (!printableEl) {
+      window.print();
+      return;
+    }
+
+    const existingFrame = document.getElementById('invoice-print-frame');
+    if (existingFrame) existingFrame.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'invoice-print-frame';
+    iframe.style.position = 'fixed';
+    iframe.style.top = '-9999px';
+    iframe.style.left = '-9999px';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+
+    const isCarta = viewMode === 'CARTA';
+    const pageStyles = isCarta
+      ? `
+        @page {
+          size: letter portrait;
+          margin: 4.5cm 1.5cm 4.5cm 1.5cm;
+        }
+        :root, html, body {
+          color-scheme: light !important;
+        }
+        * {
+          box-sizing: border-box !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+          box-shadow: none !important;
+          text-shadow: none !important;
+        }
+        html, body {
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+          background-color: #ffffff !important;
+          color: #0f172a !important;
+          font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        }
+        .no-print, .carta-page-badge {
+          display: none !important;
+        }
+        .no-screen {
+          display: flex !important;
+        }
+        .carta-page-wrapper {
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          page-break-after: always !important;
+          break-after: page !important;
+        }
+        .carta-page-wrapper:last-child {
+          page-break-after: avoid !important;
+          break-after: avoid !important;
+        }
+        .carta-page {
+          width: 100% !important;
+          min-height: 0 !important;
+          height: 178mm !important;
+          max-height: 178mm !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          box-shadow: none !important;
+          border: none !important;
+          border-radius: 0 !important;
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: space-between !important;
+          overflow: hidden !important;
+          background: transparent !important;
+        }
+        .carta-page:last-child {
+          page-break-after: avoid !important;
+          break-after: avoid !important;
+        }
+      `
+      : `
+        @page {
+          size: ${paperWidth === '80mm' ? '80mm auto' : '58mm auto'};
+          margin: 0;
+        }
+        :root, html, body {
+          color-scheme: light !important;
+        }
+        * {
+          box-sizing: border-box !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+          box-shadow: none !important;
+          text-shadow: none !important;
+        }
+        html, body {
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+          background-color: #ffffff !important;
+          color: #111827 !important;
+          font-family: "Courier New", Courier, monospace !important;
+        }
+        .no-print {
+          display: none !important;
+        }
+        #printable-sale-invoice {
+          width: ${paperWidth === '80mm' ? '76mm' : '52mm'} !important;
+          margin: 0 auto !important;
+          padding: 2mm 1mm !important;
+        }
+      `;
+
+    doc.write(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Factura ${correlativoDisplay}</title>
+  <style>${pageStyles}</style>
+</head>
+<body style="margin: 0; padding: 0; background: #ffffff !important;">
+  ${printableEl.outerHTML}
+</body>
+</html>`);
+    doc.close();
+
+    setTimeout(() => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (err) {
+        console.error('Error al imprimir por iframe, usando print global:', err);
+        window.print();
+      } finally {
+        setTimeout(() => {
+          iframe.remove();
+        }, 5000);
+      }
+    }, 300);
+  };
+
+  const handlePrintReport = () => {
     generateSalesPOSPDF({
       sales: [sale],
       config: safeConfig,
@@ -139,7 +294,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
       <style>{`
         @page {
           size: ${viewMode === 'TICKET' ? (paperWidth === '80mm' ? '80mm auto' : '58mm auto') : 'letter portrait'};
-          margin: ${viewMode === 'TICKET' ? '0' : '10mm 12mm 10mm 12mm'};
+          margin: ${viewMode === 'TICKET' ? '0' : '4.5cm 1.5cm 4.5cm 1.5cm'};
         }
         @media screen {
           .no-screen {
@@ -147,15 +302,29 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
           }
         }
         @media print {
+          :root, html, body {
+            color-scheme: light !important;
+          }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
-            background: #fff !important;
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
             width: 100% !important;
             height: auto !important;
             overflow: visible !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
+          }
+          /* Neutralizar TODOS los fondos oscuros del app y modales */
+          #root, .modal-overlay, .modal-content, [class*="modal"], [class*="overlay"], div:not(.carta-page):not(.carta-page *) {
+            background: transparent !important;
+            background-color: transparent !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            box-shadow: none !important;
+            border-color: transparent !important;
           }
           body * {
             visibility: hidden !important;
@@ -170,24 +339,31 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
             width: ${viewMode === 'TICKET' ? (paperWidth === '80mm' ? '76mm' : '52mm') : '100%'} !important;
             max-width: 100% !important;
             margin: 0 !important;
-            padding: ${viewMode === 'TICKET' ? '2mm 1mm' : '0'} !important;
-            background: #fff !important;
-            color: #000 !important;
+            padding: 0 !important;
+            background: transparent !important;
+            color: #0f172a !important;
             box-shadow: none !important;
             border: none !important;
-            border-radius: 0 !important;
-            min-height: auto !important;
-            height: auto !important;
-            overflow: visible !important;
             transform: none !important;
+          }
+          .carta-page-wrapper {
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            page-break-after: always !important;
+            break-after: page !important;
+          }
+          .carta-page-wrapper:last-child {
+            page-break-after: avoid !important;
+            break-after: avoid !important;
           }
           .carta-page {
             width: 100% !important;
-            height: 255mm !important;
-            min-height: 255mm !important;
-            max-height: 255mm !important;
-            margin: 0 0 0 0 !important;
-            padding: 2mm 0 !important;
+            min-height: 0 !important;
+            height: 178mm !important;
+            max-height: 178mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
             box-shadow: none !important;
             border: none !important;
             border-radius: 0 !important;
@@ -195,9 +371,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
             display: flex !important;
             flex-direction: column !important;
             justify-content: space-between !important;
-            page-break-after: always !important;
-            break-after: page !important;
-            transform: none !important;
+            overflow: hidden !important;
+            background: transparent !important;
           }
           .carta-page:last-child {
             page-break-after: avoid !important;
@@ -451,6 +626,27 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
             >
               <Truck size={14} color="#ffffff" /> Guía Almacén
             </button>
+            {viewMode === 'CARTA' && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => generateLetterInvoiceSeniatPDF({ sale, config, currentUser })}
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '4px 10px',
+                  background: 'rgba(59, 130, 246, 0.15)',
+                  border: '1px solid rgba(59, 130, 246, 0.4)',
+                  color: '#60a5fa',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+                title="Descargar PDF oficial SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos"
+              >
+                <Download size={13} /> PDF Carta
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-print-report btn-sm"
@@ -703,15 +899,15 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                       </div>
                     )}
 
-                    {/* Hoja Tamaño Carta Individual */}
+                    {/* Hoja Tamaño Carta Individual (Márgenes SENIAT: Sup: 4.5cm, Inf: 4.5cm, Izq: 1.5cm, Der: 1.5cm) */}
                     <div
                       className="carta-page"
                       style={{
-                        width: '720px',
-                        minHeight: '940px',
+                        width: '760px',
+                        minHeight: '1000px',
                         background: '#ffffff',
                         color: '#0f172a',
-                        padding: '1.75rem 2.25rem',
+                        padding: '4.5cm 1.5cm 4.5cm 1.5cm',
                         borderRadius: '6px',
                         boxShadow: '0 12px 35px rgba(0,0,0,0.5)',
                         fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
@@ -724,45 +920,61 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                         position: 'relative'
                       }}
                     >
-                      {/* PARTE SUPERIOR: Encabezado y Tabla de la Página */}
+                      {/* Guías visuales informativas solo en pantalla (ocultas en impresión) */}
+                      <div
+                        className="no-print"
+                        style={{
+                          position: 'absolute',
+                          top: '1.2cm',
+                          left: '1.5cm',
+                          right: '1.5cm',
+                          borderBottom: '1px dashed #cbd5e1',
+                          paddingBottom: '4px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '0.66rem',
+                          color: '#94a3b8',
+                          userSelect: 'none'
+                        }}
+                      >
+                        <span>Margen Superior: 4.5 cm (Espacio para Membrete Preimpreso)</span>
+                        <span>Papel Carta SENIAT</span>
+                      </div>
+
+                      <div
+                        className="no-print"
+                        style={{
+                          position: 'absolute',
+                          bottom: '1.2cm',
+                          left: '1.5cm',
+                          right: '1.5cm',
+                          borderTop: '1px dashed #cbd5e1',
+                          paddingTop: '4px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '0.66rem',
+                          color: '#94a3b8',
+                          userSelect: 'none'
+                        }}
+                      >
+                        <span>Margen Inferior: 4.5 cm (Espacio para Pie Legal Preimpreso)</span>
+                        <span>Márgenes Laterales: 1.5 cm</span>
+                      </div>
+
+                      {/* PARTE SUPERIOR: Encabezado sin cabecera institucional y Tabla */}
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         
-                        {/* 1. ENCABEZADO: COMPLETO EN HOJA 1, RESUMIDO EN HOJAS SIGUIENTES */}
+                        {/* 1. ENCABEZADO: SIN CABECERA INSTITUCIONAL, SOLO CORRELATIVO DE 6 DÍGITOS */}
                         {isFirstPage ? (
                           <>
-                            {/* Membrete Corporativo Oficial */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #002b7a', paddingBottom: '0.85rem', marginBottom: '0.85rem' }}>
-                              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                                <img src={motorvenLogo} alt="Logo Grupo Motorven" style={{ height: '52px', objectFit: 'contain' }} />
-                                <div>
-                                  <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 900, color: '#002b7a', letterSpacing: '-0.5px' }}>
-                                    {safeConfig.nombreEmpresa || 'GRUPO MOTORVEN, C.A.'}
-                                  </h2>
-                                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600 }}>
-                                    {safeConfig.marcaOficial || 'OILSTONE ® POR KEYSTONE, C.A.'}
-                                  </div>
-                                  <div style={{ fontSize: '0.72rem', color: '#334155', marginTop: '2px' }}>
-                                    <strong>RIF:</strong> {safeConfig.rif || 'J-31115365-9'} | <strong>TEL:</strong> {safeConfig.telefono || '+58 251 269.13.96'}
-                                  </div>
-                                  <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                                    {safeConfig.direccion || 'Zona Industrial III, Carrera 2 con Calle 4, Barquisimeto, Edo. Lara'}
-                                  </div>
+                            {/* Correlativo de 6 Dígitos Consecutivos (Ejemplo: 000000, 000001, 000002) */}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '0.65rem' }}>
+                              <div style={{ textAlign: 'right', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '4px 14px', background: '#f8fafc' }}>
+                                <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                  FACTURA N°
                                 </div>
-                              </div>
-
-                              {/* Recuadro de Numeración Fiscal */}
-                              <div style={{ border: '2px solid #e60012', borderRadius: '8px', padding: '0.5rem 0.85rem', textAlign: 'center', background: '#fff5f5', minWidth: '175px' }}>
-                                <div style={{ fontSize: '0.8rem', fontWeight: 900, color: '#e60012', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                  {docTitle}
-                                </div>
-                                <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#0f172a', fontFamily: 'monospace', margin: '2px 0' }}>
-                                  {sale.numeroDoc}
-                                </div>
-                                <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                                  N° DE CONTROL: <strong style={{ color: '#002b7a' }}>{sale.numeroControl || '00-001043'}</strong>
-                                </div>
-                                <div style={{ fontSize: '0.62rem', color: '#94a3b8', marginTop: '2px' }}>
-                                  SNAT/2011/00071
+                                <div style={{ fontSize: '1.45rem', fontWeight: 900, fontFamily: 'monospace', color: '#0f172a', letterSpacing: '2px' }}>
+                                  {correlativoDisplay}
                                 </div>
                               </div>
                             </div>
@@ -806,27 +1018,12 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                           </>
                         ) : (
                           <>
-                            {/* Encabezado de Continuación para Páginas 2+ */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #002b7a', paddingBottom: '0.5rem', marginBottom: '0.75rem' }}>
-                              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                                <img src={motorvenLogo} alt="Logo Grupo Motorven" style={{ height: '36px', objectFit: 'contain' }} />
-                                <div>
-                                  <strong style={{ fontSize: '0.95rem', color: '#002b7a' }}>{safeConfig.nombreEmpresa || 'GRUPO MOTORVEN, C.A.'}</strong>
-                                  <div style={{ fontSize: '0.68rem', color: '#64748b' }}>RIF: {safeConfig.rif || 'J-31115365-9'} • CONTINUACIÓN DE DOCUMENTO FISCAL</div>
-                                </div>
+                            {/* Encabezado de Continuación (sin cabecera institucional) */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #cbd5e1', paddingBottom: '0.45rem', marginBottom: '0.65rem' }}>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#475569' }}>
+                                CONTINUACIÓN FACTURA N° <span style={{ fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 900, color: '#0f172a' }}>{correlativoDisplay}</span>
                               </div>
-                              <div style={{ textAlign: 'right', border: '1px solid #e60012', padding: '3px 8px', borderRadius: '6px', background: '#fff5f5' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 900, color: '#e60012' }}>{docTitle} N° {sale.numeroDoc}</div>
-                                <div style={{ fontSize: '0.65rem', color: '#002b7a' }}>CONTROL: <strong>{sale.numeroControl || '00-001043'}</strong></div>
-                              </div>
-                            </div>
-
-                            {/* Resumen del Cliente y Transporte de Hoja Anterior */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '0.45rem 0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0', marginBottom: '0.75rem', fontSize: '0.72rem' }}>
-                              <div>
-                                <strong>Adquirente:</strong> {sale.clienteNombre} ({sale.clienteRif})
-                              </div>
-                              <div style={{ color: '#0369a1', fontWeight: 700 }}>
+                              <div style={{ fontSize: '0.72rem', color: '#0369a1', fontWeight: 700 }}>
                                 TRANSPORTE (VIENE DE PÁG. {pageNumber - 1}): ${formatUsd(prevAccumulatedUsd)} (Bs. {formatBs(prevAccumulatedBs)})
                               </div>
                             </div>
@@ -905,21 +1102,11 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                       </div>
 
                       {/* PARTE INFERIOR: Totales Fiscales y Firma en la última hoja, o pie formal */}
-                      <div style={{ marginTop: 'auto', paddingTop: '0.75rem' }}>
+                      <div style={{ marginTop: 'auto', paddingTop: '0.4rem' }}>
                         {isLastPage ? (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '1.25rem', alignItems: 'end', marginBottom: '1rem' }}>
-                            {/* Notas Legales SENIAT y Cajetín de Firma */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 1.25fr', gap: '0.85rem', alignItems: 'end', marginBottom: '0.45rem' }}>
+                            {/* Cajetín de Firma y Sello */}
                             <div>
-                              <div style={{ fontSize: '0.66rem', color: '#64748b', lineHeight: '1.35', marginBottom: '1rem' }}>
-                                <p style={{ margin: '0 0 3px 0' }}>
-                                  <strong>Régimen Fiscal SENIAT:</strong> Factura emitida conforme a la Providencia SNAT/2011/00071.
-                                </p>
-                                <p style={{ margin: '0' }}>
-                                  <strong>IGTF Divisas:</strong> Percepción/Retención del 3% conforme a la Providencia SNAT/2022/000013.
-                                </p>
-                              </div>
-
-                              {/* Cajetín de Firma y Sello */}
                               <div style={{ border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '0.65rem 0.85rem', background: '#fafafa', textAlign: 'center' }}>
                                 <div style={{ borderBottom: '1px solid #94a3b8', width: '80%', margin: '0.85rem auto 4px auto' }} />
                                 <div style={{ fontWeight: 700, fontSize: '0.72rem', color: '#0f172a' }}>Firma y Sello de Recepción</div>
@@ -977,19 +1164,17 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                         {/* Pie Oficial Carta con Numeración Solicitada (Ejemplo: 1/2) */}
                         <div
                           style={{
-                            borderTop: '1px solid #e2e8f0',
-                            paddingTop: '0.45rem',
+                            borderTop: '1px solid #cbd5e1',
+                            paddingTop: '0.4rem',
                             display: 'flex',
-                            justifyContent: 'space-between',
+                            justifyContent: 'flex-end',
                             alignItems: 'center',
-                            fontSize: '0.64rem',
+                            fontSize: '0.72rem',
                             color: '#64748b',
-                            fontWeight: 500
+                            fontWeight: 700
                           }}
                         >
-                          <span>ORIGINAL: ADQUIRENTE / DUPLICADO: EMISOR</span>
-                          <span style={{ fontWeight: 600 }}>DOCUMENTO FISCAL EMITIDO CONFORME A LA NORMATIVA SENIAT</span>
-                          <span style={{ fontWeight: 800, color: '#0f172a', background: '#e2e8f0', padding: '2px 8px', borderRadius: '4px' }}>
+                          <span style={{ background: '#f1f5f9', padding: '2px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', color: '#0f172a' }}>
                             PÁGINA {pageNumber} / {totalPages}
                           </span>
                         </div>
@@ -1054,6 +1239,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
               className="btn btn-print-report"
               onClick={handlePrint}
               style={{ fontSize: '0.85rem' }}
+              title="Generar y descargar Factura Fiscal Oficial en PDF (Formato Carta SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos)"
             >
               <Printer size={16} color="#ffffff" /> Imprimir Factura
             </button>

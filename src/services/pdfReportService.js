@@ -2837,7 +2837,7 @@ function resolveItemSubtotalUsd(it = {}) {
 // =========================================================================
 /**
  * Genera la Nota de Pedido / Cotización de Preventa oficial para el Vendedor
- * y el Cliente con la política explícita de reserva y vencimiento a las 5:00 PM.
+ * y el Cliente con la política explícita de reserva y vencimiento a las 72 horas de su emisión.
  * Permite impresión y descarga directa en el dispositivo local.
  */
 export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = null, client = null }) {
@@ -2855,7 +2855,7 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
 
   const base = createBaseReport({
     title: 'NOTA DE PEDIDO / PREVENTA COMERCIAL',
-    subtitle: 'Fuerza de Ventas • Reserva de Stock Temporal • Vencimiento Oficial: 5:00 PM',
+    subtitle: 'Fuerza de Ventas • Reserva de Stock Temporal • Vigencia Oficial: 72 Horas',
     moduleCode: 'PED',
     currentUser,
     config
@@ -2892,12 +2892,12 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
     { label: 'N° de Pedido', value: orderId, subtext: `Emisión: ${orderDate}`, color: COLORS.navy },
     { label: 'Volumen Total', value: `${totalLitros.toFixed(1)} Lts.`, subtext: `${items.length} Renglones`, color: COLORS.cyan },
     { label: 'Monto Total USD', value: formatUsd(totalUsd), subtext: formatBs(totalBs), color: COLORS.emerald },
-    { label: 'Vigencia Reserva', value: 'Hasta 5:00 PM', subtext: status === 'FACTURADO' ? 'Facturado' : (status === 'ANULADO' ? 'Anulado' : 'Reserva Activa'), color: status === 'ANULADO' ? COLORS.red : COLORS.amber }
+    { label: 'Vigencia Reserva', value: '72 Horas', subtext: status === 'FACTURADO' ? 'Facturado' : (status === 'ANULADO' ? 'Anulado' : 'Reserva Activa'), color: status === 'ANULADO' ? COLORS.red : COLORS.amber }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  // 2. Banner Oficial de Política de Reserva hasta las 5:00 PM
+  // 2. Banner Oficial de Política de Reserva por 72 horas
   const bannerH = 9.0;
   base.doc.setFillColor(254, 243, 199); // Amber 100 soft
   base.doc.setDrawColor(...COLORS.amber);
@@ -2910,12 +2910,12 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
   base.doc.setFont('helvetica', 'bold');
   base.doc.setFontSize(6.4);
   base.doc.setTextColor(...COLORS.amber);
-  base.doc.text('POLÍTICA DE RESERVA DE INVENTARIO (HORA CORTE 17:00:00 / 5:00 PM):', base.startX + 5, currentY + 3.4);
+  base.doc.text('POLÍTICA DE RESERVA DE INVENTARIO (CORTE OPERATIVO: 72 HORAS):', base.startX + 5, currentY + 3.4);
 
   base.doc.setFont('helvetica', 'normal');
   base.doc.setFontSize(5.6);
   base.doc.setTextColor(...COLORS.dark);
-  const noticeText = `Esta nota de pedido compromete stock temporalmente en almacén hasta las 5:00 PM del día de emisión (${orderDate}). Pasada la hora límite, los ítems reservados no facturados caducan y se liberan de forma automática a la disponibilidad general.`;
+  const noticeText = `Esta nota de pedido compromete stock temporalmente en almacén durante 72 horas desde su emisión (${orderDate}). Pasado este plazo, los ítems reservados no facturados caducan y se liberan de forma automática a la disponibilidad general.`;
   const splitNotice = base.doc.splitTextToSize(noticeText, base.tableWidth - 8);
   base.doc.text(splitNotice, base.startX + 5, currentY + 6.6);
 
@@ -3474,6 +3474,222 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Ventas_POS_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+}
+
+/**
+ * Genera el documento PDF de Factura Fiscal en Hoja Carta SENIAT
+ * según las especificaciones de papel continuo / formas preimpresas:
+ * - Margen superior: 4.5 cm (45 mm)
+ * - Margen inferior: 4.5 cm (45 mm)
+ * - Margen izquierdo: 1.5 cm (15 mm)
+ * - Margen derecho: 1.5 cm (15 mm)
+ * - Sin cabecera institucional (la hoja física ya la tiene preimpresa)
+ * - Correlativo de 6 dígitos consecutivos (Ej: 000000, 000001, 000002...)
+ * - Paginación dinámica "1/2", "2/2" al pie
+ */
+export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser = null }) {
+  if (!sale) return;
+  const tasa = Number(sale.tasaDolar || config?.tasaDolar) || 827.73;
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'letter'
+  });
+
+  const correlativo = String(sale.numeroDoc || sale.nroFactura || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
+  const items = sale.items || sale.renglones || [];
+
+  const startX = 15; // 1.5 cm
+  const tableWidth = 185.9; // 215.9 - 30
+  const topMargin = 45; // 4.5 cm
+  const bottomMargin = 45; // 4.5 cm
+  const bottomLimitY = 279.4 - bottomMargin; // 234.4 mm
+
+  // Número de factura y adquirente en página 1
+  let currentY = topMargin;
+
+  // 1. Correlativo a la derecha
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text('FACTURA N°', startX + tableWidth, currentY + 3, { align: 'right' });
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42);
+  doc.text(correlativo, startX + tableWidth, currentY + 9, { align: 'right' });
+
+  currentY += 12;
+
+  // 2. Metadatos del Adquirente
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(startX, currentY, tableWidth, 22, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text('DATOS DEL ADQUIRENTE:', startX + 3, currentY + 4.5);
+
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text(String(sale.clienteNombre || sale.cliente || 'CLIENTE GENERAL').slice(0, 45), startX + 3, currentY + 9.5);
+
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105);
+  doc.text(`RIF / C.I.: ${sale.clienteRif || sale.rif || 'V-00000000-0'}`, startX + 3, currentY + 14);
+  doc.text(`Domicilio Fiscal: ${String(sale.clienteDireccion || sale.direccion || 'Barquisimeto, Venezuela').slice(0, 50)}`, startX + 3, currentY + 18.5);
+
+  // Columna derecha del adquirente
+  const midX = startX + 110;
+  doc.setDrawColor(226, 232, 240);
+  doc.line(midX - 4, currentY + 2, midX - 4, currentY + 20);
+
+  const fecEmis = sale.fechaEmision ? new Date(sale.fechaEmision).toLocaleDateString('es-VE') : new Date().toLocaleDateString('es-VE');
+  const fecVenc = sale.fechaVencimiento ? new Date(sale.fechaVencimiento).toLocaleDateString('es-VE') : fecEmis;
+  const condPago = sale.condicionPago || 'CONTADO';
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(`Fecha Emisión: ${fecEmis}`, midX, currentY + 5);
+  doc.text(`Vencimiento: ${fecVenc} (${sale.diasCredito || 0} Días)`, midX, currentY + 9.5);
+  doc.text(`Condición: ${condPago} • Método: ${sale.metodoPago || 'EFECTIVO USD'}`, midX, currentY + 14);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(217, 119, 6);
+  doc.text(`Tasa Oficial BCV: Bs. ${tasa.toFixed(2)} / USD`, midX, currentY + 18.5);
+
+  currentY += 26;
+
+  // 3. Tabla de Renglones Facturados
+  const tableRows = items.map((it, idx) => {
+    const cant = Number(it.cantidad || 1);
+    const precio = Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
+    const subUsd = Number(it.subtotalUsd ?? it.totalUsd ?? (cant * precio));
+    const subBs = subUsd * tasa;
+    return [
+      String(idx + 1),
+      String(it.descripcion || it.articuloDescripcion || 'Lubricante'),
+      String(cant),
+      `$ ${precio.toFixed(2)}`,
+      it.tipoAlicuota || '16%',
+      `$ ${subUsd.toFixed(2)}`,
+      `Bs. ${subBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    ];
+  });
+
+  autoTable(doc, {
+    startY: currentY,
+    margin: { left: startX, right: 15, top: topMargin, bottom: bottomMargin },
+    head: [['#', 'DESCRIPCIÓN DEL LUBRICANTE', 'CANT.', 'P. UNIT ($)', 'ALÍC.', 'SUBTOTAL ($)', 'TOTAL (BS.)']],
+    body: tableRows,
+    theme: 'grid',
+    styles: {
+      fontSize: 7.5,
+      cellPadding: 2,
+      lineColor: [226, 232, 240],
+      lineWidth: 0.15,
+      textColor: [15, 23, 42]
+    },
+    headStyles: {
+      fillColor: [0, 43, 122],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'left'
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { halign: 'left' },
+      2: { halign: 'center', cellWidth: 16 },
+      3: { halign: 'right', cellWidth: 22 },
+      4: { halign: 'center', cellWidth: 16 },
+      5: { halign: 'right', cellWidth: 26 },
+      6: { halign: 'right', cellWidth: 32 }
+    },
+    didDrawPage: (data) => {
+      if (data.pageNumber > 1) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} — Adquirente: ${sale.clienteNombre || 'Cliente'}`, startX, topMargin - 4);
+      }
+    }
+  });
+
+  let finalY = doc.lastAutoTable.finalY + 4;
+
+  if (finalY + 38 > bottomLimitY) {
+    doc.addPage();
+    finalY = topMargin;
+  }
+
+  // 4. Totales y Cajetín de Firma
+  const totUsd = Number(sale.totalUsd || 0);
+  const baseUsd = Number(sale.baseGeneralUsd || (totUsd / 1.16));
+  const ivaUsd = Number(sale.ivaGeneralUsd || sale.ivaUsd || (totUsd - baseUsd));
+  const totBs = totUsd * tasa;
+
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(startX, finalY + 3, 85, 30, 2, 2);
+  doc.line(startX + 8, finalY + 19, startX + 77, finalY + 19);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Firma y Sello de Recepción', startX + 42.5, finalY + 23, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6);
+  doc.setTextColor(100, 116, 139);
+  doc.text('C.I. / RIF del Receptor • Fecha: ____/____/________', startX + 42.5, finalY + 27, { align: 'center' });
+
+  const totalsX = startX + 95;
+  const totalsWidth = 90.9;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(totalsX, finalY + 3, totalsWidth, 30, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Base Imponible General (16%):', totalsX + 3, finalY + 8);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`$ ${baseUsd.toFixed(2)} (Bs. ${(baseUsd * tasa).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, totalsX + totalsWidth - 3, finalY + 8, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.text('Débito Fiscal IVA (16%):', totalsX + 3, finalY + 13);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`$ ${ivaUsd.toFixed(2)} (Bs. ${(ivaUsd * tasa).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, totalsX + totalsWidth - 3, finalY + 13, { align: 'right' });
+
+  doc.setDrawColor(0, 43, 122);
+  doc.setLineWidth(0.4);
+  doc.line(totalsX + 3, finalY + 16, totalsX + totalsWidth - 3, finalY + 16);
+
+  doc.setFontSize(7.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('TOTAL FACTURA USD:', totalsX + 3, finalY + 22);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(5, 150, 105);
+  doc.text(`$ ${totUsd.toFixed(2)}`, totalsX + totalsWidth - 3, finalY + 22, { align: 'right' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(217, 119, 6);
+  doc.text('TOTAL OFICIAL BS.:', totalsX + 3, finalY + 28);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(9.5);
+  doc.text(`Bs. ${totBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsWidth - 3, finalY + 28, { align: 'right' });
+
+  // 5. Paginación en todas las hojas al pie: "PÁGINA X / Y"
+  const totalPagesCount = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPagesCount; p++) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`PÁGINA ${p} / ${totalPagesCount}`, startX + tableWidth, bottomLimitY, { align: 'right' });
+  }
+
+  doc.save(`Factura_${correlativo}_SENIAT.pdf`);
+  return doc;
 }
 
 // =========================================================================

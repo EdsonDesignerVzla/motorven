@@ -289,6 +289,94 @@ export const generateFiscalControlNumber = (sequenceNumber) => {
 };
 
 /**
+ * Genera el nuevo correlativo fiscal de factura de 6 dígitos consecutivos.
+ * Ejemplos: "000000", "000001", "000002" y así sucesivamente.
+ * @param {Array} sales - Lista de ventas/facturas existentes
+ * @returns {string} - Correlativo formateado a 6 dígitos
+ */
+export const getNextInvoiceCorrelativo = (sales = []) => {
+  // Inicialización automática obligatoria de la nueva serie "000000" para Contado y Crédito
+  try {
+    const initFlag = localStorage.getItem('sm_invoice_correlativo_zero_init');
+    if (!initFlag) {
+      localStorage.setItem('sm_invoice_correlativo_zero_init', 'true');
+      localStorage.setItem('sm_invoice_correlativo_force', '0');
+      localStorage.setItem('sm_invoice_correlativo_seq', '0');
+    }
+  } catch (_) {}
+
+  // 1. Si el usuario reinició o fijó explícitamente el correlativo (ej: 0 para "000000")
+  try {
+    const forcedSeq = localStorage.getItem('sm_invoice_correlativo_force');
+    if (forcedSeq !== null && forcedSeq !== '') {
+      const forcedVal = parseInt(forcedSeq, 10);
+      if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal < 50000) {
+        return String(forcedVal).padStart(6, '0');
+      }
+    }
+  } catch (_) {}
+
+  let highest = -1;
+  const list = Array.isArray(sales) ? sales : [];
+
+  list.forEach(s => {
+    if (s.tipoDoc && s.tipoDoc !== 'FACTURA') return;
+    const raw = String(s.numeroDoc || s.nroFactura || s.factNum || '');
+    if (!raw) return;
+    const digitsOnly = raw.replace(/[^0-9]/g, '');
+    if (digitsOnly) {
+      const val = parseInt(digitsOnly, 10);
+      // Valid correlativo en la serie activa iniciada desde 000000 (aislando semillas demo >= 1000)
+      if (!isNaN(val) && val >= 0 && val < 50000 && (val < 1000 || highest > 900) && val > highest) {
+        highest = val;
+      }
+    }
+  });
+
+  try {
+    const storedSeq = localStorage.getItem('sm_invoice_correlativo_seq');
+    if (storedSeq !== null && storedSeq !== '') {
+      const storedVal = parseInt(storedSeq, 10);
+      if (!isNaN(storedVal) && storedVal >= 0 && (storedVal < 1000 || highest > 900) && storedVal > highest) {
+        highest = storedVal - 1;
+      }
+    }
+  } catch (_) {}
+
+  const nextVal = highest >= 0 ? highest + 1 : 0;
+  return String(nextVal).padStart(6, '0');
+};
+
+/**
+ * Registra y actualiza el último correlativo de factura de 6 dígitos emitido.
+ * @param {string|number} correlativo
+ */
+export const commitInvoiceCorrelativo = (correlativo) => {
+  try {
+    const val = parseInt(String(correlativo).replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(val) && val >= 0) {
+      const nextSeq = String(val + 1);
+      localStorage.setItem('sm_invoice_correlativo_seq', nextSeq);
+      localStorage.setItem('sm_invoice_correlativo_force', nextSeq);
+    }
+  } catch (_) {}
+};
+
+/**
+ * Reinicia o inicializa el contador de facturas oficiales desde un valor específico (por defecto "000000").
+ * @param {number|string} startAt - Número desde el cual inicializar (0 para "000000")
+ * @returns {string} - Nuevo correlativo formateado a 6 dígitos ("000000")
+ */
+export const resetInvoiceCorrelativo = (startAt = 0) => {
+  const num = typeof startAt === 'number' ? startAt : (parseInt(String(startAt).replace(/[^0-9]/g, ''), 10) || 0);
+  try {
+    localStorage.setItem('sm_invoice_correlativo_force', String(num));
+    localStorage.setItem('sm_invoice_correlativo_seq', String(num));
+  } catch (_) {}
+  return String(num).padStart(6, '0');
+};
+
+/**
  * Genera el Número de Comprobante de Retención de IVA de 14 dígitos.
  * Formato oficial: AAAAMM + 8 dígitos consecutivos (Providencia SNAT/2013/00030 Art. 16).
  * Ejemplo: 20260900000142

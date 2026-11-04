@@ -15,7 +15,9 @@ const projectRoot = path.resolve(__dirname, '../../');
 
 const PORT = process.env.SUPABASE_LOCAL_PORT || 54321;
 const HOST = '0.0.0.0';
-const DB_FILE = path.join(projectRoot, 'supabase', 'local_database.json');
+const DB_FILE = fs.existsSync(path.join(__dirname, 'local_database.json'))
+  ? path.join(__dirname, 'local_database.json')
+  : path.join(projectRoot, 'supabase', 'local_database.json');
 
 // Prevenir caídas no deseadas de Node
 process.on('uncaughtException', (err) => {

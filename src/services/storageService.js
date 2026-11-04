@@ -20,8 +20,11 @@ import {
 import {
   calculateFiscalTaxes,
   generateFiscalControlNumber,
-  generateVatRetentionVoucherNumber
+  generateVatRetentionVoucherNumber,
+  getNextInvoiceCorrelativo,
+  commitInvoiceCorrelativo
 } from './fiscalService.js';
+import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 
 if (typeof globalThis.localStorage === 'undefined') {
   const memoryStore = new Map();
@@ -238,8 +241,20 @@ export const saveSale = (saleData) => {
   const products = getProducts();
   const config = getConfig();
 
-  const numSecuencia = String(sales.length + 1043).padStart(6, '0');
-  
+  const isCredit = isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago);
+  const nextInvoiceCorrelativo = (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc)
+    ? getNextInvoiceCorrelativo(sales)
+    : String(sales.length + 1).padStart(6, '0');
+
+  const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+  const resolvedNumeroDoc = saleData.numeroDoc
+    ? String(saleData.numeroDoc)
+    : (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc ? nextInvoiceCorrelativo : `${docPrefix}-${nextInvoiceCorrelativo}`);
+
+  if (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) {
+    commitInvoiceCorrelativo(resolvedNumeroDoc);
+  }
+
   const itemsConLitros = (saleData.items || []).map(item => ({
     ...item,
     litros: item.litros || (item.cantidad * (item.litrosPorUnidad || 0))
@@ -253,18 +268,24 @@ export const saveSale = (saleData) => {
     porcentajeRetencionIva: saleData.porcentajeRetencionIva || 75
   });
 
-  const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+  const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 7) : 0);
+  const effectiveFechaEmision = saleData.fechaEmision || saleData.fecha || new Date().toISOString();
+  const effectiveFechaVencimiento = saleData.fechaVencimiento || (isCredit ? calculateExpirationDate(effectiveFechaEmision, effectiveDiasCredito).toISOString() : null);
 
   const newSale = {
-    id: `${docPrefix}-${numSecuencia}`,
-    numeroDoc: saleData.numeroDoc || `${docPrefix}-${numSecuencia}`,
-    numeroControl: saleData.numeroControl || generateFiscalControlNumber(sales.length + 1043),
+    id: (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) ? resolvedNumeroDoc : `${docPrefix}-${resolvedNumeroDoc}`,
+    numeroDoc: resolvedNumeroDoc,
+    numeroControl: saleData.numeroControl || generateFiscalControlNumber(parseInt(resolvedNumeroDoc.replace(/[^0-9]/g, ''), 10) || (sales.length + 1)),
     tipoDoc: saleData.tipoDoc || 'FACTURA',
     documentoAfectado: saleData.documentoAfectado || '',
-    fecha: saleData.fecha || new Date().toISOString(),
+    fecha: effectiveFechaEmision,
+    fechaEmision: effectiveFechaEmision,
+    fechaVencimiento: effectiveFechaVencimiento,
+    diasCredito: effectiveDiasCredito,
     clienteId: saleData.clienteId || 'CLI-003',
     clienteNombre: saleData.clienteNombre || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
     clienteRif: saleData.clienteRif || 'V-18456789-6',
+    clienteDireccion: saleData.clienteDireccion || saleData.direccion || '',
     tasaDolar: config.tasaDolar,
     condicionPago: saleData.condicionPago || 'CONTADO',
     items: itemsConLitros,
@@ -290,11 +311,15 @@ export const saveSale = (saleData) => {
     ivaBs: taxes.totalIvaBs,
     igtfBs: taxes.igtfBs,
     totalBs: taxes.totalFacturaBs,
+    saldoUsd: isCredit ? (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd) : 0,
+    saldoBs: isCredit ? (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs) : 0,
     retencionIvaBs: taxes.retencionIvaBs,
     comprobanteRetencionIva: saleData.comprobanteRetencionIva || '',
-    estado: saleData.condicionPago === 'CREDITO' ? 'PENDIENTE' : 'PAGADO',
+    estado: isCredit ? 'PENDIENTE' : 'PAGADO',
     metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
-    vendedor: saleData.vendedor || 'Usuario Sistema'
+    vendedor: saleData.vendedor || 'Usuario Sistema',
+    pedidoOrigenId: saleData.pedidoOrigenId || saleData.orderId || null,
+    pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
   };
 
   // Ajuste de Stock
@@ -354,6 +379,26 @@ export const saveSale = (saleData) => {
   sales.unshift(newSale);
   localStorage.setItem(KEYS.SALES, JSON.stringify(sales));
   return newSale;
+};
+
+export const deleteStorageSale = (saleId) => {
+  const sales = getSales();
+  const target = sales.find(s => s.id === saleId || s.numeroDoc === saleId);
+  if (target && target.items && Array.isArray(target.items)) {
+    try {
+      const products = getProducts();
+      target.items.forEach(item => {
+        const pIdx = products.findIndex(p => p.id === item.articuloId || p.codigo === item.articuloId);
+        if (pIdx >= 0) {
+          products[pIdx].stock = (products[pIdx].stock || 0) + Number(item.cantidad || 0);
+        }
+      });
+      localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+    } catch (_) {}
+  }
+  const filtered = sales.filter(s => s.id !== saleId && s.numeroDoc !== saleId);
+  localStorage.setItem(KEYS.SALES, JSON.stringify(filtered));
+  return filtered;
 };
 
 export const getPurchases = () => {
@@ -514,6 +559,13 @@ export const updateOrderStatus = (orderId, newStatus) => {
     localStorage.setItem(KEYS.ORDERS, JSON.stringify(orders));
   }
   return orders;
+};
+
+export const deleteStorageOrder = (orderId) => {
+  const orders = getOrders();
+  const filtered = orders.filter(o => o.id !== orderId && o.numeroDoc !== orderId);
+  localStorage.setItem(KEYS.ORDERS, JSON.stringify(filtered));
+  return filtered;
 };
 
 export const getStorageSellers = () => {

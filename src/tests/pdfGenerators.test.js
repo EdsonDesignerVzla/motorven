@@ -287,7 +287,7 @@ async function runPdfTests() {
   });
 
   // 8B. Nota de Pedido / Preventa Individual para Vendedor
-  testGen('Nota de Pedido Vendedor (con renglones y reserva hasta 5:00 PM)', () => {
+  testGen('Nota de Pedido Vendedor (con renglones y reserva de 72 Horas)', () => {
     generateSellerOrderPDF({
       order: {
         id: 'PED-2026-001',

@@ -1008,70 +1008,130 @@ if (fs.existsSync(tempDir)) {
   console.log('✅ Synchronized src/data/temp/users.json and src/data/temp/profit_sellers.json');
 }
 
-// Generate src/data/supabaseRealData.js from cleaned db using fast JSON.parse exports
+// Generate individual JSON dump files and lightweight re-exports in src/data/supabaseRealData.js
+const dumpDir = path.resolve('src/data/dump');
+fs.mkdirSync(dumpDir, { recursive: true });
+
+const tables = {
+  signum_motorven: db.SIGNUM_MOTORVEN,
+  config: cleanConfigRow,
+  products: db.products,
+  clients: db.clients,
+  profit_sellers: db.profit_sellers,
+  profit_invoices: db.profit_invoices || [],
+  profit_collections: db.profit_collections || [],
+  profit_accounts_payable: db.profit_accounts_payable,
+  profit_supplier_payments: db.profit_supplier_payments,
+  profit_purchases: db.profit_purchases || [],
+  profit_suppliers: db.profit_suppliers || [],
+  profit_bank_accounts: db.profit_bank_accounts,
+  profit_cash_desks: db.profit_cash_desks,
+  profit_zones: db.profit_zones || [],
+  profit_transports: db.profit_transports,
+  profit_customer_returns: db.profit_customer_returns || [],
+  profit_inventory_adjustments: db.profit_inventory_adjustments || [],
+  profit_warehouse_transfers: db.profit_warehouse_transfers || [],
+  profit_islr_concepts: db.profit_islr_concepts || [],
+  profit_beneficiaries: db.profit_beneficiaries || [],
+  profit_payment_orders: db.profit_payment_orders || [],
+  profit_warehouses: db.profit_warehouses || [],
+  profit_product_lines: db.profit_product_lines || [],
+  profit_product_sublines: db.profit_product_sublines || [],
+  profit_product_categories: db.profit_product_categories || [],
+  profit_currencies: db.profit_currencies,
+  users: db.users,
+  orders: db.orders,
+  sales: db.sales || [],
+  purchases: db.purchases,
+  suppliers: db.suppliers,
+  cash_movements: db.cash_movements,
+  fiscal_closures: db.fiscal_closures,
+  notifications: db.notifications
+};
+
+for (const [key, val] of Object.entries(tables)) {
+  fs.writeFileSync(path.join(dumpDir, `${key}.json`), JSON.stringify(val ?? null), 'utf8');
+}
+
 const outputFilePath = path.resolve('src/data/supabaseRealData.js');
-const jp = (val) => `JSON.parse(${JSON.stringify(JSON.stringify(val ?? null))})`;
 const fileContent = `/**
  * DUMP REAL Y SINCRONIZADO DE LA BASE DE DATOS SUPABASE (PostgreSQL)
  * Generado el: ${NOW_ISO}
- *
- * Contiene datos vivos, depurados y 100% sincronizados con supabase/local_database.json:
- * - ${db.clients.length} Clientes reales
- * - ${db.products.length} Productos reales con stock y precios
- * - ${(db.profit_invoices || []).length} Facturas de Venta Profit
- * - ${(db.profit_collections || []).length} Cobros Profit
- * - ${db.profit_accounts_payable.length} Cuentas por Pagar (CxP)
- * - ${db.profit_supplier_payments.length} Pagos a Proveedores
- * - ${(db.profit_purchases || []).length} Compras Profit
- * - ${(db.profit_suppliers || []).length} Proveedores Profit
- * - ${db.profit_sellers.length} Vendedores con fotos y metas
- * - ${db.profit_bank_accounts.length} Cuentas Bancarias
- * - ${db.profit_cash_desks.length} Cajas Chicas
- * - ${(db.profit_zones || []).length} Zonas
- * - ${db.profit_transports.length} Transportes
- * - ${(db.profit_customer_returns || []).length} Devoluciones
- * - ${(db.profit_inventory_adjustments || []).length} Ajustes de Inventario
- * - ${(db.profit_warehouse_transfers || []).length} Traslados
- * - ${db.users.length} Usuarios del Sistema
- * - ${db.orders.length} Pedidos
  */
+import REAL_SIGNUM_MOTORVEN from './dump/signum_motorven.json' with { type: 'json' };
+import REAL_CONFIG from './dump/config.json' with { type: 'json' };
+import REAL_PRODUCTS from './dump/products.json' with { type: 'json' };
+import REAL_CLIENTS from './dump/clients.json' with { type: 'json' };
+import REAL_PROFIT_SELLERS from './dump/profit_sellers.json' with { type: 'json' };
+import REAL_PROFIT_INVOICES from './dump/profit_invoices.json' with { type: 'json' };
+import REAL_PROFIT_COLLECTIONS from './dump/profit_collections.json' with { type: 'json' };
+import REAL_PROFIT_ACCOUNTS_PAYABLE from './dump/profit_accounts_payable.json' with { type: 'json' };
+import REAL_PROFIT_SUPPLIER_PAYMENTS from './dump/profit_supplier_payments.json' with { type: 'json' };
+import REAL_PROFIT_PURCHASES from './dump/profit_purchases.json' with { type: 'json' };
+import REAL_PROFIT_SUPPLIERS from './dump/profit_suppliers.json' with { type: 'json' };
+import REAL_PROFIT_BANK_ACCOUNTS from './dump/profit_bank_accounts.json' with { type: 'json' };
+import REAL_PROFIT_CASH_DESKS from './dump/profit_cash_desks.json' with { type: 'json' };
+import REAL_PROFIT_ZONES from './dump/profit_zones.json' with { type: 'json' };
+import REAL_PROFIT_TRANSPORTS from './dump/profit_transports.json' with { type: 'json' };
+import REAL_PROFIT_CUSTOMER_RETURNS from './dump/profit_customer_returns.json' with { type: 'json' };
+import REAL_PROFIT_INVENTORY_ADJUSTMENTS from './dump/profit_inventory_adjustments.json' with { type: 'json' };
+import REAL_PROFIT_WAREHOUSE_TRANSFERS from './dump/profit_warehouse_transfers.json' with { type: 'json' };
+import REAL_PROFIT_ISLR_CONCEPTS from './dump/profit_islr_concepts.json' with { type: 'json' };
+import REAL_PROFIT_BENEFICIARIES from './dump/profit_beneficiaries.json' with { type: 'json' };
+import REAL_PROFIT_PAYMENT_ORDERS from './dump/profit_payment_orders.json' with { type: 'json' };
+import REAL_PROFIT_WAREHOUSES from './dump/profit_warehouses.json' with { type: 'json' };
+import REAL_PROFIT_PRODUCT_LINES from './dump/profit_product_lines.json' with { type: 'json' };
+import REAL_PROFIT_PRODUCT_SUBLINES from './dump/profit_product_sublines.json' with { type: 'json' };
+import REAL_PROFIT_PRODUCT_CATEGORIES from './dump/profit_product_categories.json' with { type: 'json' };
+import REAL_PROFIT_CURRENCIES from './dump/profit_currencies.json' with { type: 'json' };
+import REAL_USERS from './dump/users.json' with { type: 'json' };
+import REAL_ORDERS from './dump/orders.json' with { type: 'json' };
+import REAL_SALES from './dump/sales.json' with { type: 'json' };
+import REAL_PURCHASES from './dump/purchases.json' with { type: 'json' };
+import REAL_SUPPLIERS from './dump/suppliers.json' with { type: 'json' };
+import REAL_CASH_MOVEMENTS from './dump/cash_movements.json' with { type: 'json' };
+import REAL_FISCAL_CLOSURES from './dump/fiscal_closures.json' with { type: 'json' };
+import REAL_NOTIFICATIONS from './dump/notifications.json' with { type: 'json' };
 
-export const REAL_SIGNUM_MOTORVEN = ${jp(db.SIGNUM_MOTORVEN)};
-export const REAL_CONFIG = ${jp(cleanConfigRow)};
-export const REAL_PRODUCTS = ${jp(db.products)};
-export const REAL_CLIENTS = ${jp(db.clients)};
-export const REAL_PROFIT_SELLERS = ${jp(db.profit_sellers)};
-export const REAL_PROFIT_INVOICES = ${jp(db.profit_invoices || [])};
-export const REAL_PROFIT_COLLECTIONS = ${jp(db.profit_collections || [])};
-export const REAL_PROFIT_ACCOUNTS_PAYABLE = ${jp(db.profit_accounts_payable)};
-export const REAL_PROFIT_SUPPLIER_PAYMENTS = ${jp(db.profit_supplier_payments)};
-export const REAL_PROFIT_PURCHASES = ${jp(db.profit_purchases || [])};
-export const REAL_PROFIT_SUPPLIERS = ${jp(db.profit_suppliers || [])};
-export const REAL_PROFIT_BANK_ACCOUNTS = ${jp(db.profit_bank_accounts)};
-export const REAL_PROFIT_CASH_DESKS = ${jp(db.profit_cash_desks)};
-export const REAL_PROFIT_ZONES = ${jp(db.profit_zones || [])};
-export const REAL_PROFIT_TRANSPORTS = ${jp(db.profit_transports)};
-export const REAL_PROFIT_CUSTOMER_RETURNS = ${jp(db.profit_customer_returns || [])};
-export const REAL_PROFIT_INVENTORY_ADJUSTMENTS = ${jp(db.profit_inventory_adjustments || [])};
-export const REAL_PROFIT_WAREHOUSE_TRANSFERS = ${jp(db.profit_warehouse_transfers || [])};
-export const REAL_PROFIT_ISLR_CONCEPTS = ${jp(db.profit_islr_concepts || [])};
-export const REAL_PROFIT_BENEFICIARIES = ${jp(db.profit_beneficiaries || [])};
-export const REAL_PROFIT_PAYMENT_ORDERS = ${jp(db.profit_payment_orders || [])};
-export const REAL_PROFIT_WAREHOUSES = ${jp(db.profit_warehouses || [])};
-export const REAL_PROFIT_PRODUCT_LINES = ${jp(db.profit_product_lines || [])};
-export const REAL_PROFIT_PRODUCT_SUBLINES = ${jp(db.profit_product_sublines || [])};
 export const REAL_PRODUCT_SUBLINES = REAL_PROFIT_PRODUCT_SUBLINES;
-export const REAL_PROFIT_PRODUCT_CATEGORIES = ${jp(db.profit_product_categories || [])};
-export const REAL_PROFIT_CURRENCIES = ${jp(db.profit_currencies)};
-export const REAL_USERS = ${jp(db.users)};
-export const REAL_ORDERS = ${jp(db.orders)};
-export const REAL_SALES = ${jp(db.sales || [])};
-export const REAL_PURCHASES = ${jp(db.purchases)};
-export const REAL_SUPPLIERS = ${jp(db.suppliers)};
-export const REAL_CASH_MOVEMENTS = ${jp(db.cash_movements)};
-export const REAL_FISCAL_CLOSURES = ${jp(db.fiscal_closures)};
-export const REAL_NOTIFICATIONS = ${jp(db.notifications)};
+
+export {
+  REAL_SIGNUM_MOTORVEN,
+  REAL_CONFIG,
+  REAL_PRODUCTS,
+  REAL_CLIENTS,
+  REAL_PROFIT_SELLERS,
+  REAL_PROFIT_INVOICES,
+  REAL_PROFIT_COLLECTIONS,
+  REAL_PROFIT_ACCOUNTS_PAYABLE,
+  REAL_PROFIT_SUPPLIER_PAYMENTS,
+  REAL_PROFIT_PURCHASES,
+  REAL_PROFIT_SUPPLIERS,
+  REAL_PROFIT_BANK_ACCOUNTS,
+  REAL_PROFIT_CASH_DESKS,
+  REAL_PROFIT_ZONES,
+  REAL_PROFIT_TRANSPORTS,
+  REAL_PROFIT_CUSTOMER_RETURNS,
+  REAL_PROFIT_INVENTORY_ADJUSTMENTS,
+  REAL_PROFIT_WAREHOUSE_TRANSFERS,
+  REAL_PROFIT_ISLR_CONCEPTS,
+  REAL_PROFIT_BENEFICIARIES,
+  REAL_PROFIT_PAYMENT_ORDERS,
+  REAL_PROFIT_WAREHOUSES,
+  REAL_PROFIT_PRODUCT_LINES,
+  REAL_PROFIT_PRODUCT_SUBLINES,
+  REAL_PROFIT_PRODUCT_CATEGORIES,
+  REAL_PROFIT_CURRENCIES,
+  REAL_USERS,
+  REAL_ORDERS,
+  REAL_SALES,
+  REAL_PURCHASES,
+  REAL_SUPPLIERS,
+  REAL_CASH_MOVEMENTS,
+  REAL_FISCAL_CLOSURES,
+  REAL_NOTIFICATIONS
+};
 `;
 
 fs.writeFileSync(outputFilePath, fileContent, 'utf8');
-console.log('✅ Regenerated src/data/supabaseRealData.js in 100% parity with supabase/local_database.json');
+console.log('✅ Regenerated src/data/dump and src/data/supabaseRealData.js in 100% parity with supabase/local_database.json');

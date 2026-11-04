@@ -39,9 +39,9 @@
       "notificaciones",
       "configuracion"
     ],
-    "ultimo_acceso": "2026-11-02T17:27:02.509Z",
-    "ultimoAcceso": "2026-11-02T17:27:02.509Z",
-    "last_login": "2026-11-02T17:27:02.509Z",
+    "ultimo_acceso": "2026-11-03T22:31:20.522Z",
+    "ultimoAcceso": "2026-11-03T22:31:20.522Z",
+    "last_login": "2026-11-03T22:31:20.522Z",
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-10-26T19:07:04.838Z",
@@ -89,8 +89,8 @@
       "cxc"
     ],
     "ultimo_acceso": "2026-11-03T15:13:48.797Z",
-    "ultimoAcceso": null,
-    "last_login": null,
+    "ultimoAcceso": "2026-11-03T15:13:48.797Z",
+    "last_login": "2026-11-03T15:13:48.797Z",
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-10-27T19:55:42.887Z",
@@ -265,9 +265,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-03T12:48:19.581Z",
-    "updatedAt": "2026-11-02T17:33:29.729Z",
-    "color": "#10b981",
-    "descripcion": ""
+    "updatedAt": "2026-11-03T12:48:19.581Z"
   },
   {
     "id": "usr-cobranza",

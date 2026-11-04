@@ -26,3 +26,13 @@ backups/
 
 # Local DB backups
 *.backup_*.json
+
+# Binaries and Executables
+*.exe
+scripts/tunnel/*.exe
+
+# Standalone company server bundle
+SERVIDOR_EMPRESA_26.229.220.202/
+
+# Test artifacts
+**/user_autotest_*
