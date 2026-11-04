@@ -237,16 +237,30 @@ export const resetSupabaseOnlineStatus = () => {
   }
 };
 
-const withTimeout = (promise, ms = 3500) => {
+const withTimeout = (promise, ms) => {
+  // Para conexiones a través de túnel o remotas (Cloudflare trycloudflare o internet),
+  // las consultas masivas de miles de registros requieren margen suficiente.
+  // Un timeout de 3.5s o 4s abortaba las peticiones en progreso provocando que
+  // Cloudflare registrara 'stream canceled by remote' y se cargaran datos viejos.
+  // Se establece un margen generoso de 35 segundos para túneles / producción remota.
+  let timeoutMs = 35000;
+  try {
+    const isLocal = typeof window !== 'undefined' && window.location && LOCAL_HOSTNAMES.includes(window.location.hostname);
+    timeoutMs = isLocal ? (ms || 15000) : Math.max(ms || 35000, 35000);
+  } catch (_) {
+    timeoutMs = 35000;
+  }
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("Supabase connection timeout")), ms))
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Supabase connection timeout")), timeoutMs))
   ]);
 };
 
 const markSupabaseOffline = (err, action = '') => {
   const msg = err?.message || String(err);
-  if (msg.includes('Failed to fetch') || msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('timeout') || msg.includes('connection timeout') || !isNetworkOnline()) {
+  // Nunca apagar Supabase globalmente por un timeout aislado de red o una consulta pesada.
+  // Solo marcar offline si físicamente el navegador perdió la conexión a Internet.
+  if (!isNetworkOnline()) {
     isSupabaseAvailable = false;
   }
   console.warn(`[Supabase Offline Fallback] ${action}:`, msg);

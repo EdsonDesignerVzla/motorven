@@ -7,6 +7,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -376,6 +377,35 @@ function parseRawBuffer(req) {
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+function sendJson(req, res, statusCode, data, extraHeaders = {}) {
+  const jsonStr = typeof data === 'string' ? data : JSON.stringify(data);
+  const acceptEncoding = (req.headers && req.headers['accept-encoding']) || '';
+
+  if (acceptEncoding.includes('gzip') && jsonStr.length > 1024) {
+    try {
+      const gzipped = zlib.gzipSync(Buffer.from(jsonStr));
+      res.writeHead(statusCode, {
+        'Content-Type': 'application/json',
+        'Content-Encoding': 'gzip',
+        'Content-Length': gzipped.length,
+        ...extraHeaders
+      });
+      res.end(gzipped);
+      return;
+    } catch (_) {
+      // Fallback a texto plano si falla zlib
+    }
+  }
+
+  const buf = Buffer.from(jsonStr);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': buf.length,
+    ...extraHeaders
+  });
+  res.end(buf);
 }
 
 function extractFileBufferFromMultipart(buffer, contentType) {
@@ -1113,8 +1143,7 @@ const server = http.createServer(async (req, res) => {
     if (!database[tableName]) {
       // Si la tabla no existe en la BD local, devolver array vacío o 404
       if (req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Range': '0-0/0' });
-        res.end(JSON.stringify([]));
+        sendJson(req, res, 200, [], { 'Content-Range': '0-0/0' });
         return;
       }
       database[tableName] = [];
@@ -1189,23 +1218,21 @@ const server = http.createServer(async (req, res) => {
 
       // Headers de rango
       const endRange = filtered.length > 0 ? offsetParam + filtered.length - 1 : 0;
-      res.setHeader('Content-Range', `${offsetParam}-${endRange}/${totalCount}`);
+      const rangeHeader = `${offsetParam}-${endRange}/${totalCount}`;
+      res.setHeader('Content-Range', rangeHeader);
 
       // Single row check
       const acceptHeader = req.headers['accept'] || '';
       if (acceptHeader.includes('application/vnd.pgrst.object+json')) {
         if (filtered.length === 0) {
-          res.writeHead(406, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: 'JSON object requested, but no rows returned' }));
+          sendJson(req, res, 406, { message: 'JSON object requested, but no rows returned' });
           return;
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(filtered[0]));
+        sendJson(req, res, 200, filtered[0]);
         return;
       }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(filtered));
+      sendJson(req, res, 200, filtered, { 'Content-Range': rangeHeader });
       return;
     }
 
