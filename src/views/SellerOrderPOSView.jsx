@@ -217,7 +217,8 @@ export default function SellerOrderPOSView({
     }
 
     const qtyToAdd = Math.min(addQty, atpLibre);
-    const precio = resolveUnitPrice(product, selectedClient, PRICE_CHANNEL.PREVENTA);
+    const currentChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
+    const precio = resolveUnitPrice(product, selectedClient, currentChannel);
     if (!(precio > 0)) {
       notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
       return;
@@ -255,21 +256,22 @@ export default function SellerOrderPOSView({
     }
   };
 
-  // Sincronización automática: si el precio cambia en Inventario, el carrito de preventa se actualiza
+  // Sincronización automática: si el precio cambia en Inventario o cambia la modalidad (Calle vs Oficina), el carrito se actualiza
   useEffect(() => {
     setCartItems(prev => {
       let changed = false;
+      const currentChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
       const next = prev.map(it => {
         const fresh = (products || []).find(p => p && p.id === it.product?.id);
         if (!fresh) return it;
-        const precio = resolveUnitPrice(fresh, selectedClient, PRICE_CHANNEL.PREVENTA);
+        const precio = resolveUnitPrice(fresh, selectedClient, currentChannel);
         if (!(precio > 0) || precio === it.precioUsd) return it;
         changed = true;
         return { ...it, product: fresh, precioUsd: precio, subtotalUsd: lineSubtotal(it.cantidad, precio) };
       });
       return changed ? next : prev;
     });
-  }, [products, selectedClient]);
+  }, [products, selectedClient, modalidadVenta]);
 
   const updateCartQty = (productId, newQty) => {
     if (newQty <= 0) {
@@ -728,7 +730,8 @@ export default function SellerOrderPOSView({
                 const currentInCart = inCartItem ? inCartItem.cantidad : 0;
                 const atpLibre = Math.max(0, rawStock - committed - currentInCart);
                 const isOutOfStock = atpLibre <= 0;
-                const precioUsd = resolveUnitPrice(p, selectedClient, PRICE_CHANNEL.PREVENTA);
+                const currentChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
+                const precioUsd = resolveUnitPrice(p, selectedClient, currentChannel);
                 const litrosUnit = Number(p.litrosPorUnidad || 0);
 
                 return (
@@ -827,8 +830,21 @@ export default function SellerOrderPOSView({
                     {/* Footer: Precios y Botones Táctiles +/- */}
                     <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
-                        <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
-                          {formatUsd(precioUsd)}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <span style={{ fontFamily: 'var(--font-tech)', fontSize: '1rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
+                            {formatUsd(precioUsd)}
+                          </span>
+                          <span style={{
+                            fontSize: '0.62rem',
+                            padding: '1px 5px',
+                            borderRadius: '4px',
+                            fontWeight: 700,
+                            background: modalidadVenta === 'OFICINA' ? 'rgba(56, 189, 248, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                            color: modalidadVenta === 'OFICINA' ? '#38bdf8' : 'var(--motorven-red)',
+                            border: modalidadVenta === 'OFICINA' ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+                          }}>
+                            {modalidadVenta === 'OFICINA' ? 'Mayor' : 'Minorista / Calle'}
+                          </span>
                         </div>
                         <div style={{ fontSize: '0.65rem', color: 'var(--motorven-gold)' }}>
                           {formatBs(precioUsd * tasaBcv)}
@@ -1557,10 +1573,13 @@ export default function SellerOrderPOSView({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--semaforo-verde)', fontFamily: 'var(--font-tech)' }}>
-                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.PREVENTA))}
+                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA))}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>
-                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.PREVENTA) * tasaBcv)}
+                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA) * tasaBcv)}
+                  </span>
+                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                    ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista' : 'Precio Minorista / Venta de Calle'})
                   </span>
                 </div>
               </div>

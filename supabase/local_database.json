@@ -434884,6 +434884,56 @@
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
       "created_at": "2026-11-04T16:33:19.823Z"
+    },
+    {
+      "id": "LOG-1793811247355-2ODYU",
+      "usuario_id": "usr-autotest-1793811247336",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-04T16:54:07.355Z"
+    },
+    {
+      "id": "LOG-1793811629131-R74MO",
+      "usuario_id": "usr-autotest-1793811629108",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-04T17:00:29.131Z"
+    },
+    {
+      "id": "LOG-1793812217946-0RW4N",
+      "usuario_id": "usr-autotest-1793812217929",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-04T17:10:17.946Z"
+    },
+    {
+      "id": "LOG-1793812373961-H9VZZ",
+      "usuario_id": "usr-autotest-1793812373944",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-04T17:12:53.961Z"
+    },
+    {
+      "id": "LOG-1793813190524-9QHXN",
+      "usuario_id": "usr-autotest-1793813190507",
+      "usuario_nombre": "Operador Automatizado",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-04T17:26:30.524Z"
     }
   ],
   "order_items": [

@@ -378,7 +378,7 @@ export default function SalesPOSView({
         }
         return;
       }
-      const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.PREVENTA : PRICE_CHANNEL.MOSTRADOR;
+      const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR;
       const precioUsd = resolveUnitPrice(product, selectedClient, channel);
       if (!(precioUsd > 0)) {
         notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
@@ -414,7 +414,7 @@ export default function SalesPOSView({
   useEffect(() => {
     setCartItems(prev => {
       let changed = false;
-      const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.PREVENTA : PRICE_CHANNEL.MOSTRADOR;
+      const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR;
       const next = prev.map(item => {
         if (item.precioPactado) return item;
         const prod = products.find(p => p.id === item.articuloId);
@@ -976,7 +976,8 @@ export default function SalesPOSView({
                 const isLowStock = !isOutOfStock && maxAvailable <= stockMin;
                 const unitLabel = getReadableUnit(p);
 
-                const precioUsd = resolveUnitPrice(p, selectedClient, PRICE_CHANNEL.MOSTRADOR);
+                const posChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR;
+                const precioUsd = resolveUnitPrice(p, selectedClient, posChannel);
 
                 const stockConfig = isOutOfStock
                   ? { label: committedQty > 0 ? 'Comprometido' : 'Agotado', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.35)', dot: '#ef4444' }
@@ -1931,13 +1932,13 @@ export default function SalesPOSView({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
-                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.MOSTRADOR))}
+                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR))}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>
-                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, PRICE_CHANNEL.MOSTRADOR) * (Number(safeConfig.tasaDolar) || 0))}
+                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR) * (Number(safeConfig.tasaDolar) || 0))}
                   </span>
                   <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
-                    ({isWholesaleClient(selectedClient) ? 'Precio Mayorista' : 'Precio Detal'})
+                    ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista / Oficina' : (isWholesaleClient(selectedClient) ? 'Precio Mayorista' : 'Precio Detal')})
                   </span>
                 </div>
 

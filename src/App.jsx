@@ -511,7 +511,7 @@ function MainApp() {
           try {
             localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(allTableData));
           } catch (_) {}
-          notify.success('⚡ Catálogo de Lubricantes actualizado en tiempo real');
+
           return;
         }
 
@@ -521,7 +521,7 @@ function MainApp() {
             try { localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next)); } catch (_) {}
             return next;
           });
-          notify.info(`Renglón ${key} depurado en tiempo real`);
+
           return;
         }
 
@@ -540,7 +540,7 @@ function MainApp() {
             } catch (_) {}
             return next;
           });
-          notify.success(`⚡ Lubricante ${key} reconciliado y actualizado en tiempo real`);
+
         }
       } else if (tableId === 'clients') {
         if ((action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -554,7 +554,7 @@ function MainApp() {
             try { localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next)); } catch (_) {}
             return next;
           });
-          notify.info(`Cliente ${key} depurado en tiempo real`);
+
           return;
         }
 
@@ -573,7 +573,7 @@ function MainApp() {
             } catch (_) {}
             return next;
           });
-          notify.success(`⚡ Cliente ${key} sincronizado en tiempo real`);
+
         }
       } else if (tableId === 'warehouses') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -591,7 +591,7 @@ function MainApp() {
             }
             return [...prev, item];
           });
-          notify.success(`⚡ Almacén ${key} sincronizado en tiempo real`);
+
         }
       } else if (tableId === 'bank_accounts') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -608,7 +608,7 @@ function MainApp() {
             }
             return [...prev, item];
           });
-          notify.success(`⚡ Cuenta bancaria ${key} sincronizada`);
+
         }
       } else if (tableId === 'sellers') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -629,7 +629,7 @@ function MainApp() {
             }
             return [...prev, item];
           });
-          notify.success(`⚡ Asesor ${key} sincronizado`);
+
         }
       } else if (tableId === 'suppliers') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -656,7 +656,7 @@ function MainApp() {
             }
             return [...prev, item];
           });
-          notify.success(`⚡ Proveedor ${key} sincronizado`);
+
         }
       } else if (tableId === 'invoices') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -764,7 +764,7 @@ function MainApp() {
             try { localStorage.setItem('signum_users_list', JSON.stringify(sorted)); } catch (_) {}
             return sorted;
           });
-          notify.info(`Usuario eliminado en tiempo real`);
+
           return;
         }
 
@@ -793,7 +793,7 @@ function MainApp() {
             }
             return prev;
           });
-          notify.success(`⚡ Usuario @${item.username || key} sincronizado en tiempo real`);
+
         }
       } else if (tableId === 'orders') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
