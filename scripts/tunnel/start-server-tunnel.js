@@ -59,7 +59,7 @@ function startPersistentTunnel() {
   const lt = spawn(npxCmd, ['--yes', 'localtunnel', '--port', String(PORT), '--subdomain', FIXED_SUBDOMAIN], {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true
+    shell: false
   });
 
   let hasAnnounced = false;
