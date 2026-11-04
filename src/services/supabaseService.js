@@ -201,7 +201,14 @@ export const setCustomBackendUrl = (url) => {
   } catch (_) {}
 };
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: {
+    headers: {
+      'bypass-tunnel-reminder': 'true',
+      'ngrok-skip-browser-warning': 'true'
+    }
+  }
+});
 
 /**
  * Corrige URLs públicas de Storage guardadas con otro host (p. ej. http://localhost:54321/...)

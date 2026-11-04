@@ -89,7 +89,19 @@ function resolveRealtimeBaseUrl() {
     hostname.endsWith('.pages.dev') ||
     hostname.endsWith('.railway.app') ||
     hostname.endsWith('.fly.dev');
-  if (isStaticCloud) return null;
+  if (isStaticCloud) {
+    try {
+      const custom = window.localStorage.getItem('signum_custom_backend_url');
+      if (custom && /^https?:\/\//i.test(custom.trim())) return custom.trim().replace(/\/+$/, '');
+      if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) {
+        const envUrl = import.meta.env.VITE_SUPABASE_URL.trim().replace(/\/+$/, '');
+        if (/^https?:\/\//i.test(envUrl) && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+          return envUrl;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
   if ((protocol === 'http:' || protocol === 'https:') && origin && origin !== 'null') {
     return `${origin}/sb`;
   }
@@ -182,7 +194,11 @@ async function pollDeltaChanges() {
     const timeoutId = setTimeout(() => controller.abort(), 3000);
     const res = await fetch(`${baseUrl}/realtime/v1/changes?since=${lastProcessedSeq}`, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'bypass-tunnel-reminder': 'true',
+        'ngrok-skip-browser-warning': 'true'
+      },
       cache: 'no-store',
       signal: controller.signal
     });
@@ -318,7 +334,11 @@ export const broadcastReconcileChange = (payload) => {
   if (baseUrl && !isTestEnv && typeof fetch !== 'undefined') {
     fetch(`${baseUrl}/realtime/v1/broadcast`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'bypass-tunnel-reminder': 'true',
+        'ngrok-skip-browser-warning': 'true'
+      },
       body: JSON.stringify({
         table: payload.table || payload.tableId,
         tableId: payload.tableId || payload.table,

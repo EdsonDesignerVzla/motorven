@@ -13,7 +13,7 @@
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
     "supabase:status": "supabase status",
-    "tunnel": "node scripts/tunnel/start-tunnel.js",
+    "tunnel": "node scripts/tunnel/start-server-tunnel.js",
     "tunnel:local": "node -e \"import('fs').then(fs => fs.writeFileSync('.env', 'VITE_SUPABASE_URL=http://localhost:54321\\nVITE_SUPABASE_ANON_KEY=local-free-token\\n'))\"",
     "preview": "vite preview"
   },

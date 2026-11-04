@@ -349,6 +349,30 @@ function matchFilter(value, operator, target) {
   }
 }
 
+function matchOrFilter(row, orString, tableName = '') {
+  if (!orString || typeof orString !== 'string') return false;
+  const clean = orString.trim().replace(/^\(|\)$/g, '');
+  const clauses = clean.split(',');
+  for (const clause of clauses) {
+    const parts = clause.split('.');
+    if (parts.length >= 2) {
+      const col = parts[0].trim();
+      const op = parts[1].trim();
+      const target = parts.slice(2).join('.');
+      if (matchFilter(row[col], op, target)) {
+        return true;
+      }
+      if (tableName === 'products' && col === 'id') {
+        if (matchFilter(row.codigo, op, target) || matchFilter(row.sku, op, target)) return true;
+      }
+      if ((tableName === 'sales' || tableName === 'orders') && (col === 'id' || col === 'numero_doc' || col === 'numeroDoc')) {
+        if (matchFilter(row.id, op, target) || matchFilter(row.numero_doc, op, target) || matchFilter(row.numeroDoc, op, target)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -1176,14 +1200,34 @@ const server = http.createServer(async (req, res) => {
       for (const [key, value] of url.searchParams.entries()) {
         if (key === 'select' || key === 'order' || key === 'limit' || key === 'offset' || key === 'on_conflict') continue;
         
+        if (key === 'or') {
+          filtered = filtered.filter(row => matchOrFilter(row, value, tableName));
+          continue;
+        }
+
         // Formato operador: col=eq.val o col=ilike.*val*
         const dotIdx = value.indexOf('.');
         if (dotIdx > 0) {
           const operator = value.substring(0, dotIdx);
           const target = value.substring(dotIdx + 1);
-          filtered = filtered.filter(row => matchFilter(row[key], operator, target));
+          filtered = filtered.filter(row => {
+            if (matchFilter(row[key], operator, target)) return true;
+            if (tableName === 'products' && key === 'id') {
+              return matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
+            }
+            if ((tableName === 'sales' || tableName === 'orders') && (key === 'id' || key === 'numero_doc' || key === 'numeroDoc')) {
+              return matchFilter(row.id, operator, target) || matchFilter(row.numero_doc, operator, target) || matchFilter(row.numeroDoc, operator, target);
+            }
+            return false;
+          });
         } else {
-          filtered = filtered.filter(row => String(row[key]) === String(value));
+          filtered = filtered.filter(row => {
+            if (String(row[key]) === String(value)) return true;
+            if ((tableName === 'sales' || tableName === 'orders') && (key === 'id' || key === 'numero_doc' || key === 'numeroDoc')) {
+              return String(row.id || '') === String(value) || String(row.numero_doc || '') === String(value) || String(row.numeroDoc || '') === String(value);
+            }
+            return false;
+          });
         }
       }
 
@@ -1538,6 +1582,15 @@ const server = http.createServer(async (req, res) => {
           let matches = true;
           for (const [key, value] of url.searchParams.entries()) {
             if (key === 'select' || key === 'order' || key === 'limit' || key === 'offset') continue;
+
+            if (key === 'or') {
+              if (!matchOrFilter(row, value, tableName)) {
+                matches = false;
+                break;
+              }
+              continue;
+            }
+
             const dotIdx = value.indexOf('.');
             if (dotIdx > 0) {
               const operator = value.substring(0, dotIdx);
@@ -1545,6 +1598,9 @@ const server = http.createServer(async (req, res) => {
               let doesMatch = matchFilter(row[key], operator, target);
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
+              }
+              if (!doesMatch && (tableName === 'sales' || tableName === 'orders') && (key === 'id' || key === 'numero_doc' || key === 'numeroDoc')) {
+                doesMatch = matchFilter(row.id, operator, target) || matchFilter(row.numero_doc, operator, target) || matchFilter(row.numeroDoc, operator, target);
               }
               if (!doesMatch) {
                 matches = false;
@@ -1557,6 +1613,9 @@ const server = http.createServer(async (req, res) => {
               }
               if (!doesMatch && tableName === 'users' && key === 'id') {
                 doesMatch = String(row.username || '').toLowerCase() === String(value).toLowerCase();
+              }
+              if (!doesMatch && (tableName === 'sales' || tableName === 'orders') && (key === 'id' || key === 'numero_doc' || key === 'numeroDoc')) {
+                doesMatch = String(row.id || '') === String(value) || String(row.numero_doc || '') === String(value) || String(row.numeroDoc || '') === String(value);
               }
               if (!doesMatch) {
                 matches = false;
