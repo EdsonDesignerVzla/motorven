@@ -33,7 +33,9 @@ import {
   Maximize2,
   RotateCcw,
   ReceiptText,
-  Eye
+  Eye,
+  Hash,
+  Check
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
@@ -55,7 +57,7 @@ import {
   generateSalesPOSPDF
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
-import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber, resetInvoiceCorrelativo } from '../services/fiscalService';
+import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 
 const STATUS_CONFIG = {
@@ -173,6 +175,11 @@ export default function OrdersSalesModal({
   const [isDeletingInvoice, setIsDeletingInvoice] = useState(false);
   const [localDeletedInvoiceKeys, setLocalDeletedInvoiceKeys] = useState(() => new Set());
 
+  // Modal para Fijar Correlativo / N° de Factura Fiscal Inicial de forma manual
+  const [showCorrelativoModal, setShowCorrelativoModal] = useState(false);
+  const [customCorrelativoInput, setCustomCorrelativoInput] = useState('');
+  const [correlativoRefreshKey, setCorrelativoRefreshKey] = useState(0);
+
   // Verificación de rol administrativo para privilegios de eliminación
   const isAdmin = useMemo(() => {
     if (!currentUser) return false;
@@ -192,26 +199,37 @@ export default function OrdersSalesModal({
     );
   }, [currentUser]);
 
-  const handleResetCorrelativo = () => {
-    const confirmReset = window.confirm(
-      '¿Desea reiniciar el correlativo de facturas oficiales a "000000"?\n\n' +
-      'La próxima factura que se emita en caja o POS tendrá el número "000000", luego "000001", etc.\n' +
-      'Ideal para reiniciar la numeración después de realizar pruebas.'
-    );
-    if (!confirmReset) return;
+  // Correlativo actual calculado para la próxima factura
+  const currentNextCorrelativo = useMemo(() => {
+    return getNextInvoiceCorrelativo(sales);
+  }, [sales, correlativoRefreshKey]);
+
+  const handleOpenCorrelativoModal = () => {
+    setCustomCorrelativoInput(currentNextCorrelativo);
+    setShowCorrelativoModal(true);
+  };
+
+  const handleSaveCorrelativo = () => {
     try {
-      resetInvoiceCorrelativo(0);
-      notify.success('Contador de facturación reiniciado a 000000 exitosamente');
+      const cleanDigits = String(customCorrelativoInput || '').replace(/[^0-9]/g, '');
+      const num = cleanDigits === '' ? 0 : parseInt(cleanDigits, 10);
+      const safeNum = Math.max(0, Math.min(999999, isNaN(num) ? 0 : num));
+      const formatted = setInvoiceCorrelativo(safeNum);
+
+      setCorrelativoRefreshKey(k => k + 1);
+      setShowCorrelativoModal(false);
+
+      notify.success(`Próximo número de factura fijado en #${formatted}`);
       setFeedbackMsg({
         type: 'success',
-        text: '✅ ¡Contador de facturación reiniciado exitosamente! La próxima factura será la N° 000000.'
+        text: `✅ ¡Número de factura fijado exitosamente! La próxima factura a emitir será la N° ${formatted}.`
       });
-      setTimeout(() => setFeedbackMsg(null), 4500);
+      setTimeout(() => setFeedbackMsg(null), 5000);
     } catch (err) {
-      notify.error('Error al reiniciar contador: ' + (err.message || 'Error desconocido'));
+      notify.error('Error al fijar número de factura: ' + (err.message || 'Error desconocido'));
       setFeedbackMsg({
         type: 'error',
-        text: 'Error al reiniciar contador: ' + (err.message || 'Error desconocido')
+        text: 'Error al fijar número de factura: ' + (err.message || 'Error desconocido')
       });
     }
   };
@@ -1201,6 +1219,22 @@ export default function OrdersSalesModal({
     });
   }, [sales, profitInvoices, localDeletedInvoiceKeys]);
 
+  // Factura con correlativo más alto registrada en el sistema (para sugerencia de continuación)
+  const highestExistingInvoiceNum = useMemo(() => {
+    let max = -1;
+    (allInvoices || []).forEach(inv => {
+      const raw = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.nroFactura || '');
+      const digits = raw.replace(/[^0-9]/g, '');
+      if (digits) {
+        const val = parseInt(digits, 10);
+        if (!isNaN(val) && val >= 0 && val <= 999999 && val > max) {
+          max = val;
+        }
+      }
+    });
+    return max;
+  }, [allInvoices]);
+
   // Formato correlativo oficial de 6 dígitos (000000, 000001, etc.)
   const formatInvoiceCorrelativo = (inv) => {
     if (!inv) return '000000';
@@ -1220,6 +1254,92 @@ export default function OrdersSalesModal({
     if (metodo === 'CREDITO') return true;
     if (Number(inv.saldoUsd || inv.saldo_usd || 0) > 0.01) return true;
     return false;
+  };
+
+  // Normaliza cualquier factura del listado (local, Supabase o Profit Plus) al formato
+  // que esperan el modal de vista previa y el generador PDF SENIAT, garantizando que el
+  // N° de factura, renglones, totales y condición coincidan con lo mostrado en la columna.
+  const buildPrintableInvoice = (inv) => {
+    if (!inv) return null;
+    const correlativo = formatInvoiceCorrelativo(inv);
+    const isCredit = checkIsCredit(inv);
+
+    const totalUsd = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || inv.totalNetoUsd || inv.total || 0);
+    const totalBsRaw = Number(inv.totalBs || inv.total_bs || inv.totNetoBs || inv.tot_neto_bs || inv.totalNeto || inv.tot_neto || 0);
+    // Tasa propia del documento (Bs / USD); si no es deducible se usa la tasa configurada
+    const docTasa = Number(inv.tasaDolar) || (totalUsd > 0 && totalBsRaw > 0 ? totalBsRaw / totalUsd : 0) || tasaBcv;
+    const totalBs = totalBsRaw || totalUsd * docTasa;
+
+    const rawItems = inv.items || inv.renglones || [];
+    const items = rawItems.map((it, idx) => {
+      const prod = findProductById(it.articuloId || it.codigo || it.co_art);
+      const cant = Number(it.cantidad ?? it.total_art ?? 1) || 0;
+      let precioUsd = Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
+      if (!precioUsd && Number(it.precioUnitario || it.prec_vta || 0) > 0) {
+        precioUsd = Number(it.precioUnitario || it.prec_vta) / docTasa;
+      }
+      let subtotalUsd = Number(it.subtotalUsd ?? it.totalUsd ?? 0);
+      if (!subtotalUsd && Number(it.totalNeto || it.reng_neto || 0) > 0) {
+        subtotalUsd = Number(it.totalNeto || it.reng_neto) / docTasa;
+      }
+      if (!subtotalUsd) subtotalUsd = cant * precioUsd;
+      if (!precioUsd && cant > 0) precioUsd = subtotalUsd / cant;
+      return {
+        ...it,
+        codigo: it.codigo || it.articuloId || it.co_art || prod?.codigo || `LUB-${idx + 1}`,
+        descripcion: it.descripcion || it.articuloDescripcion || it.art_des || prod?.descripcion || prod?.nombre || 'Lubricante Automotriz',
+        cantidad: cant,
+        precioUsd,
+        subtotalUsd,
+        tipoAlicuota: it.tipoAlicuota || '16%',
+        litros: it.litros ?? it.litrosTotales ?? 0
+      };
+    });
+
+    const ivaUsdRaw = Number(inv.ivaGeneralUsd ?? inv.ivaUsd ?? inv.iva_usd ?? NaN);
+    const ivaUsd = Number.isFinite(ivaUsdRaw) ? ivaUsdRaw : (totalUsd - totalUsd / 1.16);
+    const baseUsd = Number(inv.baseGeneralUsd) || (totalUsd - ivaUsd);
+    const ivaBsRaw = Number(inv.ivaGeneralBs ?? inv.ivaBs ?? inv.iva_bs ?? NaN);
+
+    const fechaEmision = inv.fechaEmision || inv.fec_emis || inv.fecha || inv.created_at || new Date().toISOString();
+    const fechaVencimiento = inv.fechaVencimiento || inv.fec_venc || null;
+    let diasCredito = Number(inv.diasCredito || inv.dias_credito || 0);
+    if (isCredit && !diasCredito && fechaVencimiento) {
+      const diff = Math.round((new Date(fechaVencimiento) - new Date(fechaEmision)) / 86400000);
+      if (diff > 0) diasCredito = diff;
+    }
+    if (isCredit && !diasCredito) diasCredito = 7;
+
+    const rawCond = String(inv.condicionPago || inv.condicion_pago || '').toUpperCase();
+    const condicionPago = isCredit
+      ? ((rawCond.includes('CREDITO') || rawCond.includes('CRÉDITO')) ? (inv.condicionPago || inv.condicion_pago) : 'CREDITO')
+      : (inv.condicionPago || inv.condicion_pago || 'CONTADO');
+
+    return {
+      ...inv,
+      id: inv.id || correlativo,
+      numeroDoc: correlativo,
+      nroFactura: correlativo,
+      numeroControl: inv.numeroControl || inv.nroControl || generateFiscalControlNumber(parseInt(correlativo, 10) || 1),
+      tipoDoc: inv.tipoDoc || 'FACTURA',
+      clienteNombre: inv.clienteNombre || inv.cliente || inv.cliDes || inv.cli_des || inv.cliente_nombre || 'Cliente General',
+      clienteRif: inv.clienteRif || inv.rif || inv.cliente_rif || inv.coCli || inv.co_cli || 'V-00000000-0',
+      clienteDireccion: inv.clienteDireccion || inv.dir_ent || inv.direccionEntrega || '',
+      fechaEmision,
+      fechaVencimiento: fechaVencimiento || fechaEmision,
+      condicionPago,
+      diasCredito: isCredit ? diasCredito : 0,
+      metodoPago: inv.metodoPago || inv.metodo_pago || (isCredit ? 'CREDITO' : 'EFECTIVO USD'),
+      tasaDolar: docTasa,
+      items,
+      baseGeneralUsd: baseUsd,
+      baseGeneralBs: Number(inv.baseGeneralBs) || baseUsd * docTasa,
+      ivaGeneralUsd: ivaUsd,
+      ivaGeneralBs: Number.isFinite(ivaBsRaw) ? ivaBsRaw : ivaUsd * docTasa,
+      totalUsd,
+      totalBs,
+      vendedor: inv.vendedor || inv.venDes || inv.vendedorId || inv.co_ven || 'Caja Mostrador'
+    };
   };
 
   // Filtrado de facturas para la tabla list view
@@ -1309,7 +1429,7 @@ export default function OrdersSalesModal({
       ...inv,
       numeroDoc: correlativo,
       nroFactura: correlativo,
-      numeroControl: inv.numeroControl || generateFiscalControlNumber(parseInt(correlativo, 10) + 1)
+      ...buildPrintableInvoice(inv)
     };
     try {
       generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
@@ -1596,7 +1716,7 @@ export default function OrdersSalesModal({
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               type="button"
-              onClick={handleResetCorrelativo}
+              onClick={handleOpenCorrelativoModal}
               className="btn btn-sm"
               style={{
                 background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
@@ -1612,10 +1732,10 @@ export default function OrdersSalesModal({
                 boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)',
                 cursor: 'pointer'
               }}
-              title="Reiniciar contador de factura fiscal a 000000 para nuevas pruebas"
+              title={`Decidir manualmente a partir de cuál número de factura fiscal empezar (Próxima: #${currentNextCorrelativo})`}
             >
               <RotateCcw size={14} color="#ffffff" />
-              <span>Reiniciar Factura (000000)</span>
+              <span>Fijar N° Factura ({currentNextCorrelativo})</span>
             </button>
 
             <button
@@ -3080,6 +3200,7 @@ export default function OrdersSalesModal({
                             try {
                               const nextInvoiceNum = getNextInvoiceCorrelativo(sales);
                               commitInvoiceCorrelativo(nextInvoiceNum);
+                              setCorrelativoRefreshKey(k => k + 1);
                               const isCredit = isCreditPaymentCondition(selectedOrder.condicionPago, billingPaymentMethod);
                               const totNeto = Number(selectedOrder.totalNetoUsd) || 0;
                               const totBs = totNeto * tasaBcv;
@@ -4179,7 +4300,7 @@ export default function OrdersSalesModal({
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setInvoiceModalSale(inv);
+                                      setInvoiceModalSale(buildPrintableInvoice(inv));
                                       setShowInvoiceModal(true);
                                     }}
                                     className="btn btn-sm"
@@ -5087,6 +5208,295 @@ export default function OrdersSalesModal({
                   }}
                 >
                   Sí, continuar fuera de su zona
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL PARA DECIDIR MANUALMENTE EL NÚMERO DE FACTURA FISCAL INICIAL */}
+        {showCorrelativoModal && (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.8)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 100000,
+              padding: '1rem'
+            }}
+            onClick={() => setShowCorrelativoModal(false)}
+          >
+            <div
+              className="modal-content"
+              style={{
+                maxWidth: '520px',
+                width: '100%',
+                background: 'var(--bg-card, #111827)',
+                borderRadius: '16px',
+                border: '1.5px solid rgba(99, 102, 241, 0.5)',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.75), 0 0 30px rgba(99, 102, 241, 0.25)',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Encabezado del modal */}
+              <div style={{
+                padding: '1.2rem 1.5rem',
+                background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.25) 0%, rgba(99, 102, 241, 0.12) 100%)',
+                borderBottom: '1px solid rgba(99, 102, 241, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '10px',
+                    background: 'rgba(99, 102, 241, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid rgba(99, 102, 241, 0.4)'
+                  }}>
+                    <Hash size={20} color="#a5b4fc" />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#ffffff' }}>
+                      Fijar N° de Factura Fiscal Inicial
+                    </h3>
+                    <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Decida manualmente desde cuál correlativo comenzar la facturación
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCorrelativoModal(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '6px'
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Cuerpo del modal */}
+              <div style={{ padding: '1.4rem 1.5rem' }}>
+                {/* Visualizador en tiempo real de la próxima factura */}
+                {(() => {
+                  const rawDigits = String(customCorrelativoInput || '').replace(/[^0-9]/g, '');
+                  const numPreview = rawDigits === '' ? 0 : parseInt(rawDigits, 10);
+                  const safeNumPreview = Math.max(0, Math.min(999999, isNaN(numPreview) ? 0 : numPreview));
+                  const formattedPreview = String(safeNumPreview).padStart(6, '0');
+
+                  return (
+                    <div style={{
+                      padding: '1.25rem',
+                      borderRadius: '12px',
+                      background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.15) 0%, rgba(99, 102, 241, 0.05) 100%)',
+                      border: '1.5px solid rgba(99, 102, 241, 0.4)',
+                      textAlign: 'center',
+                      marginBottom: '1.25rem'
+                    }}>
+                      <div style={{
+                        fontSize: '0.74rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '1px',
+                        color: 'var(--text-muted)',
+                        marginBottom: '0.4rem',
+                        fontWeight: 700
+                      }}>
+                        Próxima Factura Fiscal a Emitir (SENIAT)
+                      </div>
+                      <div style={{
+                        fontSize: '2.5rem',
+                        fontWeight: 900,
+                        fontFamily: 'monospace',
+                        letterSpacing: '5px',
+                        color: '#a5b4fc',
+                        textShadow: '0 0 20px rgba(99, 102, 241, 0.45)'
+                      }}>
+                        #{formattedPreview}
+                      </div>
+                      <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                        Formato legal estándar de 6 dígitos consecutivos
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Input para ingresar el número */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                    🔢 Ingrese el número de factura a partir del cual desea empezar:
+                  </label>
+                  <input
+                    type="text"
+                    className="input-modern"
+                    autoFocus
+                    value={customCorrelativoInput}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+                      setCustomCorrelativoInput(val);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveCorrelativo();
+                      }
+                    }}
+                    placeholder="Ej: 000000, 000100, 002159..."
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      border: '1.5px solid rgba(99, 102, 241, 0.45)',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      color: '#ffffff',
+                      fontSize: '1.15rem',
+                      fontWeight: 800,
+                      fontFamily: 'monospace',
+                      letterSpacing: '3px',
+                      textAlign: 'center'
+                    }}
+                  />
+                </div>
+
+                {/* Botones de Atajos Rápidos */}
+                <div style={{ marginBottom: '1.2rem' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '0.45rem' }}>
+                    Atajos sugeridos:
+                  </span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setCustomCorrelativoInput('000000')}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(99, 102, 241, 0.35)',
+                        background: 'rgba(99, 102, 241, 0.12)',
+                        color: '#c7d2fe',
+                        fontSize: '0.76rem',
+                        cursor: 'pointer',
+                        fontWeight: 700
+                      }}
+                    >
+                      000000 (Reiniciar a cero)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomCorrelativoInput('000001')}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(99, 102, 241, 0.35)',
+                        background: 'rgba(99, 102, 241, 0.12)',
+                        color: '#c7d2fe',
+                        fontSize: '0.76rem',
+                        cursor: 'pointer',
+                        fontWeight: 700
+                      }}
+                    >
+                      000001
+                    </button>
+                    {highestExistingInvoiceNum >= 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setCustomCorrelativoInput(String(highestExistingInvoiceNum + 1).padStart(6, '0'))}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          background: 'rgba(16, 185, 129, 0.15)',
+                          color: '#6ee7b7',
+                          fontSize: '0.76rem',
+                          cursor: 'pointer',
+                          fontWeight: 700
+                        }}
+                        title={`Continuar inmediatamente después de la factura más alta registrada (${String(highestExistingInvoiceNum).padStart(6, '0')})`}
+                      >
+                        Continuar tras #{String(highestExistingInvoiceNum).padStart(6, '0')} (→ #{String(highestExistingInvoiceNum + 1).padStart(6, '0')})
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Nota informativa */}
+                <div style={{
+                  padding: '0.8rem 1rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid var(--border-glass)',
+                  fontSize: '0.78rem',
+                  color: 'var(--text-muted)',
+                  display: 'flex',
+                  gap: '8px',
+                  alignItems: 'flex-start'
+                }}>
+                  <Info size={16} color="var(--neon-cyan)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <span>
+                    La próxima factura que emita la <strong>Cajera (Paso 3)</strong> o en <strong>Ventas POS</strong> tendrá este número. Los siguientes documentos continuarán de forma consecutiva (+1).
+                  </span>
+                </div>
+              </div>
+
+              {/* Botones de acción del modal */}
+              <div style={{
+                padding: '1.1rem 1.5rem',
+                background: 'rgba(0, 0, 0, 0.25)',
+                borderTop: '1px solid var(--border-glass)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                gap: '0.75rem'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCorrelativoModal(false)}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveCorrelativo}
+                  className="btn"
+                  style={{
+                    background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '0.55rem 1.3rem',
+                    fontWeight: 800,
+                    fontSize: '0.85rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(79, 70, 229, 0.4)'
+                  }}
+                >
+                  <Check size={16} />
+                  <span>Guardar y Fijar Factura</span>
                 </button>
               </div>
             </div>

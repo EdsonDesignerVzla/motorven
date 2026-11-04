@@ -310,7 +310,7 @@ export const getNextInvoiceCorrelativo = (sales = []) => {
     const forcedSeq = localStorage.getItem('sm_invoice_correlativo_force');
     if (forcedSeq !== null && forcedSeq !== '') {
       const forcedVal = parseInt(forcedSeq, 10);
-      if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal < 50000) {
+      if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal <= 999999) {
         return String(forcedVal).padStart(6, '0');
       }
     }
@@ -355,7 +355,7 @@ export const commitInvoiceCorrelativo = (correlativo) => {
   try {
     const val = parseInt(String(correlativo).replace(/[^0-9]/g, ''), 10);
     if (!isNaN(val) && val >= 0) {
-      const nextSeq = String(val + 1);
+      const nextSeq = String(val >= 999999 ? 0 : val + 1);
       localStorage.setItem('sm_invoice_correlativo_seq', nextSeq);
       localStorage.setItem('sm_invoice_correlativo_force', nextSeq);
     }
@@ -363,18 +363,25 @@ export const commitInvoiceCorrelativo = (correlativo) => {
 };
 
 /**
- * Reinicia o inicializa el contador de facturas oficiales desde un valor específico (por defecto "000000").
- * @param {number|string} startAt - Número desde el cual inicializar (0 para "000000")
+ * Establece o reinicia el contador de facturas oficiales desde un valor numérico definido manualmente.
+ * Permite al usuario decidir a partir de cuál número de factura desea empezar a facturar (0 para "000000", 50 para "000050", etc.).
+ * @param {number|string} startAt - Número desde el cual inicializar
  * @returns {string} - Nuevo correlativo formateado a 6 dígitos ("000000")
  */
-export const resetInvoiceCorrelativo = (startAt = 0) => {
+export const setInvoiceCorrelativo = (startAt = 0) => {
   const num = typeof startAt === 'number' ? startAt : (parseInt(String(startAt).replace(/[^0-9]/g, ''), 10) || 0);
+  const safeNum = Math.max(0, Math.min(999999, isNaN(num) ? 0 : num));
   try {
-    localStorage.setItem('sm_invoice_correlativo_force', String(num));
-    localStorage.setItem('sm_invoice_correlativo_seq', String(num));
+    localStorage.setItem('sm_invoice_correlativo_force', String(safeNum));
+    localStorage.setItem('sm_invoice_correlativo_seq', String(safeNum));
   } catch (_) {}
-  return String(num).padStart(6, '0');
+  return String(safeNum).padStart(6, '0');
 };
+
+/**
+ * Alias de compatibilidad para inicializar correlativo
+ */
+export const resetInvoiceCorrelativo = setInvoiceCorrelativo;
 
 /**
  * Genera el Número de Comprobante de Retención de IVA de 14 dígitos.
