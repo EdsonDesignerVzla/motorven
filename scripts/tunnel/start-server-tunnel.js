@@ -55,12 +55,16 @@ async function ensureLocalDatabase() {
 function startPersistentTunnel() {
   console.log(`🌐 [2/2] Conectando túnel permanente con subdominio: https://${FIXED_SUBDOMAIN}.loca.lt ...`);
 
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const lt = spawn(npxCmd, ['--yes', 'localtunnel', '--port', String(PORT), '--subdomain', FIXED_SUBDOMAIN], {
-    cwd: projectRoot,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false
-  });
+  const isWin = process.platform === 'win32';
+  const lt = isWin
+    ? spawn('cmd.exe', ['/c', 'npx', '--yes', 'localtunnel', '--port', String(PORT), '--subdomain', FIXED_SUBDOMAIN], {
+        cwd: projectRoot,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+    : spawn('npx', ['--yes', 'localtunnel', '--port', String(PORT), '--subdomain', FIXED_SUBDOMAIN], {
+        cwd: projectRoot,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
 
   let hasAnnounced = false;
 
