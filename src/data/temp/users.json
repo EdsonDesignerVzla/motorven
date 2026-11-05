@@ -270,8 +270,8 @@
   {
     "id": "usr-mvgse4to",
     "username": "rosibelcxc",
-    "nombre": "Rosibel Pérez",
-    "name": "Rosibel Pérez",
+    "nombre": "Rosibel Briceño",
+    "name": "Rosibel Briceño",
     "rol": "COBRANZA",
     "role": "COBRANZA",
     "cedula": "V-21.345.678",
@@ -285,7 +285,7 @@
     "seller_id": null,
     "activo": true,
     "active": true,
-    "password": "Rosibel123",
+    "password": "Gabriel13$",
     "foto": null,
     "photo_url": null,
     "photoUrl": null,
@@ -297,13 +297,13 @@
       "pedidos",
       "notificaciones"
     ],
-    "ultimo_acceso": null,
-    "ultimoAcceso": null,
-    "last_login": null,
+    "ultimo_acceso": "2026-11-05T15:25:35.263Z",
+    "ultimoAcceso": "2026-11-05T15:25:35.263Z",
+    "last_login": "2026-11-05T15:25:35.263Z",
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
-    "updated_at": "2026-10-26T19:07:04.839Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z"
+    "updated_at": "2026-11-05T15:29:00.933Z",
+    "updatedAt": "2026-11-05T15:29:00.933Z"
   },
   {
     "id": "usr-mvgsc0hv",

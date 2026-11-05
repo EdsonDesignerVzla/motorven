@@ -153,18 +153,7 @@ const resolveInitialSupabaseUrl = (configured) => {
       return configured;
     }
 
-    // 1. Prioridad: Parámetro de URL (?server= o ?backend=)
-    const urlParams = new URLSearchParams(window.location.search);
-    const paramUrl = urlParams.get('server') || urlParams.get('backend');
-    if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
-      const cleanParam = paramUrl.trim().replace(/\/+$/, '');
-      try {
-        window.localStorage.setItem('signum_custom_backend_url', cleanParam);
-      } catch (_) {}
-      return cleanParam;
-    }
-
-    // 2. Prioridad: URL personalizada guardada en el dispositivo
+    // URL guardada previamente (será validada inmediatamente contra backend_url.json del servidor central)
     try {
       const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
       if (savedCustom && /^https?:\/\//i.test(savedCustom.trim())) {
@@ -192,6 +181,7 @@ let currentBackendUrl = resolveInitialSupabaseUrl(configuredSupabaseUrl);
 export const isStaticCloudHost = false;
 
 let backendDiscoveryPromise = null;
+let initialDiscoveryCompleted = false;
 let lastDiscoveryAt = 0;
 
 async function probeBackendHealth(candidateUrl, timeoutMs = 2500) {
@@ -219,6 +209,7 @@ async function probeBackendHealth(candidateUrl, timeoutMs = 2500) {
 
 export async function discoverActiveBackendUrl(force = false) {
   if (isTestEnv || typeof window === 'undefined' || typeof fetch === 'undefined') {
+    initialDiscoveryCompleted = true;
     return currentBackendUrl;
   }
   const now = Date.now();
@@ -230,20 +221,15 @@ export async function discoverActiveBackendUrl(force = false) {
   backendDiscoveryPromise = (async () => {
     try {
       const candidates = [];
-      const urlParams = new URLSearchParams(window.location.search);
-      const paramUrl = urlParams.get('server') || urlParams.get('backend');
-      if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
-        candidates.push(paramUrl.trim().replace(/\/+$/, ''));
-      }
 
-      // Consultar backend_url.json publicado automáticamente en GitHub Pages / servidor
+      // 1. PRIORIDAD ABSOLUTA: backend_url.json publicado por el servidor central SVR-MOTORVEN
       try {
         const basePath = window.location.pathname.endsWith('/')
           ? window.location.pathname
           : window.location.pathname.replace(/\/[^/]*$/, '/');
         const jsonUrl = `${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`;
         const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 2200);
+        const tid = setTimeout(() => controller.abort(), 2500);
         const resp = await fetch(jsonUrl, { cache: 'no-store', signal: controller.signal });
         clearTimeout(tid);
         if (resp.ok) {
@@ -259,6 +245,20 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       } catch (_) {}
 
+      // 2. Parámetro ?server= en la barra de direcciones (y limpiar barra si estaba viejo)
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const paramUrl = urlParams.get('server') || urlParams.get('backend');
+        if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
+          const cleanParam = paramUrl.trim().replace(/\/+$/, '');
+          if (!candidates.includes(cleanParam)) candidates.push(cleanParam);
+          if (window.history && typeof window.history.replaceState === 'function') {
+            window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+          }
+        }
+      } catch (_) {}
+
+      // 3. Fallback a URL guardada en localStorage solo si aún no está en la lista
       try {
         const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
         if (savedCustom && /^https?:\/\//i.test(savedCustom.trim())) {
@@ -270,20 +270,19 @@ export async function discoverActiveBackendUrl(force = false) {
       for (const candidate of candidates) {
         const healthy = await probeBackendHealth(candidate, 2500);
         if (healthy) {
-          if (currentBackendUrl !== candidate) {
-            currentBackendUrl = candidate;
-            try {
-              window.localStorage.setItem('signum_custom_backend_url', candidate);
-              window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: candidate } }));
-            } catch (_) {}
-          }
+          currentBackendUrl = candidate;
+          try {
+            window.localStorage.setItem('signum_custom_backend_url', candidate);
+            window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: candidate } }));
+          } catch (_) {}
           isSupabaseAvailable = true;
+          initialDiscoveryCompleted = true;
           return candidate;
         }
       }
 
-      // Si no se pudo verificar por /health pero hay candidato en backend_url.json y currentBackendUrl es localhost en la nube, adoptarlo
-      if (isCloudHostedPage && candidates.length > 0 && currentBackendUrl.includes('localhost')) {
+      // Si no se pudo verificar por /health pero hay candidato en backend_url.json, adoptarlo
+      if (candidates.length > 0) {
         currentBackendUrl = candidates[0];
         try {
           window.localStorage.setItem('signum_custom_backend_url', currentBackendUrl);
@@ -291,6 +290,7 @@ export async function discoverActiveBackendUrl(force = false) {
         } catch (_) {}
       }
     } catch (_) {}
+    initialDiscoveryCompleted = true;
     return currentBackendUrl;
   })();
 
@@ -333,7 +333,8 @@ const dynamicSupabaseFetch = async (input, init) => {
   if (isTestEnv || typeof fetch === 'undefined') {
     return fetch(input, init);
   }
-  if (isCloudHostedPage && currentBackendUrl.includes('localhost') && backendDiscoveryPromise) {
+  // Esperar siempre el descubrimiento inicial contra backend_url.json para no usar un túnel viejo de la laptop
+  if (!initialDiscoveryCompleted && backendDiscoveryPromise) {
     try {
       await backendDiscoveryPromise;
     } catch (_) {}

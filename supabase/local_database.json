@@ -8,7 +8,7 @@
       "rif": "J-31115365-9",
       "direccion": "Zona Industrial III, Carrera 2 con Calle 4, Barquisimeto / Caracas",
       "telefono": "+58 (251) 269.13.964",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 1,
       "origen_erp": "par_emp (Profit Plus 2K8)",
@@ -22,7 +22,7 @@
       "rif": "Nacional (632 Clientes)",
       "direccion": "Cobertura Nacional (Carabobo, Lara, Aragua, Zulia, etc.)",
       "telefono": "Directorio Comercial",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 632,
       "origen_erp": "clientes (Profit Plus 2K8)",
@@ -36,7 +36,7 @@
       "rif": "Planta Principal Oilstone",
       "direccion": "Almacén Central ALM-01",
       "telefono": "+58 (251) 269.13.964",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 29,
       "origen_erp": "art (Profit Plus 2K8)",
@@ -50,7 +50,7 @@
       "rif": "SENIAT Fiscal",
       "direccion": "Serie Fiscal Motorven",
       "telefono": "Facturación",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 2155,
       "origen_erp": "factura / reng_fac (Profit Plus)",
@@ -64,7 +64,7 @@
       "rif": "Cartera Activa",
       "direccion": "Tesorería Central",
       "telefono": "Gestión de Cobro",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 3962,
       "origen_erp": "cobros / reng_cob (Profit Plus)",
@@ -78,7 +78,7 @@
       "rif": "Proveedores",
       "direccion": "Administración & Finanzas",
       "telefono": "CxP",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 191,
       "origen_erp": "docum_cp (Profit Plus)",
@@ -92,7 +92,7 @@
       "rif": "Bancos y Transferencias",
       "direccion": "Tesorería",
       "telefono": "Pagos",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 195,
       "origen_erp": "pagos / reng_pag (Profit Plus)",
@@ -106,7 +106,7 @@
       "rif": "Proveedores Nacionales/Internacionales",
       "direccion": "Compras Planta",
       "telefono": "Logística",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 63,
       "origen_erp": "compras / reng_com (Profit Plus)",
@@ -120,7 +120,7 @@
       "rif": "Empresas Aliadas",
       "direccion": "Directorio Proveedores",
       "telefono": "Compras",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 5,
       "origen_erp": "prov (Profit Plus)",
@@ -134,7 +134,7 @@
       "rif": "Fuerza de Venta Nacional",
       "direccion": "Zonas de Distribución",
       "telefono": "Supervisión de Ventas",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 10,
       "origen_erp": "vendedor (Profit Plus)",
@@ -148,7 +148,7 @@
       "rif": "Cuentas Corporativas",
       "direccion": "Tesorería",
       "telefono": "Bancos",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 10,
       "origen_erp": "cuentas (Profit Plus)",
@@ -162,7 +162,7 @@
       "rif": "Caja Chica",
       "direccion": "Sucursales",
       "telefono": "Caja",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 3,
       "origen_erp": "cajas (Profit Plus)",
@@ -176,7 +176,7 @@
       "rif": "Rutas",
       "direccion": "Regiones de Venezuela",
       "telefono": "Logística",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 7,
       "origen_erp": "zona (Profit Plus)",
@@ -190,7 +190,7 @@
       "rif": "Usuarios Autorizados",
       "direccion": "Control de Acceso",
       "telefono": "TI & Soporte",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 18,
       "origen_erp": "usuarios (Sistema)",
@@ -204,7 +204,7 @@
       "rif": "Pipeline Comercial",
       "direccion": "Ventas Móviles",
       "telefono": "Preventa",
-      "tasa_dolar_bcv": 893.21,
+      "tasa_dolar_bcv": 894.88,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 15,
       "origen_erp": "pedidos (Profit Plus)",
@@ -223,8 +223,8 @@
       "telefono": "+58 (251) 269.13.964 / +58 (212) 555-8899",
       "email": "ventas@keystone.net.ve",
       "instagram": "@oilstone_vzla",
-      "tasa_dolar": 893.21,
-      "tasaDolar": 893.21,
+      "tasa_dolar": 894.88,
+      "tasaDolar": 894.88,
       "tasa_keystone": 909.9,
       "tasaKeystone": 909.9,
       "moneda_principal": "USD",
@@ -431179,8 +431179,8 @@
     {
       "id": "usr-mvgse4to",
       "username": "rosibelcxc",
-      "nombre": "Rosibel Pérez",
-      "name": "Rosibel Pérez",
+      "nombre": "Rosibel Briceño",
+      "name": "Rosibel Briceño",
       "rol": "COBRANZA",
       "role": "COBRANZA",
       "cedula": "V-21.345.678",
@@ -431194,7 +431194,7 @@
       "seller_id": null,
       "activo": true,
       "active": true,
-      "password": "Rosibel123",
+      "password": "Gabriel13$",
       "foto": null,
       "photo_url": null,
       "photoUrl": null,
@@ -431206,13 +431206,13 @@
         "pedidos",
         "notificaciones"
       ],
-      "ultimo_acceso": null,
-      "ultimoAcceso": null,
-      "last_login": null,
+      "ultimo_acceso": "2026-11-05T15:25:35.263Z",
+      "ultimoAcceso": "2026-11-05T15:25:35.263Z",
+      "last_login": "2026-11-05T15:25:35.263Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
-      "updated_at": "2026-10-26T19:07:04.839Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z"
+      "updated_at": "2026-11-05T15:29:00.933Z",
+      "updatedAt": "2026-11-05T15:29:00.933Z"
     },
     {
       "id": "usr-mvgsc0hv",
@@ -434197,8 +434197,8 @@
     {
       "id": "notif_init_01",
       "tipo": "stock",
-      "severidad": "info",
-      "modulo": "dashboard",
+      "severidad": "critica",
+      "modulo": "inventario",
       "titulo": "Alerta ROP: 21 SKUs en Nivel Crítico de Inventario",
       "mensaje": "La matriz de punto de reorden detectó 21 productos de lubricantes Oilstone por debajo del umbral mínimo de seguridad. Se requiere emitir orden de reposición a planta.",
       "icono": "Bell",
@@ -434206,27 +434206,27 @@
       "leido": false,
       "destinatario_rol": "ALL",
       "destinatario_usuario": "ALL",
-      "origen": "SUPABASE",
+      "origen": "MATRIZ ROP",
       "fecha": "2026-11-02T18:05:46.372Z",
       "created_at": "2026-11-02T18:05:46.372Z",
       "metadata": {
-        "almacen": "ALM-01 Planta Principal",
-        "skusCriticos": 21
+        "skusCriticos": 21,
+        "almacen": "ALM-01 Planta Principal"
       }
     },
     {
       "id": "notif_init_02",
       "tipo": "cxc",
-      "severidad": "info",
-      "modulo": "dashboard",
+      "severidad": "advertencia",
+      "modulo": "cxc",
       "titulo": "Cobranzas: Facturas Vencidas con Más de 30 Días de Mora",
       "mensaje": "El módulo de Cuentas por Cobrar detectó cuentas pendientes en semáforo rojo. Se activaron recordatorios automatizados de cobranza y estado de cuenta vía WhatsApp.",
       "icono": "Bell",
       "leida": false,
       "leido": false,
-      "destinatario_rol": "ALL",
+      "destinatario_rol": "ADMINISTRACIÓN & FINANZAS",
       "destinatario_usuario": "ALL",
-      "origen": "SUPABASE",
+      "origen": "MOTOR CXC",
       "fecha": "2026-11-02T18:05:46.372Z",
       "created_at": "2026-11-02T18:05:46.372Z",
       "metadata": {
@@ -434237,7 +434237,7 @@
       "id": "notif_init_03",
       "tipo": "fiscal",
       "severidad": "info",
-      "modulo": "dashboard",
+      "modulo": "reportes",
       "titulo": "SENIAT: Libro Fiscal de Ventas e IVA Preparado",
       "mensaje": "Los comprobantes de retención IVA (75%) y la numeración consecutiva fiscal de facturas están cuadrados y listos para la exportación de archivos oficiales TXT y XML.",
       "icono": "Bell",
@@ -434245,7 +434245,7 @@
       "leido": false,
       "destinatario_rol": "ALL",
       "destinatario_usuario": "ALL",
-      "origen": "SUPABASE",
+      "origen": "MOTOR FISCAL",
       "fecha": "2026-11-02T18:05:46.372Z",
       "created_at": "2026-11-02T18:05:46.372Z",
       "metadata": {
@@ -434255,7 +434255,7 @@
     {
       "id": "notif_init_04",
       "tipo": "sistema",
-      "severidad": "info",
+      "severidad": "exito",
       "modulo": "dashboard",
       "titulo": "Sincronización Supabase en Tiempo Real Activa",
       "mensaje": "La base de datos Supabase opera con latencia óptima y persistencia en tiempo real de clientes y catálogo.",
@@ -435173,6 +435173,91 @@
       "dispositivo": "Web Browser",
       "created_at": "2026-11-05T13:52:41.552Z",
       "fecha": "2026-11-05T13:52:41.552Z"
+    },
+    {
+      "id": "LOG-1793892106007-Z92J3",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @rosibelcxc (Rosibel Pérez) con rol COBRANZA",
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-05T15:21:46.007Z",
+      "fecha": "2026-11-05T15:21:46.007Z"
+    },
+    {
+      "id": "LOG-1793892132920-2KQZZ",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @rosibelcxc (Rosibel Briceño) con rol COBRANZA",
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-05T15:22:12.920Z",
+      "fecha": "2026-11-05T15:22:12.920Z"
+    },
+    {
+      "id": "LOG-1793892335272-VWHC3",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-05T15:25:35.272Z",
+      "fecha": "2026-11-05T15:25:35.272Z"
+    },
+    {
+      "id": "LOG-1793892377258-O2Q5V",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @rosibelcxc (Rosibel Briceño) con rol COBRANZA",
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-05T15:26:17.258Z",
+      "fecha": "2026-11-05T15:26:17.258Z"
+    },
+    {
+      "id": "LOG-1793892541239-BRRDV",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @rosibelcxc (Rosibel Briceño) con rol COBRANZA",
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-05T15:29:01.239Z",
+      "fecha": "2026-11-05T15:29:01.239Z"
     }
   ],
   "order_items": [
@@ -436574,7 +436659,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000003_02",
@@ -436597,7 +436682,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000012_01",
@@ -436620,7 +436705,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000012_02",
@@ -436643,7 +436728,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000212_01",
@@ -436666,7 +436751,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000212_02",
@@ -436689,7 +436774,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000308_01",
@@ -436712,7 +436797,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000308_02",
@@ -436735,7 +436820,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000704_01",
@@ -436758,7 +436843,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000704_02",
@@ -436781,7 +436866,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000804_01",
@@ -436804,7 +436889,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000804_02",
@@ -436827,7 +436912,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000903_01",
@@ -436850,7 +436935,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000903_02",
@@ -436873,7 +436958,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000912_01",
@@ -436896,7 +436981,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "000912_02",
@@ -436919,7 +437004,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001201_01",
@@ -436942,7 +437027,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001201_02",
@@ -436965,7 +437050,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001203_01",
@@ -436988,7 +437073,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001203_02",
@@ -437011,7 +437096,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001208_01",
@@ -437034,7 +437119,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001208_02",
@@ -437057,7 +437142,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001212_01",
@@ -437080,7 +437165,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001212_02",
@@ -437103,7 +437188,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001304_01",
@@ -437126,7 +437211,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001304_02",
@@ -437149,7 +437234,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001308_01",
@@ -437172,7 +437257,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001308_02",
@@ -437195,7 +437280,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001312_01",
@@ -437218,7 +437303,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001312_02",
@@ -437241,7 +437326,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001403_01",
@@ -437264,7 +437349,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "001403_02",
@@ -437287,7 +437372,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100102_01",
@@ -437310,7 +437395,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100102_02",
@@ -437333,7 +437418,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100202_01",
@@ -437356,7 +437441,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100202_02",
@@ -437379,7 +437464,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100303_01",
@@ -437402,7 +437487,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100303_02",
@@ -437425,7 +437510,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100403_01",
@@ -437448,7 +437533,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100403_02",
@@ -437471,7 +437556,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100502_01",
@@ -437494,7 +437579,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100502_02",
@@ -437517,7 +437602,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100602_01",
@@ -437540,7 +437625,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100602_02",
@@ -437563,7 +437648,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100905_01",
@@ -437586,7 +437671,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "100905_02",
@@ -437609,7 +437694,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101209_01",
@@ -437632,7 +437717,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101209_02",
@@ -437655,7 +437740,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101309_01",
@@ -437678,7 +437763,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101309_02",
@@ -437701,7 +437786,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101409_01",
@@ -437724,7 +437809,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101409_02",
@@ -437747,7 +437832,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101510_01",
@@ -437770,7 +437855,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101510_02",
@@ -437793,7 +437878,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101713_01",
@@ -437816,7 +437901,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101713_02",
@@ -437839,7 +437924,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101814_01",
@@ -437862,7 +437947,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     },
     {
       "id": "101814_02",
@@ -437885,7 +437970,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-05T13:54:22.820Z"
+      "updated_at": "2026-11-05T15:36:35.801Z"
     }
   ],
   "profit_goods_receipt_notes": [

@@ -76,20 +76,14 @@ try {
   broadcastChannel = null;
 }
 
+let activeDiscoveredRealtimeUrl = null;
+
 function resolveRealtimeBaseUrl() {
+  if (activeDiscoveredRealtimeUrl) return activeDiscoveredRealtimeUrl;
   if (typeof window === 'undefined' || !window.location) {
     return 'http://127.0.0.1:54321';
   }
-  const { protocol, hostname, origin, search } = window.location;
-  try {
-    const params = new URLSearchParams(search || '');
-    const paramUrl = params.get('server') || params.get('backend');
-    if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
-      const cleanParam = paramUrl.trim().replace(/\/+$/, '');
-      window.localStorage.setItem('signum_custom_backend_url', cleanParam);
-      return cleanParam;
-    }
-  } catch (_) {}
+  const { protocol, hostname, origin } = window.location;
 
   const isStaticCloud =
     hostname.endsWith('.vercel.app') ||
@@ -271,8 +265,24 @@ function connectSseStream() {
       } catch (_) {}
       if (sseSource === es) sseSource = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        if (activeSubscribers.size > 0) connectSseStream();
+      reconnectTimer = setTimeout(async () => {
+        if (activeSubscribers.size > 0) {
+          try {
+            const basePath = window.location.pathname.endsWith('/')
+              ? window.location.pathname
+              : window.location.pathname.replace(/\/[^/]*$/, '/');
+            const resp = await fetch(`${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`, { cache: 'no-store' });
+            if (resp.ok) {
+              const parsed = await resp.json();
+              if (parsed?.url && /^https?:\/\//i.test(parsed.url.trim())) {
+                const clean = parsed.url.trim().replace(/\/+$/, '');
+                activeDiscoveredRealtimeUrl = clean;
+                window.localStorage.setItem('signum_custom_backend_url', clean);
+              }
+            }
+          } catch (_) {}
+          connectSseStream();
+        }
       }, 3500);
     };
   } catch (_) {}
@@ -314,7 +324,10 @@ function ensureNetworkRealtimeStarted() {
     }
   };
 
-  const handleBackendUpdated = () => {
+  const handleBackendUpdated = (evt) => {
+    if (evt?.detail?.url) {
+      activeDiscoveredRealtimeUrl = String(evt.detail.url).trim().replace(/\/+$/, '');
+    }
     connectSseStream();
     pollDeltaChanges();
   };
