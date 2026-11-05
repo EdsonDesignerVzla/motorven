@@ -274,11 +274,23 @@ function ensureNetworkRealtimeStarted() {
   connectSseStream();
   pollDeltaChanges();
 
+  // Si el canal Server-Sent Events (SSE) está abierto (readyState === 1), los cambios llegan
+  // en < 50ms por push directo sin consumir peticiones HTTP. El polling solo actúa como
+  // red de seguridad cada 25s o de inmediato si SSE se desconecta (por ejemplo, en móviles).
   pollTimer = setInterval(() => {
+    if (activeSubscribers.size > 0) {
+      const isSseConnected = sseSource && sseSource.readyState === 1;
+      if (!isSseConnected) {
+        pollDeltaChanges();
+      }
+    }
+  }, 3500);
+
+  setInterval(() => {
     if (activeSubscribers.size > 0) {
       pollDeltaChanges();
     }
-  }, 2500);
+  }, 25000);
 
   const handleWakeUp = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;

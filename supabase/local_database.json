@@ -9,7 +9,7 @@
       "direccion": "Zona Industrial III, Carrera 2 con Calle 4, Barquisimeto / Caracas",
       "telefono": "+58 (251) 269.13.964",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 1,
       "origen_erp": "par_emp (Profit Plus 2K8)",
       "estatus_base_datos": "ACTIVO Y CONECTADO"
@@ -23,7 +23,7 @@
       "direccion": "Cobertura Nacional (Carabobo, Lara, Aragua, Zulia, etc.)",
       "telefono": "Directorio Comercial",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 632,
       "origen_erp": "clientes (Profit Plus 2K8)",
       "estatus_base_datos": "100% SINCRONIZADO"
@@ -37,7 +37,7 @@
       "direccion": "Almacén Central ALM-01",
       "telefono": "+58 (251) 269.13.964",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 29,
       "origen_erp": "art (Profit Plus 2K8)",
       "estatus_base_datos": "STOCK Y PRECIOS VIVOS"
@@ -51,7 +51,7 @@
       "direccion": "Serie Fiscal Motorven",
       "telefono": "Facturación",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 2155,
       "origen_erp": "factura / reng_fac (Profit Plus)",
       "estatus_base_datos": "AUDITADO"
@@ -65,7 +65,7 @@
       "direccion": "Tesorería Central",
       "telefono": "Gestión de Cobro",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 3962,
       "origen_erp": "cobros / reng_cob (Profit Plus)",
       "estatus_base_datos": "CONCILIADO"
@@ -79,7 +79,7 @@
       "direccion": "Administración & Finanzas",
       "telefono": "CxP",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 191,
       "origen_erp": "docum_cp (Profit Plus)",
       "estatus_base_datos": "AL DÍA"
@@ -93,7 +93,7 @@
       "direccion": "Tesorería",
       "telefono": "Pagos",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 195,
       "origen_erp": "pagos / reng_pag (Profit Plus)",
       "estatus_base_datos": "PROCESADO"
@@ -107,7 +107,7 @@
       "direccion": "Compras Planta",
       "telefono": "Logística",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 63,
       "origen_erp": "compras / reng_com (Profit Plus)",
       "estatus_base_datos": "REGISTRADO"
@@ -121,7 +121,7 @@
       "direccion": "Directorio Proveedores",
       "telefono": "Compras",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 5,
       "origen_erp": "prov (Profit Plus)",
       "estatus_base_datos": "ACTIVO"
@@ -135,7 +135,7 @@
       "direccion": "Zonas de Distribución",
       "telefono": "Supervisión de Ventas",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 10,
       "origen_erp": "vendedor (Profit Plus)",
       "estatus_base_datos": "METAS ASIGNADAS"
@@ -149,7 +149,7 @@
       "direccion": "Tesorería",
       "telefono": "Bancos",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 10,
       "origen_erp": "cuentas (Profit Plus)",
       "estatus_base_datos": "OPERATIVO"
@@ -163,7 +163,7 @@
       "direccion": "Sucursales",
       "telefono": "Caja",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 3,
       "origen_erp": "cajas (Profit Plus)",
       "estatus_base_datos": "CUADRADO"
@@ -177,7 +177,7 @@
       "direccion": "Regiones de Venezuela",
       "telefono": "Logística",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 7,
       "origen_erp": "zona (Profit Plus)",
       "estatus_base_datos": "RUTAS ACTIVAS"
@@ -191,8 +191,8 @@
       "direccion": "Control de Acceso",
       "telefono": "TI & Soporte",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
-      "registros_sincronizados": 22,
+      "tasa_keystone": 909.9,
+      "registros_sincronizados": 18,
       "origen_erp": "usuarios (Sistema)",
       "estatus_base_datos": "SEGURIDAD ACTIVA"
     },
@@ -205,7 +205,7 @@
       "direccion": "Ventas Móviles",
       "telefono": "Preventa",
       "tasa_dolar_bcv": 893.21,
-      "tasa_keystone": 38.5,
+      "tasa_keystone": 909.9,
       "registros_sincronizados": 15,
       "origen_erp": "pedidos (Profit Plus)",
       "estatus_base_datos": "EN CURSO"
@@ -226,7 +226,7 @@
       "tasa_dolar": 893.21,
       "tasaDolar": 893.21,
       "tasa_keystone": 909.9,
-      "tasaKeystone": 38.5,
+      "tasaKeystone": 909.9,
       "moneda_principal": "USD",
       "monedaPrincipal": "USD",
       "moneda_secundaria": "Bs.",
@@ -273,7 +273,7 @@
       ],
       "unidad": "Litros",
       "litrosPorUnidad": 1,
-      "stock": 767,
+      "stock": 760,
       "comprometido": 0,
       "stockMinimo": 10,
       "costoUsd": 0.01,
@@ -431032,7 +431032,7 @@
       "id": "usr-mur9uazg",
       "username": "kenyerbertf2",
       "nombre": "Kenyerbert Fernández",
-      "name": "Kenterbert Fernández",
+      "name": "Kenyerbert Fernández",
       "rol": "ALMACEN",
       "role": "ALMACEN",
       "cedula": "",
@@ -431065,9 +431065,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-05T00:50:31.564Z",
-      "updatedAt": "2026-11-02T15:30:44.761Z",
-      "color": "#f59e0b",
-      "descripcion": ""
+      "updatedAt": "2026-11-05T00:50:31.564Z"
     },
     {
       "id": "usr-mu5vswve",
@@ -434914,13 +434912,20 @@
     },
     {
       "id": "LOG-1793840813793-4QAAU",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "ELIMINAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Eliminación permanente del usuario @compras (Daniel Torres)",
-      "created_at": "2026-11-05T01:06:53.793Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-05T01:06:53.793Z",
+      "fecha": "2026-11-05T01:06:53.793Z"
     }
   ],
   "order_items": [

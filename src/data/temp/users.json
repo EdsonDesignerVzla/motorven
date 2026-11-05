@@ -353,7 +353,7 @@
     "id": "usr-mur9uazg",
     "username": "kenyerbertf2",
     "nombre": "Kenyerbert Fernández",
-    "name": "Kenterbert Fernández",
+    "name": "Kenyerbert Fernández",
     "rol": "ALMACEN",
     "role": "ALMACEN",
     "cedula": "",
@@ -386,9 +386,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-05T00:50:31.564Z",
-    "updatedAt": "2026-11-02T15:30:44.761Z",
-    "color": "#f59e0b",
-    "descripcion": ""
+    "updatedAt": "2026-11-05T00:50:31.564Z"
   },
   {
     "id": "usr-mu5vswve",
