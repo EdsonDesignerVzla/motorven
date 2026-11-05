@@ -72,6 +72,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   const isNc = sale.tipoDoc === 'NOTA_CREDITO';
   const isNd = sale.tipoDoc === 'NOTA_DEBITO';
   const isNe = sale.tipoDoc === 'NOTA_ENTREGA';
+  const isFacturaOrNotaEntrega = isNe || (!isNc && !isNd && sale.tipoDoc !== 'COTIZACION');
+  const invoiceTotalBs = Number(sale.totalBs) || (Number(sale.totalUsd || 0) * tasaBcv);
 
   const docTitle = isNc
     ? 'NOTA DE CRÉDITO'
@@ -971,7 +973,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '0.65rem' }}>
                               <div style={{ textAlign: 'right', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '4px 14px', background: '#f8fafc' }}>
                                 <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                  FACTURA N°
+                                  {isNe ? 'NOTA DE ENTREGA N°' : (isNc ? 'NOTA DE CRÉDITO N°' : (isNd ? 'NOTA DE DÉBITO N°' : 'FACTURA N°'))}
                                 </div>
                                 <div style={{ fontSize: '1.45rem', fontWeight: 900, fontFamily: 'monospace', color: '#0f172a', letterSpacing: '2px' }}>
                                   {correlativoDisplay}
@@ -1161,20 +1163,35 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                           <div style={{ height: '35px' }} />
                         )}
 
-                        {/* Pie Oficial Carta con Numeración Solicitada (Ejemplo: 1/2) */}
+                        {/* Pie Oficial Carta con Numeración Solicitada (Ejemplo: 1/2) y Leyenda Legal */}
                         <div
                           style={{
                             borderTop: '1px solid #cbd5e1',
                             paddingTop: '0.4rem',
                             display: 'flex',
-                            justifyContent: 'flex-end',
+                            justifyContent: isFacturaOrNotaEntrega ? 'space-between' : 'flex-end',
                             alignItems: 'center',
+                            gap: '0.75rem',
                             fontSize: '0.72rem',
                             color: '#64748b',
                             fontWeight: 700
                           }}
                         >
-                          <span style={{ background: '#f1f5f9', padding: '2px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', color: '#0f172a' }}>
+                          {isFacturaOrNotaEntrega && (
+                            <div
+                              style={{
+                                fontSize: '0.64rem',
+                                color: '#475569',
+                                fontWeight: 500,
+                                textAlign: 'left',
+                                maxWidth: '75%',
+                                lineHeight: '1.25'
+                              }}
+                            >
+                              Monto en <strong>{formatBs(invoiceTotalBs)}</strong>, referencial a la fecha de emisión. Los pagos en Bs se deberán realizar según la tasa oficial BCV a la fecha de su cancelación.
+                            </div>
+                          )}
+                          <span style={{ background: '#f1f5f9', padding: '2px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', color: '#0f172a', whiteSpace: 'nowrap' }}>
                             PÁGINA {pageNumber} / {totalPages}
                           </span>
                         </div>

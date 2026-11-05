@@ -3530,11 +3530,18 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   // Número de factura y adquirente en página 1
   let currentY = topMargin;
 
+  const isNe = sale.tipoDoc === 'NOTA_ENTREGA' || String(sale.numeroDoc || sale.nroFactura || '').toUpperCase().startsWith('NE');
+  const isNc = sale.tipoDoc === 'NOTA_CREDITO';
+  const isNd = sale.tipoDoc === 'NOTA_DEBITO';
+  const isCot = sale.tipoDoc === 'COTIZACION';
+  const isFacturaOrNotaEntrega = isNe || (!isNc && !isNd && !isCot);
+
   // 1. Correlativo a la derecha
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text('FACTURA N°', startX + tableWidth, currentY + 3, { align: 'right' });
+  const docHeaderTitle = isNe ? 'NOTA DE ENTREGA N°' : (isNc ? 'NOTA DE CRÉDITO N°' : (isNd ? 'NOTA DE DÉBITO N°' : 'FACTURA N°'));
+  doc.text(docHeaderTitle, startX + tableWidth, currentY + 3, { align: 'right' });
   doc.setFont('courier', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(15, 23, 42);
@@ -3700,17 +3707,32 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   doc.setFontSize(9.5);
   doc.text(`Bs. ${totBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsWidth - 3, finalY + 28, { align: 'right' });
 
-  // 5. Paginación en todas las hojas al pie: "PÁGINA X / Y"
+  // 5. Paginación en todas las hojas al pie: "PÁGINA X / Y" y Leyenda Legal
   const totalPagesCount = doc.internal.getNumberOfPages();
   for (let p = 1; p <= totalPagesCount; p++) {
     doc.setPage(p);
+
+    // Línea divisoria de pie de página
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.2);
+    doc.line(startX, bottomLimitY - 4, startX + tableWidth, bottomLimitY - 4);
+
+    if (isFacturaOrNotaEntrega) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      doc.setTextColor(71, 85, 105);
+      const disclaimer = `Monto en ${formatBs(totBs)}, referencial a la fecha de emisión. Los pagos en Bs se deberán realizar según la tasa oficial BCV a la fecha de su cancelación.`;
+      doc.text(disclaimer, startX, bottomLimitY, { maxWidth: tableWidth - 30 });
+    }
+
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
     doc.text(`PÁGINA ${p} / ${totalPagesCount}`, startX + tableWidth, bottomLimitY, { align: 'right' });
   }
 
-  doc.save(`Factura_${correlativo}_SENIAT.pdf`);
+  const filePrefix = isNe ? 'Nota_Entrega' : (isNc ? 'Nota_Credito' : (isNd ? 'Nota_Debito' : 'Factura'));
+  doc.save(`${filePrefix}_${correlativo}_SENIAT.pdf`);
   return doc;
 }
 

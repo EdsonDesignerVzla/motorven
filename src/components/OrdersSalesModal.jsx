@@ -3887,12 +3887,42 @@ export default function OrdersSalesModal({
                             </div>
                           </div>
 
-                          {/* Pie Oficial Carta */}
-                          <div style={{ borderTop: '1px solid #cbd5e1', paddingTop: '0.4rem', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', fontSize: '0.72rem', color: '#64748b', fontWeight: 700 }}>
-                            <span style={{ background: '#f1f5f9', padding: '2px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', color: '#0f172a' }}>
-                              PÁGINA 1 / 1
-                            </span>
-                          </div>
+                          {/* Pie Oficial Carta con Leyenda Legal */}
+                          {(() => {
+                            const isOrderNe = selectedOrder.tipoDoc === 'NOTA_ENTREGA' || String(selectedOrder.factNum || selectedOrder.nroFactura || '').toUpperCase().startsWith('NE');
+                            const isOrderFactOrNe = !selectedOrder.tipoDoc || selectedOrder.tipoDoc === 'FACTURA' || isOrderNe;
+                            const totUsd = Number(selectedOrder.totalNetoUsd || selectedOrder.totalUsd || 0);
+                            const totBs = Number(selectedOrder.totalBs || (totUsd * tasaBcv));
+                            return (
+                              <div style={{
+                                borderTop: '1px solid #cbd5e1',
+                                paddingTop: '0.4rem',
+                                display: 'flex',
+                                justifyContent: isOrderFactOrNe ? 'space-between' : 'flex-end',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                fontSize: '0.72rem',
+                                color: '#64748b',
+                                fontWeight: 700
+                              }}>
+                                {isOrderFactOrNe && (
+                                  <div style={{
+                                    fontSize: '0.64rem',
+                                    color: '#475569',
+                                    fontWeight: 500,
+                                    textAlign: 'left',
+                                    maxWidth: '75%',
+                                    lineHeight: '1.25'
+                                  }}>
+                                    Monto en <strong>{formatBs(totBs)}</strong>, referencial a la fecha de emisión. Los pagos en Bs se deberán realizar según la tasa oficial BCV a la fecha de su cancelación.
+                                  </div>
+                                )}
+                                <span style={{ background: '#f1f5f9', padding: '2px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', color: '#0f172a', whiteSpace: 'nowrap' }}>
+                                  PÁGINA 1 / 1
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                       </div>
