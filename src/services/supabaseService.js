@@ -135,25 +135,25 @@ const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env?.
  */
 const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'];
 const STATIC_CLOUD_HOSTS = ['.github.io', '.vercel.app', '.netlify.app', '.pages.dev'];
+const isTestEnv = typeof process !== 'undefined' && Boolean(process.env?.VITEST || process.env?.NODE_ENV === 'test');
 
-export const isStaticCloudHost = (() => {
+const isCloudHostedPage = (() => {
   try {
     if (typeof window === 'undefined' || !window.location) return false;
     const host = (window.location.hostname || '').toLowerCase();
-    const cfg = new URL(configuredSupabaseUrl);
-    return LOCAL_HOSTNAMES.includes(cfg.hostname) && STATIC_CLOUD_HOSTS.some(ext => host.endsWith(ext));
+    return STATIC_CLOUD_HOSTS.some(ext => host.endsWith(ext));
   } catch (_) {
     return false;
   }
 })();
 
-const resolveSupabaseUrl = (configured) => {
+const resolveInitialSupabaseUrl = (configured) => {
   try {
     if (typeof window === 'undefined' || !window.location || !/^https?:$/.test(window.location.protocol)) {
       return configured;
     }
 
-    // 1. Prioridad: Parámetro de URL (?server= o ?backend=) para sincronizar dispositivos al instante
+    // 1. Prioridad: Parámetro de URL (?server= o ?backend=)
     const urlParams = new URLSearchParams(window.location.search);
     const paramUrl = urlParams.get('server') || urlParams.get('backend');
     if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
@@ -174,7 +174,7 @@ const resolveSupabaseUrl = (configured) => {
 
     const cfg = new URL(configured);
     if (!LOCAL_HOSTNAMES.includes(cfg.hostname)) return configured;
-    if (isStaticCloudHost) return configured;
+    if (isCloudHostedPage) return configured;
     // Servido por Vite (dev o preview): usar el proxy del mismo origen
     if (import.meta.env?.DEV || ['5180', '4173'].includes(window.location.port)) {
       return `${window.location.origin}/sb`;
@@ -186,23 +186,176 @@ const resolveSupabaseUrl = (configured) => {
   }
 };
 
-const supabaseUrl = resolveSupabaseUrl(configuredSupabaseUrl);
+let currentBackendUrl = resolveInitialSupabaseUrl(configuredSupabaseUrl);
 
-export const getActiveBackendUrl = () => supabaseUrl;
+// Nunca bloquear llamadas a Supabase en GitHub Pages cuando existe auto-discovery o túnel activo
+export const isStaticCloudHost = false;
+
+let backendDiscoveryPromise = null;
+let lastDiscoveryAt = 0;
+
+async function probeBackendHealth(candidateUrl, timeoutMs = 2500) {
+  if (!candidateUrl || typeof fetch === 'undefined') return false;
+  try {
+    const clean = candidateUrl.trim().replace(/\/+$/, '');
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(`${clean}/health`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'bypass-tunnel-reminder': 'true',
+        'ngrok-skip-browser-warning': 'true'
+      },
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    clearTimeout(tid);
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+export async function discoverActiveBackendUrl(force = false) {
+  if (isTestEnv || typeof window === 'undefined' || typeof fetch === 'undefined') {
+    return currentBackendUrl;
+  }
+  const now = Date.now();
+  if (!force && backendDiscoveryPromise && (now - lastDiscoveryAt < 8000)) {
+    return backendDiscoveryPromise;
+  }
+  lastDiscoveryAt = now;
+
+  backendDiscoveryPromise = (async () => {
+    try {
+      const candidates = [];
+      const urlParams = new URLSearchParams(window.location.search);
+      const paramUrl = urlParams.get('server') || urlParams.get('backend');
+      if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
+        candidates.push(paramUrl.trim().replace(/\/+$/, ''));
+      }
+
+      // Consultar backend_url.json publicado automáticamente en GitHub Pages / servidor
+      try {
+        const basePath = window.location.pathname.endsWith('/')
+          ? window.location.pathname
+          : window.location.pathname.replace(/\/[^/]*$/, '/');
+        const jsonUrl = `${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`;
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 2200);
+        const resp = await fetch(jsonUrl, { cache: 'no-store', signal: controller.signal });
+        clearTimeout(tid);
+        if (resp.ok) {
+          const parsed = await resp.json();
+          if (parsed?.url && /^https?:\/\//i.test(parsed.url.trim())) {
+            candidates.push(parsed.url.trim().replace(/\/+$/, ''));
+          }
+          if (Array.isArray(parsed?.lanUrls) && window.location.protocol === 'http:') {
+            for (const lan of parsed.lanUrls) {
+              if (lan && /^http:\/\//i.test(lan)) candidates.push(lan.trim().replace(/\/+$/, ''));
+            }
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
+        if (savedCustom && /^https?:\/\//i.test(savedCustom.trim())) {
+          const cleanSaved = savedCustom.trim().replace(/\/+$/, '');
+          if (!candidates.includes(cleanSaved)) candidates.push(cleanSaved);
+        }
+      } catch (_) {}
+
+      for (const candidate of candidates) {
+        const healthy = await probeBackendHealth(candidate, 2500);
+        if (healthy) {
+          if (currentBackendUrl !== candidate) {
+            currentBackendUrl = candidate;
+            try {
+              window.localStorage.setItem('signum_custom_backend_url', candidate);
+              window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: candidate } }));
+            } catch (_) {}
+          }
+          isSupabaseAvailable = true;
+          return candidate;
+        }
+      }
+
+      // Si no se pudo verificar por /health pero hay candidato en backend_url.json y currentBackendUrl es localhost en la nube, adoptarlo
+      if (isCloudHostedPage && candidates.length > 0 && currentBackendUrl.includes('localhost')) {
+        currentBackendUrl = candidates[0];
+        try {
+          window.localStorage.setItem('signum_custom_backend_url', currentBackendUrl);
+          window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: currentBackendUrl } }));
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return currentBackendUrl;
+  })();
+
+  return backendDiscoveryPromise;
+}
+
+if (!isTestEnv && typeof window !== 'undefined') {
+  discoverActiveBackendUrl(true).catch(() => {});
+}
+
+export const getActiveBackendUrl = () => currentBackendUrl;
 
 export const setCustomBackendUrl = (url) => {
   try {
     if (!url || typeof url !== 'string' || !url.trim()) {
       localStorage.removeItem('signum_custom_backend_url');
     } else {
-      localStorage.setItem('signum_custom_backend_url', url.trim().replace(/\/+$/, ''));
+      const clean = url.trim().replace(/\/+$/, '');
+      currentBackendUrl = clean;
+      localStorage.setItem('signum_custom_backend_url', clean);
     }
     window.location.reload();
   } catch (_) {}
 };
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+function rewriteRequestUrl(rawInput, targetBaseUrl) {
+  try {
+    const str = typeof rawInput === 'string' ? rawInput : (rawInput?.url || String(rawInput));
+    const match = str.match(/^https?:\/\/[^/]+(?:\/sb)?(\/(?:rest|storage|realtime|health|api|admin)\/.*)$/);
+    if (match && targetBaseUrl) {
+      return `${targetBaseUrl.replace(/\/+$/, '')}${match[1]}`;
+    }
+    return str;
+  } catch (_) {
+    return rawInput;
+  }
+}
+
+const dynamicSupabaseFetch = async (input, init) => {
+  if (isTestEnv || typeof fetch === 'undefined') {
+    return fetch(input, init);
+  }
+  if (isCloudHostedPage && currentBackendUrl.includes('localhost') && backendDiscoveryPromise) {
+    try {
+      await backendDiscoveryPromise;
+    } catch (_) {}
+  }
+  const rewrittenUrl = rewriteRequestUrl(input, currentBackendUrl);
+  try {
+    return await fetch(rewrittenUrl, init);
+  } catch (err) {
+    // Si falló la red contra un túnel viejo, re-descubrir desde backend_url.json y reintentar 1 vez
+    const prevUrl = currentBackendUrl;
+    const discovered = await discoverActiveBackendUrl(true);
+    if (discovered && discovered !== prevUrl) {
+      const retryUrl = rewriteRequestUrl(input, discovered);
+      return await fetch(retryUrl, init);
+    }
+    throw err;
+  }
+};
+
+export const supabase = createClient(currentBackendUrl, supabaseAnonKey, {
   global: {
+    fetch: dynamicSupabaseFetch,
     headers: {
       'bypass-tunnel-reminder': 'true',
       'ngrok-skip-browser-warning': 'true'
@@ -219,8 +372,7 @@ export const normalizeStorageUrl = (url) => {
   if (url.includes('user_kenterbertf2_1793628')) return null;
   const match = url.match(/^https?:\/\/[^/]+(?:\/sb)?\/(storage\/v1\/object\/public\/.+)$/);
   if (!match) return url;
-  if (isStaticCloudHost) return null;
-  return `${supabaseUrl.replace(/\/+$/, '')}/${match[1]}`;
+  return `${currentBackendUrl.replace(/\/+$/, '')}/${match[1]}`;
 };
 
 /**
@@ -234,22 +386,15 @@ export const describeSupabaseError = (err, fallback = 'Error en la base de datos
   return msg || fallback;
 };
 
-let isSupabaseAvailable = !isStaticCloudHost;
+let isSupabaseAvailable = true;
 
 export const isSupabaseOnline = () => isSupabaseAvailable;
 
 export const resetSupabaseOnlineStatus = () => {
-  if (!isStaticCloudHost) {
-    isSupabaseAvailable = true;
-  }
+  isSupabaseAvailable = true;
 };
 
 const withTimeout = (promise, ms) => {
-  // Para conexiones a través de túnel o remotas (Cloudflare trycloudflare o internet),
-  // las consultas masivas de miles de registros requieren margen suficiente.
-  // Un timeout de 3.5s o 4s abortaba las peticiones en progreso provocando que
-  // Cloudflare registrara 'stream canceled by remote' y se cargaran datos viejos.
-  // Se establece un margen generoso de 35 segundos para túneles / producción remota.
   let timeoutMs = 35000;
   try {
     const isLocal = typeof window !== 'undefined' && window.location && LOCAL_HOSTNAMES.includes(window.location.hostname);
@@ -265,12 +410,20 @@ const withTimeout = (promise, ms) => {
 
 const markSupabaseOffline = (err, action = '') => {
   const msg = err?.message || String(err);
-  // Nunca apagar Supabase globalmente por un timeout aislado de red o una consulta pesada.
-  // Solo marcar offline si físicamente el navegador perdió la conexión a Internet.
   if (!isNetworkOnline()) {
     isSupabaseAvailable = false;
   }
   console.warn(`[Supabase Offline Fallback] ${action}:`, msg);
+  if (typeof window !== 'undefined' && /^(save|update|delete|create|add|commit)/i.test(action)) {
+    try {
+      window.dispatchEvent(new CustomEvent('signum_offline_fallback_warning', {
+        detail: {
+          action,
+          message: 'Aviso: Sin respuesta del servidor central. El cambio se encoló en modo contingencia y se enviará al reconectar.'
+        }
+      }));
+    } catch (_) {}
+  }
 };
 
 // --- Mappings ---

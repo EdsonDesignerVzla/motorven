@@ -235,13 +235,43 @@ async function initDatabase() {
 }
 
 let saveTimeout = null;
+let lastBackupDate = '';
+
+function writeAtomicJson(targetPath, dataObj) {
+  const dir = path.dirname(targetPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const payload = JSON.stringify(dataObj, null, 2);
+  const tmpPath = `${targetPath}.tmp`;
+  fs.writeFileSync(tmpPath, payload, 'utf8');
+  try {
+    fs.renameSync(tmpPath, targetPath);
+  } catch (_) {
+    fs.copyFileSync(tmpPath, targetPath);
+    try { fs.unlinkSync(tmpPath); } catch (__) {}
+  }
+  return payload;
+}
+
 function saveDatabase() {
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     try {
-      const dir = path.dirname(DB_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(DB_FILE, JSON.stringify(database, null, 2), 'utf8');
+      const serialized = writeAtomicJson(DB_FILE, database);
+
+      // Respaldo rotativo diario automático en carpeta backups/
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        if (today !== lastBackupDate) {
+          const backupDir = path.join(path.dirname(DB_FILE), 'backups');
+          if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+          const backupFile = path.join(backupDir, `local_database_${today}.json`);
+          if (!fs.existsSync(backupFile)) {
+            fs.writeFileSync(backupFile, serialized, 'utf8');
+          }
+          lastBackupDate = today;
+        }
+      } catch (_) {}
+
       if (Array.isArray(database.users)) {
         const cleanUsers = database.users.filter(u =>
           u &&
@@ -251,13 +281,13 @@ function saveDatabase() {
         );
         const tempUsersFile = path.join(projectRoot, 'src', 'data', 'temp', 'users.json');
         if (fs.existsSync(path.dirname(tempUsersFile))) {
-          fs.writeFileSync(tempUsersFile, JSON.stringify(cleanUsers, null, 2), 'utf8');
+          writeAtomicJson(tempUsersFile, cleanUsers);
         }
       }
       if (Array.isArray(database.profit_sellers)) {
         const tempSellersFile = path.join(projectRoot, 'src', 'data', 'temp', 'profit_sellers.json');
         if (fs.existsSync(path.dirname(tempSellersFile))) {
-          fs.writeFileSync(tempSellersFile, JSON.stringify(database.profit_sellers, null, 2), 'utf8');
+          writeAtomicJson(tempSellersFile, database.profit_sellers);
         }
       }
     } catch (e) {
@@ -888,11 +918,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Health & Status
+  // 2. Health & Status + Backend URL discovery
   if (pathname === '/health' || pathname === '/api/status') {
     const tableNames = Object.keys(database);
     const totalRecords = tableNames.reduce((acc, t) => acc + (database[t]?.length || 0), 0);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({
       status: 'ONLINE',
       mode: 'SUPABASE_LOCAL_FREE',
@@ -901,10 +931,60 @@ const server = http.createServer(async (req, res) => {
       totalRecords,
       seq: changeSeq,
       connectedClients: sseClients.size,
+      gzipEnabled: true,
       tokenRequired: false,
       timestamp: new Date().toISOString()
     }));
     return;
+  }
+
+  if (pathname === '/backend_url.json' || pathname === '/motorven/backend_url.json') {
+    const candidates = [
+      path.join(__dirname, 'backend_url.json'),
+      path.join(projectRoot, 'dist', 'backend_url.json'),
+      path.join(projectRoot, 'public', 'backend_url.json')
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) {
+        try {
+          const content = fs.readFileSync(c, 'utf8');
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(content);
+          return;
+        } catch (_) {}
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ url: `http://${hostHeader}:${PORT}`, updatedAt: new Date().toISOString() }));
+    return;
+  }
+
+  // 2.2. Admin Sync Endpoint (protegido para sincronización atómica entre servidores)
+  if (req.method === 'POST' && pathname === '/admin/v1/sync-database') {
+    const adminKey = req.headers['x-signum-admin-key'] || '';
+    if (adminKey !== 'motorven-master-sync-2026') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Forbidden' }));
+      return;
+    }
+    try {
+      const incomingDb = await parseBody(req);
+      if (incomingDb && typeof incomingDb === 'object' && Object.keys(incomingDb).length > 5) {
+        database = incomingDb;
+        writeAtomicJson(DB_FILE, database);
+        emitRealtimeChange({ table: 'system', tableId: 'system', eventType: 'RECONCILE', action: 'RECONCILE' });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, tables: Object.keys(database).length }));
+        return;
+      }
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Payload de base de datos inválido' }));
+      return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+      return;
+    }
   }
 
   // 2.5. Realtime API v1: /realtime/v1/events (SSE), /realtime/v1/changes (Delta Poll), /realtime/v1/broadcast
@@ -971,10 +1051,21 @@ const server = http.createServer(async (req, res) => {
 
   // 3. Supabase Storage API v1: /storage/v1/object/...
   if (pathname.startsWith('/storage/v1/')) {
-    const STORAGE_ROOT = path.join(projectRoot, 'supabase', 'storage');
+    const STORAGE_ROOT = fs.existsSync(path.join(__dirname, 'storage'))
+      ? path.resolve(__dirname, 'storage')
+      : path.resolve(projectRoot, 'supabase', 'storage');
     if (!fs.existsSync(STORAGE_ROOT)) {
       try { fs.mkdirSync(STORAGE_ROOT, { recursive: true }); } catch (_) {}
     }
+
+    const resolveSafeStorageFile = (bucket, subPath) => {
+      const cleanBucket = String(bucket || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      const resolved = path.resolve(STORAGE_ROOT, cleanBucket, String(subPath || ''));
+      if (!resolved.startsWith(STORAGE_ROOT + path.sep)) {
+        return null;
+      }
+      return resolved;
+    };
 
     // A. GET /storage/v1/object/public/:bucket/* -> Servir archivo multimedia desde disco
     if (req.method === 'GET' && pathname.includes('/object/public/')) {
@@ -982,7 +1073,12 @@ const server = http.createServer(async (req, res) => {
       if (match) {
         const bucket = decodeURIComponent(match[1]);
         const subPath = decodeURIComponent(match[2]).replace(/\?.*$/, '');
-        const diskPath = path.join(STORAGE_ROOT, bucket, subPath);
+        const diskPath = resolveSafeStorageFile(bucket, subPath);
+        if (!diskPath) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden path', statusCode: 403 }));
+          return;
+        }
 
         if (fs.existsSync(diskPath)) {
           const ext = path.extname(diskPath).toLowerCase();
@@ -1056,9 +1152,9 @@ const server = http.createServer(async (req, res) => {
       const seedFiles = seedMap[prefix] || [];
 
       // Escanear disco local
-      const targetDir = prefix ? path.join(STORAGE_ROOT, bucket, prefix) : path.join(STORAGE_ROOT, bucket);
+      const targetDir = resolveSafeStorageFile(bucket, prefix || '.');
       let diskFiles = [];
-      if (fs.existsSync(targetDir)) {
+      if (targetDir && fs.existsSync(targetDir)) {
         try {
           const entries = fs.readdirSync(targetDir, { withFileTypes: true });
           diskFiles = entries
@@ -1101,7 +1197,12 @@ const server = http.createServer(async (req, res) => {
       if (match) {
         const bucket = decodeURIComponent(match[1]);
         const subPath = decodeURIComponent(match[2]).replace(/\?.*$/, '');
-        const targetFile = path.join(STORAGE_ROOT, bucket, subPath);
+        const targetFile = resolveSafeStorageFile(bucket, subPath);
+        if (!targetFile) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden path', statusCode: 403 }));
+          return;
+        }
         const targetDir = path.dirname(targetFile);
 
         if (!fs.existsSync(targetDir)) {
@@ -1132,8 +1233,8 @@ const server = http.createServer(async (req, res) => {
       if (matchSub) {
         const bucket = decodeURIComponent(matchSub[1]);
         const subPath = decodeURIComponent(matchSub[2]).replace(/\?.*$/, '');
-        const targetFile = path.join(STORAGE_ROOT, bucket, subPath);
-        if (fs.existsSync(targetFile)) {
+        const targetFile = resolveSafeStorageFile(bucket, subPath);
+        if (targetFile && fs.existsSync(targetFile)) {
           try { fs.unlinkSync(targetFile); } catch (_) {}
           console.log(`[Supabase Storage Local] 🗑️ Archivo eliminado: ${bucket}/${subPath}`);
         }
@@ -1150,8 +1251,8 @@ const server = http.createServer(async (req, res) => {
         const deleted = [];
 
         for (const p of prefixes) {
-          const targetFile = path.join(STORAGE_ROOT, bucket, p);
-          if (fs.existsSync(targetFile)) {
+          const targetFile = resolveSafeStorageFile(bucket, p);
+          if (targetFile && fs.existsSync(targetFile)) {
             try {
               fs.unlinkSync(targetFile);
               console.log(`[Supabase Storage Local] 🗑️ Archivo eliminado: ${bucket}/${p}`);

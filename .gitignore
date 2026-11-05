@@ -33,6 +33,8 @@ scripts/tunnel/*.exe
 
 # Standalone company server bundle
 SERVIDOR_EMPRESA_26.229.220.202/
+.tunnel_config.json
+*.tmp
 
 # Test artifacts
 **/user_autotest_*

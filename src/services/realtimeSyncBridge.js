@@ -80,7 +80,17 @@ function resolveRealtimeBaseUrl() {
   if (typeof window === 'undefined' || !window.location) {
     return 'http://127.0.0.1:54321';
   }
-  const { protocol, hostname, origin } = window.location;
+  const { protocol, hostname, origin, search } = window.location;
+  try {
+    const params = new URLSearchParams(search || '');
+    const paramUrl = params.get('server') || params.get('backend');
+    if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
+      const cleanParam = paramUrl.trim().replace(/\/+$/, '');
+      window.localStorage.setItem('signum_custom_backend_url', cleanParam);
+      return cleanParam;
+    }
+  } catch (_) {}
+
   const isStaticCloud =
     hostname.endsWith('.vercel.app') ||
     hostname.endsWith('.netlify.app') ||
@@ -103,6 +113,10 @@ function resolveRealtimeBaseUrl() {
     return null;
   }
   if ((protocol === 'http:' || protocol === 'https:') && origin && origin !== 'null') {
+    try {
+      const custom = window.localStorage.getItem('signum_custom_backend_url');
+      if (custom && /^https?:\/\//i.test(custom.trim())) return custom.trim().replace(/\/+$/, '');
+    } catch (_) {}
     return `${origin}/sb`;
   }
   return 'http://127.0.0.1:54321';
@@ -300,9 +314,15 @@ function ensureNetworkRealtimeStarted() {
     }
   };
 
+  const handleBackendUpdated = () => {
+    connectSseStream();
+    pollDeltaChanges();
+  };
+
   window.addEventListener('focus', handleWakeUp);
   window.addEventListener('online', handleWakeUp);
   window.addEventListener('pageshow', handleWakeUp);
+  window.addEventListener('signum_backend_url_updated', handleBackendUpdated);
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', handleWakeUp);
   }

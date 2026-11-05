@@ -7,22 +7,37 @@ import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 let localSupabaseProc = null;
+const COMPANY_SERVER_HOST = process.env.COMPANY_SERVER_HOST || '192.168.0.6';
+
 function ensureLocalSupabaseRunning() {
   if (localSupabaseProc) return;
-  const socket = new net.Socket();
-  socket.setTimeout(600);
-  socket.once('connect', () => {
-    socket.destroy();
+  // Verificar primero si el servidor central de la empresa (SVR-MOTORVEN 192.168.0.6) está activo
+  const srvSocket = new net.Socket();
+  srvSocket.setTimeout(800);
+  srvSocket.once('connect', () => {
+    srvSocket.destroy();
+    // El servidor central de la empresa está en línea: NO levantar copia en la laptop
   });
-  socket.once('error', () => {
-    socket.destroy();
-    spawnLocalSupabase();
-  });
-  socket.once('timeout', () => {
-    socket.destroy();
-    spawnLocalSupabase();
-  });
-  socket.connect(54321, '127.0.0.1');
+  const checkFallbackLocal = () => {
+    srvSocket.destroy();
+    const socket = new net.Socket();
+    socket.setTimeout(600);
+    socket.once('connect', () => {
+      socket.destroy();
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      spawnLocalSupabase();
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      spawnLocalSupabase();
+    });
+    socket.connect(54321, '127.0.0.1');
+  };
+  srvSocket.once('error', checkFallbackLocal);
+  srvSocket.once('timeout', checkFallbackLocal);
+  srvSocket.connect(54321, COMPANY_SERVER_HOST);
 }
 
 function spawnLocalSupabase() {
@@ -90,10 +105,10 @@ const binanceP2pPlugin = () => ({
   }
 });
 
-// Proxy hacia el servidor local Supabase (puerto 54321).
-// Permite que las computadoras de la oficina usen la MISMA base de datos
-// entrando solo por http://IP-DEL-SERVIDOR:5180 (sin abrir el puerto 54321).
-const SUPABASE_LOCAL_TARGET = process.env.SUPABASE_LOCAL_TARGET || 'http://127.0.0.1:54321';
+// Proxy hacia el servidor central de la empresa SVR-MOTORVEN (192.168.0.6:54321).
+// Garantiza que la laptop de desarrollo y las computadoras de la oficina usen
+// SIEMPRE la misma base de datos central alojada en el servidor de la empresa.
+const SUPABASE_LOCAL_TARGET = process.env.SUPABASE_LOCAL_TARGET || `http://${COMPANY_SERVER_HOST}:54321`;
 const supabaseProxy = {
   '/sb': {
     target: SUPABASE_LOCAL_TARGET,
