@@ -2440,26 +2440,42 @@ export const deleteSupabaseOrder = async (orderId) => {
 
 export const deleteSupabaseSale = async (saleId) => {
   if (!saleId) return false;
-  deleteStorageSale(saleId);
+
+  const rawId = typeof saleId === 'object' ? (saleId.id || '') : String(saleId || '');
+  const rawNum = typeof saleId === 'object'
+    ? (saleId.factNum || saleId.factura || saleId.numeroDoc || saleId.id || '')
+    : String(saleId || '');
+  const cleanNum = String(rawNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+  const cleanId = String(rawId).trim();
+
+  const candidateKeys = Array.from(
+    new Set([cleanId, cleanNum, rawId, rawNum, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean))
+  );
+
+  candidateKeys.forEach(k => deleteStorageSale(k));
 
   try {
     if (typeof localStorage !== 'undefined') {
       const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
       const delList = rawDel ? JSON.parse(rawDel) : [];
-      const cleanKey = String(saleId).trim();
-      if (!delList.includes(cleanKey)) {
-        delList.push(cleanKey);
-        localStorage.setItem('signum_cxc_deleted_docs_v1', JSON.stringify(delList));
-      }
+      candidateKeys.forEach(k => {
+        if (!delList.includes(k)) delList.push(k);
+      });
+      localStorage.setItem('signum_cxc_deleted_docs_v1', JSON.stringify(delList));
+
       const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
       if (rawCustom) {
         const customMap = JSON.parse(rawCustom);
         if (customMap && typeof customMap === 'object') {
-          delete customMap[cleanKey];
+          candidateKeys.forEach(k => delete customMap[k]);
           Object.keys(customMap).forEach(k => {
             const item = customMap[k];
-            if (item && (String(item.id) === cleanKey || String(item.factNum || item.fact_num || '') === cleanKey)) {
-              delete customMap[k];
+            if (item) {
+              const iId = String(item.id || '');
+              const iNum = String(item.factNum || item.fact_num || item.numeroDoc || '');
+              if (candidateKeys.includes(iId) || candidateKeys.includes(iNum)) {
+                delete customMap[k];
+              }
             }
           });
           localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
@@ -2468,32 +2484,62 @@ export const deleteSupabaseSale = async (saleId) => {
     }
   } catch (_) {}
 
+  const broadcastKey = cleanNum || cleanId;
+  const broadcastItem = { id: cleanId || broadcastKey, factNum: cleanNum, numeroDoc: cleanNum };
+
   broadcastReconcileChange({
     tableId: 'sales',
     action: 'DELETE',
-    key: saleId
+    key: broadcastKey,
+    item: broadcastItem
+  });
+
+  broadcastReconcileChange({
+    tableId: 'invoices',
+    action: 'DELETE',
+    key: broadcastKey,
+    item: broadcastItem
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
-    enqueueSyncAction('sales', 'DELETE', { id: saleId });
+    enqueueSyncAction('sales', 'DELETE', { id: cleanId || cleanNum });
+    enqueueSyncAction('profit_invoices', 'DELETE', { id: cleanId || cleanNum });
     return true;
   }
   try {
-    const cleanNum = String(saleId).replace(/^(FAC-|FACT-|NE-|fac-)/i, '').trim();
-    await withTimeout(
-      supabase.from('profit_invoices').delete().or(`id.eq.${saleId},fact_num.eq.${cleanNum}`)
-    ).catch(() => {});
+    const orInvParts = [];
+    if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
+    if (cleanNum) {
+      orInvParts.push(`fact_num.eq.${cleanNum}`);
+      orInvParts.push(`id.eq.FAC-${cleanNum}`);
+      orInvParts.push(`id.eq.NE-${cleanNum}`);
+    }
+    if (orInvParts.length > 0) {
+      await withTimeout(
+        supabase.from('profit_invoices').delete().or(orInvParts.join(',')),
+        4000
+      ).catch(() => {});
+    }
 
-    const { error } = await withTimeout(
-      supabase.from('sales').delete().or(`id.eq.${saleId},numero_doc.eq.${saleId}`)
-    );
-    if (error) throw error;
+    const orSalesParts = [];
+    if (cleanId) orSalesParts.push(`id.eq.${cleanId}`);
+    if (cleanNum) {
+      orSalesParts.push(`numero_doc.eq.${cleanNum}`);
+      if (cleanId !== cleanNum) orSalesParts.push(`id.eq.${cleanNum}`);
+    }
+    if (orSalesParts.length > 0) {
+      const { error } = await withTimeout(
+        supabase.from('sales').delete().or(orSalesParts.join(',')),
+        4000
+      );
+      if (error) console.warn('[deleteSupabaseSale] Aviso sales delete:', error.message);
+    }
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
     console.warn('[deleteSupabaseSale] Error eliminando venta en Supabase:', err.message);
     markSupabaseOffline(err, 'deleteSupabaseSale');
-    enqueueSyncAction('sales', 'DELETE', { id: saleId });
+    enqueueSyncAction('sales', 'DELETE', { id: cleanId || cleanNum });
     return true;
   }
 };
@@ -3409,18 +3455,28 @@ export const getSupabaseProfitCashDesks = async () => {
 
 export const updateSupabaseProfitCashDesk = async (cashDesk) => {
   try {
+    const payload = {
+      id: cashDesk.id || `CAJA-${cashDesk.coCaja || cashDesk.co_caja || '01'}`,
+      co_caja: cashDesk.coCaja || cashDesk.co_caja,
+      coCaja: cashDesk.coCaja || cashDesk.co_caja,
+      descripcion: cashDesk.descripcion,
+      moneda: cashDesk.moneda || 'USD',
+      saldo_usd: cashDesk.saldoUsd ?? cashDesk.saldo_usd ?? 0,
+      saldoUsd: cashDesk.saldoUsd ?? cashDesk.saldo_usd ?? 0,
+      saldo_bs: cashDesk.saldoBs ?? cashDesk.saldo_bs ?? 0,
+      saldoBs: cashDesk.saldoBs ?? cashDesk.saldo_bs ?? 0,
+      responsable: cashDesk.responsable || 'Caja General',
+      fecha_actualizacion: new Date().toISOString()
+    };
+    broadcastReconcileChange({
+      tableId: 'cash_desks',
+      action: 'RECONCILE',
+      key: payload.id,
+      item: payload
+    });
     const { data, error } = await supabase
       .from('profit_cash_desks')
-      .upsert({
-        id: cashDesk.id,
-        co_caja: cashDesk.coCaja || cashDesk.co_caja,
-        descripcion: cashDesk.descripcion,
-        moneda: cashDesk.moneda || 'USD',
-        saldo_usd: cashDesk.saldoUsd ?? cashDesk.saldo_usd ?? 0,
-        saldo_bs: cashDesk.saldoBs ?? cashDesk.saldo_bs ?? 0,
-        responsable: cashDesk.responsable || 'Caja General',
-        fecha_actualizacion: new Date().toISOString()
-      }, { onConflict: 'id' })
+      .upsert(payload, { onConflict: 'id' })
       .select();
     if (error) throw error;
     return data;
@@ -3582,6 +3638,13 @@ export const saveSupabaseProfitCollection = async (collectionData) => {
     }
   } catch (_) {}
 
+  broadcastReconcileChange({
+    tableId: 'collections',
+    action: 'RECONCILE',
+    key: id,
+    item: normalized
+  });
+
   if (isNetworkOnline() && isSupabaseAvailable) {
     try {
       await withTimeout(
@@ -3602,13 +3665,24 @@ export const updateSupabaseProfitBankAccount = async (bankAcc) => {
     const payload = {
       id: bankAcc.id || `CTA-${bankAcc.codCta || bankAcc.cod_cta || '01'}`,
       cod_cta: bankAcc.codCta || bankAcc.cod_cta,
+      codCta: bankAcc.codCta || bankAcc.cod_cta,
       num_cta: bankAcc.numCta || bankAcc.num_cta,
+      numCta: bankAcc.numCta || bankAcc.num_cta,
       banco_nombre: bankAcc.bancoNombre || bankAcc.banco_nombre,
+      bancoNombre: bankAcc.bancoNombre || bankAcc.banco_nombre,
       saldo_bs: Number(bankAcc.saldoBs ?? bankAcc.saldo_bs ?? 0),
+      saldoBs: Number(bankAcc.saldoBs ?? bankAcc.saldo_bs ?? 0),
       saldo_usd: Number(bankAcc.saldoUsd ?? bankAcc.saldo_usd ?? 0),
+      saldoUsd: Number(bankAcc.saldoUsd ?? bankAcc.saldo_usd ?? 0),
       moneda: bankAcc.moneda || 'BS',
       fecha_actualizacion: new Date().toISOString()
     };
+    broadcastReconcileChange({
+      tableId: 'bank_accounts',
+      action: 'RECONCILE',
+      key: payload.id,
+      item: payload
+    });
     if (isNetworkOnline() && isSupabaseAvailable) {
       await withTimeout(
         supabase.from('profit_bank_accounts').upsert(payload, { onConflict: 'id' }),
@@ -3765,12 +3839,62 @@ export const saveSupabaseProfitInvoice = async (docData) => {
     item: payload
   });
 
+  if (rawNum) {
+    broadcastReconcileChange({
+      tableId: 'sales',
+      action: 'RECONCILE',
+      key: rawNum,
+      item: {
+        id: payload.id,
+        numeroDoc: rawNum,
+        tipoDoc: payload.tipoDoc,
+        clienteId: payload.clienteId,
+        clienteNombre: payload.clienteNombre,
+        clienteRif: payload.clienteRif,
+        tasaDolar: payload.tasa,
+        subtotalUsd: payload.totBrutoUsd,
+        ivaUsd: payload.ivaUsd,
+        totalUsd: payload.totNetoUsd,
+        subtotalBs: payload.totBrutoBs,
+        ivaBs: payload.ivaBs,
+        totalBs: payload.totNetoBs,
+        saldoUsd: payload.saldoUsd,
+        saldoBs: payload.saldoBs,
+        diasCredito: payload.diasCredito,
+        fechaEmision: payload.fechaEmision,
+        fechaVencimiento: payload.fechaVencimiento,
+        vendedor: payload.vendedorNombre,
+        estado: payload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
+      }
+    });
+  }
+
   if (isNetworkOnline() && isSupabaseAvailable) {
     try {
       await withTimeout(
         supabase.from('profit_invoices').upsert(payload, { onConflict: 'id' }),
         5000
       );
+      if (rawNum) {
+        await withTimeout(
+          supabase.from('sales').update({
+            cliente_id: payload.clienteId,
+            cliente_nombre: payload.clienteNombre,
+            cliente_rif: payload.clienteRif,
+            tasa_dolar: payload.tasa,
+            total_usd: payload.totNetoUsd,
+            total_bs: payload.totNetoBs,
+            saldo_usd: payload.saldoUsd,
+            saldo_bs: payload.saldoBs,
+            dias_credito: payload.diasCredito,
+            fecha_emision: payload.fechaEmision,
+            fecha_vencimiento: payload.fechaVencimiento,
+            vendedor: payload.vendedorNombre,
+            estado: payload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
+          }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`),
+          4000
+        ).catch(() => {});
+      }
     } catch (err) {
       console.warn('[saveSupabaseProfitInvoice] Guardado local activo:', err.message);
     }

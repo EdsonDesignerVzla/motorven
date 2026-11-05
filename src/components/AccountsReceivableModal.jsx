@@ -219,19 +219,53 @@ export function AccountsReceivableModal({
         const rawMap = new Map();
         const effectiveSales = Array.isArray(invoices) && invoices.length > 0 ? invoices : (Array.isArray(sales) ? sales : []);
 
-        // 1. Cargar documentos desde profitInvoices
+        // Leer documentos eliminados de forma persistente desde localStorage
+        let delSet = new Set();
+        try {
+            if (typeof localStorage !== 'undefined') {
+                const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+                if (rawDel) {
+                    const parsedDel = JSON.parse(rawDel);
+                    if (Array.isArray(parsedDel)) {
+                        parsedDel.forEach(k => {
+                            if (k) {
+                                const s = String(k).trim();
+                                delSet.add(s);
+                                const clean = s.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+                                if (clean) delSet.add(clean);
+                            }
+                        });
+                    }
+                }
+            }
+        } catch (_) {}
+
+        const isDocDeleted = (dId, dNum, dFact) => {
+            const idStr = String(dId || '').trim();
+            const numStr = String(dNum || '').trim();
+            const factStr = String(dFact || '').trim();
+            const cleanNum = (numStr || factStr || idStr).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            return (
+                (idStr && delSet.has(idStr)) ||
+                (numStr && delSet.has(numStr)) ||
+                (factStr && delSet.has(factStr)) ||
+                (cleanNum && delSet.has(cleanNum))
+            );
+        };
+
+        // 1. Cargar documentos desde profitInvoices (omitiendo eliminados)
         (profitInvoices || []).forEach(inv => {
             const key = String(inv.factNum || inv.id || '').trim();
-            if (!key) return;
+            if (!key || isDocDeleted(inv.id, inv.factNum, inv.factura)) return;
             rawMap.set(key, { ...inv, _source: 'PROFIT' });
         });
 
-        // 2. Cargar documentos a crédito desde sales/invoices (si no están ya en profitInvoices)
+        // 2. Cargar documentos a crédito desde sales/invoices (si no están ya en profitInvoices y no están eliminados)
         effectiveSales.forEach(sale => {
             const isCredit = sale.condicionPago === 'CREDITO' || sale.metodoPago === 'CREDITO' || sale.diasCredito > 0 || sale.tipoDoc === 'NOTA_ENTREGA';
             if (!isCredit) return;
-            const key = String(sale.factura || sale.factNum || sale.id || '').trim();
-            if (!key) return;
+            const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
+            if (!key || isDocDeleted(sale.id, sale.numeroDoc || sale.factura || sale.factNum)) return;
             if (!rawMap.has(key)) {
                 rawMap.set(key, {
                     id: sale.id || `DOC-${key}`,
@@ -269,6 +303,13 @@ export function AccountsReceivableModal({
         Object.entries(localDocOverrides).forEach(([key, override]) => {
             if (override?._deleted) {
                 rawMap.delete(key);
+                const cleanKey = String(key).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+                for (const mapK of Array.from(rawMap.keys())) {
+                    const cleanMapK = String(mapK).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+                    if (cleanMapK === cleanKey || mapK === key) {
+                        rawMap.delete(mapK);
+                    }
+                }
                 return;
             }
             const existing = rawMap.get(key) || {};
@@ -1012,17 +1053,57 @@ export function AccountsReceivableModal({
         if (!window.confirm(`¿Eliminar ${docLabel} #${inv.factura} de ${inv.cliente} por ${formatUsd(inv.restanteUsd)}? Esta acción no se puede deshacer.`)) {
             return;
         }
-        setDeletingKey(inv.id || inv.factura);
+        const rawNum = String(inv.factNum || inv.factura || inv.numeroDoc || '').trim();
+        const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+        const rawId = String(inv.id || '').trim();
+        const keysToDelete = Array.from(
+            new Set([rawNum, cleanNum, rawId, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean))
+        );
+
+        setDeletingKey(rawId || rawNum);
         try {
-            setLocalDocOverrides(prev => ({
-                ...prev,
-                [inv.factNum]: { _deleted: true }
-            }));
+            // 1. Marcar como eliminado en overrides de la sesión
+            setLocalDocOverrides(prev => {
+                const next = { ...prev };
+                keysToDelete.forEach(k => {
+                    next[k] = { _deleted: true };
+                });
+                return next;
+            });
+
+            // 2. Persistir inmediatamente en localStorage para garantizar que nunca reaparezca al refrescar
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+                    const delList = rawDel ? JSON.parse(rawDel) : [];
+                    keysToDelete.forEach(k => {
+                        if (!delList.includes(k)) delList.push(k);
+                    });
+                    localStorage.setItem('signum_cxc_deleted_docs_v1', JSON.stringify(delList));
+
+                    const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+                    if (rawCustom) {
+                        const customMap = JSON.parse(rawCustom);
+                        if (customMap && typeof customMap === 'object') {
+                            keysToDelete.forEach(k => delete customMap[k]);
+                            localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            // 3. Si estaba seleccionado en Parte A para registrar cobro, deseleccionar
+            if (cobroDocKey && keysToDelete.includes(cobroDocKey)) {
+                setCobroDocKey('');
+            }
+
+            // 4. Ejecutar borrado en Supabase central y emitir broadcast multi-dispositivo en tiempo real
             if (onDeleteSale) {
                 await onDeleteSale(inv);
             }
             notify.success(`${docLabel} #${inv.factura} eliminada de Cuentas por Cobrar.`);
         } catch (err) {
+            console.error('Error al eliminar documento:', err);
             notify.error('Error al eliminar: ' + (err.message || 'Error desconocido'));
         } finally {
             setDeletingKey(null);

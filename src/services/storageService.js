@@ -381,9 +381,30 @@ export const saveSale = (saleData) => {
   return newSale;
 };
 
-export const deleteStorageSale = (saleId) => {
+export const deleteStorageSale = (saleIdOrObj) => {
+  if (!saleIdOrObj) return getSales();
+  const rawId = typeof saleIdOrObj === 'object'
+    ? (saleIdOrObj.id || saleIdOrObj.numeroDoc || saleIdOrObj.factNum || saleIdOrObj.factura)
+    : saleIdOrObj;
+  const rawNum = typeof saleIdOrObj === 'object'
+    ? (saleIdOrObj.factNum || saleIdOrObj.factura || saleIdOrObj.numeroDoc || saleIdOrObj.id)
+    : saleIdOrObj;
+
+  const cleanStr = String(rawId || '').trim();
+  const cleanNum = String(rawNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+
+  const isMatch = (s) => {
+    if (!s) return false;
+    const sId = String(s.id || '').trim();
+    const sNum = String(s.numeroDoc || s.factura || s.factNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+    return (
+      (cleanStr && (sId === cleanStr || String(s.id) === cleanStr || String(s.numeroDoc) === cleanStr)) ||
+      (cleanNum && (sNum === cleanNum || String(s.numeroDoc) === cleanNum || String(s.id) === cleanNum))
+    );
+  };
+
   const sales = getSales();
-  const target = sales.find(s => s.id === saleId || s.numeroDoc === saleId);
+  const target = sales.find(isMatch);
   if (target && target.items && Array.isArray(target.items)) {
     try {
       const products = getProducts();
@@ -396,7 +417,7 @@ export const deleteStorageSale = (saleId) => {
       localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
     } catch (_) {}
   }
-  const filtered = sales.filter(s => s.id !== saleId && s.numeroDoc !== saleId);
+  const filtered = sales.filter(s => !isMatch(s));
   localStorage.setItem(KEYS.SALES, JSON.stringify(filtered));
   return filtered;
 };

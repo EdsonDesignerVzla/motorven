@@ -672,15 +672,31 @@ function MainApp() {
           setProfitInvoices(allTableData);
           return;
         }
+        if (action === 'DELETE') {
+          const targetKey = String(key || item?.id || item?.factNum || item?.numeroDoc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+          const targetId = String(key || item?.id || '').trim();
+          setProfitInvoices(prev => (prev || []).filter(f => {
+            const fNum = String(f.factNum ?? f.fact_num ?? f.numeroDoc ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            const fId = String(f.id ?? '').trim();
+            return (targetKey ? fNum !== targetKey : true) && (targetId ? fId !== targetId : true);
+          }));
+          return;
+        }
         if (item) {
           setProfitInvoices(prev => {
-            const index = prev.findIndex(f => f.facturaNumero === key || f.fact_num === key || f.id === key);
+            const targetKey = String(key || item.id || item.factNum || item.fact_num || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            const targetId = String(key || item.id || '').trim();
+            const index = prev.findIndex(f => {
+              const fNum = String(f.factNum ?? f.fact_num ?? f.facturaNumero ?? f.id ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+              const fId = String(f.id ?? '').trim();
+              return (targetKey && fNum === targetKey) || (targetId && fId === targetId);
+            });
             if (index >= 0) {
               const next = [...prev];
               next[index] = { ...next[index], ...item };
               return next;
             }
-            return [...prev, item];
+            return [item, ...prev];
           });
         }
       } else if (tableId === 'inventory_adjustments') {
@@ -830,17 +846,24 @@ function MainApp() {
           return;
         }
         if (action === 'DELETE') {
-          setSalesState(prev => prev.filter(s => String(s.id) !== String(key) && String(s.numeroDoc || '') !== String(key)));
+          const targetKey = String(key || item?.id || item?.numeroDoc || item?.factNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+          const targetId = String(key || item?.id || '').trim();
+          setSalesState(prev => prev.filter(s => {
+            const sNum = String(s.numeroDoc || s.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            const sId = String(s.id || '').trim();
+            return (targetKey ? sNum !== targetKey : true) && (targetId ? sId !== targetId : true);
+          }));
           return;
         }
         if (item) {
           setSalesState(prev => {
-            const targetKey = String(key || item.id || item.numeroDoc || item.numero_doc);
-            const index = prev.findIndex(s => 
-              String(s.id) === targetKey || 
-              String(s.numeroDoc || s.numero_doc) === targetKey || 
-              (item.numeroDoc && s.numeroDoc === item.numeroDoc)
-            );
+            const targetKey = String(key || item.id || item.numeroDoc || item.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            const targetId = String(key || item.id || '').trim();
+            const index = prev.findIndex(s => {
+              const sNum = String(s.numeroDoc || s.numero_doc || s.id || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+              const sId = String(s.id || '').trim();
+              return (targetKey && sNum === targetKey) || (targetId && sId === targetId);
+            });
             if (index >= 0) {
               const next = [...prev];
               next[index] = { ...next[index], ...item };
@@ -899,10 +922,42 @@ function MainApp() {
         }
       } else if (tableId === 'config' && item && typeof item === 'object') {
         setConfigState(prev => ({ ...prev, ...item }));
-      } else if (tableId === 'cash_desks' && Array.isArray(allTableData)) {
-        setProfitCashDesks(allTableData);
-      } else if (tableId === 'collections' && Array.isArray(allTableData)) {
-        setProfitCollections(allTableData);
+      } else if (tableId === 'cash_desks') {
+        if (Array.isArray(allTableData)) {
+          setProfitCashDesks(allTableData);
+          return;
+        }
+        if (item) {
+          setProfitCashDesks(prev => {
+            const list = Array.isArray(prev) ? [...prev] : [];
+            const idx = list.findIndex(d => String(d.id || d.coCaja || d.co_caja) === String(item.id || item.coCaja || item.co_caja || key));
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...item };
+              return list;
+            }
+            return [...list, item];
+          });
+        }
+      } else if (tableId === 'collections') {
+        if (Array.isArray(allTableData)) {
+          setProfitCollections(allTableData);
+          return;
+        }
+        if (action === 'DELETE') {
+          setProfitCollections(prev => (prev || []).filter(c => String(c.id) !== String(key) && String(c.cobNum || c.cob_num) !== String(key)));
+          return;
+        }
+        if (item) {
+          setProfitCollections(prev => {
+            const list = Array.isArray(prev) ? [...prev] : [];
+            const idx = list.findIndex(c => String(c.id) === String(item.id || key) || String(c.cobNum || c.cob_num) === String(item.cobNum || key));
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...item };
+              return list;
+            }
+            return [item, ...list];
+          });
+        }
       } else if (tableId === 'accounts_payable' && Array.isArray(allTableData)) {
         setProfitAccountsPayable(allTableData);
       } else if (tableId === 'supplier_payments' && Array.isArray(allTableData)) {
@@ -1609,17 +1664,29 @@ function MainApp() {
     }
   };
 
-  // Eliminar Factura / Venta
-  const handleDeleteSale = async (saleId) => {
+  // Eliminar Factura / Venta / Documento CxC
+  const handleDeleteSale = async (saleIdOrDoc) => {
     try {
-      await deleteSupabaseSale(saleId);
-      const remainingSales = deleteStorageSale(saleId);
-      setSalesState(remainingSales);
-      // Filtrar de facturas locales y de Profit si coincidiese
+      const rawId = typeof saleIdOrDoc === 'object' ? (saleIdOrDoc?.id || '') : String(saleIdOrDoc || '');
+      const rawNum = typeof saleIdOrDoc === 'object'
+        ? (saleIdOrDoc?.factNum || saleIdOrDoc?.factura || saleIdOrDoc?.numeroDoc || saleIdOrDoc?.id || '')
+        : String(saleIdOrDoc || '');
+      const cleanNum = String(rawNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+      const cleanId = String(rawId).trim();
+      const candidateKeys = new Set([cleanId, cleanNum, rawId, rawNum, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean));
+
+      await deleteSupabaseSale(saleIdOrDoc);
+      deleteStorageSale(cleanId);
+      const remainingSales = deleteStorageSale(cleanNum);
+      setSalesState(prev => (prev || []).filter(s => {
+        const sId = String(s.id || '').trim();
+        const sNum = String(s.numeroDoc || s.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+        return !candidateKeys.has(sId) && !candidateKeys.has(sNum);
+      }));
       setProfitInvoices(prev => (prev || []).filter(p => {
-        const pKey = String(p.factNum || p.fact_num || p.id || p.numeroDoc || '');
-        const pId = String(p.id || '');
-        return pKey !== String(saleId) && pId !== String(saleId);
+        const pKey = String(p.factNum || p.fact_num || p.numeroDoc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+        const pId = String(p.id || '').trim();
+        return !candidateKeys.has(pId) && !candidateKeys.has(pKey);
       }));
       // Actualizar inventario sincronizado
       const updatedProducts = await getSupabaseProducts();
@@ -1629,7 +1696,7 @@ function MainApp() {
       notify.success('Documento eliminado y saldo actualizado con éxito');
       return true;
     } catch (err) {
-      console.error('Error eliminando factura:', err);
+      console.error('Error eliminando documento:', err);
       notify.error('Error al eliminar el documento');
       throw err;
     }
