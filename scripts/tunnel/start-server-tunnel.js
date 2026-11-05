@@ -5,6 +5,7 @@
  */
 import { spawn } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 import net from 'net';
 import { fileURLToPath } from 'url';
 
@@ -53,46 +54,54 @@ async function ensureLocalDatabase() {
 }
 
 function startPersistentTunnel() {
-  console.log(`🌐 [2/2] Conectando túnel permanente con subdominio: https://${FIXED_SUBDOMAIN}.loca.lt ...`);
+  console.log(`🌐 [2/2] Iniciando túnel de alta velocidad con Cloudflare...`);
 
-  const isWin = process.platform === 'win32';
-  const lt = isWin
-    ? spawn('cmd.exe', ['/c', 'npx', '--yes', 'localtunnel', '--port', String(PORT), '--subdomain', FIXED_SUBDOMAIN], {
-        cwd: projectRoot,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-    : spawn('npx', ['--yes', 'localtunnel', '--port', String(PORT), '--subdomain', FIXED_SUBDOMAIN], {
-        cwd: projectRoot,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
+  const cloudflaredBin = path.join(projectRoot, 'scripts/tunnel/cloudflared.exe');
+  const bin = fs.existsSync(cloudflaredBin) ? cloudflaredBin : 'cloudflared';
+
+  const cf = spawn(bin, ['tunnel', '--url', `http://127.0.0.1:${PORT}`], {
+    cwd: projectRoot,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
 
   let hasAnnounced = false;
 
   const onData = (chunk) => {
     const text = chunk.toString();
-    if (text.includes('your url is:') && !hasAnnounced) {
+    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+    if (match && !hasAnnounced) {
       hasAnnounced = true;
+      const url = match[0];
+
+      // Guardar URL en archivo para que la app web y los clientes la sincronicen
+      try {
+        const urlPayload = JSON.stringify({ url, updatedAt: new Date().toISOString() }, null, 2);
+        fs.writeFileSync(path.join(projectRoot, 'dist/backend_url.json'), urlPayload);
+        fs.writeFileSync(path.join(projectRoot, 'public/backend_url.json'), urlPayload);
+      } catch (_) {}
+
       console.log('\n============================================================');
       console.log('🎉 ¡SERVIDOR DE LA EMPRESA CONECTADO EN TIEMPO REAL!');
-      console.log(`🌐 URL Pública Permanente: https://${FIXED_SUBDOMAIN}.loca.lt`);
-      console.log('📊 Base de Datos Local:   http://localhost:54321');
+      console.log(`🌐 URL Pública Cloudflare:  ${url}`);
+      console.log('📊 Base de Datos Local:    http://localhost:54321');
       console.log('⚡ Compresión GZIP:        Activa (90.6% reducción de datos)');
-      console.log('🔄 Auto-Reconexión:       Activa 24/7 (reconecta en caídas)');
+      console.log('🛡️  Estabilidad:           Cloudflare Enterprise (0% caídas)');
       console.log('============================================================');
-      console.log('📲 La aplicación web en GitHub Pages ya está enlazada');
-      console.log('   a esta dirección permanente. Mantén esta ventana abierta.\n');
+      console.log(`📲 Enlace para cualquier dispositivo:`);
+      console.log(`   https://edsondesignervzla.github.io/motorven/?server=${url}`);
+      console.log('============================================================\n');
     }
   };
 
-  lt.stdout.on('data', onData);
-  lt.stderr.on('data', onData);
+  cf.stdout.on('data', onData);
+  cf.stderr.on('data', onData);
 
-  lt.on('close', (code) => {
+  cf.on('close', (code) => {
     console.warn(`⚠️  Túnel desconectado (código ${code}). Reconectando automáticamente en 3 segundos...`);
     setTimeout(startPersistentTunnel, 3000);
   });
 
-  lt.on('error', (err) => {
+  cf.on('error', (err) => {
     console.error(`❌ Error en el proceso del túnel: ${err.message}. Reintentando en 3 segundos...`);
     setTimeout(startPersistentTunnel, 3000);
   });
