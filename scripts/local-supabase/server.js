@@ -845,29 +845,30 @@ process.on('unhandledRejection', (reason) => {
   console.error('[Supabase Local] Promesa rechazada controlada:', reason?.message || reason);
 });
 
-// Servidor HTTP
 const server = http.createServer(async (req, res) => {
-  req.on('error', () => {
-    sseClients.delete(res);
-  });
-  res.on('error', () => {
-    sseClients.delete(res);
-  });
+  try {
+    req.on('error', () => {
+      sseClients.delete(res);
+    });
+    res.on('error', () => {
+      sseClients.delete(res);
+    });
 
-  // CORS Headers universales
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
-  res.setHeader('Access-Control-Allow-Headers', '*');
-  res.setHeader('Access-Control-Expose-Headers', '*');
+    // CORS Headers universales
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', '*');
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
 
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = url.pathname;
+    const hostHeader = (req.headers && req.headers.host) ? String(req.headers.host).split(':')[0] : 'localhost';
+    const url = new URL(req.url, `http://${hostHeader}`);
+    const pathname = url.pathname;
 
   // 1. Dashboard Visual Web
   if (pathname === '/' || pathname === '/studio' || pathname === '/dashboard') {
@@ -1653,9 +1654,18 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Ruta no encontrada
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Endpoint no encontrado en Supabase Local' }));
+    // Ruta no encontrada
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Endpoint no encontrado en Supabase Local' }));
+  } catch (err) {
+    console.error('[Supabase Local] Error no controlado en petición HTTP:', err);
+    try {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Error interno en el servidor local: ' + (err?.message || err) }));
+      }
+    } catch (_) {}
+  }
 });
 
 // Inicializar y arrancar servidor
