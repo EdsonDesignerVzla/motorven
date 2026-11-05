@@ -576,20 +576,26 @@ function MainApp() {
 
         }
       } else if (tableId === 'warehouses') {
+        const filterOnlyTwo = (list) =>
+          (list || []).filter(w => {
+            const code = String(w?.coAlm || w?.co_alm || w?.coAlma || w?.co_alma || w?.id || '').replace(/^ALM-/, '').trim();
+            return code === '01' || code === '02';
+          });
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
-          setProfitWarehouses(allTableData);
+          setProfitWarehouses(filterOnlyTwo(allTableData));
           return;
         }
         if (item) {
-          const normKey = String(key || item.id || item.coAlm || '').replace(/^ALM-/, '');
+          const normKey = String(key || item.id || item.coAlm || '').replace(/^ALM-/, '').trim();
+          if (normKey !== '01' && normKey !== '02') return;
           setProfitWarehouses(prev => {
             const index = prev.findIndex(w => String(w.coAlm || w.co_alm || w.coAlma || w.co_alma || w.id || '').replace(/^ALM-/, '') === normKey);
             if (index >= 0) {
               const next = [...prev];
               next[index] = { ...next[index], ...item };
-              return next;
+              return filterOnlyTwo(next);
             }
-            return [...prev, item];
+            return filterOnlyTwo([...prev, item]);
           });
 
         }

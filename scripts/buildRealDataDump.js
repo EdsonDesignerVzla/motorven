@@ -57,7 +57,8 @@ const cleanConfigRow = {
 };
 db.config = [cleanConfigRow];
 
-// 2. Clean & normalize products (29 canonical Profit SKUs)
+// 2. Clean & normalize products (29 canonical Profit SKUs available in Almacén 01 and Almacén 02)
+const defaultPailaImg = (db.products || []).find(x => x && x.id === '000704' && x.imagen)?.imagen || null;
 const seenProdIds = new Set();
 db.products = (db.products || [])
   .filter(p => p && p.id && !String(p.id).startsWith('OIL-') && !seenProdIds.has(p.id) && seenProdIds.add(p.id))
@@ -76,6 +77,7 @@ db.products = (db.products || [])
     const coLin = p.co_lin || p.coLin || 'LUB-GAS';
     const coSubl = p.co_subl || p.coSubl || 'MIN-GAS';
     const coCat = p.co_cat || p.coCat || 'TERM-01';
+    const prodImg = p.imagen || (String(p.id).trim() === '000308' ? defaultPailaImg : null);
     return {
       ...p,
       id: String(p.id).trim(),
@@ -106,16 +108,103 @@ db.products = (db.products || [])
       aplicaIva,
       color_etiqueta: colorEtiqueta,
       colorEtiqueta,
-      imagen: p.imagen || null,
+      imagen: prodImg,
       especificaciones: p.especificaciones || {},
       co_lin: coLin,
       coLin,
       co_subl: coSubl,
       coSubl,
       co_cat: coCat,
-      coCat
+      coCat,
+      almacen: '01: ALMACÉN PRINCIPAL / MOSTRADOR | 02: ALMACÉN CENTRAL / BÓVEDA',
+      co_alm: '01,02',
+      coAlm: '01,02',
+      almacenes: ['01', '02'],
+      ubicacion: '01: Almacén Principal • 02: Almacén Central'
     };
   });
+
+// 2b. Clean & normalize profit_warehouses (only Almacén 01 and Almacén 02; remove Almacén 03)
+db.profit_warehouses = [
+  {
+    id: 'ALM-01',
+    coAlma: '01',
+    co_alma: '01',
+    desAlma: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+    des_alma: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+    coAlm: '01',
+    co_alm: '01',
+    desAlm: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+    des_alm: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+    campo1: 'Tienda & Despacho Inmediato',
+    campo2: '',
+    fechaActualizacion: '2026-10-22T04:16:48.076168+00:00'
+  },
+  {
+    id: 'ALM-02',
+    coAlma: '02',
+    co_alma: '02',
+    desAlma: 'ALMACÉN CENTRAL / BÓVEDA',
+    des_alma: 'ALMACÉN CENTRAL / BÓVEDA',
+    coAlm: '02',
+    co_alm: '02',
+    desAlm: 'ALMACÉN CENTRAL / BÓVEDA',
+    des_alm: 'ALMACÉN CENTRAL / BÓVEDA',
+    campo1: 'Custodia de Tambores y Paletas',
+    campo2: '',
+    fechaActualizacion: '2026-10-22T04:16:48.076168+00:00'
+  }
+];
+
+// 2c. Sync profit_stock_by_warehouse: copy all 29 products from Almacén 01 to Almacén 02 with full data & image
+db.profit_stock_by_warehouse = db.products.flatMap(p => [
+  {
+    id: `${p.id}_01`,
+    co_art: p.id,
+    codigo: p.codigo,
+    oem: p.oem,
+    descripcion: p.descripcion,
+    marca: p.marca,
+    categoria: p.categoria,
+    viscosidad: p.viscosidad,
+    unidad: p.unidad,
+    litros_por_unidad: p.litrosPorUnidad,
+    costo_usd: p.costoUsd,
+    precio_usd_detal: p.precioUsdDetal,
+    precio_usd_mayor: p.precioUsdMayor,
+    imagen: p.imagen,
+    co_alma: '01',
+    alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+    stock_act: p.stock,
+    stock_com: p.comprometido,
+    stock_lle: 0,
+    stock_des: 0,
+    updated_at: NOW_ISO
+  },
+  {
+    id: `${p.id}_02`,
+    co_art: p.id,
+    codigo: p.codigo,
+    oem: p.oem,
+    descripcion: p.descripcion,
+    marca: p.marca,
+    categoria: p.categoria,
+    viscosidad: p.viscosidad,
+    unidad: p.unidad,
+    litros_por_unidad: p.litrosPorUnidad,
+    costo_usd: p.costoUsd,
+    precio_usd_detal: p.precioUsdDetal,
+    precio_usd_mayor: p.precioUsdMayor,
+    imagen: p.imagen,
+    co_alma: '02',
+    alma_des: 'ALMACÉN CENTRAL / BÓVEDA',
+    stock_act: p.stock,
+    stock_com: p.comprometido,
+    stock_lle: 0,
+    stock_des: 0,
+    updated_at: NOW_ISO
+  }
+]);
 
 // 3. Clean & normalize clients (631 clients)
 const seenClientIds = new Set();

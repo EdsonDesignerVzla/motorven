@@ -154,6 +154,17 @@ async function initDatabase() {
           }
           p.litrosPorUnidad = realL;
           p.litros_por_unidad = realL;
+          p.almacen = p.almacen || '01: ALMACÉN PRINCIPAL / MOSTRADOR | 02: ALMACÉN CENTRAL / BÓVEDA';
+          p.co_alm = p.co_alm || p.coAlm || '01,02';
+          p.coAlm = p.coAlm || p.co_alm || '01,02';
+          p.almacenes = Array.isArray(p.almacenes) ? p.almacenes : ['01', '02'];
+          p.ubicacion = p.ubicacion || '01: Almacén Principal • 02: Almacén Central';
+        });
+      }
+      if (Array.isArray(database.profit_warehouses)) {
+        database.profit_warehouses = database.profit_warehouses.filter(w => {
+          const code = String(w?.coAlm || w?.co_alm || w?.coAlma || w?.co_alma || w?.id || '').replace(/^ALM-/, '').trim();
+          return code === '01' || code === '02';
         });
       }
       if (Array.isArray(database.order_items)) {

@@ -464,7 +464,12 @@ const mapProductToDb = (p) => {
     co_sub: hierarchy.co_sub,
     coSub: hierarchy.coSub,
     co_cat: hierarchy.co_cat,
-    coCat: hierarchy.coCat
+    coCat: hierarchy.coCat,
+    almacen: p.almacen || '01: ALMACÉN PRINCIPAL / MOSTRADOR | 02: ALMACÉN CENTRAL / BÓVEDA',
+    co_alm: p.co_alm || p.coAlm || '01,02',
+    coAlm: p.coAlm || p.co_alm || '01,02',
+    almacenes: Array.isArray(p.almacenes) ? p.almacenes : ['01', '02'],
+    ubicacion: p.ubicacion || '01: Almacén Principal • 02: Almacén Central'
   };
 };
 
@@ -528,7 +533,12 @@ const mapProductFromDb = (p) => {
     co_sub: hierarchy.co_sub,
     coSub: hierarchy.coSub,
     co_cat: hierarchy.co_cat,
-    coCat: hierarchy.coCat
+    coCat: hierarchy.coCat,
+    almacen: p.almacen || '01: ALMACÉN PRINCIPAL / MOSTRADOR | 02: ALMACÉN CENTRAL / BÓVEDA',
+    co_alm: p.co_alm || p.coAlm || '01,02',
+    coAlm: p.coAlm || p.co_alm || '01,02',
+    almacenes: Array.isArray(p.almacenes) ? p.almacenes : ['01', '02'],
+    ubicacion: p.ubicacion || '01: Almacén Principal • 02: Almacén Central'
   };
 };
 
@@ -4033,7 +4043,7 @@ export const getSupabaseProfitIslrWithholdings = async () => {
 export const mapWarehouseToDb = (w) => {
   const coAlm = (w.co_alm || w.co_alma || w.coAlm || w.coAlma || w.id?.replace(/^ALM-/, '') || '01').trim();
   const desAlm = (w.des_alm || w.des_alma || w.desAlm || w.desAlma || '').trim();
-  const stockActual = Number(w.stock_actual ?? w.stockActual ?? (coAlm === '01' ? 1826 : coAlm === '02' ? 866 : 0));
+  const stockActual = Number(w.stock_actual ?? w.stockActual ?? (coAlm === '01' || coAlm === '02' ? 1723 : 0));
   return {
     id: w.id || `ALM-${coAlm}`,
     co_alma: coAlm,
@@ -4050,7 +4060,7 @@ export const mapWarehouseToDb = (w) => {
 export const mapWarehouseFromDb = (w) => {
   const coAlm = (w.co_alm || w.co_alma || w.coAlm || w.coAlma || w.id?.replace(/^ALM-/, '') || '01').trim();
   const desAlm = (w.des_alm || w.des_alma || w.desAlm || w.desAlma || '').trim();
-  const stockActual = Number(w.stock_actual ?? w.stockActual ?? (coAlm === '01' ? 1826 : coAlm === '02' ? 866 : 0));
+  const stockActual = Number(w.stock_actual ?? w.stockActual ?? (coAlm === '01' || coAlm === '02' ? 1723 : 0));
   return {
     id: w.id || `ALM-${coAlm}`,
     coAlm,
@@ -4070,6 +4080,11 @@ export const mapWarehouseFromDb = (w) => {
 };
 
 export const getSupabaseProfitWarehouses = async () => {
+  const onlyTwoWarehouses = (list) =>
+    (list || []).filter(w => {
+      const code = String(w?.coAlm || w?.co_alm || w?.coAlma || w?.co_alma || w?.id || '').replace(/^ALM-/, '').trim();
+      return code === '01' || code === '02';
+    });
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_warehouses').select('*').order('id', { ascending: true }),
@@ -4077,10 +4092,10 @@ export const getSupabaseProfitWarehouses = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(mapWarehouseFromDb);
+    return onlyTwoWarehouses((data || []).map(mapWarehouseFromDb));
   } catch (err) {
     console.warn('[Supabase] Error cargando almacenes Profit:', err.message);
-    return REAL_PROFIT_WAREHOUSES;
+    return onlyTwoWarehouses(REAL_PROFIT_WAREHOUSES);
   }
 };
 

@@ -181,8 +181,10 @@ export default function InventoryView({
         const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').toLowerCase();
         const matchesWarehouse = selectedWarehouse === 'TODOS' ||
           normSelW === '01' ||
+          normSelW === '02' ||
           (p.almacen && p.almacen.toLowerCase().includes(normSelW)) ||
           (p.coAlm && String(p.coAlm).toLowerCase().includes(normSelW)) ||
+          (Array.isArray(p.almacenes) && p.almacenes.some(a => String(a).replace(/^ALM-/, '').toLowerCase() === normSelW)) ||
           (p.ubicacion && p.ubicacion.toLowerCase().includes(normSelW));
 
         return matchesSearch && matchesCat && matchesSemaforo && matchesWarehouse;
@@ -191,6 +193,18 @@ export default function InventoryView({
         String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
       );
   }, [products, searchTerm, globalSearch, selectedCategory, semaforoFilter, selectedWarehouse]);
+
+  // Lista de almacenes activos (solo 01 y 02; excluido el 03)
+  const activeWarehouses = useMemo(() => {
+    const rawList = warehouses.length > 0 ? warehouses : [
+      { id: 'ALM-01', coAlm: '01', desAlm: 'ALMACÉN PRINCIPAL / MOSTRADOR' },
+      { id: 'ALM-02', coAlm: '02', desAlm: 'ALMACÉN CENTRAL / BÓVEDA' }
+    ];
+    return rawList.filter((w) => {
+      const code = String(w?.coAlm || w?.co_alm || w?.coAlma || w?.co_alma || w?.id || '').replace(/^ALM-/, '').trim();
+      return code === '01' || code === '02';
+    });
+  }, [warehouses]);
 
   // Sincronizar en tiempo real para Toma Física
   const handleSyncPhysicalStock = async () => {
@@ -216,10 +230,13 @@ export default function InventoryView({
           (p.descripcion || '').toLowerCase().includes(searchLower) ||
           (p.ubicacion && p.ubicacion.toLowerCase().includes(searchLower));
 
+        const normWh = String(physicalTakeWarehouse || '').replace(/^ALM-/, '').toLowerCase();
         const matchesWh = physicalTakeWarehouse === 'TODOS' ||
-          (p.almacen && p.almacen.toLowerCase().includes(physicalTakeWarehouse.toLowerCase())) ||
-          (p.coAlm && p.coAlm === physicalTakeWarehouse) ||
-          (p.ubicacion && p.ubicacion.toLowerCase().includes(physicalTakeWarehouse.toLowerCase()));
+          normWh === '01' ||
+          normWh === '02' ||
+          (p.almacen && p.almacen.toLowerCase().includes(normWh)) ||
+          (p.coAlm && String(p.coAlm).toLowerCase().includes(normWh)) ||
+          (p.ubicacion && p.ubicacion.toLowerCase().includes(normWh));
 
         return matchesSearch && matchesWh;
       })
@@ -724,12 +741,8 @@ export default function InventoryView({
                 onChange={(e) => setSelectedWarehouse(e.target.value)}
                 style={{ width: '210px', height: '38px', fontSize: '0.82rem' }}
               >
-                <option value="TODOS">Todos los Almacenes ({warehouses.length || 3})</option>
-                {(warehouses.length > 0 ? warehouses : [
-                  { coAlm: 'ALM-01', desAlm: 'Almacén Principal Mostrador' },
-                  { coAlm: 'ALM-02', desAlm: 'Almacén Bóveda de Lubricantes' },
-                  { coAlm: 'ALM-03', desAlm: 'Almacén en Tránsito / Ruta' }
-                ]).map((w) => (
+                <option value="TODOS">Todos los Almacenes ({activeWarehouses.length})</option>
+                {activeWarehouses.map((w) => (
                   <option key={w.id || w.coAlm} value={w.coAlm}>
                     {w.coAlm} - {w.desAlm}
                   </option>
@@ -768,11 +781,7 @@ export default function InventoryView({
           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
             Almacenes:
           </span>
-          {(warehouses.length > 0 ? warehouses : [
-            { coAlm: 'ALM-01', desAlm: 'Principal Mostrador' },
-            { coAlm: 'ALM-02', desAlm: 'Bóveda Lubricantes' },
-            { coAlm: 'ALM-03', desAlm: 'Tránsito / Ruta' }
-          ]).map((w) => {
+          {activeWarehouses.map((w) => {
             const isSelected = selectedWarehouse === w.coAlm;
             return (
               <button
@@ -882,7 +891,12 @@ export default function InventoryView({
                       <td>
                         <span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{p.marca}</span>
                         <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Warehouse size={12} /> {p.ubicacion || 'Almacén Principal'}
+                          <Warehouse size={12} />{' '}
+                          {String(selectedWarehouse).replace(/^ALM-/, '') === '02'
+                            ? '02: Almacén Central / Bóveda'
+                            : String(selectedWarehouse).replace(/^ALM-/, '') === '01'
+                              ? '01: Almacén Principal / Mostrador'
+                              : (p.ubicacion || '01: Almacén Principal • 02: Almacén Central')}
                         </div>
                       </td>
                       <td style={{ textAlign: 'center' }}>
@@ -1325,9 +1339,8 @@ export default function InventoryView({
                   style={{ width: '100%', padding: '6px 10px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontWeight: 700, fontSize: '0.82rem' }}
                 >
                   <option value="TODOS">Todos los Almacenes (Consolidado General)</option>
-                  <option value="Almacén Principal">Almacén Principal / Depósito Barquisimeto</option>
-                  <option value="01">Depósito Central (Código 01)</option>
-                  <option value="02">Depósito Secundario / Tránsito (Código 02)</option>
+                  <option value="01">01: ALMACÉN PRINCIPAL / MOSTRADOR</option>
+                  <option value="02">02: ALMACÉN CENTRAL / BÓVEDA</option>
                 </select>
               </div>
 
