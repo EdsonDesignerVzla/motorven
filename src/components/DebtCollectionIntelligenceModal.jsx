@@ -22,10 +22,11 @@ import {
   Landmark,
   Phone,
   ShieldAlert,
-  AlertCircle
+  AlertCircle,
+  ArrowUpDown
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
-import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { generateAccountsReceivablePDF, generateWhatsAppCollectionPDF } from '../services/pdfReportService';
 
 export default function DebtCollectionIntelligenceModal({
   isOpen,
@@ -48,6 +49,20 @@ export default function DebtCollectionIntelligenceModal({
   const [agingFilter, setAgingFilter] = useState('ALL'); // 'ALL' | 'VIGENTE' | '1_7' | '8_15' | '16_30' | 'OVER_30'
   const [copied, setCopied] = useState(false);
   const [customPhone, setCustomPhone] = useState('');
+
+  // Ordenamiento de tablas con flechitas
+  const [sortField, setSortField] = useState('totalSaldoUsd');
+  const [sortDirection, setSortDirection] = useState('desc');
+
+  // Historial de mensajes de WhatsApp enviados/registrados
+  const [sentMessagesLog, setSentMessagesLog] = useState(() => {
+    try {
+      const stored = localStorage.getItem('signum_whatsapp_sent_log_v1');
+      return stored ? JSON.parse(stored) : [];
+    } catch (_) {
+      return [];
+    }
+  });
 
   const targetInvoices = useMemo(() => {
     const list = [];
@@ -274,6 +289,109 @@ export default function DebtCollectionIntelligenceModal({
     });
   }, [agingData.clientsList, sellerFilter, agingFilter, searchFilter]);
 
+  // Handler de Ordenamiento para las tablas
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('desc');
+    }
+  };
+
+  // Clientes filtrados y ordenados con selector interactivo de flechitas
+  const sortedFilteredClients = useMemo(() => {
+    const list = [...filteredClients];
+    list.sort((a, b) => {
+      let valA, valB;
+      if (sortField === 'nombre') {
+        valA = (a.nombre || '').toLowerCase();
+        valB = (b.nombre || '').toLowerCase();
+      } else if (sortField === 'telefono') {
+        valA = (a.telefono || '').toLowerCase();
+        valB = (b.telefono || '').toLowerCase();
+      } else if (sortField === 'invoices') {
+        valA = a.invoices.length;
+        valB = b.invoices.length;
+      } else if (sortField === 'totalSaldoUsd') {
+        valA = a.totalSaldoUsd;
+        valB = b.totalSaldoUsd;
+      } else if (sortField === 'totalSaldoBs') {
+        valA = a.totalSaldoBs;
+        valB = b.totalSaldoBs;
+      } else if (sortField === 'maxDiasVencido') {
+        valA = a.maxDiasVencido;
+        valB = b.maxDiasVencido;
+      } else if (sortField === 'tramoMayor') {
+        valA = a.maxDiasVencido;
+        valB = b.maxDiasVencido;
+      } else {
+        valA = a[sortField];
+        valB = b[sortField];
+      }
+
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return list;
+  }, [filteredClients, sortField, sortDirection]);
+
+  // Registro en bitácora de mensajes de cobranza enviados
+  const saveToSentLog = (cli, msgText, phoneNum) => {
+    if (!cli) return;
+    const entry = {
+      id: `WA-${Date.now()}`,
+      fecha: new Date().toISOString(),
+      clienteNombre: cli.nombre || 'Cliente General',
+      clienteRif: cli.rif || 'J-00000000-0',
+      telefono: phoneNum || cli.telefono || 'Sin número',
+      totalSaldoUsd: cli.totalSaldoUsd || 0,
+      totalSaldoBs: (cli.totalSaldoUsd || 0) * tasaBcv,
+      invoicesCount: cli.invoices?.length || 1,
+      invoicesList: cli.invoices?.map(i => `#${i.factNum}`).join(', ') || 'Cta. Corr.',
+      maxDiasVencido: cli.maxDiasVencido || 0,
+      estado: (cli.maxDiasVencido || 0) > 0 ? `Vencida (+${cli.maxDiasVencido}d)` : 'Al día',
+      canal: 'WhatsApp Directo'
+    };
+
+    setSentMessagesLog(prev => {
+      const updated = [entry, ...prev.filter(p => !(p.clienteRif === entry.clienteRif && Math.abs(new Date(p.fecha) - new Date(entry.fecha)) < 60000))].slice(0, 60);
+      try {
+        localStorage.setItem('signum_whatsapp_sent_log_v1', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  // Impresión oficial del Reporte de WhatsApp con mensajes enviados
+  const handlePrintWhatsAppReport = () => {
+    const messagesToPrint = sentMessagesLog.length > 0
+      ? sentMessagesLog
+      : agingData.clientsList.map((c, idx) => ({
+          id: `WA-CLI-${idx + 1}`,
+          fecha: new Date().toISOString(),
+          clienteNombre: c.nombre,
+          clienteRif: c.rif,
+          telefono: c.telefono,
+          totalSaldoUsd: c.totalSaldoUsd,
+          totalSaldoBs: c.totalSaldoBs,
+          invoicesCount: c.invoices.length,
+          invoicesList: c.invoices.map(i => `#${i.factNum}`).join(', ') || 'Cta. Corr.',
+          maxDiasVencido: c.maxDiasVencido,
+          estado: c.maxDiasVencido > 0 ? `Vencida (+${c.maxDiasVencido}d)` : 'Al día',
+          canal: 'WhatsApp Directo'
+        }));
+
+    generateWhatsAppCollectionPDF({
+      sentMessages: messagesToPrint,
+      clients: agingData.clientsList,
+      config: { ...config, tasaDolar: tasaBcv },
+      currentUser,
+      tasaBcv
+    });
+  };
+
   // 3. Normalizador de teléfonos para WhatsApp (Formato Internacional Venezuela: 58...)
   const normalizeWhatsAppPhone = (phoneStr) => {
     if (!phoneStr) return '';
@@ -324,6 +442,9 @@ export default function DebtCollectionIntelligenceModal({
     if (!generatedWhatsAppMessage) return;
     navigator.clipboard.writeText(generatedWhatsAppMessage);
     setCopied(true);
+    if (selectedClient) {
+      saveToSentLog(selectedClient, generatedWhatsAppMessage, customPhone || selectedClient.telefono);
+    }
     setTimeout(() => setCopied(false), 2500);
   };
 
@@ -333,6 +454,7 @@ export default function DebtCollectionIntelligenceModal({
     const cleanPhone = normalizeWhatsAppPhone(targetPhone);
     const encoded = encodeURIComponent(generatedWhatsAppMessage);
     const url = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
+    saveToSentLog(selectedClient, generatedWhatsAppMessage, targetPhone);
     window.open(url, '_blank');
   };
 
@@ -459,8 +581,32 @@ export default function DebtCollectionIntelligenceModal({
             </button>
           </div>
 
-          <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', padding: '0.5rem 0' }}>
-            Tasa BCV del Día: <strong style={{ color: 'var(--motorven-gold)', fontWeight: 800 }}>Bs. {tasaBcv.toFixed(2)}</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={handlePrintWhatsAppReport}
+              className="btn btn-sm"
+              style={{
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                background: 'rgba(16, 185, 129, 0.15)',
+                color: 'var(--semaforo-verde)',
+                border: '1px solid rgba(16, 185, 129, 0.4)',
+                padding: '5px 12px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title="Imprimir Reporte PDF Oficial de Mensajes y Gestiones de Cobranza por WhatsApp"
+            >
+              <Printer size={14} />
+              <span>Imprimir Reporte WhatsApp</span>
+            </button>
+            <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', padding: '0.5rem 0' }}>
+              Tasa BCV del Día: <strong style={{ color: 'var(--motorven-gold)', fontWeight: 800 }}>Bs. {tasaBcv.toFixed(2)}</strong>
+            </div>
           </div>
         </div>
 
@@ -604,18 +750,53 @@ export default function DebtCollectionIntelligenceModal({
                     <table className="custom-table" style={{ fontSize: '0.8rem' }}>
                       <thead>
                         <tr>
-                          <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>CLIENTE / RIF</th>
-                          <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>TELÉFONO</th>
-                          <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>DOCS</th>
-                          <th style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>SALDO ($ USD)</th>
-                          <th style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>SALDO (BS.)</th>
-                          <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>MORA MÁXIMA</th>
-                          <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>ESTADO AGING</th>
+                          <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('nombre')}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span>CLIENTE / RIF</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
+                          <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('telefono')}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span>TELÉFONO</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('invoices')}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                              <span>DOCS</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('totalSaldoUsd')}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                              <span>SALDO ($ USD)</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('totalSaldoBs')}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                              <span>SALDO (BS.)</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('maxDiasVencido')}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                              <span>MORA MÁXIMA</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('tramoMayor')}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                              <span>ESTADO AGING</span>
+                              <ArrowUpDown size={12} />
+                            </div>
+                          </th>
                           <th style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>ACCIÓN INMEDIATA</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredClients.map((cli, idx) => {
+                        {sortedFilteredClients.map((cli, idx) => {
                           const isCritical = cli.maxDiasVencido > 30;
 
                           return (
@@ -856,7 +1037,17 @@ export default function DebtCollectionIntelligenceModal({
                     </div>
 
                     {/* Botones de Acción */}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '6px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={handlePrintWhatsAppReport}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                        title="Generar e imprimir reporte PDF de mensajes de cobranza enviados por WhatsApp"
+                      >
+                        <Printer size={14} />
+                        Imprimir Reporte WhatsApp
+                      </button>
+
                       <button
                         onClick={handleCopyMessage}
                         className="btn btn-secondary"

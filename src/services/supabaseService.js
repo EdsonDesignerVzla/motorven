@@ -2442,6 +2442,32 @@ export const deleteSupabaseSale = async (saleId) => {
   if (!saleId) return false;
   deleteStorageSale(saleId);
 
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+      const delList = rawDel ? JSON.parse(rawDel) : [];
+      const cleanKey = String(saleId).trim();
+      if (!delList.includes(cleanKey)) {
+        delList.push(cleanKey);
+        localStorage.setItem('signum_cxc_deleted_docs_v1', JSON.stringify(delList));
+      }
+      const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+      if (rawCustom) {
+        const customMap = JSON.parse(rawCustom);
+        if (customMap && typeof customMap === 'object') {
+          delete customMap[cleanKey];
+          Object.keys(customMap).forEach(k => {
+            const item = customMap[k];
+            if (item && (String(item.id) === cleanKey || String(item.factNum || item.fact_num || '') === cleanKey)) {
+              delete customMap[k];
+            }
+          });
+          localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
+        }
+      }
+    }
+  } catch (_) {}
+
   broadcastReconcileChange({
     tableId: 'sales',
     action: 'DELETE',
@@ -2453,6 +2479,11 @@ export const deleteSupabaseSale = async (saleId) => {
     return true;
   }
   try {
+    const cleanNum = String(saleId).replace(/^(FAC-|FACT-|NE-|fac-)/i, '').trim();
+    await withTimeout(
+      supabase.from('profit_invoices').delete().or(`id.eq.${saleId},fact_num.eq.${cleanNum}`)
+    ).catch(() => {});
+
     const { error } = await withTimeout(
       supabase.from('sales').delete().or(`id.eq.${saleId},numero_doc.eq.${saleId}`)
     );
@@ -3399,6 +3430,57 @@ export const updateSupabaseProfitCashDesk = async (cashDesk) => {
   }
 };
 
+const applyLocalCxcOverridesToInvoices = (rawList = []) => {
+  try {
+    if (typeof localStorage === 'undefined') return rawList;
+    const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+    const delSet = new Set(rawDel ? JSON.parse(rawDel).map(String) : []);
+    const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+    const customMap = rawCustom ? JSON.parse(rawCustom) : {};
+
+    const matchedCustomKeys = new Set();
+    const result = [];
+
+    for (const inv of rawList) {
+      if (!inv) continue;
+      const idKey = String(inv.id || '').trim();
+      const numKey = String(inv.factNum ?? inv.fact_num ?? inv.numeroDoc ?? '').trim();
+      if ((idKey && delSet.has(idKey)) || (numKey && delSet.has(numKey))) {
+        continue;
+      }
+      const override = (idKey && customMap[idKey]) || (numKey && customMap[numKey]);
+      if (override) {
+        if (idKey) matchedCustomKeys.add(idKey);
+        if (numKey) matchedCustomKeys.add(numKey);
+        if (override.id) matchedCustomKeys.add(String(override.id));
+        if (override.factNum) matchedCustomKeys.add(String(override.factNum));
+        result.push({ ...inv, ...override });
+      } else {
+        result.push(inv);
+      }
+    }
+
+    if (customMap && typeof customMap === 'object') {
+      const addedIds = new Set();
+      Object.entries(customMap).forEach(([k, doc]) => {
+        if (!doc) return;
+        const dId = String(doc.id || k).trim();
+        const dNum = String(doc.factNum ?? doc.fact_num ?? '').trim();
+        if (delSet.has(dId) || (dNum && delSet.has(dNum))) return;
+        if (!matchedCustomKeys.has(dId) && (!dNum || !matchedCustomKeys.has(dNum)) && !addedIds.has(dId)) {
+          addedIds.add(dId);
+          if (dNum) addedIds.add(dNum);
+          result.unshift(doc);
+        }
+      });
+    }
+
+    return result;
+  } catch (_) {
+    return rawList;
+  }
+};
+
 export const getSupabaseProfitCollections = async () => {
   try {
     const { data, error } = await withTimeout(
@@ -3407,26 +3489,136 @@ export const getSupabaseProfitCollections = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(c => ({
+    const mapped = (data || []).map(c => ({
       id: c.id,
-      cobNum: c.cob_num,
-      fecha: c.fec_cob,
-      clienteId: c.cliente_id,
-      clienteNombre: c.cliente_nombre,
-      clienteRif: c.cliente_rif,
-      vendedorId: c.vendedor_id,
-      montoUsd: Number(c.monto_usd || 0),
-      montoBs: Number(c.monto_bs || 0),
+      cobNum: c.cob_num ?? c.cobNum,
+      fecha: c.fec_cob ?? c.fecha,
+      clienteId: c.cliente_id ?? c.clienteId,
+      clienteNombre: c.cliente_nombre ?? c.clienteNombre,
+      clienteRif: c.cliente_rif ?? c.clienteRif,
+      vendedorId: c.vendedor_id ?? c.vendedorId,
+      montoUsd: Number(c.monto_usd ?? c.montoUsd ?? 0),
+      montoBs: Number(c.monto_bs ?? c.montoBs ?? 0),
       tasa: Number(c.tasa || 1),
-      descrip: c.descrip,
-      anulado: c.anulado,
-      formasPago: c.formas_pago || [],
-      documentosAfectados: c.documentos_afectados || [],
-      fechaSincronizacion: c.fecha_sincronizacion
+      cuentaId: c.cuenta_id ?? c.cuentaId ?? '',
+      cuentaNombre: c.cuenta_nombre ?? c.cuentaNombre ?? '',
+      descrip: c.descrip ?? '',
+      anulado: Boolean(c.anulado),
+      formasPago: c.formas_pago || c.formasPago || [],
+      documentosAfectados: c.documentos_afectados || c.documentosAfectados || [],
+      fechaSincronizacion: c.fecha_sincronizacion ?? c.fechaSincronizacion
     }));
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const rawLocalCobs = localStorage.getItem('signum_cxc_collections_v1');
+        const localCobs = rawLocalCobs ? JSON.parse(rawLocalCobs) : [];
+        if (Array.isArray(localCobs) && localCobs.length > 0) {
+          const seenIds = new Set(mapped.map(x => String(x.id)));
+          const extras = localCobs.filter(x => x && !seenIds.has(String(x.id)));
+          return [...extras, ...mapped];
+        }
+      }
+    } catch (_) {}
+    return mapped;
   } catch (err) {
     console.warn('[Supabase] Error cargando cobros Profit:', err.message);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const rawLocalCobs = localStorage.getItem('signum_cxc_collections_v1');
+        const localCobs = rawLocalCobs ? JSON.parse(rawLocalCobs) : [];
+        if (Array.isArray(localCobs) && localCobs.length > 0) {
+          return [...localCobs, ...(REAL_PROFIT_COLLECTIONS || [])];
+        }
+      }
+    } catch (_) {}
     return REAL_PROFIT_COLLECTIONS;
+  }
+};
+
+export const saveSupabaseProfitCollection = async (collectionData) => {
+  const nowIso = new Date().toISOString();
+  const cobNum = collectionData.cobNum || collectionData.cob_num || Math.floor(4000 + Math.random() * 90000);
+  const id = collectionData.id || `cob-${cobNum}`;
+  const normalized = {
+    id,
+    cobNum,
+    cob_num: cobNum,
+    fecha: collectionData.fecha || nowIso,
+    fec_cob: collectionData.fecha || nowIso,
+    clienteId: collectionData.clienteId || '',
+    cliente_id: collectionData.clienteId || '',
+    clienteNombre: collectionData.clienteNombre || 'Cliente General',
+    cliente_nombre: collectionData.clienteNombre || 'Cliente General',
+    clienteRif: collectionData.clienteRif || '',
+    cliente_rif: collectionData.clienteRif || '',
+    vendedorId: collectionData.vendedorId || 'OF',
+    vendedor_id: collectionData.vendedorId || 'OF',
+    montoUsd: Number(collectionData.montoUsd || 0),
+    monto_usd: Number(collectionData.montoUsd || 0),
+    montoBs: Number(collectionData.montoBs || 0),
+    monto_bs: Number(collectionData.montoBs || 0),
+    tasa: Number(collectionData.tasa || 1),
+    cuentaId: collectionData.cuentaId || '',
+    cuenta_id: collectionData.cuentaId || '',
+    cuentaNombre: collectionData.cuentaNombre || '',
+    cuenta_nombre: collectionData.cuentaNombre || '',
+    descrip: collectionData.descrip || '',
+    anulado: false,
+    formasPago: collectionData.formasPago || [],
+    formas_pago: collectionData.formasPago || [],
+    documentosAfectados: collectionData.documentosAfectados || [],
+    documentos_afectados: collectionData.documentosAfectados || [],
+    fechaSincronizacion: nowIso,
+    fecha_sincronizacion: nowIso
+  };
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawLocalCobs = localStorage.getItem('signum_cxc_collections_v1');
+      const localCobs = rawLocalCobs ? JSON.parse(rawLocalCobs) : [];
+      const filtered = Array.isArray(localCobs) ? localCobs.filter(c => String(c?.id) !== String(id)) : [];
+      filtered.unshift(normalized);
+      localStorage.setItem('signum_cxc_collections_v1', JSON.stringify(filtered));
+    }
+  } catch (_) {}
+
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      await withTimeout(
+        supabase.from('profit_collections').upsert(normalized, { onConflict: 'id' }),
+        5000
+      );
+    } catch (err) {
+      console.warn('[saveSupabaseProfitCollection] Guardado local activo:', err.message);
+    }
+  }
+
+  return normalized;
+};
+
+export const updateSupabaseProfitBankAccount = async (bankAcc) => {
+  if (!bankAcc) return null;
+  try {
+    const payload = {
+      id: bankAcc.id || `CTA-${bankAcc.codCta || bankAcc.cod_cta || '01'}`,
+      cod_cta: bankAcc.codCta || bankAcc.cod_cta,
+      num_cta: bankAcc.numCta || bankAcc.num_cta,
+      banco_nombre: bankAcc.bancoNombre || bankAcc.banco_nombre,
+      saldo_bs: Number(bankAcc.saldoBs ?? bankAcc.saldo_bs ?? 0),
+      saldo_usd: Number(bankAcc.saldoUsd ?? bankAcc.saldo_usd ?? 0),
+      moneda: bankAcc.moneda || 'BS',
+      fecha_actualizacion: new Date().toISOString()
+    };
+    if (isNetworkOnline() && isSupabaseAvailable) {
+      await withTimeout(
+        supabase.from('profit_bank_accounts').upsert(payload, { onConflict: 'id' }),
+        4000
+      );
+    }
+    return payload;
+  } catch (err) {
+    console.warn('[updateSupabaseProfitBankAccount] Aviso:', err.message);
+    return bankAcc;
   }
 };
 
@@ -3438,35 +3630,153 @@ export const getSupabaseProfitInvoices = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(f => ({
+    const mapped = (data || []).map(f => ({
       id: f.id,
       factNum: f.fact_num ?? f.factNum,
+      tipoDoc: f.tipo_doc ?? f.tipoDoc ?? 'FACTURA',
       fechaEmision: f.fec_emis ?? f.fechaEmision,
       fechaVencimiento: f.fec_venc ?? f.fechaVencimiento,
+      diasCredito: f.dias_credito ?? f.diasCredito,
+      diasVencidoCustom: f.dias_vencido_custom ?? f.diasVencidoCustom,
       clienteId: f.cliente_id ?? f.clienteId ?? f.co_cli,
       clienteNombre: f.cliente_nombre ?? f.clienteNombre ?? f.cli_des,
       clienteRif: f.cliente_rif ?? f.clienteRif ?? f.rif,
       vendedorId: f.vendedor_id ?? f.vendedorId ?? f.co_ven,
+      vendedorNombre: f.vendedor_nombre ?? f.vendedorNombre,
       totBrutoUsd: Number(f.tot_bruto_usd ?? f.totBrutoUsd ?? f.totalBrutoUsd ?? 0),
       totBrutoBs: Number(f.tot_bruto_bs ?? f.totBrutoBs ?? f.tot_bruto ?? f.totalBruto ?? 0),
       ivaUsd: Number(f.iva_usd ?? f.ivaUsd ?? 0),
       ivaBs: Number(f.iva_bs ?? f.ivaBs ?? f.iva ?? 0),
       totNetoUsd: Number(f.tot_neto_usd ?? f.totNetoUsd ?? f.totalNetoUsd ?? 0),
       totNetoBs: Number(f.tot_neto_bs ?? f.totNetoBs ?? f.tot_neto ?? f.totalNeto ?? 0),
+      abonosUsd: f.abonos_usd !== undefined ? Number(f.abonos_usd) : (f.abonosUsd !== undefined ? Number(f.abonosUsd) : undefined),
+      abonosBs: f.abonos_bs !== undefined ? Number(f.abonos_bs) : (f.abonosBs !== undefined ? Number(f.abonosBs) : undefined),
       saldoUsd: Number(f.saldo_usd ?? f.saldoUsd ?? 0),
       saldoBs: Number(f.saldo_bs ?? f.saldoBs ?? f.saldo ?? 0),
+      tasa: Number(f.tasa ?? f.tasa_dolar ?? f.tasaDolar ?? 0),
       status: f.status,
       anulada: f.anulada,
       formaPago: f.forma_pag ?? f.formaPago,
       totalLitros: Number(f.total_litros ?? f.totalLitros ?? 0),
       totalCajas: Number(f.total_cajas ?? f.totalCajas ?? 0),
       items: f.items || [],
+      observaciones: f.observaciones ?? f.descrip ?? '',
+      historialCobros: f.historial_cobros ?? f.historialCobros ?? [],
       fechaSincronizacion: f.fecha_sincronizacion ?? f.fechaSincronizacion
     }));
+    return applyLocalCxcOverridesToInvoices(mapped);
   } catch (err) {
     console.warn('[Supabase] Error cargando facturas Profit:', err.message);
-    return REAL_PROFIT_INVOICES;
+    return applyLocalCxcOverridesToInvoices(REAL_PROFIT_INVOICES);
   }
+};
+
+export const saveSupabaseProfitInvoice = async (docData) => {
+  if (!docData) return null;
+  const nowIso = new Date().toISOString();
+  const isNotaEntrega = String(docData.tipoDoc || docData.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA';
+  const rawNum = String(docData.factNum ?? docData.fact_num ?? docData.numeroDoc ?? docData.id ?? '').trim();
+  const id = String(docData.id || (isNotaEntrega ? `NE-${rawNum}` : `FAC-${rawNum}`)).trim();
+
+  // En Notas de Entrega no se calcula IVA ni ningún impuesto
+  const totBrutoUsd = Number(docData.totBrutoUsd ?? docData.tot_bruto_usd ?? docData.totNetoUsd ?? 0);
+  const ivaUsd = isNotaEntrega ? 0 : Number(docData.ivaUsd ?? docData.iva_usd ?? 0);
+  const totNetoUsd = isNotaEntrega
+    ? Number(docData.totNetoUsd ?? docData.tot_neto_usd ?? totBrutoUsd)
+    : Number(docData.totNetoUsd ?? docData.tot_neto_usd ?? (totBrutoUsd + ivaUsd));
+  const tasa = Number(docData.tasa ?? docData.tasaDolar ?? 827.73) || 827.73;
+  const abonosUsd = docData.abonosUsd !== undefined
+    ? Number(docData.abonosUsd)
+    : Math.max(0, Number((totNetoUsd - Number(docData.saldoUsd ?? totNetoUsd)).toFixed(2)));
+  const saldoUsd = Math.max(0, Number((docData.saldoUsd !== undefined ? Number(docData.saldoUsd) : (totNetoUsd - abonosUsd)).toFixed(2)));
+
+  const payload = {
+    ...docData,
+    id,
+    factNum: rawNum,
+    fact_num: isNaN(Number(rawNum)) ? rawNum : Number(rawNum),
+    tipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+    tipo_doc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+    fechaEmision: docData.fechaEmision || docData.fec_emis || nowIso,
+    fec_emis: docData.fechaEmision || docData.fec_emis || nowIso,
+    fechaVencimiento: docData.fechaVencimiento || docData.fec_venc || docData.fechaEmision || nowIso,
+    fec_venc: docData.fechaVencimiento || docData.fec_venc || docData.fechaEmision || nowIso,
+    diasCredito: Number(docData.diasCredito ?? docData.dias_credito ?? 0),
+    dias_credito: Number(docData.diasCredito ?? docData.dias_credito ?? 0),
+    diasVencidoCustom: docData.diasVencidoCustom ?? docData.dias_vencido_custom ?? null,
+    dias_vencido_custom: docData.diasVencidoCustom ?? docData.dias_vencido_custom ?? null,
+    clienteId: docData.clienteId || docData.cliente_id || docData.clienteRif || 'CLI-GEN',
+    cliente_id: docData.clienteId || docData.cliente_id || docData.clienteRif || 'CLI-GEN',
+    clienteNombre: docData.clienteNombre || docData.cliente_nombre || 'Cliente General',
+    cliente_nombre: docData.clienteNombre || docData.cliente_nombre || 'Cliente General',
+    clienteRif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
+    cliente_rif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
+    vendedorId: docData.vendedorId || docData.vendedor_id || 'OF',
+    vendedor_id: docData.vendedorId || docData.vendedor_id || 'OF',
+    vendedorNombre: docData.vendedorNombre || docData.vendedor_nombre || '',
+    vendedor_nombre: docData.vendedorNombre || docData.vendedor_nombre || '',
+    totBrutoUsd,
+    tot_bruto_usd: totBrutoUsd,
+    totBrutoBs: Number((totBrutoUsd * tasa).toFixed(2)),
+    tot_bruto_bs: Number((totBrutoUsd * tasa).toFixed(2)),
+    ivaUsd,
+    iva_usd: ivaUsd,
+    ivaBs: Number((ivaUsd * tasa).toFixed(2)),
+    iva_bs: Number((ivaUsd * tasa).toFixed(2)),
+    totNetoUsd,
+    tot_neto_usd: totNetoUsd,
+    totNetoBs: Number((totNetoUsd * tasa).toFixed(2)),
+    tot_neto_bs: Number((totNetoUsd * tasa).toFixed(2)),
+    abonosUsd,
+    abonos_usd: abonosUsd,
+    abonosBs: Number((abonosUsd * tasa).toFixed(2)),
+    abonos_bs: Number((abonosUsd * tasa).toFixed(2)),
+    saldoUsd,
+    saldo_usd: saldoUsd,
+    saldoBs: Number((saldoUsd * tasa).toFixed(2)),
+    saldo_bs: Number((saldoUsd * tasa).toFixed(2)),
+    tasa,
+    status: saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE',
+    anulada: false,
+    formaPago: docData.formaPago || docData.forma_pag || (Number(docData.diasCredito || 0) > 0 ? '03' : '01'),
+    forma_pag: docData.formaPago || docData.forma_pag || (Number(docData.diasCredito || 0) > 0 ? '03' : '01'),
+    observaciones: docData.observaciones || '',
+    historialCobros: docData.historialCobros || docData.historial_cobros || [],
+    historial_cobros: docData.historialCobros || docData.historial_cobros || [],
+    fechaSincronizacion: nowIso,
+    fecha_sincronizacion: nowIso,
+    updated_at: nowIso
+  };
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+      const customMap = rawCustom ? JSON.parse(rawCustom) : {};
+      customMap[id] = payload;
+      if (rawNum) customMap[rawNum] = payload;
+      localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
+    }
+  } catch (_) {}
+
+  broadcastReconcileChange({
+    tableId: 'invoices',
+    action: 'RECONCILE',
+    key: id,
+    item: payload
+  });
+
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      await withTimeout(
+        supabase.from('profit_invoices').upsert(payload, { onConflict: 'id' }),
+        5000
+      );
+    } catch (err) {
+      console.warn('[saveSupabaseProfitInvoice] Guardado local activo:', err.message);
+    }
+  }
+
+  return payload;
 };
 
 export const getSupabaseProfitSuppliers = async () => {

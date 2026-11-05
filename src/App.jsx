@@ -89,10 +89,13 @@ import {
   saveSupabaseOrder,
   updateSupabaseOrderStatus,
   getSupabaseProfitBankAccounts,
+  updateSupabaseProfitBankAccount,
   getSupabaseProfitCashDesks,
   updateSupabaseProfitCashDesk,
   getSupabaseProfitCollections,
+  saveSupabaseProfitCollection,
   getSupabaseProfitInvoices,
+  saveSupabaseProfitInvoice,
   getSupabaseProfitSuppliers,
   getSupabaseProfitPurchases,
   getSupabaseProfitAccountsPayable,
@@ -1615,20 +1618,112 @@ function MainApp() {
       // Filtrar de facturas locales y de Profit si coincidiese
       setProfitInvoices(prev => (prev || []).filter(p => {
         const pKey = String(p.factNum || p.fact_num || p.id || p.numeroDoc || '');
-        return pKey !== String(saleId);
+        const pId = String(p.id || '');
+        return pKey !== String(saleId) && pId !== String(saleId);
       }));
       // Actualizar inventario sincronizado
       const updatedProducts = await getSupabaseProducts();
       if (updatedProducts && updatedProducts.length > 0) {
         setProductsState(updatedProducts);
       }
-      notify.success('Factura eliminada y saldo actualizado con éxito');
+      notify.success('Documento eliminado y saldo actualizado con éxito');
       return true;
     } catch (err) {
       console.error('Error eliminando factura:', err);
-      notify.error('Error al eliminar la factura');
+      notify.error('Error al eliminar el documento');
       throw err;
     }
+  };
+
+  // Guardar o Editar Documento CxC (Factura Fiscal / Nota de Entrega)
+  const handleSaveCxcDocument = async (docData) => {
+    const saved = await saveSupabaseProfitInvoice(docData);
+    if (!saved) return null;
+    setProfitInvoices(prev => {
+      const list = Array.isArray(prev) ? [...prev] : [];
+      const idx = list.findIndex(p =>
+        String(p.id) === String(saved.id) ||
+        String(p.factNum ?? p.fact_num ?? '') === String(saved.factNum)
+      );
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...saved };
+        return list;
+      }
+      return [saved, ...list];
+    });
+    setSalesState(prev => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      const idx = prev.findIndex(s =>
+        String(s.id) === String(saved.id) ||
+        String(s.numeroDoc ?? s.factNum ?? '') === String(saved.factNum)
+      );
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = {
+          ...next[idx],
+          ...saved,
+          numeroDoc: saved.factNum,
+          totalUsd: saved.totNetoUsd,
+          totalBs: saved.totNetoBs,
+          saldoUsd: saved.saldoUsd,
+          saldoBs: saved.saldoBs,
+          abonosUsd: saved.abonosUsd,
+          abonosBs: saved.abonosBs
+        };
+        return next;
+      }
+      return prev;
+    });
+    return saved;
+  };
+
+  // Registrar Cobro en Cuentas por Cobrar (Parte A) y actualizar Abonos y Restante (Parte B)
+  const handleRegisterCxcCollection = async ({ updatedDoc, collectionPayload, selectedAccount }) => {
+    const savedDoc = await handleSaveCxcDocument(updatedDoc);
+    if (collectionPayload) {
+      const savedCob = await saveSupabaseProfitCollection(collectionPayload);
+      if (savedCob) {
+        setProfitCollections(prev => [savedCob, ...(Array.isArray(prev) ? prev : [])]);
+      }
+    }
+    if (selectedAccount) {
+      const montoUsd = Number(collectionPayload?.montoUsd || 0);
+      const montoBs = Number(collectionPayload?.montoBs || 0);
+      if (selectedAccount.kind === 'CAJA') {
+        setProfitCashDesks(prev => {
+          const list = Array.isArray(prev) ? [...prev] : [];
+          return list.map(d => {
+            if (String(d.id || d.coCaja) === String(selectedAccount.rawId)) {
+              const updatedDesk = {
+                ...d,
+                saldoUsd: Number(((Number(d.saldoUsd || 0)) + montoUsd).toFixed(2)),
+                saldoBs: Number(((Number(d.saldoBs || 0)) + montoBs).toFixed(2))
+              };
+              updateSupabaseProfitCashDesk(updatedDesk).catch(() => {});
+              return updatedDesk;
+            }
+            return d;
+          });
+        });
+      } else if (selectedAccount.kind === 'BANCO') {
+        setProfitBankAccounts(prev => {
+          const list = Array.isArray(prev) ? [...prev] : [];
+          return list.map(b => {
+            if (String(b.id || b.codCta) === String(selectedAccount.rawId)) {
+              const updatedBank = {
+                ...b,
+                saldoUsd: Number(((Number(b.saldoUsd || 0)) + montoUsd).toFixed(2)),
+                saldoBs: Number(((Number(b.saldoBs || 0)) + montoBs).toFixed(2))
+              };
+              updateSupabaseProfitBankAccount(updatedBank).catch(() => {});
+              return updatedBank;
+            }
+            return b;
+          });
+        });
+      }
+    }
+    return savedDoc;
   };
 
   // Proceder a facturar un Pedido en el POS
@@ -2035,10 +2130,15 @@ function MainApp() {
               clients={clients}
               sellers={profitSellers}
               profitSellers={profitSellers}
+              bankAccounts={profitBankAccounts}
+              cashDesks={profitCashDesks}
+              collections={profitCollections}
               config={config}
               currentUser={currentUser}
               onOpenCollectionIntelligence={() => setShowDebtCollectionModal(true)}
               onDeleteSale={handleDeleteSale}
+              onSaveDocument={handleSaveCxcDocument}
+              onRegisterCollection={handleRegisterCxcCollection}
             />
           )}
 

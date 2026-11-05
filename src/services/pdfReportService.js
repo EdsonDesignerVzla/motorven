@@ -921,29 +921,44 @@ export function generateProfitabilityPDF({ products = [], sales = [], config = {
 // =========================================================================
 // 3. REPORTE DE CUENTAS POR COBRAR (CxC) & AGING (PRIORITARIO)
 // =========================================================================
-export function generateAccountsReceivablePDF({ receivables = [], cxcList = [], clients = [], sellers = [], config = {}, currentUser = null }) {
+export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = null, configArg = null, docTypeArg = 'FACTURA') {
+  const isArrayCall = Array.isArray(arg1);
+  const receivables = isArrayCall ? arg1 : (arg1?.receivables || []);
+  const cxcList = isArrayCall ? [] : (arg1?.cxcList || []);
+  const clients = isArrayCall ? [] : (arg1?.clients || []);
+  const config = isArrayCall ? (configArg || {}) : (arg1?.config || {});
+  const currentUser = isArrayCall ? null : (arg1?.currentUser || null);
+  const isNotaEntrega = docTypeArg === 'NOTA_ENTREGA';
+
   const base = createBaseReport({
-    title: 'INFORME DE CUENTAS POR COBRAR & ENVEJECIMIENTO DE CARTERA (CXC)',
-    subtitle: 'Aging Report de Créditos Comerciales, Facturas Pendientes, Tramo de Mora y Riesgo',
+    title: isNotaEntrega
+      ? 'REPORTE DOCUMENTOS CXC — NOTAS DE ENTREGA (SIN IVA)'
+      : 'REPORTE DOCUMENTOS CXC — FACTURAS FISCALES',
+    subtitle: 'Vendedor • Factura • RIF • Nombre Cliente • Emisión • Vencimiento • Días Vencido • Días Crédito • Monto • Abonos • Restante',
     moduleCode: 'CXC',
     currentUser,
     config
   });
 
   const dataset = receivables && receivables.length > 0 ? receivables : cxcList;
-  const tasa = Number(config?.tasaDolar) || 827.73;
+  const tasa = Number(config?.tasaDolar) || 451.51;
   const now = new Date();
 
-  const totalCarteraUsd = dataset.reduce((acc, r) => acc + Number(r.saldoUsd || r.montoTotalUsd || r.saldo || r.saldoDeudorTotalUsd || r.saldoDeudorUsd || 0), 0);
-  const vencidas = dataset.filter(r => r.isVencida || (r.fechaVencimiento && new Date(r.fechaVencimiento) < now) || Number(r.diasMora || r.maxDiasMora || 0) > 0);
-  const totalVencidoUsd = vencidas.reduce((acc, r) => acc + Number(r.saldoUsd || r.montoTotalUsd || r.saldo || r.totalSaldoVencidoUsd || r.saldoDeudorTotalUsd || r.saldoDeudorUsd || 0), 0);
-  const efectividad = totalCarteraUsd > 0 ? (((totalCarteraUsd - totalVencidoUsd) / totalCarteraUsd) * 100) : 100;
+  const getMontoFactura = (r) => Number(r.montoFacturaUsd ?? r.totalFacturaUsd ?? r.totNetoUsd ?? r.montoTotalUsd ?? r.saldoUsd ?? r.saldo ?? 0);
+  const getAbonos = (r) => Number(r.abonosUsd ?? r.montoPagadoUsd ?? Math.max(0, getMontoFactura(r) - Number(r.restanteUsd ?? r.saldoPendienteUsd ?? r.saldoUsd ?? getMontoFactura(r))));
+  const getRestante = (r) => Number(r.restanteUsd ?? r.saldoPendienteUsd ?? r.saldoUsd ?? Math.max(0, getMontoFactura(r) - getAbonos(r)));
+
+  const totalMontoFacturaUsd = dataset.reduce((acc, r) => acc + getMontoFactura(r), 0);
+  const totalAbonosUsd = dataset.reduce((acc, r) => acc + getAbonos(r), 0);
+  const totalCarteraUsd = dataset.reduce((acc, r) => acc + getRestante(r), 0);
+  const vencidas = dataset.filter(r => r.estado === 'VENCIDA' || r.isVencida || Number(r.diasVencidos ?? r.diasMora ?? 0) > 0);
+  const totalVencidoUsd = vencidas.reduce((acc, r) => acc + getRestante(r), 0);
 
   const cards = [
-    { label: 'Total Cartera CxC', value: formatUsd(totalCarteraUsd), subtext: formatBs(totalCarteraUsd * tasa), color: COLORS.navy },
-    { label: 'Documentos Pendientes', value: `${dataset.length} Facturas`, subtext: `${clients.length} Clientes Totales`, color: COLORS.cyan },
-    { label: 'Saldo Vencido (>0d)', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} Facturas en Mora`, color: COLORS.red },
-    { label: 'Efectividad de Cobro', value: `${efectividad.toFixed(1)}%`, subtext: 'Cartera Vigente', color: COLORS.emerald }
+    { label: isNotaEntrega ? 'Monto Notas' : 'Monto Facturas', value: formatUsd(totalMontoFacturaUsd), subtext: `${dataset.length} Documentos`, color: COLORS.navy },
+    { label: 'Total Abonos', value: formatUsd(totalAbonosUsd), subtext: formatBs(totalAbonosUsd * tasa), color: COLORS.emerald },
+    { label: 'Total Restante', value: formatUsd(totalCarteraUsd), subtext: formatBs(totalCarteraUsd * tasa), color: COLORS.cyan },
+    { label: 'Saldo Vencido (>0d)', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} Docs Vencidos`, color: COLORS.red }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
@@ -951,26 +966,40 @@ export function generateAccountsReceivablePDF({ receivables = [], cxcList = [], 
   currentY = addAnalyticalBox(
     base.doc,
     currentY,
-    'ESTADO DE CARTERA & ANÁLISIS DE ENVEJECIMIENTO (AGING)',
-    `La cartera total por cobrar asciende a ${formatUsd(totalCarteraUsd)} (${formatBs(totalCarteraUsd * tasa)}). El índice de solvencia vigente representa el ${efectividad.toFixed(1)}% de la cartera. Se recomienda priorizar gestión de cobranza preventiva sobre los ${vencidas.length} documentos vencidos para optimizar el ciclo de conversión de efectivo.`,
+    'REPORTE DE DOCUMENTOS DE CUENTAS POR COBRAR (CXC)',
+    `Monto total facturado: ${formatUsd(totalMontoFacturaUsd)} | Abonos registrados: ${formatUsd(totalAbonosUsd)} | Saldo restante por cobrar: ${formatUsd(totalCarteraUsd)} (${formatBs(totalCarteraUsd * tasa)}).`,
     base.tableWidth,
     base.startX
   );
 
-  const tableData = dataset.slice(0, 18).map((r) => {
-    const isVencida = r.isVencida || (r.fechaVencimiento && new Date(r.fechaVencimiento) < now) || Number(r.diasMora || r.maxDiasMora || 0) > 0;
-    const dias = r.diasMora || r.maxDiasMora || (isVencida && r.fechaVencimiento ? Math.max(1, Math.round((now - new Date(r.fechaVencimiento)) / 86400000)) : 0);
-    const montoSaldo = Number(r.saldoUsd || r.montoTotalUsd || r.saldo || r.saldoDeudorTotalUsd || r.saldoDeudorUsd || 0);
+  const formatPdfDate = (d) => {
+    if (!d) return '—';
+    if (d instanceof Date && !isNaN(d.getTime())) {
+      return d.toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+    return String(d).slice(0, 10);
+  };
+
+  const tableData = dataset.slice(0, 28).map((r) => {
+    const isVencida = r.estado === 'VENCIDA' || r.isVencida || (r.fechaVencimiento && new Date(r.fechaVencimiento) < now) || Number(r.diasVencidos ?? r.diasMora ?? 0) > 0;
+    const diasVencido = Number(r.diasVencidos ?? r.diasMora ?? (isVencida && r.fechaVencimiento ? Math.max(0, Math.round((now - new Date(r.fechaVencimiento)) / 86400000)) : 0));
+    const diasCredito = Number(r.diasCredito ?? 15);
+    const montoFactura = getMontoFactura(r);
+    const abonos = getAbonos(r);
+    const restante = getRestante(r);
 
     return [
-      String(r.factNum || r.nroDoc || r.coCli || r.codigo || r.id || 'FACT-00'),
-      r.clienteNombre || r.cliente || r.nombre || r.razonSocial || 'Cliente Comercial',
-      r.vendedorId || r.vendedor || r.vendedorAsignado || 'Asesor General',
-      r.fechaEmision ? String(r.fechaEmision).slice(0, 10) : (r.fechaRegistro ? String(r.fechaRegistro).slice(0, 10) : '2026-10-01'),
-      r.fechaVencimiento ? String(r.fechaVencimiento).slice(0, 10) : (r.fechaUltimaVenta ? String(r.fechaUltimaVenta).slice(0, 10) : '2026-10-20'),
-      `${dias} d`,
-      formatUsd(montoSaldo),
-      isVencida ? 'EN MORA' : 'VIGENTE'
+      String(r.vendedorId || r.vendedor || 'OF'),
+      String(r.factura || r.factNum || r.nroDoc || r.id || '0000'),
+      String(r.rif || r.clienteRif || 'N/A'),
+      String(r.cliente || r.clienteNombre || r.nombre || 'Cliente Comercial').slice(0, 28),
+      formatPdfDate(r.fechaEmisionIso || r.fechaEmision || r.fechaRegistro),
+      formatPdfDate(r.fechaVencimientoIso || r.fechaVencimiento),
+      `${diasVencido}`,
+      `${diasCredito}`,
+      formatUsd(montoFactura),
+      formatUsd(abonos),
+      formatUsd(restante)
     ];
   });
 
@@ -978,54 +1007,47 @@ export function generateAccountsReceivablePDF({ receivables = [], cxcList = [], 
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['FACTURA', 'CLIENTE / DEUDOR', 'ASESOR', 'EMISIÓN', 'VENCIMIENTO', 'MORA', 'SALDO USD', 'ESTADO']],
-    body: tableData.length > 0 ? tableData : [['SIN DEUDAS', 'No hay facturas pendientes en cartera', '-', '-', '-', '0 d', '$ 0.00', 'AL DÍA']],
+    head: [['VENDEDOR', 'FACTURA', 'RIF', 'NOMBRE CLIENTE', 'FECHA EMISIÓN', 'FECHA VENC.', 'DÍAS VENC.', 'DÍAS CRÉD.', 'MONTO FACTURA', 'ABONOS', 'RESTANTE']],
+    body: tableData.length > 0 ? tableData : [['-', 'SIN DOCS', '-', 'No hay documentos pendientes en cartera', '-', '-', '0', '0', '$ 0.00', '$ 0.00', '$ 0.00']],
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
       textColor: [255, 255, 255],
-      fontSize: 6.8,
+      fontSize: 5.5,
       fontStyle: 'bold',
-      cellPadding: 1.6
+      cellPadding: 1.2
     },
     styles: {
-      fontSize: 6.2,
-      cellPadding: 1.4,
+      fontSize: 5.5,
+      cellPadding: 1.1,
       textColor: COLORS.dark
     },
     alternateRowStyles: {
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { fontStyle: 'bold', halign: 'center', cellWidth: 20 },
-      1: { cellWidth: 48 },
-      2: { cellWidth: 24 },
-      3: { halign: 'center', cellWidth: 16 },
-      4: { halign: 'center', cellWidth: 16 },
-      5: { halign: 'center', fontStyle: 'bold', cellWidth: 14 },
-      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
-      7: { halign: 'center', fontStyle: 'bold', cellWidth: 17.9 }
-    },
-    didParseCell: (data) => {
-      if (data.column.index === 7 && data.section === 'body') {
-        data.cell.text = ''; // Vector badge drawn in didDrawCell
-      }
-    },
-    didDrawCell: (data) => {
-      if (data.column.index === 7 && data.section === 'body') {
-        drawStatusBadge(base.doc, data.cell, data.cell.raw);
-      }
+      0: { fontStyle: 'bold', halign: 'center', cellWidth: 12 },
+      1: { fontStyle: 'bold', halign: 'center', cellWidth: 14 },
+      2: { halign: 'center', cellWidth: 18 },
+      3: { cellWidth: 36 },
+      4: { halign: 'center', cellWidth: 15 },
+      5: { halign: 'center', cellWidth: 15 },
+      6: { halign: 'center', fontStyle: 'bold', cellWidth: 11 },
+      7: { halign: 'center', cellWidth: 11 },
+      8: { halign: 'right', cellWidth: 16 },
+      9: { halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold', cellWidth: 15 },
+      10: { halign: 'right', textColor: COLORS.red, fontStyle: 'bold', cellWidth: 16.9 }
     }
   });
 
   const finalY = base.doc.lastAutoTable?.finalY || currentY;
   addGrandTotalBox(base.doc, finalY + 3.5, [
-    { label: 'CARTERA TOTAL CXC', value: formatUsd(totalCarteraUsd), subtext: formatBs(totalCarteraUsd * tasa), color: COLORS.navy },
-    { label: 'CARTERA VIGENTE', value: formatUsd(Math.max(0, totalCarteraUsd - totalVencidoUsd)), subtext: `${efectividad.toFixed(1)}% al día`, color: COLORS.emerald },
-    { label: 'SALDO VENCIDO (MORA)', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} facturas`, color: totalVencidoUsd > 0 ? COLORS.red : COLORS.emerald }
+    { label: 'MONTO FACTURAS', value: formatUsd(totalMontoFacturaUsd), subtext: formatBs(totalMontoFacturaUsd * tasa), color: COLORS.navy },
+    { label: 'TOTAL ABONOS', value: formatUsd(totalAbonosUsd), subtext: formatBs(totalAbonosUsd * tasa), color: COLORS.emerald },
+    { label: 'TOTAL RESTANTE', value: formatUsd(totalCarteraUsd), subtext: `${dataset.length} documentos`, color: totalCarteraUsd > 0 ? COLORS.red : COLORS.emerald }
   ], base.tableWidth, base.startX);
 
-  finalizeAndSave(base.doc, `Reporte_Cuentas_Cobrar_CxC_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  finalizeAndSave(base.doc, `Reporte_Documentos_CxC_${docTypeArg}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
 }
 
 // =========================================================================
@@ -4919,5 +4941,192 @@ export function generateProfitDatabaseTablePDF({
 
   return base.doc;
 }
+
+/**
+ * =========================================================================
+ * 40. REPORTE OFICIAL DE GESTIÓN & MENSAJES DE COBRANZAS POR WHATSAPP
+ * =========================================================================
+ * Genera el informe institucional de todos los mensajes y recordatorios de cobranza
+ * enviados o gestionados vía WhatsApp a clientes deudores con desglose de facturas,
+ * saldos en USD, equivalentes en Bolívares (BCV), días de mora y estado del contacto.
+ */
+export function generateWhatsAppCollectionPDF({
+  sentMessages = [],
+  clients = [],
+  config = {},
+  currentUser = null,
+  tasaBcv: propTasaBcv = null
+} = {}) {
+  const tasa = Number(propTasaBcv || config?.tasaDolar) || 451.51;
+
+  const base = createBaseReport({
+    title: 'REPORTE OFICIAL DE GESTIÓN & MENSAJES DE COBRANZAS WHATSAPP',
+    subtitle: 'Auditoría de Notificaciones Enviadas, Saldos Notificados y Recordatorios de Cartera',
+    moduleCode: 'WA-CXC',
+    currentUser,
+    config
+  });
+
+  // Si no hay mensajes registrados directamente, usar clientes deudores activos para el reporte
+  let dataset = Array.isArray(sentMessages) && sentMessages.length > 0 ? sentMessages : [];
+  if (dataset.length === 0 && Array.isArray(clients) && clients.length > 0) {
+    dataset = clients.map((c, idx) => ({
+      id: `WA-CLI-${idx + 1}`,
+      fecha: new Date().toISOString(),
+      clienteNombre: c.nombre || c.cliente || 'Cliente Comercial',
+      clienteRif: c.rif || 'J-00000000-0',
+      telefono: c.telefono || 'Sin teléfono',
+      totalSaldoUsd: Number(c.totalSaldoUsd || c.saldoUsd || 0),
+      totalSaldoBs: Number(c.totalSaldoBs || (c.totalSaldoUsd || 0) * tasa),
+      invoicesCount: c.invoices?.length || 1,
+      invoicesList: c.invoices?.map(i => `#${i.factNum || i.factura}`).join(', ') || 'Cta. Corr.',
+      maxDiasVencido: Number(c.maxDiasVencido || c.diasVencidos || 0),
+      estado: (c.maxDiasVencido || 0) > 0 ? `Vencida (+${c.maxDiasVencido}d)` : 'Al día',
+      canal: 'WhatsApp Directo'
+    }));
+  }
+
+  const totalNotificaciones = dataset.length;
+  const totalSaldoUsd = dataset.reduce((acc, m) => acc + Number(m.totalSaldoUsd || 0), 0);
+  const totalSaldoBs = totalSaldoUsd * tasa;
+  const totalEnMora = dataset.filter(m => Number(m.maxDiasVencido || 0) > 0).length;
+
+  const cards = [
+    {
+      label: 'Mensajes Notificados',
+      value: `${totalNotificaciones} Envíos`,
+      subtext: 'Canal WhatsApp Business',
+      color: COLORS.navy
+    },
+    {
+      label: 'Saldo Total Notificado',
+      value: formatUsd(totalSaldoUsd),
+      subtext: formatBs(totalSaldoBs),
+      color: COLORS.cyan
+    },
+    {
+      label: 'Casos en Mora (>0 días)',
+      value: `${totalEnMora} Clientes`,
+      subtext: `${totalNotificaciones - totalEnMora} Clientes al Día`,
+      color: totalEnMora > 0 ? COLORS.red : COLORS.emerald
+    },
+    {
+      label: 'Tasa Oficial BCV',
+      value: formatBs(tasa),
+      subtext: 'Conversión Multimoneda',
+      color: COLORS.amber
+    }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  currentY = addAnalyticalBox(
+    base.doc,
+    currentY,
+    'SÍNTESIS DE GESTIÓN DE COBRANZAS POR MENSAJERÍA INSTANTÁNEA (WHATSAPP)',
+    `El Departamento de Cobranzas certifica el registro de ${totalNotificaciones} gestiones de cobranza vía WhatsApp, notificando un saldo exigible de ${formatUsd(totalSaldoUsd)} (${formatBs(totalSaldoBs)} a tasa oficial BCV Bs. ${tasa.toFixed(2)}/USD). Se priorizaron ${totalEnMora} clientes con facturas en vencimiento moroso para agilizar la recaudación a través de las cuentas bancarias corporativas.`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const formatDateTimeShort = (isoStr) => {
+    if (!isoStr) return '—';
+    try {
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return String(isoStr).slice(0, 16);
+      return d.toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit' }) + ' ' +
+             d.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+    } catch (_) {
+      return String(isoStr).slice(0, 16);
+    }
+  };
+
+  const tableData = dataset.slice(0, 40).map((m) => {
+    const sUsd = Number(m.totalSaldoUsd || 0);
+    const sBs = Number(m.totalSaldoBs || sUsd * tasa);
+    const mora = Number(m.maxDiasVencido || 0);
+    const estadoStr = mora > 30 ? 'CRÍTICO (+30D)' : mora > 0 ? `MORA (+${mora}D)` : 'AL DÍA (0D)';
+
+    return [
+      formatDateTimeShort(m.fecha),
+      String(m.clienteNombre || 'Cliente General').slice(0, 26),
+      String(m.clienteRif || 'N/A'),
+      String(m.telefono || 'Sin teléfono'),
+      String(m.invoicesList || m.invoicesCount || '1 fac.').slice(0, 22),
+      formatUsd(sUsd),
+      formatBs(sBs),
+      mora > 0 ? `+${mora} d` : 'Al día',
+      estadoStr
+    ];
+  });
+
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['FECHA/HORA', 'CLIENTE / RAZÓN SOCIAL', 'RIF', 'TELÉFONO', 'FACTURAS', 'SALDO ($)', 'SALDO (BS.)', 'MORA', 'ESTADO']],
+    body: tableData.length > 0 ? tableData : [['—', 'Sin mensajes registrados en el período', '—', '—', '—', '$ 0.00', 'Bs. 0,00', '0 d', 'SIN REGISTROS']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 5.6,
+      fontStyle: 'bold',
+      cellPadding: 1.4,
+      halign: 'center'
+    },
+    styles: {
+      fontSize: 5.4,
+      cellPadding: 1.2,
+      textColor: COLORS.dark,
+      valign: 'middle'
+    },
+    alternateRowStyles: {
+      fillColor: COLORS.lightBg
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 16 },
+      1: { cellWidth: 38, fontStyle: 'bold' },
+      2: { halign: 'center', cellWidth: 17 },
+      3: { halign: 'center', cellWidth: 20 },
+      4: { cellWidth: 22 },
+      5: { halign: 'right', fontStyle: 'bold', textColor: COLORS.red, cellWidth: 17 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 20 },
+      7: { halign: 'center', fontStyle: 'bold', cellWidth: 13 },
+      8: { halign: 'center', fontStyle: 'bold', cellWidth: 16.9 }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 8) {
+        data.cell.text = ''; // Vector badge drawn in didDrawCell
+      }
+    },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.column.index === 8) {
+        drawStatusBadge(base.doc, data.cell, data.cell.raw);
+      }
+    }
+  });
+
+  const finalY = base.doc.lastAutoTable?.finalY || currentY;
+  addGrandTotalBox(base.doc, finalY + 3.5, [
+    { label: 'TOTAL MENSAJES NOTIFICADOS', value: `${totalNotificaciones} Envíos`, subtext: 'Canal WhatsApp Web / API', color: COLORS.navy },
+    { label: 'SALDO TOTAL EXIGIBLE', value: formatUsd(totalSaldoUsd), subtext: formatBs(totalSaldoBs), color: COLORS.emerald },
+    { label: 'CASOS EN MORA RECAUDADA', value: `${totalEnMora} Clientes`, subtext: 'Seguimiento prioritario', color: totalEnMora > 0 ? COLORS.red : COLORS.emerald }
+  ], base.tableWidth, base.startX);
+
+  addSignatures(
+    base.doc,
+    finalY + 22,
+    ['DEPARTAMENTO DE COBRANZAS', 'GERENCIA DE ADMINISTRACIÓN Y FINANZAS'],
+    base.tableWidth,
+    base.startX
+  );
+
+  const filename = `Reporte_Gestion_Cobranzas_WhatsApp_${new Date().toISOString().slice(0, 10)}.pdf`;
+  finalizeAndSave(base.doc, filename, currentUser);
+
+  return base.doc;
+}
+
 
 
