@@ -25,6 +25,7 @@ import {
   commitInvoiceCorrelativo
 } from './fiscalService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
+import { getProductWarehouseStocks } from './formatService.js';
 
 if (typeof globalThis.localStorage === 'undefined') {
   const memoryStore = new Map();
@@ -162,17 +163,26 @@ export const getProducts = () => {
 
 export const saveProduct = (product) => {
   const products = getProducts();
-  const targetId = String(product.id || product.codigo || '').trim().toUpperCase();
+  const stocks = getProductWarehouseStocks(product);
+  const normalized = {
+    ...product,
+    stockAlmacen01: stocks.stock01,
+    stock_almacen_01: stocks.stock01,
+    stockAlmacen02: stocks.stock02,
+    stock_almacen_02: stocks.stock02,
+    stock: stocks.total
+  };
+  const targetId = String(normalized.id || normalized.codigo || '').trim().toUpperCase();
   const existingIndex = products.findIndex(p =>
-    (product.id && String(p.id).trim().toUpperCase() === String(product.id).trim().toUpperCase()) ||
-    (product.codigo && String(p.codigo).trim().toUpperCase() === String(product.codigo).trim().toUpperCase())
+    (normalized.id && String(p.id).trim().toUpperCase() === targetId) ||
+    (normalized.codigo && String(p.codigo).trim().toUpperCase() === targetId)
   );
   
   if (existingIndex >= 0) {
-    products[existingIndex] = { ...products[existingIndex], ...product };
+    products[existingIndex] = { ...products[existingIndex], ...normalized };
   } else {
-    const newId = product.id || product.codigo || `OIL-${String(products.length + 1).padStart(3, '0')}`;
-    products.push({ ...product, id: newId });
+    const newId = normalized.id || normalized.codigo || `OIL-${String(products.length + 1).padStart(3, '0')}`;
+    products.push({ ...normalized, id: newId });
   }
   
   localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
@@ -322,21 +332,45 @@ export const saveSale = (saleData) => {
     pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
   };
 
-  // Ajuste de Stock
+  // Ajuste de Stock Independiente por Almacén:
+  // Almacén 01: Facturas Fiscales SENIAT y Notas de Débito
+  // Almacén 02: Notas de Entrega / Despacho
   if (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO') {
+    const isNotaEntrega = newSale.tipoDoc === 'NOTA_ENTREGA';
     newSale.items.forEach(item => {
-      const prodIndex = products.findIndex(p => p.id === item.articuloId);
+      const prodIndex = products.findIndex(p => p.id === item.articuloId || p.codigo === item.articuloId);
       if (prodIndex >= 0) {
-        products[prodIndex].stock = Math.max(0, products[prodIndex].stock - item.cantidad);
+        const currentStocks = getProductWarehouseStocks(products[prodIndex]);
+        if (isNotaEntrega) {
+          currentStocks.stock02 = Math.max(0, currentStocks.stock02 - item.cantidad);
+        } else {
+          currentStocks.stock01 = Math.max(0, currentStocks.stock01 - item.cantidad);
+        }
+        products[prodIndex].stockAlmacen01 = currentStocks.stock01;
+        products[prodIndex].stock_almacen_01 = currentStocks.stock01;
+        products[prodIndex].stockAlmacen02 = currentStocks.stock02;
+        products[prodIndex].stock_almacen_02 = currentStocks.stock02;
+        products[prodIndex].stock = currentStocks.stock01 + currentStocks.stock02;
       }
     });
     localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
   } else if (newSale.tipoDoc === 'NOTA_CREDITO') {
-    // En Nota de Crédito se reingresa la mercancía devuelta al stock
+    // En Nota de Crédito se reingresa al almacén de origen (si afecta Nota de Entrega a Alm 02, si no a Alm 01)
+    const isAfecNotaEntrega = String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE');
     newSale.items.forEach(item => {
-      const prodIndex = products.findIndex(p => p.id === item.articuloId);
+      const prodIndex = products.findIndex(p => p.id === item.articuloId || p.codigo === item.articuloId);
       if (prodIndex >= 0) {
-        products[prodIndex].stock += item.cantidad;
+        const currentStocks = getProductWarehouseStocks(products[prodIndex]);
+        if (isAfecNotaEntrega) {
+          currentStocks.stock02 += item.cantidad;
+        } else {
+          currentStocks.stock01 += item.cantidad;
+        }
+        products[prodIndex].stockAlmacen01 = currentStocks.stock01;
+        products[prodIndex].stock_almacen_01 = currentStocks.stock01;
+        products[prodIndex].stockAlmacen02 = currentStocks.stock02;
+        products[prodIndex].stock_almacen_02 = currentStocks.stock02;
+        products[prodIndex].stock = currentStocks.stock01 + currentStocks.stock02;
       }
     });
     localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));

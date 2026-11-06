@@ -1,6 +1,6 @@
 /**
  * DUMP REAL Y SINCRONIZADO DE LA BASE DE DATOS SUPABASE (PostgreSQL)
- * Generado el: 2026-11-05T17:34:40.531Z
+ * Generado el: 2026-11-06T17:11:59.005Z
  */
 import REAL_SIGNUM_MOTORVEN from './dump/signum_motorven.json' with { type: 'json' };
 import REAL_CONFIG from './dump/config.json' with { type: 'json' };
@@ -24,6 +24,7 @@ import REAL_PROFIT_ISLR_CONCEPTS from './dump/profit_islr_concepts.json' with { 
 import REAL_PROFIT_BENEFICIARIES from './dump/profit_beneficiaries.json' with { type: 'json' };
 import REAL_PROFIT_PAYMENT_ORDERS from './dump/profit_payment_orders.json' with { type: 'json' };
 import REAL_PROFIT_WAREHOUSES from './dump/profit_warehouses.json' with { type: 'json' };
+import REAL_PROFIT_STOCK_BY_WAREHOUSE from './dump/profit_stock_by_warehouse.json' with { type: 'json' };
 import REAL_PROFIT_PRODUCT_LINES from './dump/profit_product_lines.json' with { type: 'json' };
 import REAL_PROFIT_PRODUCT_SUBLINES from './dump/profit_product_sublines.json' with { type: 'json' };
 import REAL_PROFIT_PRODUCT_CATEGORIES from './dump/profit_product_categories.json' with { type: 'json' };
@@ -62,6 +63,7 @@ export {
   REAL_PROFIT_BENEFICIARIES,
   REAL_PROFIT_PAYMENT_ORDERS,
   REAL_PROFIT_WAREHOUSES,
+  REAL_PROFIT_STOCK_BY_WAREHOUSE,
   REAL_PROFIT_PRODUCT_LINES,
   REAL_PROFIT_PRODUCT_SUBLINES,
   REAL_PROFIT_PRODUCT_CATEGORIES,

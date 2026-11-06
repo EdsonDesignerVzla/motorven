@@ -28,7 +28,7 @@ import {
   RotateCcw,
   Download
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST, getProductWarehouseStocks } from '../services/formatService';
 import { getProductRetailPrice, getProductWholesalePrice } from '../services/pricingService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { canManageProducts, canViewCosts } from '../services/authService';
@@ -75,6 +75,11 @@ export default function InventoryView({
   const [physicalTakeLastSync, setPhysicalTakeLastSync] = useState(new Date().toLocaleTimeString('es-VE'));
   const [editingProduct, setEditingProduct] = useState(null);
   const [selectedSpecProduct, setSelectedSpecProduct] = useState(null);
+  const [activeModalWarehouse, setActiveModalWarehouse] = useState('01');
+  const [productToDelete, setProductToDelete] = useState(null);
+
+  const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').trim();
+  const isSpecificWarehouse = normSelW === '01' || normSelW === '02';
 
   const categories = [
     'TODAS',
@@ -98,54 +103,113 @@ export default function InventoryView({
     }
   };
 
-  // KPIs Consolidados de Inventario en Tiempo Real
+  // KPIs Consolidados e Independientes por Almacén en Tiempo Real:
+  // - Consolidado Total: Suma de Almacén 01 + Almacén 02
+  // - Almacén 01: Principal / Mostrador (Facturas Fiscales SENIAT)
+  // - Almacén 02: Central / Bóveda (Notas de Entrega / Despacho)
   const inventoryKpis = useMemo(() => {
-    const totalSkus = products.length;
-    const totalCajas = products.reduce((acc, p) => acc + (Number(p.stock) || 0), 0);
-    const totalLitros = products.reduce((acc, p) => acc + ((Number(p.stock) || 0) * resolveProductLitersPerUnit(p)), 0);
-    const totalValorUsd = products.reduce((acc, p) => acc + ((Number(p.stock) || 0) * (Number(p.costoUsd) || 0)), 0);
     const tasa = Number(config?.tasaDolar || 827.73);
-    const totalValorBs = totalValorUsd * tasa;
 
-    const breakdownByUnit = {
-      Litros: 0,
-      Caja: 0,
-      Paila: 0,
-      Tambor: 0,
-      Totem: 0
-    };
-
-    const breakdownLitersByUnit = {
-      Litros: 0,
-      Caja: 0,
-      Paila: 0,
-      Tambor: 0,
-      Totem: 0
-    };
-
+    // Métricas Consolidadas (Suma de ambos almacenes)
+    let totalCajas = 0;
+    let totalLitros = 0;
+    let totalValorUsd = 0;
     let countCriticos = 0;
     let countReorden = 0;
     let countOptimos = 0;
+    const breakdownByUnit = { Litros: 0, Caja: 0, Paila: 0, Tambor: 0, Totem: 0 };
+    const breakdownLitersByUnit = { Litros: 0, Caja: 0, Paila: 0, Tambor: 0, Totem: 0 };
+
+    // Métricas Almacén 01 (Principal / Facturas Fiscales SENIAT)
+    let alm01TotalCajas = 0;
+    let alm01TotalLitros = 0;
+    let alm01TotalValorUsd = 0;
+    let alm01ActiveSkus = 0;
+    let alm01CountCriticos = 0;
+    let alm01CountReorden = 0;
+    let alm01CountOptimos = 0;
+    const alm01BreakdownByUnit = { Litros: 0, Caja: 0, Paila: 0, Tambor: 0, Totem: 0 };
+    const alm01BreakdownLitersByUnit = { Litros: 0, Caja: 0, Paila: 0, Tambor: 0, Totem: 0 };
+
+    // Métricas Almacén 02 (Central / Bóveda / Notas de Entrega)
+    let alm02TotalCajas = 0;
+    let alm02TotalLitros = 0;
+    let alm02TotalValorUsd = 0;
+    let alm02ActiveSkus = 0;
+    let alm02CountCriticos = 0;
+    let alm02CountReorden = 0;
+    let alm02CountOptimos = 0;
+    const alm02BreakdownByUnit = { Litros: 0, Caja: 0, Paila: 0, Tambor: 0, Totem: 0 };
+    const alm02BreakdownLitersByUnit = { Litros: 0, Caja: 0, Paila: 0, Tambor: 0, Totem: 0 };
 
     products.forEach(p => {
-      const s = Number(p.stock) || 0;
-      const min = Number(p.stockMinimo) || 5;
-      if (s <= min) countCriticos++;
-      else if (s <= min * 2) countReorden++;
-      else countOptimos++;
+      const stocks = getProductWarehouseStocks(p);
+      const s01 = stocks.stock01;
+      const s02 = stocks.stock02;
+      const sTotal = stocks.total;
 
       const unit = resolveProductUnit(p, 'Caja');
       const litersPerUnit = resolveProductLitersPerUnit(p);
-      const totalLts = s * litersPerUnit;
+      const min = Number(p.stockMinimo) || 5;
+      const costo = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || 0;
+
+      // 1. Acumuladores Consolidados (Suma Total)
+      totalCajas += sTotal;
+      const lTotal = sTotal * litersPerUnit;
+      totalLitros += lTotal;
+      totalValorUsd += sTotal * costo;
+
+      if (sTotal <= min) countCriticos++;
+      else if (sTotal <= min * 2) countReorden++;
+      else countOptimos++;
 
       if (breakdownByUnit[unit] !== undefined) {
-        breakdownByUnit[unit] += s;
-        breakdownLitersByUnit[unit] += totalLts;
+        breakdownByUnit[unit] += sTotal;
+        breakdownLitersByUnit[unit] += lTotal;
+      }
+
+      // 2. Acumuladores Almacén 01 (Principal - Fiscal)
+      if (s01 > 0) alm01ActiveSkus++;
+      alm01TotalCajas += s01;
+      const l01 = s01 * litersPerUnit;
+      alm01TotalLitros += l01;
+      alm01TotalValorUsd += s01 * costo;
+
+      const min01 = Math.max(1, Math.round(min * 0.4));
+      if (s01 <= min01) alm01CountCriticos++;
+      else if (s01 <= min01 * 2) alm01CountReorden++;
+      else alm01CountOptimos++;
+
+      if (alm01BreakdownByUnit[unit] !== undefined) {
+        alm01BreakdownByUnit[unit] += s01;
+        alm01BreakdownLitersByUnit[unit] += l01;
+      }
+
+      // 3. Acumuladores Almacén 02 (Central - Notas de Entrega)
+      if (s02 > 0) alm02ActiveSkus++;
+      alm02TotalCajas += s02;
+      const l02 = s02 * litersPerUnit;
+      alm02TotalLitros += l02;
+      alm02TotalValorUsd += s02 * costo;
+
+      const min02 = Math.max(1, Math.round(min * 0.6));
+      if (s02 <= min02) alm02CountCriticos++;
+      else if (s02 <= min02 * 2) alm02CountReorden++;
+      else alm02CountOptimos++;
+
+      if (alm02BreakdownByUnit[unit] !== undefined) {
+        alm02BreakdownByUnit[unit] += s02;
+        alm02BreakdownLitersByUnit[unit] += l02;
       }
     });
 
+    const totalValorBs = totalValorUsd * tasa;
+    const alm01TotalValorBs = alm01TotalValorUsd * tasa;
+    const alm02TotalValorBs = alm02TotalValorUsd * tasa;
+
     return {
-      totalSkus,
+      // Consolidado (Suma Total 01 + 02)
+      totalSkus: products.length,
       totalCajas,
       totalLitros,
       totalValorUsd,
@@ -154,7 +218,31 @@ export default function InventoryView({
       countReorden,
       countOptimos,
       breakdownByUnit,
-      breakdownLitersByUnit
+      breakdownLitersByUnit,
+
+      // Almacén 01: Principal (Facturas Fiscales)
+      alm01TotalSkus: alm01ActiveSkus,
+      alm01TotalCajas,
+      alm01TotalLitros,
+      alm01TotalValorUsd,
+      alm01TotalValorBs,
+      alm01CountCriticos,
+      alm01CountReorden,
+      alm01CountOptimos,
+      alm01BreakdownByUnit,
+      alm01BreakdownLitersByUnit,
+
+      // Almacén 02: Central / Bóveda (Notas de Entrega)
+      alm02TotalSkus: alm02ActiveSkus,
+      alm02TotalCajas,
+      alm02TotalLitros,
+      alm02TotalValorUsd,
+      alm02TotalValorBs,
+      alm02CountCriticos,
+      alm02CountReorden,
+      alm02CountOptimos,
+      alm02BreakdownByUnit,
+      alm02BreakdownLitersByUnit
     };
   }, [products, config]);
 
@@ -175,17 +263,21 @@ export default function InventoryView({
           (p.categoria && p.categoria.toLowerCase().includes(selectedCategory.toLowerCase())) ||
           (selectedCategory.toLowerCase().includes(p.categoria?.toLowerCase() || '___'));
 
-        const sem = getSemaforoStatus(Number(p.stock) || 0, Number(p.stockMinimo) || 5);
+        const stocks = getProductWarehouseStocks(p);
+        const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').trim();
+        const currentStock = normSelW === '01' ? stocks.stock01 : (normSelW === '02' ? stocks.stock02 : stocks.total);
+        const effMin = normSelW === '01'
+          ? Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.4))
+          : (normSelW === '02'
+            ? Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.6))
+            : (Number(p.stockMinimo) || 5));
+
+        const sem = getSemaforoStatus(currentStock, effMin);
         const matchesSemaforo = semaforoFilter === 'TODOS' || sem.level === semaforoFilter;
 
-        const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').toLowerCase();
         const matchesWarehouse = selectedWarehouse === 'TODOS' ||
           normSelW === '01' ||
-          normSelW === '02' ||
-          (p.almacen && p.almacen.toLowerCase().includes(normSelW)) ||
-          (p.coAlm && String(p.coAlm).toLowerCase().includes(normSelW)) ||
-          (Array.isArray(p.almacenes) && p.almacenes.some(a => String(a).replace(/^ALM-/, '').toLowerCase() === normSelW)) ||
-          (p.ubicacion && p.ubicacion.toLowerCase().includes(normSelW));
+          normSelW === '02';
 
         return matchesSearch && matchesCat && matchesSemaforo && matchesWarehouse;
       })
@@ -378,11 +470,19 @@ export default function InventoryView({
     document.body.removeChild(link);
   };
 
-  const handleOpenModal = (product = null) => {
+  const handleOpenModal = (product = null, warehouseCode = null) => {
     if (!canManage) return;
+    const targetWh = warehouseCode || (isSpecificWarehouse ? normSelW : '01');
+    setActiveModalWarehouse(targetWh);
+
     if (product) {
+      const stocks = getProductWarehouseStocks(product);
       setEditingProduct({
         ...product,
+        activeWarehouse: targetWh,
+        stockAlmacen01: stocks.stock01,
+        stockAlmacen02: stocks.stock02,
+        stock: stocks.total,
         unidad: resolveProductUnit(product, 'Caja'),
         litrosPorUnidad: resolveProductLitersPerUnit(product)
       });
@@ -394,10 +494,13 @@ export default function InventoryView({
         marca: 'Motorven Lubricants',
         categoria: 'Gasolina',
         viscosidad: '20W-50 Mineral',
-        ubicacion: 'Pasillo A - Palet 01',
+        ubicacion: targetWh === '02' ? '02: Almacén Central / Bóveda' : '01: Almacén Principal / Mostrador',
         unidad: 'Caja',
         litrosPorUnidad: 11.35,
-        stock: 20,
+        activeWarehouse: targetWh,
+        stockAlmacen01: targetWh === '01' ? 10 : 0,
+        stockAlmacen02: targetWh === '02' ? 10 : 0,
+        stock: 10,
         comprometido: 0,
         stockMinimo: 5,
         costoUsd: 28.0,
@@ -408,6 +511,61 @@ export default function InventoryView({
       });
     }
     setShowModal(true);
+  };
+
+  const handleOpenSpecModal = (product, warehouseCode = null) => {
+    const targetWh = warehouseCode || (isSpecificWarehouse ? normSelW : '01');
+    setSelectedSpecProduct({
+      ...product,
+      _warehouseContext: targetWh
+    });
+  };
+
+  const handleOpenDeleteModal = (product, warehouseCode = null) => {
+    if (!canManage) return;
+    const targetWh = warehouseCode || (isSpecificWarehouse ? normSelW : '01');
+    const stocks = getProductWarehouseStocks(product);
+    setProductToDelete({
+      product,
+      warehouseCode: targetWh,
+      warehouseName: targetWh === '01' ? '01: ALMACÉN PRINCIPAL / MOSTRADOR' : '02: ALMACÉN CENTRAL / BÓVEDA',
+      warehousePurpose: targetWh === '01' ? 'Facturas Fiscales SENIAT' : 'Notas de Entrega / Despacho',
+      stockThisWh: targetWh === '01' ? stocks.stock01 : stocks.stock02,
+      stockOtherWh: targetWh === '01' ? stocks.stock02 : stocks.stock01,
+      otherWhName: targetWh === '01' ? '02: Almacén Central' : '01: Almacén Principal',
+      totalStock: stocks.total
+    });
+  };
+
+  const handleZeroOutWarehouseStock = async () => {
+    if (!productToDelete) return;
+    const { product, warehouseCode } = productToDelete;
+    const stocks = getProductWarehouseStocks(product);
+    const s01 = warehouseCode === '01' ? 0 : stocks.stock01;
+    const s02 = warehouseCode === '02' ? 0 : stocks.stock02;
+    const updatedProd = {
+      ...product,
+      stockAlmacen01: s01,
+      stock_almacen_01: s01,
+      stockAlmacen02: s02,
+      stock_almacen_02: s02,
+      stock: s01 + s02
+    };
+    try {
+      await onSaveProduct(updatedProd);
+      setProductToDelete(null);
+    } catch (err) {
+      console.error('Error al vaciar existencia de almacén:', err);
+    }
+  };
+
+  const handleConfirmFullDelete = async () => {
+    if (!productToDelete) return;
+    const targetId = productToDelete.product.id || productToDelete.product.codigo;
+    setProductToDelete(null);
+    if (onDeleteProduct) {
+      await onDeleteProduct(targetId);
+    }
   };
 
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -449,12 +607,23 @@ export default function InventoryView({
     e.preventDefault();
     setSavingStatus({ saving: true, message: 'Guardando en Supabase...' });
     try {
-      const saved = await onSaveProduct(editingProduct);
+      const s01 = Math.max(0, Number(editingProduct.stockAlmacen01) || 0);
+      const s02 = Math.max(0, Number(editingProduct.stockAlmacen02) || 0);
+      const payloadToSave = {
+        ...editingProduct,
+        stockAlmacen01: s01,
+        stock_almacen_01: s01,
+        stockAlmacen02: s02,
+        stock_almacen_02: s02,
+        stock: s01 + s02
+      };
+      const saved = await onSaveProduct(payloadToSave);
+      const targetLabel = activeModalWarehouse === '02' ? 'Almacén Central (02 - Notas de Entrega)' : 'Almacén Principal (01 - Facturas Fiscales)';
       if (saved && saved._comparison) {
         setSavingStatus({
           saving: false,
           success: true,
-          message: '✅ Sincronizado y Comparado: Supabase [art] y Supabase 100% coincidentes.'
+          message: `✅ Sincronizado para ${targetLabel}: Supabase y Almacén 100% coincidentes.`
         });
         setTimeout(() => {
           setShowModal(false);
@@ -464,7 +633,7 @@ export default function InventoryView({
         setSavingStatus({
           saving: false,
           success: true,
-          message: '✅ Lubricante guardado exitosamente.'
+          message: `✅ Lubricante guardado para ${targetLabel}.`
         });
         setTimeout(() => {
           setShowModal(false);
@@ -553,7 +722,12 @@ export default function InventoryView({
           </button>
 
           {canManage ? (
-            <button className="btn btn-secondary" onClick={() => handleOpenModal()} style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => handleOpenModal(null, isSpecificWarehouse ? normSelW : '01')}
+              style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+              title={isSpecificWarehouse ? `Cargar nuevo producto en Almacén ${normSelW}` : 'Cargar nuevo producto en inventario'}
+            >
               <Plus size={16} /> Cargar Nuevo Lubricante
             </button>
           ) : (
@@ -576,14 +750,31 @@ export default function InventoryView({
 
       {/* KPI METRIC CARDS DE INVENTARIO */}
       <div className="inventory-kpi-grid">
-        {/* KPI 1: VOLUMEN TOTAL */}
-        <div className="kpi-card-modern" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: '14px', padding: '1.15rem', minWidth: 0 }}>
+        {/* KPI 1: VOLUMEN TOTAL (CONSOLIDADO: SUMA DE LOS DOS ALMACENES) */}
+        <div
+          className="kpi-card-modern"
+          onClick={() => setSelectedWarehouse('TODOS')}
+          style={{
+            background: 'var(--bg-card)',
+            border: selectedWarehouse === 'TODOS' ? '1px solid var(--neon-cyan)' : '1px solid var(--border-glass)',
+            borderRadius: '14px',
+            padding: '1.15rem',
+            minWidth: 0,
+            cursor: 'pointer',
+            boxShadow: selectedWarehouse === 'TODOS' ? '0 0 14px rgba(6, 182, 212, 0.18)' : 'none',
+            transition: 'all 0.25s ease'
+          }}
+          title="Ver Consolidado de ambos almacenes (Suma Alm 01 + Alm 02)"
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
               Volumen en Bodega
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Oilstone ®</span>
+              <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                Σ Alm 01 + 02
+              </span>
             </div>
           </div>
           <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-tech)' }}>
@@ -598,12 +789,91 @@ export default function InventoryView({
               <span>• 🏗️ <strong>{inventoryKpis.breakdownByUnit.Totem}</strong> Totem <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Totem || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
             )}
           </div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '2px', opacity: 0.85 }}>
-            ({inventoryKpis.totalSkus} SKUs activos)
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', opacity: 0.9, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>({inventoryKpis.totalSkus} SKUs totales)</span>
+            <span style={{ color: 'var(--neon-cyan)', fontWeight: 700 }}>Total Consolidado</span>
           </div>
         </div>
 
-        {/* KPI 2: VALORIZACIÓN */}
+        {/* KPI 2: ALMACÉN 01 - PRINCIPAL / MOSTRADOR (FACTURAS FISCALES SENIAT) */}
+        <div
+          className="kpi-card-modern"
+          onClick={() => setSelectedWarehouse('01')}
+          style={{
+            background: 'linear-gradient(135deg, rgba(0, 43, 122, 0.16) 0%, rgba(2, 132, 199, 0.10) 100%)',
+            border: selectedWarehouse === '01' ? '1px solid #38bdf8' : '1px solid rgba(2, 132, 199, 0.35)',
+            borderRadius: '14px',
+            padding: '1.15rem',
+            minWidth: 0,
+            cursor: 'pointer',
+            boxShadow: selectedWarehouse === '01' ? '0 0 16px rgba(56, 189, 248, 0.28)' : 'none',
+            transition: 'all 0.25s ease'
+          }}
+          title="Clic para filtrar por 01: Almacén Principal (Facturación Fiscal)"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              🏢 01: Alm. Principal
+            </span>
+            <span style={{ fontSize: '0.65rem', background: 'rgba(2, 132, 199, 0.22)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.45)', padding: '2px 7px', borderRadius: '12px', fontWeight: 800 }}>
+              🧾 Facturas Fiscales
+            </span>
+          </div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-tech)' }}>
+            {inventoryKpis.alm01TotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px', lineHeight: 1.35 }}>
+            <span>💧 <strong>{inventoryKpis.alm01BreakdownByUnit?.Litros || 0}</strong> Lts <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Litros || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 📦 <strong>{inventoryKpis.alm01BreakdownByUnit?.Caja || 0}</strong> Cajas <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Caja || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 🪣 <strong>{inventoryKpis.alm01BreakdownByUnit?.Paila || 0}</strong> Pailas <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Paila || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 🛢️ <strong>{inventoryKpis.alm01BreakdownByUnit?.Tambor || 0}</strong> Tambor <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Tambor || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+          </div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>({inventoryKpis.alm01TotalSkus} SKUs en mostrador)</span>
+            <span style={{ color: 'var(--motorven-gold)', fontWeight: 700 }}>{formatUsd(inventoryKpis.alm01TotalValorUsd)}</span>
+          </div>
+        </div>
+
+        {/* KPI 3: ALMACÉN 02 - CENTRAL / BÓVEDA (NOTAS DE ENTREGA) */}
+        <div
+          className="kpi-card-modern"
+          onClick={() => setSelectedWarehouse('02')}
+          style={{
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(0, 43, 122, 0.10) 100%)',
+            border: selectedWarehouse === '02' ? '1px solid var(--motorven-emerald)' : '1px solid rgba(16, 185, 129, 0.35)',
+            borderRadius: '14px',
+            padding: '1.15rem',
+            minWidth: 0,
+            cursor: 'pointer',
+            boxShadow: selectedWarehouse === '02' ? '0 0 16px rgba(16, 185, 129, 0.28)' : 'none',
+            transition: 'all 0.25s ease'
+          }}
+          title="Clic para filtrar por 02: Almacén Central / Bóveda (Notas de Entrega)"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--motorven-emerald)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              🏛️ 02: Alm. Central
+            </span>
+            <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.22)', color: 'var(--motorven-emerald)', border: '1px solid rgba(16, 185, 129, 0.45)', padding: '2px 7px', borderRadius: '12px', fontWeight: 800 }}>
+              🚚 Notas de Entrega
+            </span>
+          </div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
+            {inventoryKpis.alm02TotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px', lineHeight: 1.35 }}>
+            <span>💧 <strong>{inventoryKpis.alm02BreakdownByUnit?.Litros || 0}</strong> Lts <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Litros || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 📦 <strong>{inventoryKpis.alm02BreakdownByUnit?.Caja || 0}</strong> Cajas <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Caja || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 🪣 <strong>{inventoryKpis.alm02BreakdownByUnit?.Paila || 0}</strong> Pailas <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Paila || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+            <span>• 🛢️ <strong>{inventoryKpis.alm02BreakdownByUnit?.Tambor || 0}</strong> Tambor <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Tambor || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
+          </div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>({inventoryKpis.alm02TotalSkus} SKUs en bóveda)</span>
+            <span style={{ color: 'var(--motorven-gold)', fontWeight: 700 }}>{formatUsd(inventoryKpis.alm02TotalValorUsd)}</span>
+          </div>
+        </div>
+
+        {/* KPI 4: VALORIZACIÓN */}
         {canSeeCosts && (
           <div className="kpi-card-modern" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: '14px', padding: '1.15rem', minWidth: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
@@ -618,10 +888,14 @@ export default function InventoryView({
             <div style={{ fontSize: '0.75rem', color: 'var(--motorven-gold)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
               {formatBs(inventoryKpis.totalValorBs)}
             </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+              <span>🏢 01: <strong style={{ color: '#38bdf8' }}>{formatUsd(inventoryKpis.alm01TotalValorUsd)}</strong></span>
+              <span>🏛️ 02: <strong style={{ color: 'var(--motorven-emerald)' }}>{formatUsd(inventoryKpis.alm02TotalValorUsd)}</strong></span>
+            </div>
           </div>
         )}
 
-        {/* KPI 3: SALUD DEL SEMÁFORO */}
+        {/* KPI 5: SALUD DEL SEMÁFORO */}
         <div className="kpi-card-modern" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: '14px', padding: '1.15rem', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
@@ -739,14 +1013,18 @@ export default function InventoryView({
                 className="form-control filter-select"
                 value={selectedWarehouse}
                 onChange={(e) => setSelectedWarehouse(e.target.value)}
-                style={{ width: '210px', height: '38px', fontSize: '0.82rem' }}
+                style={{ width: '235px', height: '38px', fontSize: '0.82rem' }}
               >
-                <option value="TODOS">Todos los Almacenes ({activeWarehouses.length})</option>
-                {activeWarehouses.map((w) => (
-                  <option key={w.id || w.coAlm} value={w.coAlm}>
-                    {w.coAlm} - {w.desAlm}
-                  </option>
-                ))}
+                <option value="TODOS">Todos los Almacenes (Σ Consolidado)</option>
+                {activeWarehouses.map((w) => {
+                  const code = String(w.coAlm || w.id).replace(/^ALM-/, '');
+                  const tag = code === '01' ? ' (Facturas Fiscales)' : code === '02' ? ' (Notas de Entrega)' : '';
+                  return (
+                    <option key={w.id || w.coAlm} value={w.coAlm}>
+                      {w.coAlm} - {w.desAlm}{tag}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -776,13 +1054,38 @@ export default function InventoryView({
           </div>
         </div>
 
-        {/* Chips de Almacenes y Líneas Supabase */}
+        {/* Chips de Almacenes Independientes */}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)', alignItems: 'center' }}>
           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
             Almacenes:
           </span>
+          <button
+            type="button"
+            onClick={() => setSelectedWarehouse('TODOS')}
+            style={{
+              fontSize: '0.72rem',
+              padding: '3px 9px',
+              borderRadius: '20px',
+              border: selectedWarehouse === 'TODOS' ? '1px solid var(--neon-cyan)' : '1px solid var(--border-glass)',
+              background: selectedWarehouse === 'TODOS' ? 'rgba(6, 182, 212, 0.18)' : 'var(--bg-card)',
+              color: selectedWarehouse === 'TODOS' ? 'var(--neon-cyan)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              fontWeight: 600
+            }}
+          >
+            Σ Todos (Consolidado: Alm 01 + Alm 02)
+          </button>
           {activeWarehouses.map((w) => {
             const isSelected = selectedWarehouse === w.coAlm;
+            const isAlm01 = String(w.coAlm).replace(/^ALM-/, '') === '01';
+            const isAlm02 = String(w.coAlm).replace(/^ALM-/, '') === '02';
+            const activeColor = isAlm01 ? '#38bdf8' : isAlm02 ? 'var(--motorven-emerald)' : 'var(--neon-cyan)';
+            const activeBg = isAlm01 ? 'rgba(2, 132, 199, 0.2)' : isAlm02 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(6, 182, 212, 0.15)';
+            const subLabel = isAlm01 ? ' • 🧾 Facturas Fiscales' : isAlm02 ? ' • 🚚 Notas de Entrega' : '';
+
             return (
               <button
                 key={w.coAlm}
@@ -790,19 +1093,19 @@ export default function InventoryView({
                 onClick={() => setSelectedWarehouse(isSelected ? 'TODOS' : w.coAlm)}
                 style={{
                   fontSize: '0.72rem',
-                  padding: '3px 9px',
+                  padding: '3px 10px',
                   borderRadius: '20px',
-                  border: isSelected ? '1px solid var(--neon-cyan)' : '1px solid var(--border-glass)',
-                  background: isSelected ? 'rgba(6, 182, 212, 0.15)' : 'var(--bg-card)',
-                  color: isSelected ? 'var(--neon-cyan)' : 'var(--text-muted)',
+                  border: isSelected ? `1px solid ${activeColor}` : '1px solid var(--border-glass)',
+                  background: isSelected ? activeBg : 'var(--bg-card)',
+                  color: isSelected ? activeColor : 'var(--text-muted)',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '4px',
-                  fontWeight: 600
+                  fontWeight: isSelected ? 700 : 500
                 }}
               >
-                <Warehouse size={12} /> {w.coAlm}: {w.desAlm}
+                <Warehouse size={12} /> {w.coAlm}: {w.desAlm}{subLabel}
               </button>
             );
           })}
@@ -825,7 +1128,7 @@ export default function InventoryView({
                 <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Precio Detal ($ / Bs)</th>
                 <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Precio Mayor ($)</th>
                 {canSeeCosts && <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>Margen Detal</th>}
-                <th style={{ textAlign: 'center', width: '88px' }} className="col-acciones">Acciones</th>
+                <th style={{ textAlign: 'center', width: isSpecificWarehouse ? '94px' : '128px' }} className="col-acciones">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -837,12 +1140,20 @@ export default function InventoryView({
                 </tr>
               ) : (
                 filteredProducts.map((p) => {
-                  const sem = getSemaforoStatus(Number(p.stock) || 0, Number(p.stockMinimo) || 5);
+                  const stocks = getProductWarehouseStocks(p);
+                  const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').trim();
+                  const currentStock = normSelW === '01' ? stocks.stock01 : (normSelW === '02' ? stocks.stock02 : stocks.total);
+                  const effMin = normSelW === '01'
+                    ? Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.4))
+                    : (normSelW === '02'
+                      ? Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.6))
+                      : (Number(p.stockMinimo) || 5));
+                  const sem = getSemaforoStatus(currentStock, effMin);
                   const precioUsdDetal = getProductRetailPrice(p);
                   const precioUsdMayor = getProductWholesalePrice(p);
                   const precioBsDetal = precioUsdDetal * (Number(config?.tasaDolar) || 886.22);
                   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0);
-                  const totalLitrosStock = ((Number(p.stock) || 0) * resolveProductLitersPerUnit(p)).toFixed(1);
+                  const totalLitrosStock = (currentStock * resolveProductLitersPerUnit(p)).toFixed(1);
 
                   return (
                     <tr key={p.id || p.codigo}>
@@ -889,25 +1200,41 @@ export default function InventoryView({
                         </div>
                       </td>
                       <td>
-                        <span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{p.marca}</span>
-                        <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Warehouse size={12} />{' '}
-                          {String(selectedWarehouse).replace(/^ALM-/, '') === '02'
-                            ? '02: Almacén Central / Bóveda'
-                            : String(selectedWarehouse).replace(/^ALM-/, '') === '01'
-                              ? '01: Almacén Principal / Mostrador'
-                              : (p.ubicacion || '01: Almacén Principal • 02: Almacén Central')}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{p.marca}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
+                        </div>
+                        <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Warehouse size={12} color="var(--neon-cyan)" />
+                            {normSelW === '01' && (
+                              <span style={{ color: '#38bdf8', fontWeight: 700 }}>01: Alm. Principal (Facturas Fiscales)</span>
+                            )}
+                            {normSelW === '02' && (
+                              <span style={{ color: 'var(--motorven-emerald)', fontWeight: 700 }}>02: Alm. Central (Notas de Entrega)</span>
+                            )}
+                            {normSelW !== '01' && normSelW !== '02' && (
+                              <span>Alm 01 (Fiscal) • Alm 02 (Notas Entrega)</span>
+                            )}
+                          </div>
+                          {normSelW !== '01' && normSelW !== '02' && (
+                            <div style={{ fontSize: '0.7rem', display: 'flex', gap: '8px', marginTop: '1px' }}>
+                              <span>🏢 01: <strong style={{ color: '#38bdf8' }}>{stocks.stock01}</strong></span>
+                              <span>•</span>
+                              <span>🏛️ 02: <strong style={{ color: 'var(--motorven-emerald)' }}>{stocks.stock02}</strong></span>
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                          <strong style={{ fontSize: '1rem', color: sem.color, fontFamily: 'var(--font-tech)' }}>
-                            {p.stock}
+                          <strong style={{ fontSize: '1.05rem', color: sem.color, fontFamily: 'var(--font-tech)' }}>
+                            {currentStock}
                           </strong>
                           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
                         </div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)', fontWeight: 600, fontFamily: 'var(--font-code)' }}>
-                          ({totalLitrosStock} L Totales)
+                          ({totalLitrosStock} L {normSelW === '01' ? 'Fiscal' : normSelW === '02' ? 'Entrega' : 'Totales'})
                         </div>
                       </td>
 
@@ -955,26 +1282,59 @@ export default function InventoryView({
                       )}
 
                       <td style={{ textAlign: 'center' }} className="col-acciones">
-                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                          {canManage && (
-                            <button className="btn btn-secondary btn-sm" onClick={() => handleOpenModal(p)} title="Editar Lubricante" style={{ padding: '3px 7px' }}>
-                              <Edit2 size={13} />
+                        {isSpecificWarehouse ? (
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                            {canManage && (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleOpenModal(p, normSelW)}
+                                title={`Editar en Almacén ${normSelW === '01' ? 'Principal (01 - Fiscal)' : 'Central (02 - Notas Entrega)'}`}
+                                style={{
+                                  padding: '3px 7px',
+                                  borderColor: normSelW === '01' ? '#38bdf8' : 'var(--motorven-emerald)',
+                                  background: normSelW === '01' ? 'rgba(2, 132, 199, 0.15)' : 'rgba(16, 185, 129, 0.15)'
+                                }}
+                              >
+                                <Edit2 size={13} color={normSelW === '01' ? '#38bdf8' : 'var(--motorven-emerald)'} />
+                              </button>
+                            )}
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleOpenSpecModal(p, normSelW)}
+                              title={`Ficha Técnica (${normSelW === '01' ? '01: Alm. Principal' : '02: Alm. Central'})`}
+                              style={{ color: 'var(--motorven-cyan, #00f0ff)', padding: '3px 7px' }}
+                            >
+                              <Info size={13} />
                             </button>
-                          )}
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => setSelectedSpecProduct(p)}
-                            title="Ficha Técnica & Calidad ASTM"
-                            style={{ color: 'var(--motorven-cyan, #00f0ff)', padding: '3px 7px' }}
+                            {canManage && (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleOpenDeleteModal(p, normSelW)}
+                                title={`Eliminar / Ajustar en Almacén ${normSelW === '01' ? 'Principal' : 'Central'}`}
+                                style={{ color: 'var(--motorven-red)', padding: '3px 7px' }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span
+                            style={{
+                              fontSize: '0.68rem',
+                              color: 'var(--text-muted)',
+                              fontStyle: 'italic',
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              background: 'rgba(255, 255, 255, 0.03)',
+                              border: '1px dashed var(--border-glass)',
+                              display: 'inline-block',
+                              whiteSpace: 'nowrap'
+                            }}
+                            title="Seleccione '01: Almacén Principal' o '02: Almacén Central' en el filtro para gestionar este lubricante"
                           >
-                            <Info size={13} />
-                          </button>
-                          {canManage && (
-                            <button className="btn btn-secondary btn-sm" onClick={() => onDeleteProduct(p.id || p.codigo)} title="Eliminar" style={{ color: 'var(--motorven-red)', padding: '3px 7px' }}>
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
+                            🔒 Seleccione Almacén
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -990,10 +1350,27 @@ export default function InventoryView({
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '750px', maxHeight: '90vh', overflowY: 'auto' }}>
             <div className="modal-header">
-              <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Package size={20} color="var(--motorven-gold)" />
-                {editingProduct.id ? 'Editar Lubricante' : 'Cargar Nuevo Lubricante'}
-              </h2>
+              <div>
+                <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Package size={20} color="var(--motorven-gold)" />
+                  {editingProduct.id ? 'Editar Lubricante' : 'Cargar Nuevo Lubricante'}
+                </h2>
+                <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {activeModalWarehouse === '01' ? (
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(2, 132, 199, 0.22)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.5)', padding: '2px 8px', borderRadius: '12px', fontWeight: 800 }}>
+                      🏢 01: ALMACÉN PRINCIPAL / MOSTRADOR • 🧾 Facturas Fiscales SENIAT
+                    </span>
+                  ) : activeModalWarehouse === '02' ? (
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.22)', color: 'var(--motorven-emerald)', border: '1px solid rgba(16, 185, 129, 0.5)', padding: '2px 8px', borderRadius: '12px', fontWeight: 800 }}>
+                      🏛️ 02: ALMACÉN CENTRAL / BÓVEDA • 🚚 Notas de Entrega / Despacho
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(0, 240, 255, 0.15)', color: 'var(--neon-cyan)', border: '1px solid rgba(0, 240, 255, 0.35)', padding: '2px 8px', borderRadius: '12px', fontWeight: 800 }}>
+                      Σ Todos los Almacenes (Consolidado)
+                    </span>
+                  )}
+                </div>
+              </div>
               <button className="btn-close" onClick={() => setShowModal(false)}><X size={18} /></button>
             </div>
 
@@ -1106,20 +1483,125 @@ export default function InventoryView({
               </div>
 
               <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Stock Actual (Cajas/Unidades)</label>
-                  <input
-                    type="number"
-                    className="form-control"
-                    value={editingProduct.stock}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, stock: parseInt(e.target.value) || 0 })}
-                    required
-                  />
+                {activeModalWarehouse === '02' ? (
+                  <div className="form-group" style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '10px', border: '1px dashed var(--border-glass)', opacity: 0.9 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label className="form-label" style={{ color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.78rem', margin: 0 }}>
+                        🏢 Stock 01: Alm. Principal (Facturas Fiscales)
+                      </label>
+                      <span style={{ fontSize: '0.65rem', background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-muted)', padding: '2px 7px', borderRadius: '8px' }}>
+                        🔒 Protegido
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-tech)', padding: '4px 0' }}>
+                      {editingProduct.stockAlmacen01 ?? 0} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{resolveProductUnit(editingProduct.unidad, 'Caja')}</span>
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>
+                      Existencia fija de facturación fiscal (intacta).
+                    </div>
+                  </div>
+                ) : (
+                  <div className="form-group" style={{ background: 'rgba(2, 132, 199, 0.10)', padding: '12px 14px', borderRadius: '10px', border: activeModalWarehouse === '01' ? '2px solid #38bdf8' : '1px solid rgba(2, 132, 199, 0.3)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label className="form-label" style={{ color: '#38bdf8', fontWeight: 800, fontSize: '0.82rem', margin: 0 }}>
+                        🏢 Stock 01: Alm. Principal (Facturas Fiscales)
+                      </label>
+                      {activeModalWarehouse === '01' && (
+                        <span style={{ fontSize: '0.65rem', background: '#0284c7', color: '#fff', padding: '2px 7px', borderRadius: '8px', fontWeight: 700 }}>
+                          ✏️ EDITANDO AHORA
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      className="form-control"
+                      style={{ fontSize: '1.05rem', fontWeight: 700, borderColor: '#38bdf8' }}
+                      value={editingProduct.stockAlmacen01 ?? 0}
+                      onChange={(e) => {
+                        const val01 = Math.max(0, parseInt(e.target.value) || 0);
+                        const val02 = Math.max(0, Number(editingProduct.stockAlmacen02) || 0);
+                        setEditingProduct({
+                          ...editingProduct,
+                          stockAlmacen01: val01,
+                          stock: val01 + val02
+                        });
+                      }}
+                      required
+                    />
+                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '3px' }}>
+                      Existencia destinada exclusivamente a facturación fiscal SENIAT
+                    </div>
+                  </div>
+                )}
+
+                {activeModalWarehouse === '01' ? (
+                  <div className="form-group" style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '10px', border: '1px dashed var(--border-glass)', opacity: 0.9 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label className="form-label" style={{ color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.78rem', margin: 0 }}>
+                        🏛️ Stock 02: Alm. Central (Notas de Entrega)
+                      </label>
+                      <span style={{ fontSize: '0.65rem', background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-muted)', padding: '2px 7px', borderRadius: '8px' }}>
+                        🔒 Protegido
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-tech)', padding: '4px 0' }}>
+                      {editingProduct.stockAlmacen02 ?? 0} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{resolveProductUnit(editingProduct.unidad, 'Caja')}</span>
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>
+                      Existencia fija de notas de entrega (intacta).
+                    </div>
+                  </div>
+                ) : (
+                  <div className="form-group" style={{ background: 'rgba(16, 185, 129, 0.10)', padding: '12px 14px', borderRadius: '10px', border: activeModalWarehouse === '02' ? '2px solid var(--motorven-emerald)' : '1px solid rgba(16, 185, 129, 0.3)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label className="form-label" style={{ color: 'var(--motorven-emerald)', fontWeight: 800, fontSize: '0.82rem', margin: 0 }}>
+                        🏛️ Stock 02: Alm. Central (Notas de Entrega)
+                      </label>
+                      {activeModalWarehouse === '02' && (
+                        <span style={{ fontSize: '0.65rem', background: '#059669', color: '#fff', padding: '2px 7px', borderRadius: '8px', fontWeight: 700 }}>
+                          ✏️ EDITANDO AHORA
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      className="form-control"
+                      style={{ fontSize: '1.05rem', fontWeight: 700, borderColor: 'var(--motorven-emerald)' }}
+                      value={editingProduct.stockAlmacen02 ?? 0}
+                      onChange={(e) => {
+                        const val02 = Math.max(0, parseInt(e.target.value) || 0);
+                        const val01 = Math.max(0, Number(editingProduct.stockAlmacen01) || 0);
+                        setEditingProduct({
+                          ...editingProduct,
+                          stockAlmacen02: val02,
+                          stock: val01 + val02
+                        });
+                      }}
+                      required
+                    />
+                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '3px' }}>
+                      Existencia destinada a despacho comercial por notas de entrega
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-row" style={{ marginTop: '0.4rem', marginBottom: '0.75rem' }}>
+                <div className="form-group" style={{ background: 'rgba(0, 43, 122, 0.1)', padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
+                  <label className="form-label" style={{ fontWeight: 800, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Σ Stock Total Consolidado (Alm 01 + Alm 02)
+                  </label>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--neon-cyan)', fontFamily: 'var(--font-tech)' }}>
+                    {editingProduct.stock ?? 0} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{resolveProductUnit(editingProduct.unidad, 'Caja')}</span>
+                  </div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Stock Mínimo (Alerta Crítica)</label>
                   <input
                     type="number"
+                    min="0"
                     className="form-control"
                     value={editingProduct.stockMinimo}
                     onChange={(e) => setEditingProduct({ ...editingProduct, stockMinimo: parseInt(e.target.value) || 0 })}
@@ -1271,6 +1753,103 @@ export default function InventoryView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Eliminación / Vaciado de Almacén Específico */}
+      {productToDelete && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-content" style={{ maxWidth: '540px', padding: '1.5rem', borderRadius: '16px', background: 'var(--bg-card)', border: '1px solid rgba(230, 0, 18, 0.4)', boxShadow: '0 12px 36px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.85rem' }}>
+              <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(230, 0, 18, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Trash2 size={22} color="var(--motorven-red)" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                  Gestión de Inventario por Almacén
+                </h3>
+                <div style={{ fontSize: '0.75rem', color: productToDelete.warehouseCode === '01' ? '#38bdf8' : 'var(--motorven-emerald)', fontWeight: 700 }}>
+                  {productToDelete.warehouseName} • {productToDelete.warehousePurpose}
+                </div>
+              </div>
+              <button className="btn-close" onClick={() => setProductToDelete(null)}><X size={18} /></button>
+            </div>
+
+            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border-glass)', marginBottom: '1.25rem' }}>
+              <div style={{ fontWeight: 800, color: 'var(--neon-cyan)', fontSize: '0.92rem', marginBottom: '4px' }}>
+                {productToDelete.product.codigo} — {productToDelete.product.descripcion || productToDelete.product.nombre}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.78rem', marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed var(--border-glass)' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Existencia en {productToDelete.warehouseCode === '01' ? 'Almacén 01' : 'Almacén 02'}:</span>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800, color: productToDelete.warehouseCode === '01' ? '#38bdf8' : 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
+                    {productToDelete.stockThisWh} <span style={{ fontSize: '0.75rem' }}>{resolveProductUnit(productToDelete.product, 'Caja')}</span>
+                  </div>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Existencia en {productToDelete.otherWhName}:</span>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-tech)' }}>
+                    {productToDelete.stockOtherWh} <span style={{ fontSize: '0.75rem' }}>{resolveProductUnit(productToDelete.product, 'Caja')} (intacto)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.82rem', color: '#cbd5e1', lineHeight: 1.5, marginBottom: '1.25rem' }}>
+              Seleccione la operación que desea ejecutar para este producto en <strong>{productToDelete.warehouseName}</strong>:
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleZeroOutWarehouseStock}
+                style={{
+                  padding: '11px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  borderColor: 'rgba(245, 158, 11, 0.45)',
+                  color: '#fbbf24',
+                  fontWeight: 700,
+                  fontSize: '0.84rem'
+                }}
+              >
+                <span>📦 Vaciar solo este almacén (Poner en 0)</span>
+                <span style={{ fontSize: '0.7rem', opacity: 0.9 }}>Mantiene {productToDelete.otherWhName} intacto</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleConfirmFullDelete}
+                style={{
+                  padding: '11px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(230, 0, 18, 0.15)',
+                  borderColor: 'rgba(230, 0, 18, 0.5)',
+                  color: '#f87171',
+                  fontWeight: 700,
+                  fontSize: '0.84rem'
+                }}
+              >
+                <span>🗑️ Eliminar lubricante del catálogo general</span>
+                <span style={{ fontSize: '0.7rem', opacity: 0.9 }}>Borrado permanente</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setProductToDelete(null)}
+                style={{ marginTop: '4px', fontSize: '0.82rem' }}
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1749,24 +2328,58 @@ export default function InventoryView({
                   {selectedSpecProduct.descripcion}
                 </h4>
 
-                <div style={{ fontSize: '0.82rem', color: 'var(--motorven-gold, #f59e0b)', fontWeight: 700, marginBottom: '6px' }}>
-                  Norma / Certificación: {selectedSpecProduct.normaApi || 'API SL / CI-4 / COVENIN 936'}
-                </div>
+                {/* Indicador y Métricas de Almacén Activo para la Ficha */}
+                {(() => {
+                  const specStocks = getProductWarehouseStocks(selectedSpecProduct);
+                  const specWh = selectedSpecProduct._warehouseContext || (normSelW === '01' || normSelW === '02' ? normSelW : '01');
+                  const specWhStock = specWh === '02' ? specStocks.stock02 : specStocks.stock01;
+                  const specOtherStock = specWh === '02' ? specStocks.stock01 : specStocks.stock02;
+                  const litersUnit = resolveProductLitersPerUnit(selectedSpecProduct);
+                  const specWhLiters = (specWhStock * litersUnit).toFixed(1);
+                  const specTotalLiters = (specStocks.total * litersUnit).toFixed(1);
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
-                  <div>
-                    Presentación: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductUnit(selectedSpecProduct, 'Caja')}</strong>
-                  </div>
-                  <div>
-                    Litros x Envase: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductLitersPerUnit(selectedSpecProduct)} L</strong>
-                  </div>
-                  <div>
-                    Stock en Bodega: <strong style={{ color: 'var(--semaforo-verde, #10b981)' }}>{selectedSpecProduct.stock || 0} unid.</strong>
-                  </div>
-                  <div>
-                    Litros Totales: <strong style={{ color: 'var(--neon-cyan, #00f0ff)' }}>{((Number(selectedSpecProduct.stock) || 0) * resolveProductLitersPerUnit(selectedSpecProduct)).toFixed(1)} L</strong>
-                  </div>
-                </div>
+                  return (
+                    <>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 10px',
+                        borderRadius: '8px',
+                        background: specWh === '02' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(2, 132, 199, 0.12)',
+                        border: `1px solid ${specWh === '02' ? 'rgba(16, 185, 129, 0.4)' : 'rgba(56, 189, 248, 0.4)'}`,
+                        marginBottom: '8px'
+                      }}>
+                        <Warehouse size={14} color={specWh === '02' ? 'var(--motorven-emerald)' : '#38bdf8'} />
+                        <span style={{ fontSize: '0.78rem', fontWeight: 800, color: specWh === '02' ? 'var(--motorven-emerald)' : '#38bdf8' }}>
+                          {specWh === '02' ? '🏛️ 02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)' : '🏢 01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales)'}
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '0.82rem', color: 'var(--motorven-gold, #f59e0b)', fontWeight: 700, marginBottom: '6px' }}>
+                        Norma / Certificación: {selectedSpecProduct.normaApi || 'API SL / CI-4 / COVENIN 936'}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                        <div>
+                          Presentación: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductUnit(selectedSpecProduct, 'Caja')}</strong>
+                        </div>
+                        <div>
+                          Litros x Envase: <strong style={{ color: 'var(--text-primary)' }}>{litersUnit} L</strong>
+                        </div>
+                        <div style={{ background: specWh === '02' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(2, 132, 199, 0.08)', padding: '5px 8px', borderRadius: '6px', border: `1px solid ${specWh === '02' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(2, 132, 199, 0.25)'}` }}>
+                          Stock en {specWh === '02' ? 'Alm 02 (Entrega)' : 'Alm 01 (Fiscal)'}: <strong style={{ color: specWh === '02' ? 'var(--motorven-emerald)' : '#38bdf8', fontSize: '0.9rem' }}>{specWhStock} unid.</strong> ({specWhLiters} L)
+                        </div>
+                        <div style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                          Stock en {specWh === '02' ? 'Alm 01 (Fiscal)' : 'Alm 02 (Entrega)'}: <strong style={{ color: 'var(--text-primary)' }}>{specOtherStock} unid.</strong>
+                        </div>
+                        <div style={{ gridColumn: 'span 2', fontSize: '0.72rem', color: 'var(--neon-cyan)', background: 'rgba(0, 240, 255, 0.06)', padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(0, 240, 255, 0.2)' }}>
+                          Σ Consolidado Total (Alm 01 + Alm 02): <strong>{specStocks.total} unid.</strong> ({specTotalLiters} L)
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {/* Precios Detal y Mayorista */}
                 <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', background: 'var(--surface-input, rgba(255,255,255,0.03))', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
@@ -1885,12 +2498,13 @@ export default function InventoryView({
                     className="btn btn-secondary"
                     onClick={() => {
                       const prodToEdit = selectedSpecProduct;
+                      const targetWh = selectedSpecProduct?._warehouseContext || (normSelW === '01' || normSelW === '02' ? normSelW : '01');
                       setSelectedSpecProduct(null);
-                      handleOpenModal(prodToEdit);
+                      handleOpenModal(prodToEdit, targetWh);
                     }}
                     style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <Edit2 size={14} /> Editar Parámetros
+                    <Edit2 size={14} /> Editar en este Almacén
                   </button>
                 )}
               </div>

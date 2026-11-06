@@ -32,6 +32,7 @@ const DB_TABLE_TO_UI_ID = {
   sellers: 'sellers',
   profit_warehouses: 'warehouses',
   warehouses: 'warehouses',
+  profit_stock_by_warehouse: 'stock_by_warehouse',
   profit_bank_accounts: 'bank_accounts',
   bank_accounts: 'bank_accounts',
   profit_cash_desks: 'cash_desks',

@@ -12,7 +12,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from './formatService.js';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -2551,10 +2551,10 @@ export function generateInventoryPDF({
     ];
   } else {
     cards = [
-      { label: 'Total SKUs Activos', value: `${totalSkus} Líneas`, subtext: 'Lubricantes Oilstone ®', color: COLORS.navy },
-      { label: 'Volumen en Bodega', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
-      { label: 'Valoración al Costo', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.emerald },
-      { label: 'Alertas de Quiebre', value: `${countCriticos} SKUs`, subtext: 'Punto Crítico ROP', color: COLORS.red }
+      { label: 'Volumen en Bodega (Total)', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
+      { label: '01: Alm. Principal (Fiscal)', value: `${(Number(kpis?.alm01TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L`, subtext: kpis?.alm01BreakdownLabel || 'Facturas Fiscales', color: COLORS.emerald },
+      { label: '02: Alm. Central (N/Entrega)', value: `${(Number(kpis?.alm02TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L`, subtext: kpis?.alm02BreakdownLabel || 'Notas de Entrega', color: COLORS.cyan },
+      { label: 'Valoración al Costo', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy }
     ];
   }
 
@@ -2566,7 +2566,7 @@ export function generateInventoryPDF({
     isPhysicalTake ? 'REGISTRO DE AUDITORÍA FÍSICA EN BODEGA' : 'DIAGNÓSTICO DE COBERTURA DE STOCK & DISPONIBILIDAD',
     isPhysicalTake
       ? `Auditoría física de inventario ejecutada en ${warehouseName}. Auditor Responsable: ${auditorName || currentUser?.nombre || 'Auditor de Almacén'}. Los valores presentados confrontan la existencia en tiempo real del sistema Supabase versus el levantamiento físico de conteo para efectos de conciliación fiscal y control de mermas.`
-      : `El inventario en almacén central registra una valorización total de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Se identifican ${countCriticos} ítems en umbral de alerta que ameritan reposición con planta. La disponibilidad general se sitúa en niveles óptimos para el despacho inmediato del pipeline comercial.`,
+      : `El inventario consolidado registra un volumen de ${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros con valorización total de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Desglose Operativo por Almacén: [01 Almacén Principal (Facturas Fiscales)]: ${(Number(kpis?.alm01TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })} L (${formatUsd(kpis?.alm01TotalValorUsd || 0)}) | [02 Almacén Central (Notas de Entrega)]: ${(Number(kpis?.alm02TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })} L (${formatUsd(kpis?.alm02TotalValorUsd || 0)}). Se identifican ${countCriticos} ítems en umbral de alerta que ameritan reposición con planta.`,
     base.tableWidth,
     base.startX
   );
@@ -2658,7 +2658,8 @@ export function generateInventoryPDF({
   }
 
   const tableData = sortedProducts.map((p) => {
-    const stock = Number(p.stock || 0);
+    const wStocks = getProductWarehouseStocks(p);
+    const stock = Number(wStocks.total || 0);
     const min = Number(p.stockMinimo || 5);
     const costo = Number(p.costoUsd || 0);
     const precio = Number(p.precioUsd || p.precioA || 0);
@@ -2668,7 +2669,8 @@ export function generateInventoryPDF({
     return [
       p.codigo || 'SKU-00',
       p.descripcion || 'Producto',
-      p.categoria || 'Lubricantes',
+      `${wStocks.stock01}`,
+      `${wStocks.stock02}`,
       `${stock} ${resolveProductUnit(p, 'Caja')}`,
       formatUsd(costo),
       formatUsd(precio),
@@ -2681,8 +2683,8 @@ export function generateInventoryPDF({
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['CÓDIGO', 'DESCRIPCIÓN LUBRICANTE', 'LÍNEA / CAT.', 'STOCK', 'COSTO U.', 'PRECIO V.', 'VALOR TOTAL', 'ESTADO']],
-    body: tableData.length > 0 ? tableData : [['SIN STOCK', 'No hay productos registrados en existencias', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', 'AGOTADO']],
+    head: [['CÓDIGO', 'DESCRIPCIÓN LUBRICANTE', 'ALM 01 (FISC)', 'ALM 02 (ENTR)', 'TOTAL', 'COSTO U.', 'PRECIO V.', 'VALOR TOTAL', 'ESTADO']],
+    body: tableData.length > 0 ? tableData : [['SIN STOCK', 'No hay productos registrados en existencias', '0', '0', '0', '$ 0.00', '$ 0.00', '$ 0.00', 'AGOTADO']],
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
@@ -2700,22 +2702,23 @@ export function generateInventoryPDF({
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { fontStyle: 'bold', halign: 'center', cellWidth: 16 },
-      1: { cellWidth: 50 },
-      2: { cellWidth: 20 },
-      3: { halign: 'center', fontStyle: 'bold', cellWidth: 16 },
-      4: { halign: 'right', cellWidth: 18 },
-      5: { halign: 'right', fontStyle: 'bold', cellWidth: 18 },
-      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
-      7: { halign: 'center', fontStyle: 'bold', cellWidth: 17.9 }
+      0: { fontStyle: 'bold', halign: 'center', cellWidth: 15 },
+      1: { cellWidth: 44 },
+      2: { halign: 'center', fontStyle: 'bold', cellWidth: 15 },
+      3: { halign: 'center', fontStyle: 'bold', cellWidth: 15 },
+      4: { halign: 'center', fontStyle: 'bold', cellWidth: 17 },
+      5: { halign: 'right', cellWidth: 17 },
+      6: { halign: 'right', cellWidth: 17 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 22 },
+      8: { halign: 'center', fontStyle: 'bold', cellWidth: 17.9 }
     },
     didParseCell: (data) => {
-      if (data.column.index === 7 && data.section === 'body') {
+      if (data.column.index === 8 && data.section === 'body') {
         data.cell.text = ''; // Vector badge drawn in didDrawCell
       }
     },
     didDrawCell: (data) => {
-      if (data.column.index === 7 && data.section === 'body') {
+      if (data.column.index === 8 && data.section === 'body') {
         drawStatusBadge(base.doc, data.cell, data.cell.raw);
       }
     }

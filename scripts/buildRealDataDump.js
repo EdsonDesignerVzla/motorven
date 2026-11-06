@@ -98,6 +98,10 @@ db.products = (db.products || [])
       comprometido,
       stock_minimo: stockMinimo,
       stockMinimo,
+      stockAlmacen01: Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? Math.round(stock * 0.4)),
+      stock_almacen_01: Number(p.stock_almacen_01 ?? p.stockAlmacen01 ?? Math.round(stock * 0.4)),
+      stockAlmacen02: Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? Math.max(0, stock - Math.round(stock * 0.4))),
+      stock_almacen_02: Number(p.stock_almacen_02 ?? p.stockAlmacen02 ?? Math.max(0, stock - Math.round(stock * 0.4))),
       costo_usd: costoUsd,
       costoUsd,
       precio_usd_detal: precioUsdDetal,
@@ -175,7 +179,7 @@ db.profit_stock_by_warehouse = db.products.flatMap(p => [
     imagen: p.imagen,
     co_alma: '01',
     alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
-    stock_act: p.stock,
+    stock_act: Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? 0),
     stock_com: p.comprometido,
     stock_lle: 0,
     stock_des: 0,
@@ -198,7 +202,7 @@ db.profit_stock_by_warehouse = db.products.flatMap(p => [
     imagen: p.imagen,
     co_alma: '02',
     alma_des: 'ALMACÉN CENTRAL / BÓVEDA',
-    stock_act: p.stock,
+    stock_act: Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? 0),
     stock_com: p.comprometido,
     stock_lle: 0,
     stock_des: 0,
@@ -1124,6 +1128,7 @@ const tables = {
   profit_beneficiaries: db.profit_beneficiaries || [],
   profit_payment_orders: db.profit_payment_orders || [],
   profit_warehouses: db.profit_warehouses || [],
+  profit_stock_by_warehouse: db.profit_stock_by_warehouse || [],
   profit_product_lines: db.profit_product_lines || [],
   profit_product_sublines: db.profit_product_sublines || [],
   profit_product_categories: db.profit_product_categories || [],
@@ -1169,6 +1174,7 @@ import REAL_PROFIT_ISLR_CONCEPTS from './dump/profit_islr_concepts.json' with { 
 import REAL_PROFIT_BENEFICIARIES from './dump/profit_beneficiaries.json' with { type: 'json' };
 import REAL_PROFIT_PAYMENT_ORDERS from './dump/profit_payment_orders.json' with { type: 'json' };
 import REAL_PROFIT_WAREHOUSES from './dump/profit_warehouses.json' with { type: 'json' };
+import REAL_PROFIT_STOCK_BY_WAREHOUSE from './dump/profit_stock_by_warehouse.json' with { type: 'json' };
 import REAL_PROFIT_PRODUCT_LINES from './dump/profit_product_lines.json' with { type: 'json' };
 import REAL_PROFIT_PRODUCT_SUBLINES from './dump/profit_product_sublines.json' with { type: 'json' };
 import REAL_PROFIT_PRODUCT_CATEGORIES from './dump/profit_product_categories.json' with { type: 'json' };
@@ -1207,6 +1213,7 @@ export {
   REAL_PROFIT_BENEFICIARIES,
   REAL_PROFIT_PAYMENT_ORDERS,
   REAL_PROFIT_WAREHOUSES,
+  REAL_PROFIT_STOCK_BY_WAREHOUSE,
   REAL_PROFIT_PRODUCT_LINES,
   REAL_PROFIT_PRODUCT_SUBLINES,
   REAL_PROFIT_PRODUCT_CATEGORIES,

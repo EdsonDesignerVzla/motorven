@@ -51,7 +51,7 @@ import {
   getNextInvoiceCorrelativo,
   commitInvoiceCorrelativo
 } from './fiscalService.js';
-import { resolveProductUnit, resolveProductLitersPerUnit } from './formatService.js';
+import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import {
   getConfig as getStorageConfig,
@@ -153,23 +153,23 @@ const resolveInitialSupabaseUrl = (configured) => {
       return configured;
     }
 
-    // URL guardada previamente (será validada inmediatamente contra backend_url.json del servidor central)
+    // Servido por Vite (dev o preview): usar siempre el proxy /sb del mismo origen
+    if (import.meta.env?.DEV || Boolean(window.location.port)) {
+      return `${window.location.origin}/sb`;
+    }
+
+    // URL guardada previamente (ignorando túneles muertos loca.lt)
     try {
       const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
-      if (savedCustom && /^https?:\/\//i.test(savedCustom.trim())) {
+      if (savedCustom && /^https?:\/\//i.test(savedCustom.trim()) && !savedCustom.includes('loca.lt')) {
         return savedCustom.trim().replace(/\/+$/, '');
       }
     } catch (_) {}
 
     const cfg = new URL(configured);
-    if (!LOCAL_HOSTNAMES.includes(cfg.hostname)) return configured;
+    if (!LOCAL_HOSTNAMES.includes(cfg.hostname) && !cfg.hostname.includes('loca.lt')) return configured;
     if (isCloudHostedPage) return configured;
-    // Servido por Vite (dev o preview): usar el proxy del mismo origen
-    if (import.meta.env?.DEV || ['5180', '4173'].includes(window.location.port)) {
-      return `${window.location.origin}/sb`;
-    }
-    // Servido por otro servidor estático en la red: apuntar al host que sirvió la página
-    return `${window.location.protocol}//${window.location.hostname}:${cfg.port || '54321'}`;
+    return `${window.location.origin}/sb`;
   } catch (_) {
     return configured;
   }
@@ -222,7 +222,17 @@ export async function discoverActiveBackendUrl(force = false) {
     try {
       const candidates = [];
 
-      // 1. PRIORIDAD ABSOLUTA: backend_url.json publicado por el servidor central SVR-MOTORVEN
+      // 0. Prioridad en desarrollo y red local: proxy /sb de Vite y servidor central 192.168.0.6:54321
+      if (typeof window !== 'undefined' && window.location) {
+        if (window.location.origin && window.location.origin !== 'null') {
+          candidates.push(`${window.location.origin}/sb`);
+        }
+        candidates.push('http://192.168.0.6:54321');
+        candidates.push('http://127.0.0.1:54321');
+        candidates.push('http://localhost:54321');
+      }
+
+      // 1. backend_url.json publicado por el servidor central SVR-MOTORVEN
       try {
         const basePath = window.location.pathname.endsWith('/')
           ? window.location.pathname
@@ -258,16 +268,17 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       } catch (_) {}
 
-      // 3. Fallback a URL guardada en localStorage solo si aún no está en la lista
+      // 3. Fallback a URL guardada en localStorage solo si aún no está en la lista y no es loca.lt
       try {
         const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
-        if (savedCustom && /^https?:\/\//i.test(savedCustom.trim())) {
+        if (savedCustom && /^https?:\/\//i.test(savedCustom.trim()) && !savedCustom.includes('loca.lt')) {
           const cleanSaved = savedCustom.trim().replace(/\/+$/, '');
           if (!candidates.includes(cleanSaved)) candidates.push(cleanSaved);
         }
       } catch (_) {}
 
       for (const candidate of candidates) {
+        if (!candidate || candidate.includes('loca.lt')) continue;
         const healthy = await probeBackendHealth(candidate, 2500);
         if (healthy) {
           currentBackendUrl = candidate;
@@ -281,9 +292,10 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       }
 
-      // Si no se pudo verificar por /health pero hay candidato en backend_url.json, adoptarlo
-      if (candidates.length > 0) {
-        currentBackendUrl = candidates[0];
+      // Si no se pudo verificar por /health pero hay candidato no-localt, adoptarlo
+      const validCandidate = candidates.find(c => c && !c.includes('loca.lt'));
+      if (validCandidate) {
+        currentBackendUrl = validCandidate;
         try {
           window.localStorage.setItem('signum_custom_backend_url', currentBackendUrl);
           window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: currentBackendUrl } }));
@@ -564,15 +576,20 @@ const mapProductToDb = (p) => {
   const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || 0;
   const litrosPorUnidad = resolveProductLitersPerUnit(p);
-  const stock = Number(p.stock ?? 0) || 0;
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stockMinimo ?? p.stock_minimo ?? 0) || 0;
-
   const hierarchy = inferProductLineAndFamily(p);
+  const warehouseStocks = getProductWarehouseStocks(p);
+  const stock = warehouseStocks.total;
+  const stock01 = warehouseStocks.stock01;
+  const stock02 = warehouseStocks.stock02;
+  const cleanId = String(p.id || p.codigo || '').trim() || `OIL_${Date.now()}`;
+  const cleanCodigo = String(p.codigo || cleanId).trim();
 
   return {
-    id: p.id,
-    codigo: p.codigo,
+    id: cleanId,
+    codigo: cleanCodigo,
+    co_art: cleanId,
     oem: p.oem || '',
     descripcion: p.descripcion || p.nombre || '',
     nombre: p.nombre || p.descripcion || '',
@@ -587,6 +604,10 @@ const mapProductToDb = (p) => {
     litros_por_unidad: litrosPorUnidad,
     litrosPorUnidad,
     stock,
+    stockAlmacen01: stock01,
+    stock_almacen_01: stock01,
+    stockAlmacen02: stock02,
+    stock_almacen_02: stock02,
     comprometido,
     stock_minimo: stockMinimo,
     stockMinimo,
@@ -633,11 +654,14 @@ const mapProductFromDb = (p) => {
   const precioUsdMayor = Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
   const costoUsd = Number(p.costo_usd ?? p.costoUsd ?? p.costo ?? 0) || 0;
   const litrosPorUnidad = resolveProductLitersPerUnit(p);
-  const stock = Number(p.stock ?? 0) || 0;
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 0) || 0;
 
   const hierarchy = inferProductLineAndFamily(p);
+  const warehouseStocks = getProductWarehouseStocks(p);
+  const stock = warehouseStocks.total;
+  const stock01 = warehouseStocks.stock01;
+  const stock02 = warehouseStocks.stock02;
 
   return {
     id: p.id,
@@ -656,6 +680,10 @@ const mapProductFromDb = (p) => {
     litrosPorUnidad,
     litros_por_unidad: litrosPorUnidad,
     stock,
+    stockAlmacen01: stock01,
+    stock_almacen_01: stock01,
+    stockAlmacen02: stock02,
+    stock_almacen_02: stock02,
     comprometido,
     stockMinimo,
     stock_minimo: stockMinimo,
@@ -1614,9 +1642,16 @@ export const getSupabaseProducts = async () => {
 };
 
 export const saveSupabaseProduct = async (product) => {
-  // 1. Normalizar presentación y factor de litros antes de guardar
+  // 1. Normalizar presentación, almacenes y factor de litros antes de guardar
+  const stocks = getProductWarehouseStocks(product);
   const normalized = {
     ...product,
+    id: product.id || product.codigo || `OIL_${Date.now()}`,
+    stockAlmacen01: stocks.stock01,
+    stock_almacen_01: stocks.stock01,
+    stockAlmacen02: stocks.stock02,
+    stock_almacen_02: stocks.stock02,
+    stock: stocks.total,
     unidad: resolveProductUnit(product, 'Caja'),
     litrosPorUnidad: resolveProductLitersPerUnit(product),
     litros_por_unidad: resolveProductLitersPerUnit(product)
@@ -1626,11 +1661,6 @@ export const saveSupabaseProduct = async (product) => {
   saveStorageProduct(normalized);
   const currentProds = getStorageProducts();
   const prodToSave = currentProds.find(p => (normalized.id && p.id === normalized.id) || p.codigo === normalized.codigo) || normalized;
-
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
-    enqueueSyncAction('product', 'UPDATE', prodToSave);
-    return prodToSave;
-  }
 
   try {
     const payload = mapProductToDb(prodToSave);
@@ -1643,6 +1673,60 @@ export const saveSupabaseProduct = async (product) => {
     const mapped = mapProductFromDb(data);
     saveStorageProduct(mapped);
 
+    // Sincronizar stock independiente en profit_stock_by_warehouse en Supabase
+    try {
+      const pStocks = getProductWarehouseStocks(mapped);
+      const stock01Payload = {
+        id: `${mapped.id}_01`,
+        co_art: mapped.id,
+        codigo: mapped.codigo,
+        oem: mapped.oem || '',
+        descripcion: mapped.descripcion || mapped.nombre || '',
+        marca: mapped.marca || 'OILSTONE',
+        categoria: mapped.categoria || 'Lubricantes',
+        viscosidad: mapped.viscosidad || '',
+        unidad: mapped.unidad || 'Caja',
+        litros_por_unidad: Number(mapped.litrosPorUnidad || mapped.litros_por_unidad || 0),
+        costo_usd: Number(mapped.costoUsd || mapped.costo_usd || 0),
+        precio_usd_detal: Number(mapped.precioUsdDetal || mapped.precio_usd_detal || 0),
+        precio_usd_mayor: Number(mapped.precioUsdMayor || mapped.precio_usd_mayor || 0),
+        imagen: mapped.imagen || '',
+        co_alma: '01',
+        alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+        stock_act: Number(mapped.stockAlmacen01 ?? mapped.stock_almacen_01 ?? pStocks.stock01),
+        stock_com: Number(mapped.comprometido ?? 0),
+        stock_lle: 0,
+        stock_des: 0,
+        updated_at: new Date().toISOString()
+      };
+      const stock02Payload = {
+        id: `${mapped.id}_02`,
+        co_art: mapped.id,
+        codigo: mapped.codigo,
+        oem: mapped.oem || '',
+        descripcion: mapped.descripcion || mapped.nombre || '',
+        marca: mapped.marca || 'OILSTONE',
+        categoria: mapped.categoria || 'Lubricantes',
+        viscosidad: mapped.viscosidad || '',
+        unidad: mapped.unidad || 'Caja',
+        litros_por_unidad: Number(mapped.litrosPorUnidad || mapped.litros_por_unidad || 0),
+        costo_usd: Number(mapped.costoUsd || mapped.costo_usd || 0),
+        precio_usd_detal: Number(mapped.precioUsdDetal || mapped.precio_usd_detal || 0),
+        precio_usd_mayor: Number(mapped.precioUsdMayor || mapped.precio_usd_mayor || 0),
+        imagen: mapped.imagen || '',
+        co_alma: '02',
+        alma_des: 'ALMACÉN CENTRAL / BÓVEDA',
+        stock_act: Number(mapped.stockAlmacen02 ?? mapped.stock_almacen_02 ?? pStocks.stock02),
+        stock_com: Number(mapped.comprometido ?? 0),
+        stock_lle: 0,
+        stock_des: 0,
+        updated_at: new Date().toISOString()
+      };
+      await supabase.from('profit_stock_by_warehouse').upsert([stock01Payload, stock02Payload]);
+    } catch (e) {
+      console.warn('[saveSupabaseProduct] Sync profit_stock_by_warehouse:', e.message);
+    }
+
     // Reflejo en tiempo real en Supabase (SQL Server: art) y comparativa
     try {
       const profitRes = await writeProfitProduct(mapped, 'SAVE');
@@ -1654,8 +1738,17 @@ export const saveSupabaseProduct = async (product) => {
       console.warn('[saveSupabaseProduct] Aviso escribiendo en Supabase:', e.message);
     }
 
+    // Difundir actualización en tiempo real a todas las pestañas y terminales
+    broadcastReconcileChange({
+      tableId: 'products',
+      action: 'RECONCILE',
+      key: mapped.codigo || mapped.id,
+      item: mapped
+    });
+
     return mapped;
   } catch (err) {
+    console.warn('[saveSupabaseProduct] Supabase error:', err?.message || err);
     markSupabaseOffline(err, 'saveSupabaseProduct');
     enqueueSyncAction('product', 'UPDATE', prodToSave);
     writeProfitProduct(prodToSave, 'SAVE').catch(() => {});
@@ -1676,11 +1769,6 @@ export const deleteSupabaseProduct = async (id) => {
     console.warn('[deleteSupabaseProduct] Aviso eliminando en Supabase:', e.message);
   });
 
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
-    enqueueSyncAction('product', 'DELETE', { id: targetId, codigo: coArt });
-    return true;
-  }
-
   try {
     const { error } = await withTimeout(
       supabase.from('products').delete().eq('id', targetId)
@@ -1689,12 +1777,31 @@ export const deleteSupabaseProduct = async (id) => {
     if (error) {
       await supabase.from('products').delete().eq('codigo', coArt);
     }
+
+    try {
+      await supabase.from('profit_stock_by_warehouse').delete().eq('co_art', targetId);
+      await supabase.from('profit_stock_by_warehouse').delete().eq('codigo', coArt);
+      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_01`);
+      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_02`);
+    } catch (_) {}
+
+    // Notificar eliminación en tiempo real
+    broadcastReconcileChange({
+      tableId: 'products',
+      action: 'DELETE',
+      key: targetId
+    });
+
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
     try {
       await supabase.from('products').delete().eq('codigo', coArt);
+      await supabase.from('profit_stock_by_warehouse').delete().eq('co_art', targetId);
+      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_01`);
+      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_02`);
     } catch (_) {}
+    enqueueSyncAction('product', 'DELETE', { id: targetId, codigo: coArt });
     return true;
   }
 };
@@ -2088,38 +2195,58 @@ export const processSupabaseSale = async (saleData) => {
       pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
     };
 
-    // 1. If Factura, Nota de Entrega or Nota de Débito, reduce stock; if Nota de Crédito, increment stock
+    // 1. If Factura or Nota de Débito, reduce stock from Alm 01; if Nota de Entrega, reduce from Alm 02
     if (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO') {
+      const isNotaEntrega = newSale.tipoDoc === 'NOTA_ENTREGA';
       for (const item of newSale.items) {
         const { data: prodData, error: prodErr } = await supabase
           .from('products')
-          .select('stock')
+          .select('*')
           .eq('id', item.articuloId)
           .single();
         
         if (!prodErr && prodData) {
-          const currentStock = prodData.stock;
-          const newStock = Math.max(0, currentStock - item.cantidad);
+          const wStocks = getProductWarehouseStocks(prodData);
+          if (isNotaEntrega) {
+            wStocks.stock02 = Math.max(0, wStocks.stock02 - item.cantidad);
+          } else {
+            wStocks.stock01 = Math.max(0, wStocks.stock01 - item.cantidad);
+          }
+          const newTotal = wStocks.stock01 + wStocks.stock02;
           await supabase
             .from('products')
-            .update({ stock: newStock })
+            .update({
+              stock: newTotal,
+              stock_almacen_01: wStocks.stock01,
+              stock_almacen_02: wStocks.stock02
+            })
             .eq('id', item.articuloId);
         }
       }
     } else if (newSale.tipoDoc === 'NOTA_CREDITO') {
+      const isAfecNotaEntrega = String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE');
       for (const item of newSale.items) {
         const { data: prodData, error: prodErr } = await supabase
           .from('products')
-          .select('stock')
+          .select('*')
           .eq('id', item.articuloId)
           .single();
         
         if (!prodErr && prodData) {
-          const currentStock = prodData.stock;
-          const newStock = currentStock + item.cantidad;
+          const wStocks = getProductWarehouseStocks(prodData);
+          if (isAfecNotaEntrega) {
+            wStocks.stock02 += item.cantidad;
+          } else {
+            wStocks.stock01 += item.cantidad;
+          }
+          const newTotal = wStocks.stock01 + wStocks.stock02;
           await supabase
             .from('products')
-            .update({ stock: newStock })
+            .update({
+              stock: newTotal,
+              stock_almacen_01: wStocks.stock01,
+              stock_almacen_02: wStocks.stock02
+            })
             .eq('id', item.articuloId);
         }
       }

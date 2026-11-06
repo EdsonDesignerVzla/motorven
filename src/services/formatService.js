@@ -122,4 +122,76 @@ export const resolveProductLitersPerUnit = (product) => {
   return (rawLiters > 1 && rawLiters !== 19) ? rawLiters : 11.35;
 };
 
+/**
+ * Partición canónica de inventario por almacén para los SKUs de SIGNUM MOTORVEN:
+ * Almacén 01: Principal / Mostrador (Facturas Fiscales SENIAT)
+ * Almacén 02: Central / Bóveda (Notas de Entrega / Despacho)
+ */
+export const DEFAULT_WAREHOUSE_SPLITS = {
+  '000003': [300, 460], // Granel Diesel SAE 50 (Total 760 L)
+  '000804': [1, 1],     // Tambores Diesel CF 50 (Total 2 Tambores)
+  '001201': [60, 92],   // 15W40 Semi (Total 152 Cajas)
+  '001208': [80, 112],  // 15W40 Mineral (Total 192 Cajas)
+  '001308': [45, 68],   // 20W50 Semi (Total 113 Cajas)
+  '100102': [55, 86],   // 20W50 Mineral (Total 141 Cajas)
+  '100202': [50, 85],   // 25W60 Mineral (Total 135 Cajas)
+  '100403': [30, 48],   // Motos 4T (Total 78 Cajas)
+  '100502': [34, 50],   // Dexron II (Total 84 Cajas)
+  '101209': [2, 4],     // 15W40 Paila (Total 6 Pailas)
+  '101309': [2, 3],     // 20W50 Paila (Total 5 Pailas)
+  '101409': [7, 10],    // 25W60 Paila (Total 17 Pailas)
+  '101713': [0, 1],     // Trans-Manual 140 Paila (Total 1 Paila)
+  '101814': [15, 22]    // Fuera de Borda TC-W3 (Total 37 Cajas)
+};
+
+/**
+ * Resuelve las existencias independientes por almacén de un producto:
+ * - stock01: Almacén 01 (Principal / Mostrador -> Facturas Fiscales)
+ * - stock02: Almacén 02 (Central / Bóveda -> Notas de Entrega)
+ * - total: Consolidado (stock01 + stock02)
+ */
+export const getProductWarehouseStocks = (product) => {
+  if (!product || typeof product !== 'object') {
+    return { stock01: 0, stock02: 0, total: 0 };
+  }
+
+  const rawTotal = Number(product.stock ?? product.stockActual ?? product.existencia ?? 0) || 0;
+  const raw01 = product.stockAlmacen01 ?? product.stock_almacen_01 ?? product.stock_01 ?? product.stock01;
+  const raw02 = product.stockAlmacen02 ?? product.stock_almacen_02 ?? product.stock_02 ?? product.stock02;
+
+  const has01 = raw01 !== undefined && raw01 !== null && !isNaN(Number(raw01));
+  const has02 = raw02 !== undefined && raw02 !== null && !isNaN(Number(raw02));
+
+  if (has01 && has02) {
+    const s01 = Math.max(0, Number(raw01));
+    const s02 = Math.max(0, Number(raw02));
+    return { stock01: s01, stock02: s02, total: s01 + s02 };
+  }
+
+  if (has01 && !has02) {
+    const s01 = Math.max(0, Number(raw01));
+    const s02 = Math.max(0, rawTotal - s01);
+    return { stock01: s01, stock02: s02, total: s01 + s02 };
+  }
+
+  if (!has01 && has02) {
+    const s02 = Math.max(0, Number(raw02));
+    const s01 = Math.max(0, rawTotal - s02);
+    return { stock01: s01, stock02: s02, total: s01 + s02 };
+  }
+
+  const code = String(product.codigo || product.id || '').trim();
+  if (DEFAULT_WAREHOUSE_SPLITS[code]) {
+    const [def01, def02] = DEFAULT_WAREHOUSE_SPLITS[code];
+    if (def01 + def02 === rawTotal) {
+      return { stock01: def01, stock02: def02, total: rawTotal };
+    }
+  }
+
+  const s01 = Math.round(rawTotal * 0.4);
+  const s02 = Math.max(0, rawTotal - s01);
+  return { stock01: s01, stock02: s02, total: rawTotal };
+};
+
+
 
