@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, Smartphone } from 'lucide-react';
 import Navigation from './components/Navigation';
 import HeaderBar from './components/HeaderBar';
+import MobileAppLayout from './components/mobile/MobileAppLayout';
 
 import DashboardView from './views/DashboardView';
 import InventoryView from './views/InventoryView';
@@ -197,6 +198,37 @@ function MainApp() {
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('signum_theme') || 'light';
   });
+
+  // Detección y Persistencia de Modo Móvil (Smartphones & iPhone) vs Escritorio (PC)
+  const [deviceViewMode, setDeviceViewMode] = useState(() => {
+    try {
+      const saved = localStorage.getItem('signum_device_view_mode');
+      if (saved === 'desktop' || saved === 'mobile') return saved;
+      if (typeof window !== 'undefined') {
+        const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+        const isMobileUA = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(ua);
+        const isSmallScreen = window.innerWidth <= 768;
+        if (isMobileUA || isSmallScreen) return 'mobile';
+      }
+    } catch (_) {}
+    return 'desktop';
+  });
+
+  const handleSwitchToDesktop = () => {
+    setDeviceViewMode('desktop');
+    try {
+      localStorage.setItem('signum_device_view_mode', 'desktop');
+    } catch (_) {}
+    if (notify?.info) notify.info('Cambiado a vista completa de computadora (PC)');
+  };
+
+  const handleSwitchToMobile = () => {
+    setDeviceViewMode('mobile');
+    try {
+      localStorage.setItem('signum_device_view_mode', 'mobile');
+    } catch (_) {}
+    if (notify?.info) notify.info('Cambiado a versión optimizada para celulares');
+  };
   const [config, setConfigState] = useState(() => {
     try {
       const cached = localStorage.getItem('signum_app_config');
@@ -1841,6 +1873,34 @@ function MainApp() {
     );
   }
 
+  if (deviceViewMode === 'mobile') {
+    return (
+      <MobileAppLayout
+        products={products}
+        clients={clients}
+        orders={orders}
+        sales={sales}
+        profitInvoices={profitInvoices}
+        profitCollections={profitCollections}
+        profitBankAccounts={profitBankAccounts}
+        profitAccountsPayable={profitAccountsPayable}
+        profitSupplierPayments={profitSupplierPayments}
+        profitPurchases={profitPurchases}
+        profitSellers={profitSellers}
+        profitZones={profitZones}
+        config={config}
+        currentUser={currentUser}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        onSwitchToDesktop={handleSwitchToDesktop}
+        onSaveOrder={handleSaveOrder}
+        onProceedToPOS={handleProceedToInvoiceFromOrder}
+        onSyncProfit={handleSyncProfit}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
   return (
     <div className={`app-container ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
       <Navigation
@@ -2378,6 +2438,34 @@ function MainApp() {
           profitBankAccounts={profitBankAccounts}
           config={config}
         />
+
+        {/* Botón flotante para alternar a Modo Celular */}
+        <button
+          type="button"
+          className="no-print"
+          onClick={handleSwitchToMobile}
+          style={{
+            position: 'fixed',
+            bottom: '18px',
+            right: '18px',
+            zIndex: 9999,
+            background: 'linear-gradient(135deg, #0284c7 0%, #002b7a 100%)',
+            color: '#ffffff',
+            border: '1px solid rgba(255, 255, 255, 0.25)',
+            borderRadius: '30px',
+            padding: '8px 14px',
+            fontSize: '0.75rem',
+            fontWeight: 800,
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+          title="Activar versión optimizada para celulares y iPhone"
+        >
+          <Smartphone size={15} /> Modo Celular 📱
+        </button>
 
       </div>
     </div>
