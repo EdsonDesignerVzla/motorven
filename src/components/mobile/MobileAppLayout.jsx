@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './mobile.css';
 import {
   Home,
@@ -50,6 +50,27 @@ export default function MobileAppLayout({
 }) {
   const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'cxc' | 'inventario' | 'menu' | <module_id>
   const [showConfigModal, setShowConfigModal] = useState(false);
+
+  // Bloqueo total de desplazamiento en viewport del celular para Cero-Scroll garantizado
+  useEffect(() => {
+    document.documentElement.classList.add('mobile-screen-locked');
+    document.body.classList.add('mobile-screen-locked');
+
+    const handleTouchMove = (e) => {
+      // Si está en la pantalla de inicio, bloquear cualquier intento de arrastre / rebote de Safari/Chrome
+      if (mobileTab === 'home') {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+    return () => {
+      document.documentElement.classList.remove('mobile-screen-locked');
+      document.body.classList.remove('mobile-screen-locked');
+      window.removeEventListener('touchmove', handleTouchMove);
+    };
+  }, [mobileTab]);
 
   const tasaBcv = Number(config?.tasaDolar || 827.73);
 
