@@ -7,7 +7,13 @@ import {
   MessageCircle,
   ShieldCheck,
   Zap,
-  Smartphone
+  Smartphone,
+  Building2,
+  ShoppingBag,
+  FileSpreadsheet,
+  Users,
+  Award,
+  Settings
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../../services/formatService';
 import { detectUserDevice } from './deviceDetection';
@@ -20,6 +26,9 @@ export default function MobileHomeView({
   orders = [],
   sales = [],
   profitInvoices = [],
+  profitBankAccounts = [],
+  profitPurchases = [],
+  profitSellers = [],
   onNavigateTab
 }) {
   const deviceInfo = detectUserDevice();
@@ -42,6 +51,113 @@ export default function MobileHomeView({
   const userName = currentUser?.nombre?.split(' ')[0] || 'Operador';
   const userInitial = userName.charAt(0).toUpperCase();
 
+  // Definición de todos los módulos del sistema (4 por línea en GridView)
+  const systemModules = [
+    // Fila 1: Operaciones Principales
+    {
+      id: 'pedidos',
+      label: 'Pedidos',
+      icon: ShoppingCart,
+      gradient: 'linear-gradient(135deg, #0284c7 0%, #002b7a 100%)',
+      accentColor: '#38bdf8',
+      kpi: `${totalOrdersCount} Docs`,
+      badge: totalOrdersCount > 0 ? totalOrdersCount : null
+    },
+    {
+      id: 'cxc',
+      label: 'Cobranzas',
+      icon: DollarSign,
+      gradient: 'linear-gradient(135deg, #10b981 0%, #065f46 100%)',
+      accentColor: clientesEnMora > 0 ? '#ef4444' : '#34d399',
+      kpi: formatUsd(totalDeudaUsd),
+      badge: clientesEnMora > 0 ? clientesEnMora : null
+    },
+    {
+      id: 'inventario',
+      label: 'Stock',
+      icon: Package,
+      gradient: 'linear-gradient(135deg, #f59e0b 0%, #b45309 100%)',
+      accentColor: '#fbbf24',
+      kpi: `${products.length} SKUs`
+    },
+    {
+      id: 'ventas',
+      label: 'Ventas POS',
+      icon: Zap,
+      gradient: 'linear-gradient(135deg, #e60012 0%, #991b1b 100%)',
+      accentColor: '#f87171',
+      kpi: formatUsd(totalVentasUsd)
+    },
+
+    // Fila 2: Finanzas, Tesorería & SENIAT
+    {
+      id: 'cxc',
+      label: 'Tasa BCV',
+      icon: ShieldCheck,
+      gradient: 'linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)',
+      accentColor: '#34d399',
+      kpi: `Bs. ${tasaBcv.toFixed(2)}`
+    },
+    {
+      id: 'flujo_caja',
+      label: 'Caja/Bancos',
+      icon: Building2,
+      gradient: 'linear-gradient(135deg, #06b6d4 0%, #0e7490 100%)',
+      accentColor: '#22d3ee',
+      kpi: `${profitBankAccounts.length || 3} Ctas`
+    },
+    {
+      id: 'compras',
+      label: 'Compras',
+      icon: ShoppingBag,
+      gradient: 'linear-gradient(135deg, #eab308 0%, #854d0e 100%)',
+      accentColor: '#facc15',
+      kpi: `${profitPurchases.length || 0} Docs`
+    },
+    {
+      id: 'seniat',
+      label: 'SENIAT',
+      icon: FileSpreadsheet,
+      gradient: 'linear-gradient(135deg, #6366f1 0%, #4338ca 100%)',
+      accentColor: '#818cf8',
+      kpi: 'IVA / ISLR'
+    },
+
+    // Fila 3: Fuerza de Ventas, Analítica & Control
+    {
+      id: 'vendedores',
+      label: 'Vendedores',
+      icon: Award,
+      gradient: 'linear-gradient(135deg, #a855f7 0%, #6b21a8 100%)',
+      accentColor: '#c084fc',
+      kpi: `${profitSellers.length || 0} Asesores`
+    },
+    {
+      id: 'rentabilidad',
+      label: 'Rentabilidad',
+      icon: TrendingUp,
+      gradient: 'linear-gradient(135deg, #f97316 0%, #c2410c 100%)',
+      accentColor: '#fb923c',
+      kpi: 'BI Metas'
+    },
+    {
+      id: 'usuarios',
+      label: 'Usuarios',
+      icon: Users,
+      gradient: 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)',
+      accentColor: '#f472b6',
+      kpi: 'Seguridad'
+    },
+    {
+      id: 'config',
+      label: 'Ajustes',
+      icon: Settings,
+      gradient: 'linear-gradient(135deg, #64748b 0%, #334155 100%)',
+      accentColor: '#94a3b8',
+      kpi: 'General'
+    }
+  ];
+
   return (
     <div className="mobile-canvas-view">
       
@@ -61,19 +177,20 @@ export default function MobileHomeView({
               fontSize: '0.78rem',
               fontWeight: 900,
               color: '#ffffff',
-              boxShadow: '0 0 10px rgba(56, 189, 248, 0.4)'
+              boxShadow: '0 0 10px rgba(56, 189, 248, 0.4)',
+              flexShrink: 0
             }}
           >
             {userInitial}
           </div>
-          <div>
+          <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <span style={{ fontSize: '0.88rem', fontWeight: 900, color: '#ffffff', lineHeight: 1.1 }}>
+              <span style={{ fontSize: '0.88rem', fontWeight: 900, color: '#ffffff', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 Hola, {userName}
               </span>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px #10b981' }} />
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px #10b981', flexShrink: 0 }} />
             </div>
-            <div style={{ fontSize: '0.60rem', color: '#94a3b8', lineHeight: 1 }}>
+            <div style={{ fontSize: '0.60rem', color: '#94a3b8', lineHeight: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {currentUser?.cargo || currentUser?.rol || 'Administrador'}
             </div>
           </div>
@@ -86,144 +203,40 @@ export default function MobileHomeView({
         </div>
       </div>
 
-      {/* 2. GRIDVIEW DE KPIS PEQUEÑOS Y ELEGANTES (ESTILO WIDGETS APPLE iOS 2x2) */}
-      <div className="mobile-kpi-gridview" style={{ flexShrink: 0 }}>
-        
-        {/* KPI 1: Tasa Oficial BCV */}
-        <div
-          className="mobile-kpi-card"
-          style={{ '--kpi-accent': '#10b981', '--kpi-icon-bg': 'rgba(16, 185, 129, 0.15)' }}
-          onClick={() => onNavigateTab('cxc')}
-        >
-          <div className="mobile-kpi-header">
-            <span className="mobile-kpi-label">TASA BCV</span>
-            <div className="mobile-kpi-icon">
-              <ShieldCheck size={12} />
-            </div>
-          </div>
-          <div className="mobile-kpi-value" style={{ color: '#34d399' }}>
-            Bs. {tasaBcv.toFixed(2)}
-          </div>
-          <div className="mobile-kpi-subtext">
-            Planta: <strong style={{ color: '#fbbf24' }}>Bs. {tasaKeystone.toFixed(2)}</strong>
-          </div>
-        </div>
-
-        {/* KPI 2: Ventas y Facturación */}
-        <div
-          className="mobile-kpi-card"
-          style={{ '--kpi-accent': '#0284c7', '--kpi-icon-bg': 'rgba(2, 132, 199, 0.15)' }}
-          onClick={() => onNavigateTab('pedidos')}
-        >
-          <div className="mobile-kpi-header">
-            <span className="mobile-kpi-label">VENTAS TOTALES</span>
-            <div className="mobile-kpi-icon">
-              <TrendingUp size={12} />
-            </div>
-          </div>
-          <div className="mobile-kpi-value" style={{ color: '#38bdf8' }}>
-            {formatUsd(totalVentasUsd)}
-          </div>
-          <div className="mobile-kpi-subtext">
-            Total: <strong>{formatBs(totalVentasBs)}</strong>
-          </div>
-        </div>
-
-        {/* KPI 3: Cuentas por Cobrar (CxC) */}
-        <div
-          className="mobile-kpi-card"
-          style={{ '--kpi-accent': clientesEnMora > 0 ? '#ef4444' : '#f59e0b', '--kpi-icon-bg': clientesEnMora > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)' }}
-          onClick={() => onNavigateTab('cxc')}
-        >
-          <div className="mobile-kpi-header">
-            <span className="mobile-kpi-label">CARTERA CXC</span>
-            <div className="mobile-kpi-icon">
-              <DollarSign size={12} />
-            </div>
-          </div>
-          <div className="mobile-kpi-value" style={{ color: '#fbbf24' }}>
-            {formatUsd(totalDeudaUsd)}
-          </div>
-          <div className="mobile-kpi-subtext" style={{ color: clientesEnMora > 0 ? '#fca5a5' : '#86efac' }}>
-            {clientesEnMora > 0 ? `⚠️ ${clientesEnMora} en mora` : '✅ Cartera al día'}
-          </div>
-        </div>
-
-        {/* KPI 4: Stock Oilstone */}
-        <div
-          className="mobile-kpi-card"
-          style={{ '--kpi-accent': '#a855f7', '--kpi-icon-bg': 'rgba(168, 85, 247, 0.15)' }}
-          onClick={() => onNavigateTab('inventario')}
-        >
-          <div className="mobile-kpi-header">
-            <span className="mobile-kpi-label">OILSTONE LUBES</span>
-            <div className="mobile-kpi-icon">
-              <Package size={12} />
-            </div>
-          </div>
-          <div className="mobile-kpi-value" style={{ color: '#c084fc' }}>
-            {products.length} SKUs
-          </div>
-          <div className="mobile-kpi-subtext">
-            Stock: <strong>{Math.round(totalLitrosDisponibles).toLocaleString('es-VE')} Lts</strong>
-          </div>
-        </div>
-
-      </div>
-
-      {/* 3. LANZADOR VISUAL DE ACCIONES RÁPIDAS (VISUAL APP LAUNCHER) */}
-      <div style={{ flexShrink: 0 }}>
+      {/* 2. GRIDVIEW DE TODOS LOS MÓDULOS (4 KPIS MÁXIMO POR LÍNEA, FILAS SUCESIVAS) */}
+      <div style={{ width: '100%', boxSizing: 'border-box', flexShrink: 0 }}>
         <div style={{ fontSize: '0.58rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '0.5px', marginBottom: '4px', paddingLeft: '2px' }}>
-          Módulos Táctiles Principales
+          Módulos del Sistema (4 por línea)
         </div>
 
-        <div className="mobile-launcher-grid">
-          
-          {/* Botón 1: Preventa / Pedidos */}
-          <div className="mobile-launcher-tile" onClick={() => onNavigateTab('pedidos')}>
-            <div className="mobile-launcher-icon-wrap" style={{ background: 'linear-gradient(135deg, #0284c7 0%, #002b7a 100%)' }}>
-              <ShoppingCart size={17} />
-              {totalOrdersCount > 0 && (
-                <span className="mobile-launcher-badge">{totalOrdersCount}</span>
-              )}
-            </div>
-            <span className="mobile-launcher-label">Preventa Pedidos</span>
-          </div>
-
-          {/* Botón 2: Cobranzas WhatsApp */}
-          <div className="mobile-launcher-tile" onClick={() => onNavigateTab('cxc')}>
-            <div className="mobile-launcher-icon-wrap" style={{ background: 'linear-gradient(135deg, #22c55e 0%, #15803d 100%)' }}>
-              <MessageCircle size={17} />
-              {clientesEnMora > 0 && (
-                <span className="mobile-launcher-badge" style={{ background: '#f59e0b' }}>{clientesEnMora}</span>
-              )}
-            </div>
-            <span className="mobile-launcher-label">Cobranzas WhatsApp</span>
-          </div>
-
-          {/* Botón 3: Catálogo Stock Oilstone */}
-          <div className="mobile-launcher-tile" onClick={() => onNavigateTab('inventario')}>
-            <div className="mobile-launcher-icon-wrap" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #b45309 100%)' }}>
-              <Package size={17} />
-            </div>
-            <span className="mobile-launcher-label">Catálogo Aceites</span>
-          </div>
-
-          {/* Botón 4: Ventas POS */}
-          <div className="mobile-launcher-tile" onClick={() => onNavigateTab('ventas')}>
-            <div className="mobile-launcher-icon-wrap" style={{ background: 'linear-gradient(135deg, #e60012 0%, #991b1b 100%)' }}>
-              <Zap size={17} />
-            </div>
-            <span className="mobile-launcher-label">Ventas POS</span>
-          </div>
-
+        <div className="mobile-modules-gridview">
+          {systemModules.map((mod, idx) => {
+            const IconComponent = mod.icon;
+            return (
+              <div
+                key={`${mod.id}-${idx}`}
+                className="mobile-module-tile"
+                style={{ '--mod-accent': mod.accentColor }}
+                onClick={() => onNavigateTab(mod.id)}
+              >
+                <div className="mobile-module-icon-wrap" style={{ background: mod.gradient }}>
+                  <IconComponent size={15} />
+                  {mod.badge && (
+                    <span className="mobile-module-badge">{mod.badge}</span>
+                  )}
+                </div>
+                <div className="mobile-module-title">{mod.label}</div>
+                <div className="mobile-module-kpi">{mod.kpi}</div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* 4. HUB DE ACCIÓN INMEDIATA CON BOTONES ERGONÓMICOS TÁCTILES */}
+      {/* 3. HUB DE ACCIÓN INMEDIATA CON BOTONES ERGONÓMICOS TÁCTILES */}
       <div className="mobile-focus-widget" style={{ flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+          <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
             ⚡ Actividad Comercial Reciente
           </span>
           <span style={{ fontSize: '0.58rem', color: '#38bdf8', fontWeight: 800, cursor: 'pointer' }} onClick={() => onNavigateTab('pedidos')}>
@@ -243,31 +256,31 @@ export default function MobileHomeView({
               background: 'rgba(255, 255, 255, 0.04)',
               border: '1px solid rgba(255, 255, 255, 0.08)',
               borderRadius: '8px',
-              padding: '5px 8px',
+              padding: '4px 8px',
               gap: '8px',
               cursor: 'pointer'
             }}
             onClick={() => onNavigateTab('pedidos')}
           >
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: 800, fontSize: '0.74rem', color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontWeight: 800, fontSize: '0.72rem', color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {lastOrder.clienteNombre || 'Cliente General'}
               </div>
-              <div style={{ fontSize: '0.58rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: '0.56rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 Pedido #{lastOrder.numeroDoc || lastOrder.id} • {lastOrder.condicionPago || 'CONTADO'}
               </div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ fontWeight: 900, fontSize: '0.80rem', color: '#10b981', fontFamily: 'monospace' }}>
+              <div style={{ fontWeight: 900, fontSize: '0.78rem', color: '#10b981', fontFamily: 'monospace' }}>
                 {formatUsd(lastOrder.totalUsd || lastOrder.totalNetoUsd || 0)}
               </div>
-              <span style={{ fontSize: '0.54rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '1px 5px', borderRadius: '4px' }}>
+              <span style={{ fontSize: '0.52rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '1px 5px', borderRadius: '4px' }}>
                 {lastOrder.estatus || 'ACTIVO'}
               </span>
             </div>
           </div>
         ) : (
-          <div style={{ fontSize: '0.66rem', color: '#64748b', textAlign: 'center', padding: '3px' }}>
+          <div style={{ fontSize: '0.64rem', color: '#64748b', textAlign: 'center', padding: '2px' }}>
             Listo para crear pedidos de lubricantes Oilstone.
           </div>
         )}

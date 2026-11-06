@@ -22,6 +22,8 @@ import CashflowView from '../../views/CashflowView';
 import PurchasesView from '../../views/PurchasesView';
 import TaxReportsView from '../../views/TaxReportsView';
 import UsersManagementView from '../../views/UsersManagementView';
+import SellersView from '../../views/SellersView';
+import ProfitabilityView from '../../views/ProfitabilityView';
 import AppConfigModal from '../AppConfigModal';
 import { formatBs } from '../../services/formatService';
 
@@ -128,7 +130,10 @@ export default function MobileAppLayout({
           orders={orders}
           sales={sales}
           profitInvoices={profitInvoices}
-          onNavigateTab={setMobileTab}
+          profitBankAccounts={profitBankAccounts}
+          profitPurchases={profitPurchases}
+          profitSellers={profitSellers}
+          onNavigateTab={handleNavigateSubmodule}
         />
       ) : (
         <main className="mobile-scroll-view">
@@ -138,13 +143,13 @@ export default function MobileAppLayout({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
               <button
                 type="button"
-                onClick={() => setMobileTab('menu')}
+                onClick={() => setMobileTab('home')}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
-                  background: 'rgba(255, 255, 255, 0.06)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
                   color: '#fff',
                   borderRadius: '10px',
                   padding: '6px 12px',
@@ -153,7 +158,7 @@ export default function MobileAppLayout({
                   cursor: 'pointer'
                 }}
               >
-                <ArrowLeft size={14} /> Volver al Menú
+                <ArrowLeft size={14} /> Volver al Inicio
               </button>
               <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase' }}>
                 Módulo: {mobileTab}
@@ -254,6 +259,34 @@ export default function MobileAppLayout({
           {mobileTab === 'usuarios' && (
             <UsersManagementView
               currentUser={currentUser}
+              config={config}
+            />
+          )}
+
+          {mobileTab === 'vendedores' && (
+            <SellersView
+              profitSellers={profitSellers}
+              profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              profitBankAccounts={profitBankAccounts}
+              clients={clients}
+              orders={orders}
+              config={config}
+              onSyncProfit={onSyncProfit}
+              onUpdateSellerTarget={async () => {}}
+              onUpdateSellerPhoto={async () => {}}
+              onUpdateSellerZone={async () => {}}
+              onUpdateGlobalTarget={async () => {}}
+            />
+          )}
+
+          {mobileTab === 'rentabilidad' && (
+            <ProfitabilityView
+              products={products}
+              profitInvoices={profitInvoices}
+              profitPurchases={profitPurchases}
+              profitSellers={profitSellers}
+              profitZones={profitZones}
               config={config}
             />
           )}
