@@ -46,8 +46,8 @@ export default function MobileHomeView({
     <div className="mobile-canvas-view">
       
       {/* 1. BARRA SUPERIOR DE BIENVENIDA Y DETECCIÓN INTELIGENTE DE DISPOSITIVO */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, paddingBottom: '2px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box', flexShrink: 0, paddingBottom: '2px', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
           <div
             style={{
               width: '28px',
@@ -238,23 +238,26 @@ export default function MobileHomeView({
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              width: '100%',
+              boxSizing: 'border-box',
               background: 'rgba(255, 255, 255, 0.04)',
               border: '1px solid rgba(255, 255, 255, 0.08)',
               borderRadius: '8px',
               padding: '5px 8px',
+              gap: '8px',
               cursor: 'pointer'
             }}
             onClick={() => onNavigateTab('pedidos')}
           >
-            <div style={{ maxWidth: '65%' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontWeight: 800, fontSize: '0.74rem', color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {lastOrder.clienteNombre || 'Cliente General'}
               </div>
-              <div style={{ fontSize: '0.58rem', color: '#94a3b8' }}>
+              <div style={{ fontSize: '0.58rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 Pedido #{lastOrder.numeroDoc || lastOrder.id} • {lastOrder.condicionPago || 'CONTADO'}
               </div>
             </div>
-            <div style={{ textAlign: 'right' }}>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <div style={{ fontWeight: 900, fontSize: '0.80rem', color: '#10b981', fontFamily: 'monospace' }}>
                 {formatUsd(lastOrder.totalUsd || lastOrder.totalNetoUsd || 0)}
               </div>
