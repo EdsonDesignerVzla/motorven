@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Smartphone,
   Search,
@@ -70,6 +70,23 @@ export default function SellerOrderPOSView({
   const [selectedClient, setSelectedClient] = useState(null);
   const [clientSearchText, setClientSearchText] = useState('');
   const [isClientDropdownOpen, setIsClientDropdownOpen] = useState(false);
+  const clientSearchContainerRef = useRef(null);
+
+  // Cerrar listview de clientes al hacer click fuera del buscador
+  useEffect(() => {
+    if (!isClientDropdownOpen) return;
+    const handleClickOutside = (e) => {
+      if (clientSearchContainerRef.current && !clientSearchContainerRef.current.contains(e.target)) {
+        setIsClientDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isClientDropdownOpen]);
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [condicionPago, setCondicionPago] = useState('CONTADO');
   const [orderNotes, setOrderNotes] = useState('');
@@ -533,7 +550,16 @@ export default function SellerOrderPOSView({
         <div className="pos-catalog-col" style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
           
           {/* SELECCIÓN Y FICHA DEL CLIENTE */}
-          <div className="bento-card" style={{ padding: '0.9rem 1.1rem', background: 'var(--bg-card-glass)', position: 'relative' }}>
+          <div
+            className="bento-card"
+            style={{
+              padding: '0.9rem 1.1rem',
+              background: 'var(--bg-card-glass)',
+              position: 'relative',
+              overflow: 'visible',
+              zIndex: isClientDropdownOpen ? 1050 : 2
+            }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <label style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--neon-cyan)', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
                 <User size={14} /> 1. Cliente Destinatario de la Preventa
@@ -554,7 +580,7 @@ export default function SellerOrderPOSView({
             </div>
 
             {!selectedClient ? (
-              <div style={{ position: 'relative' }}>
+              <div ref={clientSearchContainerRef} style={{ position: 'relative', zIndex: isClientDropdownOpen ? 1051 : 1 }}>
                 <div style={{ position: 'relative' }}>
                   <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                   <input
@@ -563,32 +589,62 @@ export default function SellerOrderPOSView({
                     placeholder="🔍 Buscar cliente por nombre, RIF o código..."
                     value={clientSearchText}
                     onFocus={() => setIsClientDropdownOpen(true)}
+                    onClick={() => setIsClientDropdownOpen(true)}
                     onChange={(e) => {
                       setClientSearchText(e.target.value);
                       setIsClientDropdownOpen(true);
                     }}
-                    style={{ paddingLeft: '36px', fontSize: '0.85rem', width: '100%' }}
+                    style={{ paddingLeft: '36px', paddingRight: clientSearchText ? '32px' : '12px', fontSize: '0.85rem', width: '100%' }}
                   />
+                  {clientSearchText && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setClientSearchText('');
+                        setIsClientDropdownOpen(true);
+                      }}
+                      title="Limpiar búsqueda"
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </div>
 
                 {isClientDropdownOpen && (
                   <>
                     <div
-                      style={{ position: 'fixed', inset: 0, zIndex: 40 }}
-                      onClick={() => setIsClientDropdownOpen(false)}
+                      style={{ position: 'fixed', inset: 0, zIndex: 1040 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsClientDropdownOpen(false);
+                      }}
                     />
                     <div style={{
                       position: 'absolute',
                       top: 'calc(100% + 4px)',
                       left: 0,
                       right: 0,
-                      maxHeight: '260px',
+                      maxHeight: '280px',
                       overflowY: 'auto',
-                      border: '1px solid var(--border-glass-highlight, rgba(56, 189, 248, 0.4))',
+                      border: '1.5px solid var(--border-glass-highlight, rgba(56, 189, 248, 0.45))',
                       borderRadius: '10px',
-                      background: 'var(--surface-card, #ffffff)',
-                      boxShadow: '0 12px 30px rgba(0,0,0,0.25)',
-                      zIndex: 50
+                      background: 'var(--surface-card, #0f172a)',
+                      backgroundColor: 'var(--surface-card, #0f172a)',
+                      boxShadow: '0 20px 45px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)',
+                      zIndex: 1050
                     }}>
                       {filteredClients.length === 0 ? (
                         <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
@@ -598,31 +654,33 @@ export default function SellerOrderPOSView({
                         filteredClients.map((cl) => (
                           <div
                             key={cl.id || cl.codigo || cl.rif}
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               handleSelectClient(cl);
                               setIsClientDropdownOpen(false);
                             }}
                             style={{
-                              padding: '8px 12px',
-                              borderBottom: '1px solid var(--border-glass)',
+                              padding: '9px 12px',
+                              borderBottom: '1px solid var(--border-glass, rgba(255,255,255,0.06))',
                               cursor: 'pointer',
                               display: 'flex',
                               justifyContent: 'space-between',
                               alignItems: 'center',
                               transition: 'background 0.15s ease'
                             }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-glass-hover, rgba(0,43,122,0.06))')}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-glass-hover, rgba(0, 240, 255, 0.08))')}
                             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                           >
                             <div>
-                              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                                 {cl.nombre || cl.razonSocial || cl.cli_des}
                               </div>
-                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                RIF: {cl.rif || cl.co_cli} • Zona: {cl.zona || 'General'}
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                RIF: <strong style={{ color: 'var(--text-primary)' }}>{cl.rif || cl.co_cli}</strong> • Zona: {cl.zona || 'General'}
                               </div>
                             </div>
-                            <ChevronRight size={14} color="var(--text-muted)" />
+                            <ChevronRight size={14} color="var(--neon-cyan)" />
                           </div>
                         ))
                       )}
