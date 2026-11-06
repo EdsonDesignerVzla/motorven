@@ -223,7 +223,7 @@
       "telefono": "+58 (251) 269.13.964 / +58 (212) 555-8899",
       "email": "ventas@keystone.net.ve",
       "instagram": "@oilstone_vzla",
-      "tasa_dolar": 894.88,
+      "tasa_dolar": 896.12,
       "tasaDolar": 894.88,
       "tasa_keystone": 909.9,
       "tasaKeystone": 909.9,
@@ -273,7 +273,7 @@
       ],
       "unidad": "Litros",
       "litrosPorUnidad": 1,
-      "stock": 760,
+      "stock": 750,
       "comprometido": 0,
       "stockMinimo": 10,
       "costoUsd": 0.01,
@@ -79930,11 +79930,11 @@
     {
       "id": "fac-133",
       "fact_num": 133,
-      "factNum": 133,
-      "fec_emis": "2026-02-24T00:00:00.000Z",
-      "fechaEmision": "2026-02-24T00:00:00.000Z",
-      "fec_venc": "2026-03-26T00:00:00.000Z",
-      "fechaVencimiento": "2026-03-26T00:00:00.000Z",
+      "factNum": "133",
+      "fec_emis": "2026-02-24",
+      "fechaEmision": "2026-02-24",
+      "fec_venc": "2026-03-26",
+      "fechaVencimiento": "2026-03-26",
       "co_cli": "J501397635",
       "clienteId": "J501397635",
       "cli_des": "Inversiones Pecos, C.A.",
@@ -79948,17 +79948,17 @@
       "totalNeto": 314853.27,
       "iva": 0,
       "saldo": 26544.05,
-      "tot_neto_usd": 380.38,
+      "tot_neto_usd": 441.24,
       "totalNetoUsd": 380.38,
       "tot_bruto_usd": 380.38,
       "totalBrutoUsd": 380.38,
-      "iva_usd": 0,
-      "saldo_usd": 32.07,
+      "iva_usd": 60.86,
+      "saldo_usd": 92.93,
       "totalLitros": 102.15,
       "totalCajas": 9,
-      "status": "VENCIDA",
+      "status": "PENDIENTE",
       "anulada": false,
-      "forma_pag": "05",
+      "forma_pag": "03",
       "dir_ent": "",
       "items": [
         {
@@ -79995,12 +79995,47 @@
           "totalNeto": 91883.25
         }
       ],
-      "updated_at": "2026-10-27T20:12:04.834Z",
+      "updated_at": "2026-11-06T20:02:49.698Z",
       "total_litros": 102.15,
       "total_cajas": 9,
-      "totNetoUsd": 380.38,
+      "totNetoUsd": 441.24,
       "cliente_nombre": "Inversiones Pecos, C.A.",
-      "vendedor_id": "YC"
+      "vendedor_id": "YC",
+      "originalFactNum": "133",
+      "tipoDoc": "FACTURA",
+      "vendedorNombre": "Yheyson Calderon",
+      "clienteRif": "J-501397635",
+      "diasCredito": 30,
+      "diasVencidoCustom": 226,
+      "totBrutoUsd": 380.38,
+      "ivaUsd": 60.86,
+      "abonosUsd": 348.31,
+      "saldoUsd": 92.93,
+      "tasa": 896.12,
+      "observaciones": "",
+      "historialCobros": [],
+      "_customCreated": true,
+      "tipo_doc": "FACTURA",
+      "dias_credito": 30,
+      "dias_vencido_custom": 226,
+      "cliente_id": "J501397635",
+      "cliente_rif": "J-501397635",
+      "vendedor_nombre": "Yheyson Calderon",
+      "totBrutoBs": 340866.13,
+      "tot_bruto_bs": 340866.13,
+      "ivaBs": 54537.86,
+      "iva_bs": 54537.86,
+      "totNetoBs": 395403.99,
+      "tot_neto_bs": 395403.99,
+      "abonos_usd": 348.31,
+      "abonosBs": 312127.56,
+      "abonos_bs": 312127.56,
+      "saldoBs": 83276.43,
+      "saldo_bs": 83276.43,
+      "formaPago": "03",
+      "historial_cobros": [],
+      "fechaSincronizacion": "2026-11-06T20:02:49.698Z",
+      "fecha_sincronizacion": "2026-11-06T20:02:49.698Z"
     },
     {
       "id": "fac-134",
@@ -181982,21 +182017,21 @@
     {
       "id": "FAC-2144",
       "fact_num": 2144,
-      "fec_emis": "2026-10-28T00:00:00.000Z",
-      "fec_venc": "2026-11-12T00:00:00.000Z",
+      "fec_emis": "2026-10-28",
+      "fec_venc": "2026-11-12",
       "cliente_id": "J507331334",
       "cliente_nombre": "Emprendimiento Neuris Diaz",
       "cliente_rif": "J-507331334",
       "vendedor_id": "KB",
       "tot_bruto_usd": 98.71,
-      "tot_bruto_bs": 81707.04,
-      "iva_usd": 0,
-      "iva_bs": 0,
-      "tot_neto_usd": 98.71,
-      "tot_neto_bs": 81707.04,
-      "saldo_usd": 98.71,
-      "saldo_bs": 81707.04,
-      "status": "SALDO_PENDIENTE",
+      "tot_bruto_bs": 88456.01,
+      "iva_usd": 15.79,
+      "iva_bs": 14149.73,
+      "tot_neto_usd": 114.5,
+      "tot_neto_bs": 102605.74,
+      "saldo_usd": 114.5,
+      "saldo_bs": 102605.74,
+      "status": "PENDIENTE",
       "anulada": false,
       "forma_pag": "03",
       "total_litros": 1,
@@ -182014,13 +182049,45 @@
           "totalNeto": 81707.04
         }
       ],
-      "fecha_sincronizacion": "2026-10-31T16:05:04.248Z",
+      "fecha_sincronizacion": "2026-11-06T19:53:22.256Z",
       "totalLitros": 1,
       "totalCajas": 0.09,
-      "fechaEmision": "2026-10-28T00:00:00.000Z",
-      "totNetoUsd": 98.71,
+      "fechaEmision": "2026-10-28",
+      "totNetoUsd": 114.5,
       "clienteNombre": "Emprendimiento Neuris Diaz",
-      "vendedorId": "KB"
+      "vendedorId": "KB",
+      "factNum": "2144",
+      "originalFactNum": "2144",
+      "tipoDoc": "FACTURA",
+      "vendedorNombre": "Katherine Becerra",
+      "clienteId": "J507331334",
+      "clienteRif": "J-507331334",
+      "fechaVencimiento": "2026-11-12",
+      "diasCredito": 15,
+      "diasVencidoCustom": 0,
+      "totBrutoUsd": 98.71,
+      "ivaUsd": 15.79,
+      "abonosUsd": 0,
+      "saldoUsd": 114.5,
+      "tasa": 896.12,
+      "observaciones": "",
+      "historialCobros": [],
+      "_customCreated": true,
+      "tipo_doc": "FACTURA",
+      "dias_credito": 15,
+      "dias_vencido_custom": 0,
+      "vendedor_nombre": "Katherine Becerra",
+      "totBrutoBs": 88456.01,
+      "ivaBs": 14149.73,
+      "totNetoBs": 102605.74,
+      "abonos_usd": 0,
+      "abonosBs": 0,
+      "abonos_bs": 0,
+      "saldoBs": 102605.74,
+      "formaPago": "03",
+      "historial_cobros": [],
+      "fechaSincronizacion": "2026-11-06T19:53:22.256Z",
+      "updated_at": "2026-11-06T19:53:22.256Z"
     },
     {
       "id": "FAC-2146",
@@ -374859,14 +374926,14 @@
       "meta_litros_mes": 3000,
       "metaLitrosMes": 3000,
       "activo": true,
-      "foto": "",
+      "foto": null,
       "avatar": "",
       "co_zon": "02",
       "coZon": "02",
       "zona": "Isabelica-Pque valencia-Flor Amarllo- CentralTcarigua-Guigue",
       "created_at": "2026-10-01T15:47:45.917227+00:00",
       "createdAt": "2026-10-01T15:47:45.917227+00:00",
-      "updated_at": "2026-11-02T16:52:35.293Z",
+      "updated_at": "2026-11-06T20:03:20.422Z",
       "updatedAt": "2026-11-02T16:52:35.293Z"
     },
     {
@@ -431064,7 +431131,7 @@
         "notificaciones",
         "configuracion"
       ],
-      "ultimo_acceso": "2026-11-03T22:31:20.522Z",
+      "ultimo_acceso": "2026-11-06T19:43:30.322Z",
       "ultimoAcceso": "2026-11-03T22:31:20.522Z",
       "last_login": "2026-11-03T22:31:20.522Z",
       "created_at": "2026-09-01T00:00:00.000Z",
@@ -431113,7 +431180,7 @@
         "bases-datos",
         "cxc"
       ],
-      "ultimo_acceso": "2026-11-03T15:13:48.797Z",
+      "ultimo_acceso": "2026-11-06T19:44:23.845Z",
       "ultimoAcceso": "2026-11-03T15:13:48.797Z",
       "last_login": "2026-11-03T15:13:48.797Z",
       "created_at": "2026-09-01T00:00:00.000Z",
@@ -431242,15 +431309,18 @@
         "pedidos",
         "inventario",
         "compras",
-        "notificaciones"
+        "notificaciones",
+        "dashboard"
       ],
-      "ultimo_acceso": "2026-11-02T17:26:34.115Z",
+      "ultimo_acceso": "2026-11-06T20:20:38.641Z",
       "ultimoAcceso": "2026-11-02T17:26:34.115Z",
       "last_login": "2026-11-02T17:26:34.115Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
-      "updated_at": "2026-11-02T17:25:37.517Z",
-      "updatedAt": "2026-11-02T17:25:37.517Z"
+      "updated_at": "2026-11-06T20:21:42.612Z",
+      "updatedAt": "2026-11-02T17:25:37.517Z",
+      "color": "#f59e0b",
+      "descripcion": ""
     },
     {
       "id": "usr-caja",
@@ -431320,15 +431390,18 @@
         "caja",
         "ventas",
         "pedidos",
-        "notificaciones"
+        "notificaciones",
+        "dashboard"
       ],
-      "ultimo_acceso": "2026-11-05T15:25:35.263Z",
+      "ultimo_acceso": "2026-11-06T20:16:50.498Z",
       "ultimoAcceso": "2026-11-05T15:25:35.263Z",
       "last_login": "2026-11-05T15:25:35.263Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
-      "updated_at": "2026-11-05T15:29:00.933Z",
-      "updatedAt": "2026-11-05T15:29:00.933Z"
+      "updated_at": "2026-11-06T20:04:15.474Z",
+      "updatedAt": "2026-11-05T15:29:00.933Z",
+      "color": "#6366f1",
+      "descripcion": ""
     },
     {
       "id": "usr-mvgsc0hv",
@@ -431431,7 +431504,7 @@
       "seller_id": "YC",
       "activo": true,
       "active": true,
-      "password": "Yheyson123",
+      "password": "15439159",
       "foto": null,
       "photo_url": null,
       "photoUrl": null,
@@ -431442,15 +431515,18 @@
         "vendedores",
         "inventario",
         "cxc",
-        "notificaciones"
+        "notificaciones",
+        "dashboard"
       ],
-      "ultimo_acceso": null,
+      "ultimo_acceso": "2026-11-06T20:10:24.719Z",
       "ultimoAcceso": null,
       "last_login": null,
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
-      "updated_at": "2026-11-02T16:52:35.287Z",
-      "updatedAt": "2026-11-02T16:52:35.287Z"
+      "updated_at": "2026-11-06T20:03:19.789Z",
+      "updatedAt": "2026-11-02T16:52:35.287Z",
+      "color": "#0ea5e9",
+      "descripcion": ""
     },
     {
       "id": "usr-seller-vv",
@@ -435374,6 +435450,186 @@
       "dispositivo": "Web Browser",
       "created_at": "2026-11-05T15:29:01.239Z",
       "fecha": "2026-11-05T15:29:01.239Z"
+    },
+    {
+      "id": "LOG-1793994210324-VOQT2",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
+      "created_at": "2026-11-06T19:43:30.324Z"
+    },
+    {
+      "id": "LOG-1793994263852-KA6BB",
+      "usuario_id": "usr-muyb8kga",
+      "usuario_nombre": "Manuel Rosales",
+      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
+      "created_at": "2026-11-06T19:44:23.852Z"
+    },
+    {
+      "id": "LOG-1793994314685-N5ROQ",
+      "usuario_id": "usr-mvgse4to",
+      "usuario_nombre": "Rosibel Briceño",
+      "usuario_rol": "COBRANZA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
+      "created_at": "2026-11-06T19:45:14.685Z"
+    },
+    {
+      "id": "LOG-1793995247520-KFFKN",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
+      "created_at": "2026-11-06T20:00:47.520Z"
+    },
+    {
+      "id": "LOG-1793995256509-S4FVT",
+      "usuario_id": "usr-mu5vswve",
+      "usuario_nombre": "Yheyson Calderón",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-06T20:00:56.509Z"
+    },
+    {
+      "id": "LOG-1793995294178-M6MU0",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
+      "created_at": "2026-11-06T20:01:34.178Z"
+    },
+    {
+      "id": "LOG-1793995325130-X0ZRB",
+      "usuario_id": "usr-mu5vswve",
+      "usuario_nombre": "Yheyson Calderón",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGOUT",
+      "modulo": "SEGURIDAD",
+      "detalles": "Cierre de sesión de @ventas",
+      "created_at": "2026-11-06T20:02:05.130Z"
+    },
+    {
+      "id": "LOG-1793995400421-Y1OA4",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
+      "created_at": "2026-11-06T20:03:20.421Z"
+    },
+    {
+      "id": "LOG-1793995416188-0J99H",
+      "usuario_id": "usr-mu5vswve",
+      "usuario_nombre": "Yheyson Calderón",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-06T20:03:36.188Z"
+    },
+    {
+      "id": "LOG-1793995420952-MMPFX",
+      "usuario_id": "usr-mvgse4to",
+      "usuario_nombre": "Rosibel Briceño",
+      "usuario_rol": "COBRANZA",
+      "accion": "LOGOUT",
+      "modulo": "SEGURIDAD",
+      "detalles": "Cierre de sesión de @rosibelcxc",
+      "created_at": "2026-11-06T20:03:40.952Z"
+    },
+    {
+      "id": "LOG-1793995456999-6LE3Y",
+      "usuario_id": "usr-mvgse4to",
+      "usuario_nombre": "Rosibel Briceño",
+      "usuario_rol": "COBRANZA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
+      "created_at": "2026-11-06T20:04:16.999Z"
+    },
+    {
+      "id": "LOG-1793995456120-3MKU6",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @rosibelcxc (Rosibel Briceño) con rol COBRANZA",
+      "created_at": "2026-11-06T20:04:16.120Z"
+    },
+    {
+      "id": "LOG-1793995563464-1M3UP",
+      "usuario_id": "usr-mu5vswve",
+      "usuario_nombre": "Yheyson Calderón",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGOUT",
+      "modulo": "SEGURIDAD",
+      "detalles": "Cierre de sesión de @ventas",
+      "created_at": "2026-11-06T20:06:03.464Z"
+    },
+    {
+      "id": "LOG-1793995576046-94Q6I",
+      "usuario_id": "usr-mu5vswve",
+      "usuario_nombre": "Yheyson Calderón",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-06T20:06:16.046Z"
+    },
+    {
+      "id": "LOG-1793995824721-ANUDM",
+      "usuario_id": "usr-mu5vswve",
+      "usuario_nombre": "Yheyson Calderón",
+      "usuario_rol": "VENTAS",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
+      "created_at": "2026-11-06T20:10:24.721Z"
+    },
+    {
+      "id": "LOG-1793996210508-7CBP6",
+      "usuario_id": "usr-mvgse4to",
+      "usuario_nombre": "Rosibel Briceño",
+      "usuario_rol": "COBRANZA",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
+      "created_at": "2026-11-06T20:16:50.508Z"
+    },
+    {
+      "id": "LOG-1793996438644-TT5HJ",
+      "usuario_id": "usr-almacen",
+      "usuario_nombre": "Ray Briceño",
+      "usuario_rol": "ALMACEN",
+      "accion": "LOGIN",
+      "modulo": "SEGURIDAD",
+      "detalles": "Inicio de sesión exitoso en el sistema con rol ALMACEN",
+      "created_at": "2026-11-06T20:20:38.644Z"
+    },
+    {
+      "id": "LOG-1793996503564-JOBTN",
+      "usuario_id": "usr-muq3bdll",
+      "usuario_nombre": "Edson Designer",
+      "usuario_rol": "ADMINISTRADOR MASTER",
+      "accion": "EDITAR_USUARIO",
+      "modulo": "USUARIOS",
+      "detalles": "Actualización de datos para @almacen (Ray Briceño) con rol ALMACEN",
+      "created_at": "2026-11-06T20:21:43.564Z"
     }
   ],
   "order_items": [
@@ -436775,7 +437031,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000003_02",
@@ -436798,7 +437054,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000012_01",
@@ -436821,7 +437077,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000012_02",
@@ -436844,7 +437100,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000212_01",
@@ -436867,7 +437123,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000212_02",
@@ -436890,7 +437146,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000308_01",
@@ -436913,7 +437169,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000308_02",
@@ -436936,7 +437192,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000704_01",
@@ -436959,7 +437215,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000704_02",
@@ -436982,7 +437238,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000804_01",
@@ -437005,7 +437261,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000804_02",
@@ -437028,7 +437284,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000903_01",
@@ -437051,7 +437307,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000903_02",
@@ -437074,7 +437330,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000912_01",
@@ -437097,7 +437353,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "000912_02",
@@ -437120,7 +437376,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001201_01",
@@ -437143,7 +437399,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001201_02",
@@ -437166,7 +437422,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001203_01",
@@ -437189,7 +437445,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001203_02",
@@ -437212,7 +437468,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001208_01",
@@ -437235,7 +437491,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001208_02",
@@ -437258,7 +437514,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001212_01",
@@ -437281,7 +437537,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001212_02",
@@ -437304,7 +437560,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001304_01",
@@ -437327,7 +437583,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001304_02",
@@ -437350,7 +437606,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001308_01",
@@ -437373,7 +437629,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001308_02",
@@ -437396,7 +437652,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001312_01",
@@ -437419,7 +437675,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001312_02",
@@ -437442,7 +437698,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001403_01",
@@ -437465,7 +437721,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "001403_02",
@@ -437488,7 +437744,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100102_01",
@@ -437511,7 +437767,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100102_02",
@@ -437534,7 +437790,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100202_01",
@@ -437557,7 +437813,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100202_02",
@@ -437580,7 +437836,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100303_01",
@@ -437603,7 +437859,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100303_02",
@@ -437626,7 +437882,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100403_01",
@@ -437649,7 +437905,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100403_02",
@@ -437672,7 +437928,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100502_01",
@@ -437695,7 +437951,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100502_02",
@@ -437718,7 +437974,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100602_01",
@@ -437741,7 +437997,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100602_02",
@@ -437764,7 +438020,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100905_01",
@@ -437787,7 +438043,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "100905_02",
@@ -437810,7 +438066,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101209_01",
@@ -437833,7 +438089,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101209_02",
@@ -437856,7 +438112,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101309_01",
@@ -437879,7 +438135,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101309_02",
@@ -437902,7 +438158,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101409_01",
@@ -437925,7 +438181,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101409_02",
@@ -437948,7 +438204,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101510_01",
@@ -437971,7 +438227,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101510_02",
@@ -437994,7 +438250,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101713_01",
@@ -438017,7 +438273,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101713_02",
@@ -438040,7 +438296,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101814_01",
@@ -438063,7 +438319,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     },
     {
       "id": "101814_02",
@@ -438086,7 +438342,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T17:26:35.731Z"
+      "updated_at": "2026-11-06T18:35:12.458Z"
     }
   ],
   "profit_goods_receipt_notes": [

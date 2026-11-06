@@ -990,7 +990,9 @@ export default function OrdersSalesModal({
 
     try {
       setIsSaving(true);
-      const orderId = `OC-${Date.now().toString().slice(-6)}`;
+      const isNotaEntrega = modalidadVenta === 'OFICINA';
+      const prefix = isNotaEntrega ? 'PED-NE' : 'PED-FF';
+      const orderId = `${prefix}-${Date.now().toString().slice(-6)}`;
       const clientName = activeClientObj?.nombre || activeClientObj?.razonSocial || clientSearchText || 'Cliente General';
       const clientRif = activeClientObj?.rif || 'J-000000000';
 
@@ -1029,7 +1031,14 @@ export default function OrdersSalesModal({
       const orderPayload = {
         id: orderId,
         numeroDoc: orderId,
-        tipoDoc: 'ORDEN_COMPRA',
+        correlativo: orderId,
+        tipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+        tipo_doc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+        almacen: isNotaEntrega ? '02' : '01',
+        almacenId: isNotaEntrega ? '02' : '01',
+        almacen_id: isNotaEntrega ? '02' : '01',
+        co_alma: isNotaEntrega ? '02' : '01',
+        almacenNombre: isNotaEntrega ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)',
         modalidadVenta,
         fechaEmision: nowIso,
         diasCredito: diasCreditoForm,
@@ -1099,7 +1108,7 @@ export default function OrdersSalesModal({
 
       setTimeout(() => {
         setFeedbackMsg(null);
-        setActiveTab('pipeline');
+        setActiveTab(isNotaEntrega ? 'pedidos_nota_entrega' : 'pipeline');
       }, 1500);
 
     } catch (err) {
@@ -1110,9 +1119,74 @@ export default function OrdersSalesModal({
     }
   };
 
-  // Filtrado de pedidos en la pestaña Pipeline (Las órdenes facturadas se excluyen de la vista por defecto de Pipeline)
-  const filteredPipelineOrders = useMemo(() => {
-    return safeOrders.filter(ord => {
+  // Clasificación de Pedidos: Factura Fiscal (Almacén 01) vs Nota de Entrega (Almacén 02)
+  const isOrderNotaEntrega = (ord) => {
+    if (!ord) return false;
+    const num = String(ord.numeroDoc || ord.id || ord.correlativo || '').toUpperCase().trim();
+    if (num.startsWith('PED-NE') || num.startsWith('NE-') || num.startsWith('NOTA-')) return true;
+    if (num.startsWith('PED-FF') || num.startsWith('FACT-') || num.startsWith('FF-')) return false;
+    if (ord.tipoDoc === 'NOTA_ENTREGA' || ord.tipo_doc === 'NOTA_ENTREGA') return true;
+    if (ord.tipoDoc === 'FACTURA' || ord.tipo_doc === 'FACTURA') return false;
+    if (ord.almacen === '02' || ord.almacen_id === '02' || ord.co_alma === '02') return true;
+    if (ord.almacen === '01' || ord.almacen_id === '01' || ord.co_alma === '01') return false;
+    if (ord.modalidadVenta === 'OFICINA') return true;
+    return false;
+  };
+
+  const isOrderFiscal = (ord) => !isOrderNotaEntrega(ord);
+
+  // Función utilitaria para calcular KPIs de cualquier grupo de pedidos
+  const computeOrderKpis = (orderList) => {
+    let preventas = 0;
+    let aprobados = 0;
+    let enTransito = 0;
+    let facturados = 0;
+    let retenidos = 0;
+    let totalLitros = 0;
+    let totalUsd = 0;
+
+    orderList.forEach(o => {
+      if (!o) return;
+      const st = o.status || 'PENDIENTE';
+      if (st === 'PENDIENTE') preventas++;
+      else if (st === 'APROBADO') aprobados++;
+      else if (st === 'EN_TRANSITO') enTransito++;
+      else if (st === 'FACTURADO') facturados++;
+      else if (st === 'RETENIDO_CREDITO') retenidos++;
+
+      totalLitros += Number(o.totalLitros || 0);
+      totalUsd += Number(o.totalNetoUsd || o.totalUsd || 0);
+    });
+
+    return {
+      total: orderList.length,
+      preventas,
+      aprobados,
+      enTransito,
+      facturados,
+      retenidos,
+      totalLitros,
+      totalUsd,
+      activeCount: preventas + aprobados + enTransito + retenidos
+    };
+  };
+
+  // Listas divididas
+  const fiscalOrders = useMemo(() => safeOrders.filter(isOrderFiscal), [safeOrders]);
+  const notaEntregaOrders = useMemo(() => safeOrders.filter(isOrderNotaEntrega), [safeOrders]);
+
+  // KPIs por módulo
+  const fiscalKpis = useMemo(() => computeOrderKpis(fiscalOrders), [fiscalOrders]);
+  const notaEntregaKpis = useMemo(() => computeOrderKpis(notaEntregaOrders), [notaEntregaOrders]);
+  const pipelineKpis = useMemo(() => computeOrderKpis(safeOrders), [safeOrders]);
+
+  const fiscalOrdersCount = fiscalKpis.activeCount;
+  const notaEntregaOrdersCount = notaEntregaKpis.activeCount;
+  const activeOrdersCount = fiscalOrdersCount;
+
+  // Filtrado de pedidos según búsqueda, estatus y zona
+  const filterOrders = (ordersList) => {
+    return ordersList.filter(ord => {
       if (!ord) return false;
       const term = searchQuery.toLowerCase().trim();
       const matchSearch =
@@ -1130,46 +1204,17 @@ export default function OrdersSalesModal({
 
       return matchSearch && matchStatus && matchZone;
     });
-  }, [safeOrders, searchQuery, statusFilter, zoneFilter]);
+  };
 
-  // KPIs del Pipeline
-  const pipelineKpis = useMemo(() => {
-    let preventas = 0;
-    let aprobados = 0;
-    let enTransito = 0;
-    let facturados = 0;
-    let retenidos = 0;
-    let totalLitros = 0;
-    let totalUsd = 0;
-
-    safeOrders.forEach(o => {
-      if (!o) return;
-      const st = o.status || 'PENDIENTE';
-      if (st === 'PENDIENTE') preventas++;
-      else if (st === 'APROBADO') aprobados++;
-      else if (st === 'EN_TRANSITO') enTransito++;
-      else if (st === 'FACTURADO') facturados++;
-      else if (st === 'RETENIDO_CREDITO') retenidos++;
-
-      totalLitros += Number(o.totalLitros || 0);
-      totalUsd += Number(o.totalNetoUsd || o.totalUsd || 0);
-    });
-
-    return {
-      total: safeOrders.length,
-      preventas,
-      aprobados,
-      enTransito,
-      facturados,
-      retenidos,
-      totalLitros,
-      totalUsd
-    };
-  }, [safeOrders]);
-
-  const activeOrdersCount = useMemo(() => {
-    return pipelineKpis.preventas + pipelineKpis.aprobados + pipelineKpis.enTransito + pipelineKpis.retenidos;
-  }, [pipelineKpis]);
+  const filteredFiscalOrders = useMemo(
+    () => filterOrders(fiscalOrders),
+    [fiscalOrders, searchQuery, statusFilter, zoneFilter]
+  );
+  const filteredNotaEntregaOrders = useMemo(
+    () => filterOrders(notaEntregaOrders),
+    [notaEntregaOrders, searchQuery, statusFilter, zoneFilter]
+  );
+  const filteredPipelineOrders = filteredFiscalOrders;
 
   // =========================================================================
   // TAB 6: LÓGICA DE DATOS PARA LISTADO DE FACTURAS (LIST VIEW)
@@ -1564,7 +1609,7 @@ export default function OrdersSalesModal({
               <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span>1. Vendedor emite O.C. ➔ 2. Cajera emite Factura ➔ 3. Almacén despacha O.E.</span> • 
                 <span>Tasa BCV: <strong style={{ color: 'var(--motorven-gold, #f59e0b)' }}>{formatBs(tasaBcv)}</strong></span> •
-                <span>{activeOrdersCount} Órdenes Activas en Pipeline</span>
+                <span>{fiscalOrdersCount} Fiscales (Alm 01) • {notaEntregaOrdersCount} Notas de Entrega (Alm 02)</span>
               </div>
             </div>
           </div>
@@ -1626,7 +1671,28 @@ export default function OrdersSalesModal({
             }}
           >
             <Layers size={15} />
-            <span>2. Pipeline & Control ({activeOrdersCount})</span>
+            <span>2. Pedidos Fiscales ({fiscalOrdersCount})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('pedidos_nota_entrega')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              borderRadius: '8px',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              border: activeTab === 'pedidos_nota_entrega' ? '1.5px solid var(--semaforo-verde)' : '1px solid transparent',
+              background: activeTab === 'pedidos_nota_entrega' ? (isDark ? 'rgba(16, 185, 129, 0.18)' : '#d1fae5') : 'transparent',
+              color: activeTab === 'pedidos_nota_entrega' ? (isDark ? 'var(--semaforo-verde)' : '#047857') : 'var(--text-muted)'
+            }}
+          >
+            <Package size={15} color={activeTab === 'pedidos_nota_entrega' ? 'var(--semaforo-verde)' : 'var(--text-muted)'} />
+            <span>3. Pedidos por nota de entrega ({notaEntregaOrdersCount})</span>
           </button>
 
           <button
@@ -1641,13 +1707,13 @@ export default function OrdersSalesModal({
               fontSize: '0.82rem',
               fontWeight: 700,
               cursor: 'pointer',
-              border: activeTab === 'facturar' ? '1.5px solid var(--semaforo-verde)' : '1px solid transparent',
-              background: activeTab === 'facturar' ? (isDark ? 'rgba(16, 185, 129, 0.18)' : '#d1fae5') : 'transparent',
-              color: activeTab === 'facturar' ? (isDark ? 'var(--semaforo-verde)' : '#047857') : 'var(--text-muted)'
+              border: activeTab === 'facturar' ? '1.5px solid var(--motorven-gold)' : '1px solid transparent',
+              background: activeTab === 'facturar' ? (isDark ? 'rgba(245, 158, 11, 0.18)' : '#fef3c7') : 'transparent',
+              color: activeTab === 'facturar' ? (isDark ? 'var(--motorven-gold)' : '#b45309') : 'var(--text-muted)'
             }}
           >
-            <CreditCard size={15} color="var(--semaforo-verde)" />
-            <span>3. Facturación en Caja (Cajera)</span>
+            <CreditCard size={15} color="var(--motorven-gold)" />
+            <span>4. Facturación en Caja (Cajera)</span>
           </button>
 
           <button
@@ -1662,13 +1728,13 @@ export default function OrdersSalesModal({
               fontSize: '0.82rem',
               fontWeight: 700,
               cursor: 'pointer',
-              border: activeTab === 'imprimir' ? '1.5px solid var(--motorven-gold)' : '1px solid transparent',
-              background: activeTab === 'imprimir' ? (isDark ? 'rgba(245, 158, 11, 0.18)' : '#fef3c7') : 'transparent',
-              color: activeTab === 'imprimir' ? (isDark ? 'var(--motorven-gold)' : '#b45309') : 'var(--text-muted)'
+              border: activeTab === 'imprimir' ? '1.5px solid #38bdf8' : '1px solid transparent',
+              background: activeTab === 'imprimir' ? (isDark ? 'rgba(56, 189, 248, 0.18)' : '#e0f2fe') : 'transparent',
+              color: activeTab === 'imprimir' ? (isDark ? '#38bdf8' : '#0284c7') : 'var(--text-muted)'
             }}
           >
             <Printer size={15} />
-            <span>4. Orden de Entrega {selectedOrder?.status === 'FACTURADO' ? '✅' : '🔒'}</span>
+            <span>5. Orden de Entrega {selectedOrder?.status === 'FACTURADO' ? '✅' : '🔒'}</span>
           </button>
 
           <button
@@ -1689,7 +1755,7 @@ export default function OrdersSalesModal({
             }}
           >
             <TrendingUp size={15} />
-            <span>5. Métricas & Volumen</span>
+            <span>6. Métricas & Volumen</span>
           </button>
 
           <button
@@ -1710,7 +1776,7 @@ export default function OrdersSalesModal({
             }}
           >
             <ReceiptText size={15} color={activeTab === 'facturas_list' ? (isDark ? '#22d3ee' : '#0891b2') : 'var(--text-muted)'} />
-            <span>6. Listado de Facturas ({allInvoices.length})</span>
+            <span>7. Listado de Facturas ({allInvoices.length})</span>
           </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2111,28 +2177,34 @@ export default function OrdersSalesModal({
                           onClick={() => setModalidadVenta('PREVENTA')}
                           className="btn btn-sm"
                           style={{
-                            padding: '2px 7px',
-                            fontSize: '0.64rem',
+                            padding: '3px 8px',
+                            fontSize: '0.68rem',
                             fontWeight: 800,
+                            borderRadius: '6px',
+                            border: modalidadVenta === 'PREVENTA' ? '1px solid var(--neon-cyan)' : '1px solid transparent',
                             background: modalidadVenta === 'PREVENTA' ? 'var(--motorven-red)' : 'rgba(255,255,255,0.05)',
                             color: modalidadVenta === 'PREVENTA' ? '#fff' : 'var(--text-muted)'
                           }}
+                          title="Factura Fiscal (Almacén 01) - Genera código PED-FF"
                         >
-                          Preventa
+                          📄 Factura Fiscal
                         </button>
                         <button
                           type="button"
                           onClick={() => setModalidadVenta('OFICINA')}
                           className="btn btn-sm"
                           style={{
-                            padding: '2px 7px',
-                            fontSize: '0.64rem',
+                            padding: '3px 8px',
+                            fontSize: '0.68rem',
                             fontWeight: 800,
+                            borderRadius: '6px',
+                            border: modalidadVenta === 'OFICINA' ? '1px solid var(--semaforo-verde)' : '1px solid transparent',
                             background: modalidadVenta === 'OFICINA' ? '#0284c7' : 'rgba(255,255,255,0.05)',
                             color: modalidadVenta === 'OFICINA' ? '#fff' : 'var(--text-muted)'
                           }}
+                          title="Nota de Entrega (Almacén 02) - Genera código PED-NE"
                         >
-                          🏢 Venta Oficina
+                          📦 Nota de Entrega
                         </button>
                       </div>
                     </div>
@@ -2569,342 +2641,426 @@ export default function OrdersSalesModal({
             </div>
           )}
 
-          {/* TAB 2: PIPELINE & CONTROL */}
-          {activeTab === 'pipeline' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              
-              {/* Barra de Filtros */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '10px',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
-                  padding: '10px 14px',
-                  borderRadius: '12px',
-                  border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))'
-                }}
-              >
-                <div style={{ flex: 1, minWidth: '220px', position: 'relative' }}>
-                  <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="Buscar por cliente, RIF, número de pedido o vendedor..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    style={{ paddingLeft: '32px', fontSize: '0.82rem', width: '100%' }}
-                  />
-                </div>
-
-                <div style={{ minWidth: '160px' }}>
-                  <select
-                    className="form-control"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    style={{ fontSize: '0.82rem' }}
-                  >
-                    <option value="ALL">Todos los Estados ({activeOrdersCount})</option>
-                    <option value="PENDIENTE">1. Preventas ({pipelineKpis.preventas})</option>
-                    <option value="APROBADO">2. Aprobados ({pipelineKpis.aprobados})</option>
-                    <option value="EN_TRANSITO">3. En Tránsito ({pipelineKpis.enTransito})</option>
-                    <option value="FACTURADO">4. Facturados ({pipelineKpis.facturados})</option>
-                    <option value="RETENIDO_CREDITO">⛔ Retenidos por Crédito ({pipelineKpis.retenidos || 0})</option>
-                  </select>
-                </div>
-
-                <div style={{ minWidth: '160px' }}>
-                  <select
-                    className="form-control"
-                    value={zoneFilter}
-                    onChange={(e) => setZoneFilter(e.target.value)}
-                    style={{ fontSize: '0.82rem' }}
-                  >
-                    <option value="ALL">Todas las Zonas</option>
-                    {safeProfitZones.map(z => (
-                      <option key={z.coZon || z.co_zon} value={z.coZon || z.co_zon}>
-                        {z.coZon || z.co_zon} - {z.zonDes || z.zon_des}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Listado de Tarjetas */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '12px' }}>
-                {filteredPipelineOrders.length === 0 ? (
-                  <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
-                    <Truck size={48} style={{ opacity: 0.3, margin: '0 auto 12px' }} />
-                    <div style={{ fontSize: '1rem', fontWeight: 700 }}>No se encontraron pedidos con los filtros aplicados.</div>
-                    <div style={{ fontSize: '0.82rem', marginTop: '4px' }}>Crea un nuevo pedido desde la pestaña 1.</div>
+          {/* TAB 2: PEDIDOS FISCALES & TAB 3: PEDIDOS POR NOTA DE ENTREGA */}
+          {(() => {
+            const renderOrdersPipelineTab = ({
+              ordersList,
+              kpis,
+              isNotaEntrega,
+              title,
+              badgeText,
+              badgeBg,
+              badgeBorder,
+              badgeColor,
+              emptyText
+            }) => (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                
+                {/* Banner Informativo del Almacén y Tipo de Pedido */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    background: isNotaEntrega ? 'rgba(16, 185, 129, 0.08)' : 'rgba(0, 240, 255, 0.08)',
+                    border: `1px solid ${isNotaEntrega ? 'rgba(16, 185, 129, 0.25)' : 'rgba(0, 240, 255, 0.25)'}`,
+                    borderRadius: '12px',
+                    padding: '8px 14px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', color: 'var(--text-primary)' }}>
+                    <span
+                      style={{
+                        fontWeight: 800,
+                        padding: '2px 8px',
+                        borderRadius: '6px',
+                        background: badgeBg,
+                        border: `1px solid ${badgeBorder}`,
+                        color: badgeColor,
+                        fontSize: '0.74rem'
+                      }}
+                    >
+                      {badgeText}
+                    </span>
+                    <span>
+                      {isNotaEntrega
+                        ? 'Pedidos asignados al Almacén 02 (Despacho por Nota de Entrega). Correlativo oficial: PED-NE-XXXXXX'
+                        : 'Pedidos asignados al Almacén 01 (Facturación Fiscal SENIAT). Correlativo oficial: PED-FF-XXXXXX'}
+                    </span>
                   </div>
-                ) : (
-                  filteredPipelineOrders.map(ord => {
-                    const st = STATUS_CONFIG[ord.status] || STATUS_CONFIG.PENDIENTE;
-                    const StatusIcon = st.icon;
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    {kpis.activeCount} pedidos activos • {kpis.facturados} facturados
+                  </div>
+                </div>
 
-                    return (
-                      <div
-                        key={ord.id}
-                        style={{
-                          background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
-                          border: selectedOrder?.id === ord.id ? '2px solid var(--neon-cyan)' : '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))',
-                          borderRadius: '14px',
-                          padding: '12px 14px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '8px',
-                          transition: 'all 0.2s ease',
-                          cursor: 'pointer'
-                        }}
-                        onClick={() => setSelectedOrder(ord)}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div>
-                            <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>
-                              {ord.numeroDoc || ord.id}
-                            </div>
-                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                              {ord.fechaEmision ? new Date(ord.fechaEmision).toLocaleDateString('es-VE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
-                            </div>
-                          </div>
+                {/* Barra de Filtros */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '10px',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
+                    padding: '10px 14px',
+                    borderRadius: '12px',
+                    border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))'
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: '220px', position: 'relative' }}>
+                    <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder={`Buscar en ${title} por cliente, RIF, número o vendedor...`}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      style={{ paddingLeft: '32px', fontSize: '0.82rem', width: '100%' }}
+                    />
+                  </div>
 
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            {isOrderReservationExpired(ord) && (
+                  <div style={{ minWidth: '160px' }}>
+                    <select
+                      className="form-control"
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                      style={{ fontSize: '0.82rem' }}
+                    >
+                      <option value="ALL">Todos los Estados ({kpis.activeCount})</option>
+                      <option value="PENDIENTE">1. Preventas ({kpis.preventas})</option>
+                      <option value="APROBADO">2. Aprobados ({kpis.aprobados})</option>
+                      <option value="EN_TRANSITO">3. En Tránsito ({kpis.enTransito})</option>
+                      <option value="FACTURADO">4. Facturados ({kpis.facturados})</option>
+                      <option value="RETENIDO_CREDITO">⛔ Retenidos por Crédito ({kpis.retenidos || 0})</option>
+                    </select>
+                  </div>
+
+                  <div style={{ minWidth: '160px' }}>
+                    <select
+                      className="form-control"
+                      value={zoneFilter}
+                      onChange={(e) => setZoneFilter(e.target.value)}
+                      style={{ fontSize: '0.82rem' }}
+                    >
+                      <option value="ALL">Todas las Zonas</option>
+                      {safeProfitZones.map(z => (
+                        <option key={z.coZon || z.co_zon} value={z.coZon || z.co_zon}>
+                          {z.coZon || z.co_zon} - {z.zonDes || z.zon_des}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Listado de Tarjetas */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '12px' }}>
+                  {ordersList.length === 0 ? (
+                    <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
+                      <Truck size={48} style={{ opacity: 0.3, margin: '0 auto 12px' }} />
+                      <div style={{ fontSize: '1rem', fontWeight: 700 }}>{emptyText}</div>
+                      <div style={{ fontSize: '0.82rem', marginTop: '4px' }}>Crea un nuevo pedido desde la pestaña 1 con la modalidad correspondiente.</div>
+                    </div>
+                  ) : (
+                    ordersList.map(ord => {
+                      const st = STATUS_CONFIG[ord.status] || STATUS_CONFIG.PENDIENTE;
+                      const StatusIcon = st.icon;
+
+                      return (
+                        <div
+                          key={ord.id}
+                          style={{
+                            background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
+                            border: selectedOrder?.id === ord.id ? `2px solid ${badgeColor}` : '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))',
+                            borderRadius: '14px',
+                            padding: '12px 14px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px',
+                            transition: 'all 0.2s ease',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => setSelectedOrder(ord)}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                              <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-heading)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>{ord.numeroDoc || ord.id}</span>
+                                <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700 }}>
+                                  {isNotaEntrega ? 'ALM-02 NE' : 'ALM-01 FF'}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                {ord.fechaEmision ? new Date(ord.fechaEmision).toLocaleDateString('es-VE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              {isOrderReservationExpired(ord) && (
+                                <span
+                                  style={{
+                                    fontSize: '0.62rem',
+                                    padding: '1px 6px',
+                                    borderRadius: '10px',
+                                    background: 'rgba(239, 68, 68, 0.15)',
+                                    border: '1px solid var(--motorven-red)',
+                                    color: '#f87171',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px'
+                                  }}
+                                  title="Esta preventa no fue facturada antes de las 72 horas desde su emisión; su reserva de stock se liberó automáticamente al almacén."
+                                >
+                                  <Clock size={10} /> Caducada 72h
+                                </span>
+                              )}
                               <span
                                 style={{
-                                  fontSize: '0.62rem',
-                                  padding: '1px 6px',
-                                  borderRadius: '10px',
-                                  background: 'rgba(239, 68, 68, 0.15)',
-                                  border: '1px solid var(--motorven-red)',
-                                  color: '#f87171',
-                                  fontWeight: 700,
-                                  display: 'inline-flex',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 800,
+                                  padding: '2px 8px',
+                                  borderRadius: '12px',
+                                  background: 'rgba(255, 255, 255, 0.08)',
+                                  border: `1px solid ${st.color}`,
+                                  color: st.color,
+                                  display: 'flex',
                                   alignItems: 'center',
-                                  gap: '3px'
+                                  gap: '4px'
                                 }}
-                                title="Esta preventa no fue facturada antes de las 72 horas desde su emisión; su reserva de stock se liberó automáticamente al almacén."
                               >
-                                <Clock size={10} /> Caducada 72h
+                                <StatusIcon size={12} />
+                                {st.shortLabel}
                               </span>
-                            )}
-                            <span
-                              style={{
-                                fontSize: '0.68rem',
-                                fontWeight: 800,
-                                padding: '2px 8px',
-                                borderRadius: '12px',
-                                background: 'rgba(255, 255, 255, 0.08)',
-                                border: `1px solid ${st.color}`,
-                                color: st.color,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px'
-                              }}
-                            >
-                              <StatusIcon size={12} />
-                              {st.shortLabel}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {ord.clienteNombre}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                              RIF: {ord.clienteRif || 'S/R'} • Zona: {ord.zonaVenta || 'General'}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0, 0, 0, 0.2)', padding: '6px 10px', borderRadius: '8px' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--motorven-gold)', fontWeight: 700 }}>
+                              🛢️ {Number(ord.totalLitros || 0).toFixed(1)} Lts
+                            </span>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
+                              {formatUsd(ord.totalNetoUsd || ord.totalUsd)}
                             </span>
                           </div>
-                        </div>
 
-                        <div>
-                          <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {ord.clienteNombre}
-                          </div>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                            RIF: {ord.clienteRif || 'S/R'} • Zona: {ord.zonaVenta || 'General'}
-                          </div>
-                        </div>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                            {ord.status === 'FACTURADO' ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedOrder(ord);
+                                  setActiveTab('imprimir');
+                                }}
+                                className="btn btn-sm"
+                                style={{ flex: 1, fontSize: '0.72rem', padding: '4px 6px', background: 'rgba(16, 185, 129, 0.25)', border: '1px solid var(--semaforo-verde)', color: 'var(--semaforo-verde)', fontWeight: 800 }}
+                              >
+                                ✅ Facturado (Ver O.E.)
+                              </button>
+                            ) : ord.status === 'RETENIDO_CREDITO' ? (
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (onUpdateOrderStatus) {
+                                    await onUpdateOrderStatus(ord.id, 'APROBADO');
+                                    setSelectedOrder({ ...ord, status: 'APROBADO' });
+                                    setFeedbackMsg({
+                                      type: 'success',
+                                      text: `✅ ¡Crédito de la orden ${ord.numeroDoc || ord.id} APROBADO! Ahora ha sido enviada a Caja para facturación.`
+                                    });
+                                  }
+                                }}
+                                className="btn btn-sm"
+                                style={{
+                                  flex: 1,
+                                  fontSize: '0.72rem',
+                                  padding: '4px 6px',
+                                  background: 'rgba(217, 119, 6, 0.18)',
+                                  border: '1px solid #d97706',
+                                  color: '#f59e0b',
+                                  fontWeight: 800,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '4px'
+                                }}
+                                title="Crédito negado retenido. Haga clic para autorizar formalmente y enviar a Caja."
+                              >
+                                <ShieldCheck size={13} />
+                                <span>✓ Aprobar y Enviar a Caja</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedOrder(ord);
+                                  if (onProceedToPOS) {
+                                    onProceedToPOS(ord);
+                                  } else {
+                                    setActiveTab('facturar');
+                                  }
+                                }}
+                                className="btn btn-sm"
+                                style={{
+                                  flex: 1,
+                                  fontSize: '0.72rem',
+                                  padding: '4px 6px',
+                                  background: 'rgba(16, 185, 129, 0.15)',
+                                  border: '1px solid var(--semaforo-verde)',
+                                  color: 'var(--semaforo-verde)',
+                                  fontWeight: 800,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '4px'
+                                }}
+                                title="Cargar pedido directamente al terminal POS de facturación"
+                              >
+                                🚀 Facturar en POS
+                              </button>
+                            )}
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0, 0, 0, 0.2)', padding: '6px 10px', borderRadius: '8px' }}>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--motorven-gold)', fontWeight: 700 }}>
-                            🛢️ {Number(ord.totalLitros || 0).toFixed(1)} Lts
-                          </span>
-                          <span style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
-                            {formatUsd(ord.totalNetoUsd || ord.totalUsd)}
-                          </span>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                          {ord.status === 'FACTURADO' ? (
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedOrder(ord);
-                                setActiveTab('imprimir');
+                                generateSellerOrderPDF({
+                                  order: ord,
+                                  config,
+                                  currentUser,
+                                  client: safeClients.find(c => c.id === ord.clienteId || c.rif === ord.clienteRif)
+                                });
                               }}
-                              className="btn btn-sm"
-                              style={{ flex: 1, fontSize: '0.72rem', padding: '4px 6px', background: 'rgba(16, 185, 129, 0.25)', border: '1px solid var(--semaforo-verde)', color: 'var(--semaforo-verde)', fontWeight: 800 }}
+                              className="btn btn-print-report btn-sm"
+                              style={{
+                                fontSize: '0.72rem',
+                                padding: '4px 8px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)'
+                              }}
+                              title="Descargar Nota de Pedido / Cotización de Preventa en PDF para el Vendedor (guarda en su dispositivo)"
                             >
-                              ✅ Facturado (Ver O.E.)
+                              <Printer size={13} color="#ffffff" /> 📄 PDF Pedido
                             </button>
-                          ) : ord.status === 'RETENIDO_CREDITO' ? (
+
                             <button
                               type="button"
                               onClick={async (e) => {
                                 e.stopPropagation();
-                                if (onUpdateOrderStatus) {
-                                  await onUpdateOrderStatus(ord.id, 'APROBADO');
-                                  setSelectedOrder({ ...ord, status: 'APROBADO' });
+                                const isFacturado = ord.status === 'FACTURADO';
+                                const docLabel = ord.numeroDoc || ord.id;
+                                const confirmMsg = isFacturado
+                                  ? `¿Está seguro de eliminar la Orden de Entrega y Factura ${docLabel}?\n\nEsta acción borrará la orden, la factura generada y devolverá el stock de productos al inventario.`
+                                  : `¿Está seguro de eliminar el pedido ${docLabel}?`;
+                                if (!window.confirm(confirmMsg)) return;
+
+                                try {
+                                  setIsSaving(true);
+                                  if (isFacturado) {
+                                    const linkedSale = (sales || []).find(s =>
+                                      s.pedidoOrigenId === ord.id ||
+                                      s.numeroDoc === ord.nroFactura ||
+                                      s.id === ord.facturaId ||
+                                      (ord.nroFactura && s.numeroDoc && String(s.numeroDoc).includes(ord.nroFactura))
+                                    );
+                                    if (linkedSale && onDeleteSale) {
+                                      await onDeleteSale(linkedSale.id);
+                                    }
+                                  }
+                                  if (onDeleteOrder) {
+                                    await onDeleteOrder(ord.id);
+                                  }
+                                  if (selectedOrder?.id === ord.id) {
+                                    setSelectedOrder(null);
+                                  }
                                   setFeedbackMsg({
                                     type: 'success',
-                                    text: `✅ ¡Crédito de la orden ${ord.numeroDoc || ord.id} APROBADO! Ahora ha sido enviada a Caja para facturación.`
+                                    text: `✅ Orden ${docLabel} eliminada correctamente.`
                                   });
+                                  setTimeout(() => setFeedbackMsg(null), 3000);
+                                } catch (err) {
+                                  setFeedbackMsg({
+                                    type: 'error',
+                                    text: 'Error al eliminar la orden: ' + (err.message || 'Error desconocido')
+                                  });
+                                } finally {
+                                  setIsSaving(false);
                                 }
                               }}
                               className="btn btn-sm"
                               style={{
-                                flex: 1,
                                 fontSize: '0.72rem',
-                                padding: '4px 6px',
-                                background: 'rgba(217, 119, 6, 0.18)',
-                                border: '1px solid #d97706',
-                                color: '#f59e0b',
-                                fontWeight: 800,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '4px'
-                              }}
-                              title="Crédito negado retenido. Haga clic para autorizar formalmente y enviar a Caja."
-                            >
-                              <ShieldCheck size={13} />
-                              <span>✓ Aprobar y Enviar a Caja</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedOrder(ord);
-                                if (onProceedToPOS) {
-                                  onProceedToPOS(ord);
-                                } else {
-                                  setActiveTab('facturar');
-                                }
-                              }}
-                              className="btn btn-sm"
-                              style={{
-                                flex: 1,
-                                fontSize: '0.72rem',
-                                padding: '4px 6px',
-                                background: 'rgba(16, 185, 129, 0.15)',
-                                border: '1px solid var(--semaforo-verde)',
-                                color: 'var(--semaforo-verde)',
-                                fontWeight: 800,
+                                padding: '4px 8px',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                gap: '4px'
+                                background: 'rgba(239, 68, 68, 0.15)',
+                                border: '1px solid var(--motorven-red)',
+                                color: '#ef4444',
+                                borderRadius: '6px',
+                                cursor: 'pointer'
                               }}
-                              title="Cargar pedido directamente al terminal POS de facturación"
+                              title="Eliminar este pedido / orden de entrega"
                             >
-                              🚀 Facturar en POS
+                              <Trash2 size={13} />
                             </button>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedOrder(ord);
-                              generateSellerOrderPDF({
-                                order: ord,
-                                config,
-                                currentUser,
-                                client: safeClients.find(c => c.id === ord.clienteId || c.rif === ord.clienteRif)
-                              });
-                            }}
-                            className="btn btn-print-report btn-sm"
-                            style={{
-                              fontSize: '0.72rem',
-                              padding: '4px 8px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)'
-                            }}
-                            title="Descargar Nota de Pedido / Cotización de Preventa en PDF para el Vendedor (guarda en su dispositivo)"
-                          >
-                            <Printer size={13} color="#ffffff" /> 📄 PDF Pedido
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              const isFacturado = ord.status === 'FACTURADO';
-                              const docLabel = ord.numeroDoc || ord.id;
-                              const confirmMsg = isFacturado
-                                ? `¿Está seguro de eliminar la Orden de Entrega y Factura ${docLabel}?\n\nEsta acción borrará la orden, la factura generada y devolverá el stock de productos al inventario.`
-                                : `¿Está seguro de eliminar el pedido ${docLabel}?`;
-                              if (!window.confirm(confirmMsg)) return;
-
-                              try {
-                                setIsSaving(true);
-                                if (isFacturado) {
-                                  const linkedSale = (sales || []).find(s =>
-                                    s.pedidoOrigenId === ord.id ||
-                                    s.numeroDoc === ord.nroFactura ||
-                                    s.id === ord.facturaId ||
-                                    (ord.nroFactura && s.numeroDoc && String(s.numeroDoc).includes(ord.nroFactura))
-                                  );
-                                  if (linkedSale && onDeleteSale) {
-                                    await onDeleteSale(linkedSale.id);
-                                  }
-                                }
-                                if (onDeleteOrder) {
-                                  await onDeleteOrder(ord.id);
-                                }
-                                if (selectedOrder?.id === ord.id) {
-                                  setSelectedOrder(null);
-                                }
-                                setFeedbackMsg({
-                                  type: 'success',
-                                  text: `✅ Orden ${docLabel} eliminada correctamente.`
-                                });
-                                setTimeout(() => setFeedbackMsg(null), 3000);
-                              } catch (err) {
-                                setFeedbackMsg({
-                                  type: 'error',
-                                  text: 'Error al eliminar la orden: ' + (err.message || 'Error desconocido')
-                                });
-                              } finally {
-                                setIsSaving(false);
-                              }
-                            }}
-                            className="btn btn-sm"
-                            style={{
-                              fontSize: '0.72rem',
-                              padding: '4px 8px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              background: 'rgba(239, 68, 68, 0.15)',
-                              border: '1px solid var(--motorven-red)',
-                              color: '#ef4444',
-                              borderRadius: '6px',
-                              cursor: 'pointer'
-                            }}
-                            title="Eliminar este pedido / orden de entrega"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })
-                )}
+                      );
+                    })
+                  )}
+                </div>
+
               </div>
+            );
 
-            </div>
-          )}
+            if (activeTab === 'pipeline') {
+              return renderOrdersPipelineTab({
+                ordersList: filteredFiscalOrders,
+                kpis: fiscalKpis,
+                isNotaEntrega: false,
+                title: 'Pedidos Fiscales',
+                badgeText: 'PEDIDOS FISCALES (ALMACÉN 01)',
+                badgeBg: isDark ? 'rgba(0, 240, 255, 0.15)' : '#e0f2fe',
+                badgeBorder: 'var(--neon-cyan, #0284c7)',
+                badgeColor: isDark ? 'var(--neon-cyan, #00f0ff)' : '#0284c7',
+                emptyText: 'No se encontraron pedidos fiscales con los filtros aplicados.'
+              });
+            }
 
-          {/* TAB 3: FACTURACIÓN EN CAJA (CAJERA) */}
+            if (activeTab === 'pedidos_nota_entrega') {
+              return renderOrdersPipelineTab({
+                ordersList: filteredNotaEntregaOrders,
+                kpis: notaEntregaKpis,
+                isNotaEntrega: true,
+                title: 'Pedidos por Nota de Entrega',
+                badgeText: 'NOTAS DE ENTREGA (ALMACÉN 02)',
+                badgeBg: isDark ? 'rgba(16, 185, 129, 0.18)' : '#d1fae5',
+                badgeBorder: 'var(--semaforo-verde, #10b981)',
+                badgeColor: isDark ? 'var(--semaforo-verde, #10b981)' : '#047857',
+                emptyText: 'No se encontraron pedidos por nota de entrega con los filtros aplicados.'
+              });
+            }
+
+            return null;
+          })()}
+
+          {/* TAB 4: FACTURACIÓN EN CAJA (CAJERA) */}
           {activeTab === 'facturar' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               
@@ -2923,7 +3079,7 @@ export default function OrdersSalesModal({
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: 'var(--text-primary)' }}>
                   <span style={{ fontWeight: 800, color: 'var(--semaforo-verde)' }}>PASO 2 (ROL CAJERA):</span>
-                  <span>La cajera recibe la Nota de Pedido del vendedor, cobra y emite la <strong>Factura Fiscal</strong>. Al emitir la factura se generará la <strong>Orden de Entrega (Paso 3)</strong>.</span>
+                  <span>La cajera recibe la Nota de Pedido del vendedor, cobra y emite la <strong>Factura Fiscal (Alm 01)</strong> o <strong>Nota de Entrega (Alm 02)</strong>. Al emitir se generará la <strong>Orden de Entrega (Paso 3)</strong>.</span>
                 </div>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                   Cajera en turno: <strong>{currentUser?.nombre || 'Caja Principal'}</strong>
@@ -2933,12 +3089,12 @@ export default function OrdersSalesModal({
               {!selectedOrder ? (
                 <div style={{ textAlign: 'center', padding: '2rem 1rem', background: 'var(--surface-input, rgba(255, 255, 255, 0.03))', borderRadius: '14px' }}>
                   <ShoppingCart size={42} style={{ color: 'var(--semaforo-verde)', margin: '0 auto 10px' }} />
-                  <div style={{ fontSize: '1.05rem', fontWeight: 800 }}>Seleccione una Nota de Pedido para Facturar</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800 }}>Seleccione una Nota de Pedido para Facturar / Emitir</div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Seleccione una nota de pedido de la lista para proceder al cobro y emisión de la factura fiscal.
+                    Seleccione un pedido fiscal (PED-FF) o nota de entrega (PED-NE) para proceder al cobro y emisión oficial.
                   </div>
 
-                  <div style={{ maxWidth: '500px', margin: '1rem auto 0' }}>
+                  <div style={{ maxWidth: '520px', margin: '1rem auto 0' }}>
                     <select
                       className="form-control"
                       onChange={(e) => {
@@ -2948,11 +3104,14 @@ export default function OrdersSalesModal({
                       style={{ fontSize: '0.85rem' }}
                     >
                       <option value="">-- Seleccionar Nota de Pedido --</option>
-                      {safeOrders.map(o => (
-                        <option key={o.id} value={o.id}>
-                          {o.numeroDoc || o.id} • {o.clienteNombre} ({formatUsd(o.totalNetoUsd)}) {o.status === 'FACTURADO' ? '✅ FACTURADO' : (o.status === 'RETENIDO_CREDITO' ? '⛔ RETENIDO (Crédito Negado)' : '⏳ PENDIENTE')}
-                        </option>
-                      ))}
+                      {safeOrders.map(o => {
+                        const isNE = isOrderNotaEntrega(o);
+                        return (
+                          <option key={o.id} value={o.id}>
+                            {isNE ? '[NE Alm 02]' : '[FF Alm 01]'} {o.numeroDoc || o.id} • {o.clienteNombre} ({formatUsd(o.totalNetoUsd)}) {o.status === 'FACTURADO' ? '✅ FACTURADO' : (o.status === 'RETENIDO_CREDITO' ? '⛔ RETENIDO (Crédito Negado)' : '⏳ PENDIENTE')}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
@@ -3207,10 +3366,13 @@ export default function OrdersSalesModal({
 
                               let saleResult = null;
                               if (onProcessSale) {
+                                const isOrdNotaEntrega = isOrderNotaEntrega(selectedOrder);
                                 saleResult = await onProcessSale({
                                   orderId: selectedOrder.id,
                                   pedidoOrigenId: selectedOrder.id,
                                   pedidoOrigenDoc: selectedOrder.numeroDoc || selectedOrder.id,
+                                  tipoDoc: isOrdNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+                                  almacen: isOrdNotaEntrega ? '02' : '01',
                                   numeroDoc: nextInvoiceNum,
                                   clienteId: selectedOrder.clienteId,
                                   clienteNombre: selectedOrder.clienteNombre,
@@ -3300,7 +3462,7 @@ export default function OrdersSalesModal({
             </div>
           )}
 
-          {/* TAB 4: ORDEN DE ENTREGA / GUÍA DE DESPACHO */}
+          {/* TAB 5: ORDEN DE ENTREGA / GUÍA DE DESPACHO */}
           {activeTab === 'imprimir' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               
@@ -3309,15 +3471,15 @@ export default function OrdersSalesModal({
                   <FileText size={42} style={{ color: 'var(--motorven-gold)', margin: '0 auto 10px' }} />
                   <div style={{ fontSize: '1.05rem', fontWeight: 800 }}>Seleccione una Orden para Ver su Orden de Entrega</div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Seleccione una orden del pipeline para consultar o imprimir su documento de entrega oficial.
+                    Seleccione una orden de Pedidos Fiscales o Pedidos por Nota de Entrega para consultar o imprimir su documento oficial.
                   </div>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('pipeline')}
+                    onClick={() => setActiveTab(selectedOrder && isOrderNotaEntrega(selectedOrder) ? 'pedidos_nota_entrega' : 'pipeline')}
                     className="btn btn-secondary"
                     style={{ marginTop: '1rem', fontSize: '0.82rem' }}
                   >
-                    Ir al Pipeline
+                    Ir al Listado de Pedidos
                   </button>
                 </div>
               ) : selectedOrder.status !== 'FACTURADO' ? (
@@ -3402,11 +3564,11 @@ export default function OrdersSalesModal({
 
                     <button
                       type="button"
-                      onClick={() => setActiveTab('pipeline')}
+                      onClick={() => setActiveTab(selectedOrder && isOrderNotaEntrega(selectedOrder) ? 'pedidos_nota_entrega' : 'pipeline')}
                       className="btn btn-secondary"
                       style={{ fontSize: '0.85rem', padding: '10px 18px' }}
                     >
-                      Volver al Pipeline
+                      Volver a Pedidos
                     </button>
                   </div>
                 </div>
@@ -3500,8 +3662,9 @@ export default function OrdersSalesModal({
                             if (onDeleteOrder) {
                               await onDeleteOrder(selectedOrder.id);
                             }
+                            const wasNotaEntrega = isOrderNotaEntrega(selectedOrder);
                             setSelectedOrder(null);
-                            setActiveTab('pipeline');
+                            setActiveTab(wasNotaEntrega ? 'pedidos_nota_entrega' : 'pipeline');
                             setFeedbackMsg({
                               type: 'success',
                               text: `✅ Orden de Entrega y Factura ${docLabel} eliminadas exitosamente. Stock restituido.`
@@ -3934,14 +4097,16 @@ export default function OrdersSalesModal({
             </div>
           )}
 
-          {/* TAB 5: MÉTRICAS & VOLUMEN */}
+          {/* TAB 6: MÉTRICAS & VOLUMEN */}
           {activeTab === 'metricas' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
                 <div style={{ background: 'var(--surface-input, rgba(255, 255, 255, 0.03))', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '1rem' }}>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total Pedidos Registrados</div>
                   <div style={{ fontSize: '1.6rem', fontWeight: 900, color: 'var(--text-heading)', marginTop: '4px' }}>{pipelineKpis.total}</div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--neon-cyan)', marginTop: '2px' }}>Pipeline Activo 100%</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--neon-cyan)', marginTop: '2px' }}>
+                    {fiscalOrders.length} Fiscales (PED-FF) • {notaEntregaOrders.length} N. Entrega (PED-NE)
+                  </div>
                 </div>
 
                 <div style={{ background: 'var(--surface-input, rgba(255, 255, 255, 0.03))', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '1rem' }}>
@@ -3967,7 +4132,7 @@ export default function OrdersSalesModal({
             </div>
           )}
 
-          {/* TAB 6: LISTADO DE FACTURAS (LIST VIEW) */}
+          {/* TAB 7: LISTADO DE FACTURAS (LIST VIEW) */}
           {activeTab === 'facturas_list' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {/* KPIS DE FACTURACIÓN */}

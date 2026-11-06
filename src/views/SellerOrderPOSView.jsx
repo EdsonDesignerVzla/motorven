@@ -28,9 +28,10 @@ import {
   Layers,
   Info,
   Building2,
-  Zap
+  Zap,
+  Warehouse
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from '../services/formatService';
 import { resolveUnitPrice, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -55,6 +56,7 @@ export default function SellerOrderPOSView({
   currentUser,
   onSaveOrder,
   onProceedToPOS,
+  onProcessSale,
   onSyncProfit
 }) {
   const notify = useNotification();
@@ -132,11 +134,13 @@ export default function SellerOrderPOSView({
   // Fórmula: D = max(0, Stock Físico - Comprometido Vigente (72h) - En Carrito)
   // -------------------------------------------------------------------------
   const committedStockMap = useMemo(() => {
-    const map = {};
+    const map01 = {};
+    const map02 = {};
+    const mapTotal = {};
     const now = Date.now();
     const HOURS_72_MS = 72 * 60 * 60 * 1000;
 
-    if (!Array.isArray(orders)) return map;
+    if (!Array.isArray(orders)) return { map01, map02, mapTotal };
 
     orders.forEach((ord) => {
       if (!ord) return;
@@ -149,27 +153,34 @@ export default function SellerOrderPOSView({
         if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) return;
       }
 
+      const alm = String(ord.almacen || ord.almacenId || ord.almacen_id || ord.co_alma || '').trim();
+      const isAlm02 = alm === '02' || ord.tipoDoc === 'NOTA_ENTREGA' || ord.modalidadVenta === 'OFICINA';
+      const targetMap = isAlm02 ? map02 : map01;
+
       const items = ord.items || ord.renglones || [];
       if (Array.isArray(items)) {
         items.forEach((it) => {
           const key = it.articuloId || it.id || it.co_art || it.codigo;
           const qty = Number(it.cantidad || it.qty || 0);
           if (key && qty > 0) {
-            map[key] = (map[key] || 0) + qty;
+            targetMap[key] = (targetMap[key] || 0) + qty;
+            mapTotal[key] = (mapTotal[key] || 0) + qty;
           }
         });
       }
     });
 
-    return map;
+    return { map01, map02, mapTotal };
   }, [orders]);
 
-  // Consulta de stock comprometido vigente
-  const getProductCommittedQty = (p) => {
+  // Consulta de stock comprometido vigente por almacén (01 = Fiscal, 02 = Nota de Entrega)
+  const getProductCommittedQty = (p, specificWarehouse = null) => {
     if (!p) return 0;
     const keyId = p.id;
     const keyCode = p.codigo;
-    return (committedStockMap[keyId] || 0) + (keyCode && keyCode !== keyId ? (committedStockMap[keyCode] || 0) : 0);
+    const wh = specificWarehouse || (modalidadVenta === 'OFICINA' ? '02' : '01');
+    const target = wh === '02' ? committedStockMap.map02 : committedStockMap.map01;
+    return (target[keyId] || 0) + (keyCode && keyCode !== keyId ? (target[keyCode] || 0) : 0);
   };
 
   // Clientes asignados al vendedor o lista completa filtrable
@@ -220,21 +231,36 @@ export default function SellerOrderPOSView({
     });
   }, [products, productSearch, selectedCategory]);
 
+  // Contador de productos con existencia disponible en el almacén activo
+  const availableCount = useMemo(() => {
+    const isNota = modalidadVenta === 'OFICINA';
+    return (filteredProducts || []).filter((p) => {
+      const wStocks = getProductWarehouseStocks(p);
+      const raw = Number(isNota ? wStocks.stock02 : wStocks.stock01);
+      const committed = getProductCommittedQty(p, isNota ? '02' : '01');
+      return (raw - committed) > 0;
+    }).length;
+  }, [filteredProducts, modalidadVenta, committedStockMap]);
+
   // Métodos del carrito
   const addToCart = (product, addQty = 1) => {
-    const rawStock = Number(product.stock ?? product.stockActual ?? product.existencia ?? 0);
-    const committed = getProductCommittedQty(product);
-    const inCartItem = cartItems.find((it) => it.product.id === product.id);
+    const isNota = modalidadVenta === 'OFICINA';
+    const targetWh = isNota ? '02' : '01';
+    const whLabel = isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
+    const wStocks = getProductWarehouseStocks(product);
+    const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
+    const committed = getProductCommittedQty(product, targetWh);
+    const inCartItem = cartItems.find((it) => it.product.id === product.id || it.product.codigo === product.codigo);
     const currentInCart = inCartItem ? inCartItem.cantidad : 0;
     const atpLibre = Math.max(0, rawStock - committed - currentInCart);
 
     if (atpLibre <= 0) {
-      notify.warning(`No hay disponibilidad libre para agregar más unidades de ${product.codigo}. (Físico: ${rawStock}, Comprometido hoy: ${committed})`);
+      notify.warning(`No hay existencia disponible en ${whLabel} para el artículo ${product.codigo}. (Físico: ${rawStock}, Comprometido: ${committed})`);
       return;
     }
 
     const qtyToAdd = Math.min(addQty, atpLibre);
-    const currentChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
+    const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
     const precio = resolveUnitPrice(product, selectedClient, currentChannel);
     if (!(precio > 0)) {
       notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
@@ -245,7 +271,7 @@ export default function SellerOrderPOSView({
     if (inCartItem) {
       setCartItems(
         cartItems.map((it) => {
-          if (it.product.id === product.id) {
+          if (it.product.id === product.id || it.product.codigo === product.codigo) {
             const newQty = it.cantidad + qtyToAdd;
             return {
               ...it,
@@ -273,19 +299,41 @@ export default function SellerOrderPOSView({
     }
   };
 
-  // Sincronización automática: si el precio cambia en Inventario o cambia la modalidad (Calle vs Oficina), el carrito se actualiza
+  // Sincronización automática: si el precio cambia en Inventario o cambia de almacén (Fiscal vs Nota de Entrega), el carrito se ajusta
   useEffect(() => {
     setCartItems(prev => {
       let changed = false;
-      const currentChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
+      const isNota = modalidadVenta === 'OFICINA';
+      const targetWh = isNota ? '02' : '01';
+      const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
       const next = prev.map(it => {
-        const fresh = (products || []).find(p => p && p.id === it.product?.id);
-        if (!fresh) return it;
-        const precio = resolveUnitPrice(fresh, selectedClient, currentChannel);
-        if (!(precio > 0) || precio === it.precioUsd) return it;
-        changed = true;
-        return { ...it, product: fresh, precioUsd: precio, subtotalUsd: lineSubtotal(it.cantidad, precio) };
-      });
+        const fresh = (products || []).find(p => p && (p.id === it.product?.id || p.codigo === it.product?.codigo));
+        const prod = fresh || it.product;
+        const precio = resolveUnitPrice(prod, selectedClient, currentChannel);
+        const wStocks = getProductWarehouseStocks(prod);
+        const rawStock = Number(targetWh === '02' ? wStocks.stock02 : wStocks.stock01);
+        const committed = getProductCommittedQty(prod, targetWh);
+        const maxAvail = Math.max(0, rawStock - committed);
+        const newQty = Math.min(it.cantidad, maxAvail);
+
+        const priceChanged = precio > 0 && precio !== it.precioUsd;
+        const qtyChanged = newQty !== it.cantidad;
+
+        if (priceChanged || qtyChanged) {
+          changed = true;
+          const finalPrice = precio > 0 ? precio : it.precioUsd;
+          return {
+            ...it,
+            product: prod,
+            cantidad: newQty,
+            precioUsd: finalPrice,
+            subtotalUsd: lineSubtotal(newQty, finalPrice),
+            litros: newQty * resolveProductLitersPerUnit(prod)
+          };
+        }
+        return it;
+      }).filter(it => it.cantidad > 0);
+
       return changed ? next : prev;
     });
   }, [products, selectedClient, modalidadVenta]);
@@ -296,23 +344,27 @@ export default function SellerOrderPOSView({
       return;
     }
 
-    const inCartItem = cartItems.find((it) => it.product.id === productId);
+    const inCartItem = cartItems.find((it) => it.product.id === productId || it.product.codigo === productId);
     if (!inCartItem) return;
 
     const product = inCartItem.product;
-    const rawStock = Number(product.stock ?? product.stockActual ?? product.existencia ?? 0);
-    const committed = getProductCommittedQty(product);
+    const isNota = modalidadVenta === 'OFICINA';
+    const targetWh = isNota ? '02' : '01';
+    const whLabel = isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
+    const wStocks = getProductWarehouseStocks(product);
+    const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
+    const committed = getProductCommittedQty(product, targetWh);
     const maxAvailable = Math.max(0, rawStock - committed);
 
     if (newQty > maxAvailable) {
-      notify.warning(`La cantidad solicitada (${newQty}) excede la disponibilidad (${maxAvailable} disponibles).`);
+      notify.warning(`La cantidad solicitada (${newQty}) excede la disponibilidad en ${whLabel} (${maxAvailable} disponibles).`);
       return;
     }
 
     const litrosUnit = resolveProductLitersPerUnit(product);
     setCartItems(
       cartItems.map((it) => {
-        if (it.product.id === productId) {
+        if (it.product.id === productId || it.product.codigo === productId) {
           return {
             ...it,
             cantidad: newQty,
@@ -404,16 +456,29 @@ export default function SellerOrderPOSView({
     }
 
     setIsSubmitting(true);
-    const orderCorrelativo = `PED-${Date.now().toString().slice(-6)}`;
+    const isNotaEntrega = modalidadVenta === 'OFICINA';
+    const prefix = isNotaEntrega ? 'PED-NE' : 'PED-FF';
+    const orderCorrelativo = `${prefix}-${Date.now().toString().slice(-6)}`;
     const effectiveStatus = isCreditDenied ? 'RETENIDO_CREDITO' : 'APROBADO';
     const nowIso = new Date().toISOString();
     const expIso = calculateExpirationDate(nowIso, diasCreditoActual).toISOString();
+
+    const tipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA';
+    const warehouseCode = isNotaEntrega ? '02' : '01';
+    const warehouseName = isNotaEntrega ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
 
     const orderPayload = {
       id: orderCorrelativo,
       numeroDoc: orderCorrelativo,
       correlativo: orderCorrelativo,
       modalidadVenta,
+      tipoDoc,
+      tipo_doc: tipoDoc,
+      almacen: warehouseCode,
+      almacenId: warehouseCode,
+      almacen_id: warehouseCode,
+      co_alma: warehouseCode,
+      almacenNombre: warehouseName,
       clienteId: selectedClient.id || selectedClient.codigo || 'CLI-TEMP',
       clienteNombre: selectedClient.nombre || selectedClient.razonSocial || 'Cliente',
       clienteRif: selectedClient.rif || 'J-000000000',
@@ -428,8 +493,8 @@ export default function SellerOrderPOSView({
       creditOverrideApproved,
       creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : null,
       creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : null,
-      observaciones: orderNotes || (modalidadVenta === 'OFICINA' ? 'Venta por Oficina enviada a Caja.' : 'Preventa móvil levantada en campo por asesor comercial.'),
-      notas: orderNotes || (modalidadVenta === 'OFICINA' ? 'Venta por Oficina enviada a Caja.' : 'Preventa móvil levantada en campo por asesor comercial.'),
+      observaciones: orderNotes || (isNotaEntrega ? 'Nota de Entrega enviada a Caja (Almacén 02).' : 'Factura Fiscal enviada a Caja (Almacén 01).'),
+      notas: orderNotes || (isNotaEntrega ? 'Nota de Entrega enviada a Caja (Almacén 02).' : 'Factura Fiscal enviada a Caja (Almacén 01).'),
       status: effectiveStatus,
       totalLitros,
       totalCajas,
@@ -465,11 +530,101 @@ export default function SellerOrderPOSView({
         onProceedToPOS(savedOrder);
       } else {
         setShowSuccessModal(true);
-        notify.success(`¡Nota de Pedido ${orderCorrelativo} enviada a Caja exitosamente!`);
+        notify.success(`¡${isNotaEntrega ? 'Nota de Entrega' : 'Factura Fiscal'} ${orderCorrelativo} enviada a Caja exitosamente!`);
       }
     } catch (err) {
       console.error('Error emitiendo pedido:', err);
       notify.error('Error al registrar la preventa: ' + (err.message || 'Error de conexión'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Procesar venta directa y descontar inventario del almacén correspondiente
+  const handleDirectSale = async () => {
+    if (!selectedClient) {
+      notify.error('Debe seleccionar el cliente destinatario de la venta.');
+      return;
+    }
+    if (cartItems.length === 0) {
+      notify.warning('El pedido está vacío. Seleccione al menos un producto.');
+      return;
+    }
+    if (isCreditDenied) {
+      notify.error('Operación retenida por políticas de crédito. Solicite aprobación.');
+      return;
+    }
+
+    const isNotaEntrega = modalidadVenta === 'OFICINA';
+    const tipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA';
+    const warehouseCode = isNotaEntrega ? '02' : '01';
+    const warehouseName = isNotaEntrega ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
+
+    const confirmed = await notify.confirm({
+      title: isNotaEntrega ? '¿Procesar Nota de Entrega Directa?' : '¿Emitir Factura Fiscal Directa?',
+      message: `Esta acción descontará el inventario directamente de ${warehouseName}. Monto Total: ${formatUsd(totalUsd)} (${formatBs(totalBs)}).`,
+      confirmText: isNotaEntrega ? 'Sí, Emitir Nota de Entrega' : 'Sí, Emitir Factura Fiscal',
+      cancelText: 'Cancelar'
+    });
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const expIso = calculateExpirationDate(nowIso, diasCreditoActual).toISOString();
+
+      const salePayload = {
+        tipoDoc,
+        almacen: warehouseCode,
+        co_alma: warehouseCode,
+        clienteId: selectedClient.id || selectedClient.codigo || 'CLI-TEMP',
+        clienteNombre: selectedClient.nombre || selectedClient.razonSocial || 'Cliente',
+        clienteRif: selectedClient.rif || 'J-000000000',
+        clienteDireccion: deliveryAddress,
+        condicionPago,
+        diasCredito: diasCreditoActual,
+        fechaEmision: nowIso,
+        fechaVencimiento: expIso,
+        metodoPago: condicionPago === 'CREDITO' ? 'CREDITO' : 'EFECTIVO_USD',
+        vendedor: sellerName,
+        observaciones: orderNotes || (isNotaEntrega ? 'Nota de Entrega procesada desde Preventa Móvil.' : 'Factura Fiscal procesada desde Preventa Móvil.'),
+        items: cartItems.map((it) => ({
+          articuloId: it.product.id || it.product.codigo,
+          codigo: it.product.codigo,
+          descripcion: it.product.descripcion,
+          articuloDescripcion: it.product.descripcion,
+          cantidad: it.cantidad,
+          precioUsd: it.precioUsd,
+          subtotalUsd: it.subtotalUsd,
+          unidad: resolveProductUnit(it.product, 'Caja'),
+          unidadVenta: resolveProductUnit(it.product, 'Caja'),
+          litrosPorUnidad: resolveProductLitersPerUnit(it.product),
+          litros: it.litros,
+          tipoAlicuota: it.product.tipoAlicuota || 'GENERAL_16',
+          aplicaIva: it.product.aplicaIva !== false
+        })),
+        totalUsd,
+        totalBs
+      };
+
+      let completedSale = salePayload;
+      if (onProcessSale) {
+        completedSale = await onProcessSale(salePayload);
+      }
+      clearCart();
+      notify.success(`¡${isNotaEntrega ? 'Nota de Entrega' : 'Factura Fiscal'} #${completedSale?.numeroDoc || ''} procesada y descontada con éxito!`);
+      setLastEmittedOrder({
+        ...salePayload,
+        ...completedSale,
+        numeroDoc: completedSale?.numeroDoc || salePayload.numeroDoc,
+        status: 'FACTURADO',
+        totalLitros,
+        totalNetoUsd: totalUsd
+      });
+      setShowSuccessModal(true);
+    } catch (err) {
+      console.error('Error procesando venta directa:', err);
+      notify.error('Error al procesar la venta: ' + (err.message || 'Error de conexión'));
     } finally {
       setIsSubmitting(false);
     }
@@ -746,9 +901,29 @@ export default function SellerOrderPOSView({
                   style={{ paddingLeft: '36px', fontSize: '0.85rem', width: '100%' }}
                 />
               </div>
-              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.12)', color: 'var(--semaforo-verde)', border: '1px solid rgba(16, 185, 129, 0.35)', fontSize: '0.74rem', fontWeight: 800, padding: '6px 12px', borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-                <Package size={14} /> {filteredProducts.length} Disponibles
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span
+                  className="badge"
+                  style={{
+                    background: modalidadVenta === 'OFICINA' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    color: modalidadVenta === 'OFICINA' ? '#38bdf8' : 'var(--motorven-red)',
+                    border: modalidadVenta === 'OFICINA' ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)',
+                    fontSize: '0.74rem',
+                    fontWeight: 800,
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}
+                  title={modalidadVenta === 'OFICINA' ? 'Almacén 02: Bóveda Central (Notas de Entrega)' : 'Almacén 01: Principal (Facturación Fiscal)'}
+                >
+                  <Warehouse size={13} /> {modalidadVenta === 'OFICINA' ? 'Alm 02 (Nota de Entrega)' : 'Alm 01 (Factura Fiscal)'}
+                </span>
+                <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.12)', color: 'var(--semaforo-verde)', border: '1px solid rgba(16, 185, 129, 0.35)', fontSize: '0.74rem', fontWeight: 800, padding: '6px 12px', borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                  <Package size={14} /> {availableCount} Disponibles
+                </span>
+              </div>
             </div>
 
             {/* Pastillas de Categorías */}
@@ -782,13 +957,15 @@ export default function SellerOrderPOSView({
               </div>
             ) : (
               filteredProducts.map((p) => {
-                const rawStock = Number(p.stock ?? p.stockActual ?? p.existencia ?? 0);
-                const committed = getProductCommittedQty(p);
-                const inCartItem = cartItems.find((it) => it.product.id === p.id);
+                const wStocks = getProductWarehouseStocks(p);
+                const isNota = modalidadVenta === 'OFICINA';
+                const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
+                const committed = getProductCommittedQty(p, isNota ? '02' : '01');
+                const inCartItem = cartItems.find((it) => it.product.id === p.id || it.product.codigo === p.codigo);
                 const currentInCart = inCartItem ? inCartItem.cantidad : 0;
                 const atpLibre = Math.max(0, rawStock - committed - currentInCart);
                 const isOutOfStock = atpLibre <= 0;
-                const currentChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
+                const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
                 const precioUsd = resolveUnitPrice(p, selectedClient, currentChannel);
                 const litrosUnit = Number(p.litrosPorUnidad || 0);
 
@@ -876,11 +1053,17 @@ export default function SellerOrderPOSView({
 
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.68rem' }}>
                         <span style={{ color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
-                        <span style={{
-                          color: isOutOfStock ? 'var(--motorven-red)' : 'var(--semaforo-verde)',
-                          fontWeight: 800
-                        }}>
-                          {isOutOfStock ? (committed > 0 ? 'Comprometido Hoy' : 'Agotado') : `Disp: ${atpLibre} un.`}
+                        <span
+                          style={{
+                            color: isOutOfStock ? 'var(--motorven-red)' : 'var(--semaforo-verde)',
+                            fontWeight: 800,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                          title={`Existencia física en ${isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'}: ${rawStock} un. (Comprometido: ${committed})`}
+                        >
+                          {isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : `${isNota ? 'Alm 02' : 'Alm 01'}: ${atpLibre} un.`}
                         </span>
                       </div>
                     </div>
@@ -959,7 +1142,7 @@ export default function SellerOrderPOSView({
           
           <div className="bento-card" style={{ padding: '0.9rem', background: 'var(--bg-card-glass)', display: 'flex', flexDirection: 'column', gap: '0.65rem', minWidth: 0 }}>
             
-            {/* Selector de Modalidad: Preventa Móvil vs Venta por Oficina */}
+            {/* Selector de Modalidad: Factura Fiscal vs Nota de Entrega */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
               <button
                 type="button"
@@ -978,7 +1161,7 @@ export default function SellerOrderPOSView({
                   gap: '5px'
                 }}
               >
-                <Smartphone size={13} /> Preventa Calle
+                <FileText size={13} /> Factura Fiscal
               </button>
               <button
                 type="button"
@@ -997,7 +1180,7 @@ export default function SellerOrderPOSView({
                   gap: '5px'
                 }}
               >
-                <Building2 size={13} /> Venta por Oficina
+                <Package size={13} /> Nota de Entrega
               </button>
             </div>
 
@@ -1252,7 +1435,7 @@ export default function SellerOrderPOSView({
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                  Total {modalidadVenta === 'OFICINA' ? 'Venta Oficina' : 'Preventa'}:
+                  Total {modalidadVenta === 'OFICINA' ? 'Nota de Entrega' : 'Factura Fiscal'}:
                 </span>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: 'var(--semaforo-verde)', lineHeight: 1 }}>
@@ -1282,14 +1465,47 @@ export default function SellerOrderPOSView({
                   gap: '8px',
                   background: isCreditDenied
                     ? 'linear-gradient(135deg, #d97706, #b45309)'
-                    : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
-                  boxShadow: '0 4px 16px rgba(220, 38, 38, 0.4)',
+                    : (modalidadVenta === 'OFICINA'
+                        ? 'linear-gradient(135deg, #0284c7, #0369a1)'
+                        : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)'),
+                  boxShadow: modalidadVenta === 'OFICINA' ? '0 4px 16px rgba(2, 132, 199, 0.4)' : '0 4px 16px rgba(220, 38, 38, 0.4)',
                   opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
                 }}
               >
                 <Send size={17} />
-                <span>{isCreditDenied ? 'SOLICITAR APROBACIÓN A CAJA' : '🚀 EMITIR NOTA DE PEDIDO A CAJA'}</span>
+                <span>
+                  {isCreditDenied
+                    ? 'SOLICITAR APROBACIÓN A CAJA'
+                    : (modalidadVenta === 'OFICINA' ? '🚀 EMITIR NOTA DE ENTREGA A CAJA' : '🚀 EMITIR FACTURA FISCAL A CAJA')}
+                </span>
               </button>
+
+              {onProcessSale && !isCreditDenied && (
+                <button
+                  type="button"
+                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
+                  onClick={handleDirectSale}
+                  className="btn btn-sm"
+                  style={{
+                    padding: '9px',
+                    fontSize: '0.82rem',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    background: modalidadVenta === 'OFICINA' ? 'linear-gradient(135deg, #0369a1, #075985)' : 'linear-gradient(135deg, #059669, #047857)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    boxShadow: '0 3px 10px rgba(0,0,0,0.25)',
+                    opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
+                  }}
+                >
+                  <CheckCircle2 size={15} />
+                  <span>{modalidadVenta === 'OFICINA' ? 'Facturar Directo (Nota de Entrega - Alm 02)' : 'Facturar Directo (Factura Fiscal - Alm 01)'}</span>
+                </button>
+              )}
 
               {!isCreditDenied && onProceedToPOS && (
                 <button
@@ -1353,7 +1569,9 @@ export default function SellerOrderPOSView({
             </div>
 
             <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 900, color: 'var(--text-primary)' }}>
-              ¡Nota de Pedido Emitida Exitosamente!
+              {lastEmittedOrder.status === 'FACTURADO'
+                ? (lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? '¡Nota de Entrega Facturada Directamente!' : '¡Factura Fiscal Emitida Directamente!')
+                : (lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? '¡Nota de Entrega Enviada a Caja!' : '¡Factura Fiscal Enviada a Caja!')}
             </h3>
 
             <div style={{ fontFamily: 'var(--font-code)', fontSize: '1.05rem', fontWeight: 800, color: 'var(--neon-cyan)', marginTop: '4px' }}>
@@ -1372,12 +1590,15 @@ export default function SellerOrderPOSView({
               gap: '8px'
             }}>
               <span>Emisión: <strong>{formatDateVe(lastEmittedOrder.fechaEmision)}</strong></span>
+              <span>Almacén: <strong style={{ color: lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? '#38bdf8' : 'var(--motorven-gold)' }}>{lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? '02: Bóveda Central' : '01: Principal Fiscal'}</strong></span>
               <span>Plazo: <strong>{lastEmittedOrder.diasCredito || 0} Días</strong></span>
               <span>Vencimiento: <strong style={{ color: 'var(--motorven-gold)' }}>{formatDateVe(lastEmittedOrder.fechaVencimiento)}</strong></span>
             </div>
 
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '8px 0 14px', lineHeight: '1.5' }}>
-              La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({lastEmittedOrder.totalLitros.toFixed(1)} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd)}) ya se encuentra en la <strong>bandeja de entrada de la Cajera en planta</strong> con restricción de <strong>NO MODIFICAR</strong>.
+              {lastEmittedOrder.status === 'FACTURADO'
+                ? <>La venta para <strong>{lastEmittedOrder.clienteNombre}</strong> ({lastEmittedOrder.totalLitros ? Number(lastEmittedOrder.totalLitros).toFixed(1) : '0.0'} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd || lastEmittedOrder.totalUsd)}) ha sido completada y el stock fue descontado de <strong>{lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'}</strong>.</>
+                : <>La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({lastEmittedOrder.totalLitros ? Number(lastEmittedOrder.totalLitros).toFixed(1) : '0.0'} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd || lastEmittedOrder.totalUsd)}) ya se encuentra en la <strong>bandeja de entrada de la Cajera en planta</strong> ({lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02' : 'Almacén 01'}) con restricción de <strong>NO MODIFICAR</strong>.</>}
             </p>
 
             {/* Botones de Documento */}
@@ -1640,6 +1861,39 @@ export default function SellerOrderPOSView({
                     ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista' : 'Precio Minorista / Venta de Calle'})
                   </span>
                 </div>
+
+                {/* KPI de Stock en Almacén Activo */}
+                {(() => {
+                  const specStocks = getProductWarehouseStocks(selectedSpecProduct);
+                  const isNota = modalidadVenta === 'OFICINA';
+                  const specRaw = Number(isNota ? specStocks.stock02 : specStocks.stock01);
+                  const specCommitted = getProductCommittedQty(selectedSpecProduct, isNota ? '02' : '01');
+                  const specDisp = Math.max(0, specRaw - specCommitted);
+                  const isZero = specDisp <= 0;
+                  return (
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '7px 10px',
+                      background: isNota ? 'rgba(56, 189, 248, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                      border: isNota ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: '0.73rem'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <Warehouse size={13} color={isNota ? '#38bdf8' : 'var(--motorven-red)'} />
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          {isNota ? 'Alm 02 (Notas de Entrega):' : 'Alm 01 (Facturación Fiscal):'}
+                        </span>
+                      </div>
+                      <strong style={{ color: isZero ? 'var(--motorven-red)' : 'var(--semaforo-verde)', fontFamily: 'var(--font-code)' }}>
+                        {isZero ? (specCommitted > 0 ? 'COMPROMETIDO' : 'AGOTADO') : `${specDisp} un. disponibles (Físico: ${specRaw})`}
+                      </strong>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -1726,7 +1980,7 @@ export default function SellerOrderPOSView({
                 <ShieldCheck size={22} color="var(--motorven-gold)" />
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                    Auditoría & Aprobación de Crédito ({modalidadVenta === 'OFICINA' ? 'Venta por Oficina' : 'Nota de Pedido'})
+                    Auditoría & Aprobación de Crédito ({modalidadVenta === 'OFICINA' ? 'Nota de Entrega' : 'Factura Fiscal'})
                   </h3>
                   <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
                     Cliente: {selectedClient.nombre || selectedClient.razonSocial} ({selectedClient.rif})

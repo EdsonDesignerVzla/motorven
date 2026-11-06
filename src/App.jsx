@@ -1895,6 +1895,7 @@ function MainApp() {
         onSwitchToDesktop={handleSwitchToDesktop}
         onSaveOrder={handleSaveOrder}
         onProceedToPOS={handleProceedToInvoiceFromOrder}
+        onProcessSale={handleProcessSale}
         onSyncProfit={handleSyncProfit}
         onLogout={handleLogout}
       />
@@ -1992,6 +1993,7 @@ function MainApp() {
                 currentUser={currentUser}
                 onSaveOrder={handleSaveOrder}
                 onProceedToPOS={handleProceedToInvoiceFromOrder}
+                onProcessSale={handleProcessSale}
                 onSyncProfit={handleSyncProfit}
               />
             </ModuleErrorBoundary>

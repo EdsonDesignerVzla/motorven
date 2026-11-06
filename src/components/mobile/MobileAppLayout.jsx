@@ -47,6 +47,7 @@ export default function MobileAppLayout({
   onSwitchToDesktop,
   onSaveOrder,
   onProceedToPOS,
+  onProcessSale,
   onSyncProfit,
   onLogout
 }) {
@@ -180,6 +181,7 @@ export default function MobileAppLayout({
               currentUser={currentUser}
               onSaveOrder={onSaveOrder}
               onProceedToPOS={onProceedToPOS}
+              onProcessSale={onProcessSale}
               onSyncProfit={onSyncProfit}
             />
           )}

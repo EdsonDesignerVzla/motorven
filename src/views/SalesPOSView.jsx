@@ -198,6 +198,23 @@ export default function SalesPOSView({
       });
     }
 
+    // 1.1 Sincronizar Tipo de Documento y Almacén según la orden (Factura Fiscal -> Alm 01, Nota de Entrega -> Alm 02)
+    const isOrderNotaEntrega =
+      orderToLoad.tipoDoc === 'NOTA_ENTREGA' ||
+      orderToLoad.tipo_doc === 'NOTA_ENTREGA' ||
+      orderToLoad.modalidadVenta === 'OFICINA' ||
+      orderToLoad.almacen === '02' ||
+      orderToLoad.co_alma === '02' ||
+      String(orderToLoad.numeroDoc || orderToLoad.id || '').toUpperCase().startsWith('PED-NE');
+
+    if (isOrderNotaEntrega) {
+      setTipoDoc('NOTA_ENTREGA');
+      setModalidadVenta('OFICINA');
+    } else {
+      setTipoDoc('FACTURA');
+      setModalidadVenta('MOSTRADOR');
+    }
+
     // 2. Establecer condición de pago y plazo exacto que viene de la Nota de Pedido
     const isOrderCash = !orderToLoad.condicionPago || String(orderToLoad.condicionPago).toUpperCase() === 'CONTADO';
     setCondicionPago(isOrderCash ? 'CONTADO' : 'CREDITO');
