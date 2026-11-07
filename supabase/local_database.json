@@ -8,7 +8,7 @@
       "rif": "J-31115365-9",
       "direccion": "Zona Industrial III, Carrera 2 con Calle 4, Barquisimeto / Caracas",
       "telefono": "+58 (251) 269.13.964",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 1,
       "origen_erp": "par_emp (Profit Plus 2K8)",
@@ -22,7 +22,7 @@
       "rif": "Nacional (632 Clientes)",
       "direccion": "Cobertura Nacional (Carabobo, Lara, Aragua, Zulia, etc.)",
       "telefono": "Directorio Comercial",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 632,
       "origen_erp": "clientes (Profit Plus 2K8)",
@@ -36,7 +36,7 @@
       "rif": "Planta Principal Oilstone",
       "direccion": "Almacén Central ALM-01",
       "telefono": "+58 (251) 269.13.964",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 29,
       "origen_erp": "art (Profit Plus 2K8)",
@@ -50,7 +50,7 @@
       "rif": "SENIAT Fiscal",
       "direccion": "Serie Fiscal Motorven",
       "telefono": "Facturación",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 2155,
       "origen_erp": "factura / reng_fac (Profit Plus)",
@@ -64,7 +64,7 @@
       "rif": "Cartera Activa",
       "direccion": "Tesorería Central",
       "telefono": "Gestión de Cobro",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 3962,
       "origen_erp": "cobros / reng_cob (Profit Plus)",
@@ -78,7 +78,7 @@
       "rif": "Proveedores",
       "direccion": "Administración & Finanzas",
       "telefono": "CxP",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 191,
       "origen_erp": "docum_cp (Profit Plus)",
@@ -92,7 +92,7 @@
       "rif": "Bancos y Transferencias",
       "direccion": "Tesorería",
       "telefono": "Pagos",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 195,
       "origen_erp": "pagos / reng_pag (Profit Plus)",
@@ -106,7 +106,7 @@
       "rif": "Proveedores Nacionales/Internacionales",
       "direccion": "Compras Planta",
       "telefono": "Logística",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 63,
       "origen_erp": "compras / reng_com (Profit Plus)",
@@ -120,7 +120,7 @@
       "rif": "Empresas Aliadas",
       "direccion": "Directorio Proveedores",
       "telefono": "Compras",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 5,
       "origen_erp": "prov (Profit Plus)",
@@ -134,7 +134,7 @@
       "rif": "Fuerza de Venta Nacional",
       "direccion": "Zonas de Distribución",
       "telefono": "Supervisión de Ventas",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 10,
       "origen_erp": "vendedor (Profit Plus)",
@@ -148,7 +148,7 @@
       "rif": "Cuentas Corporativas",
       "direccion": "Tesorería",
       "telefono": "Bancos",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 10,
       "origen_erp": "cuentas (Profit Plus)",
@@ -162,7 +162,7 @@
       "rif": "Caja Chica",
       "direccion": "Sucursales",
       "telefono": "Caja",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 3,
       "origen_erp": "cajas (Profit Plus)",
@@ -176,7 +176,7 @@
       "rif": "Rutas",
       "direccion": "Regiones de Venezuela",
       "telefono": "Logística",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 7,
       "origen_erp": "zona (Profit Plus)",
@@ -190,7 +190,7 @@
       "rif": "Usuarios Autorizados",
       "direccion": "Control de Acceso",
       "telefono": "TI & Soporte",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 18,
       "origen_erp": "usuarios (Sistema)",
@@ -204,7 +204,7 @@
       "rif": "Pipeline Comercial",
       "direccion": "Ventas Móviles",
       "telefono": "Preventa",
-      "tasa_dolar_bcv": 894.88,
+      "tasa_dolar_bcv": 896.12,
       "tasa_keystone": 909.9,
       "registros_sincronizados": 15,
       "origen_erp": "pedidos (Profit Plus)",
@@ -224,7 +224,7 @@
       "email": "ventas@keystone.net.ve",
       "instagram": "@oilstone_vzla",
       "tasa_dolar": 896.12,
-      "tasaDolar": 894.88,
+      "tasaDolar": 896.12,
       "tasa_keystone": 909.9,
       "tasaKeystone": 909.9,
       "moneda_principal": "USD",
@@ -374926,7 +374926,7 @@
       "meta_litros_mes": 3000,
       "metaLitrosMes": 3000,
       "activo": true,
-      "foto": null,
+      "foto": "",
       "avatar": "",
       "co_zon": "02",
       "coZon": "02",
@@ -374934,7 +374934,7 @@
       "created_at": "2026-10-01T15:47:45.917227+00:00",
       "createdAt": "2026-10-01T15:47:45.917227+00:00",
       "updated_at": "2026-11-06T20:03:20.422Z",
-      "updatedAt": "2026-11-02T16:52:35.293Z"
+      "updatedAt": "2026-11-06T20:03:20.422Z"
     },
     {
       "id": "CB",
@@ -431132,8 +431132,8 @@
         "configuracion"
       ],
       "ultimo_acceso": "2026-11-06T19:43:30.322Z",
-      "ultimoAcceso": "2026-11-03T22:31:20.522Z",
-      "last_login": "2026-11-03T22:31:20.522Z",
+      "ultimoAcceso": "2026-11-06T19:43:30.322Z",
+      "last_login": "2026-11-06T19:43:30.322Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-10-26T19:07:04.838Z",
@@ -431181,8 +431181,8 @@
         "cxc"
       ],
       "ultimo_acceso": "2026-11-06T19:44:23.845Z",
-      "ultimoAcceso": "2026-11-03T15:13:48.797Z",
-      "last_login": "2026-11-03T15:13:48.797Z",
+      "ultimoAcceso": "2026-11-06T19:44:23.845Z",
+      "last_login": "2026-11-06T19:44:23.845Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-10-27T19:55:42.887Z",
@@ -431313,14 +431313,12 @@
         "dashboard"
       ],
       "ultimo_acceso": "2026-11-06T20:20:38.641Z",
-      "ultimoAcceso": "2026-11-02T17:26:34.115Z",
-      "last_login": "2026-11-02T17:26:34.115Z",
+      "ultimoAcceso": "2026-11-06T20:20:38.641Z",
+      "last_login": "2026-11-06T20:20:38.641Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T20:21:42.612Z",
-      "updatedAt": "2026-11-02T17:25:37.517Z",
-      "color": "#f59e0b",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T20:21:42.612Z"
     },
     {
       "id": "usr-caja",
@@ -431394,14 +431392,12 @@
         "dashboard"
       ],
       "ultimo_acceso": "2026-11-06T20:16:50.498Z",
-      "ultimoAcceso": "2026-11-05T15:25:35.263Z",
-      "last_login": "2026-11-05T15:25:35.263Z",
+      "ultimoAcceso": "2026-11-06T20:16:50.498Z",
+      "last_login": "2026-11-06T20:16:50.498Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T20:04:15.474Z",
-      "updatedAt": "2026-11-05T15:29:00.933Z",
-      "color": "#6366f1",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T20:04:15.474Z"
     },
     {
       "id": "usr-mvgsc0hv",
@@ -431519,14 +431515,12 @@
         "dashboard"
       ],
       "ultimo_acceso": "2026-11-06T20:10:24.719Z",
-      "ultimoAcceso": null,
-      "last_login": null,
+      "ultimoAcceso": "2026-11-06T20:10:24.719Z",
+      "last_login": "2026-11-06T20:10:24.719Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T20:03:19.789Z",
-      "updatedAt": "2026-11-02T16:52:35.287Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T20:03:19.789Z"
     },
     {
       "id": "usr-seller-vv",
@@ -435453,183 +435447,309 @@
     },
     {
       "id": "LOG-1793994210324-VOQT2",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
-      "created_at": "2026-11-06T19:43:30.324Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T19:43:30.324Z",
+      "fecha": "2026-11-06T19:43:30.324Z"
     },
     {
       "id": "LOG-1793994263852-KA6BB",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-06T19:44:23.852Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T19:44:23.852Z",
+      "fecha": "2026-11-06T19:44:23.852Z"
     },
     {
       "id": "LOG-1793994314685-N5ROQ",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
-      "created_at": "2026-11-06T19:45:14.685Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T19:45:14.685Z",
+      "fecha": "2026-11-06T19:45:14.685Z"
     },
     {
       "id": "LOG-1793995247520-KFFKN",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
-      "created_at": "2026-11-06T20:00:47.520Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:00:47.520Z",
+      "fecha": "2026-11-06T20:00:47.520Z"
     },
     {
       "id": "LOG-1793995256509-S4FVT",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:00:56.509Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:00:56.509Z",
+      "fecha": "2026-11-06T20:00:56.509Z"
     },
     {
       "id": "LOG-1793995294178-M6MU0",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
-      "created_at": "2026-11-06T20:01:34.178Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:01:34.178Z",
+      "fecha": "2026-11-06T20:01:34.178Z"
     },
     {
       "id": "LOG-1793995325130-X0ZRB",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @ventas",
-      "created_at": "2026-11-06T20:02:05.130Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:02:05.130Z",
+      "fecha": "2026-11-06T20:02:05.130Z"
     },
     {
       "id": "LOG-1793995400421-Y1OA4",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
-      "created_at": "2026-11-06T20:03:20.421Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:03:20.421Z",
+      "fecha": "2026-11-06T20:03:20.421Z"
     },
     {
       "id": "LOG-1793995416188-0J99H",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:03:36.188Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:03:36.188Z",
+      "fecha": "2026-11-06T20:03:36.188Z"
     },
     {
       "id": "LOG-1793995420952-MMPFX",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @rosibelcxc",
-      "created_at": "2026-11-06T20:03:40.952Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:03:40.952Z",
+      "fecha": "2026-11-06T20:03:40.952Z"
     },
     {
       "id": "LOG-1793995456999-6LE3Y",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
-      "created_at": "2026-11-06T20:04:16.999Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:04:16.999Z",
+      "fecha": "2026-11-06T20:04:16.999Z"
     },
     {
       "id": "LOG-1793995456120-3MKU6",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @rosibelcxc (Rosibel Briceño) con rol COBRANZA",
-      "created_at": "2026-11-06T20:04:16.120Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:04:16.120Z",
+      "fecha": "2026-11-06T20:04:16.120Z"
     },
     {
       "id": "LOG-1793995563464-1M3UP",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @ventas",
-      "created_at": "2026-11-06T20:06:03.464Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:06:03.464Z",
+      "fecha": "2026-11-06T20:06:03.464Z"
     },
     {
       "id": "LOG-1793995576046-94Q6I",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:06:16.046Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:06:16.046Z",
+      "fecha": "2026-11-06T20:06:16.046Z"
     },
     {
       "id": "LOG-1793995824721-ANUDM",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:10:24.721Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:10:24.721Z",
+      "fecha": "2026-11-06T20:10:24.721Z"
     },
     {
       "id": "LOG-1793996210508-7CBP6",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
-      "created_at": "2026-11-06T20:16:50.508Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:16:50.508Z",
+      "fecha": "2026-11-06T20:16:50.508Z"
     },
     {
       "id": "LOG-1793996438644-TT5HJ",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ALMACEN",
-      "created_at": "2026-11-06T20:20:38.644Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:20:38.644Z",
+      "fecha": "2026-11-06T20:20:38.644Z"
     },
     {
       "id": "LOG-1793996503564-JOBTN",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @almacen (Ray Briceño) con rol ALMACEN",
-      "created_at": "2026-11-06T20:21:43.564Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:21:43.564Z",
+      "fecha": "2026-11-06T20:21:43.564Z"
     }
   ],
   "order_items": [
@@ -437031,7 +437151,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000003_02",
@@ -437054,7 +437174,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000012_01",
@@ -437077,7 +437197,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000012_02",
@@ -437100,7 +437220,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000212_01",
@@ -437123,7 +437243,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000212_02",
@@ -437146,7 +437266,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000308_01",
@@ -437169,7 +437289,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000308_02",
@@ -437192,7 +437312,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000704_01",
@@ -437215,7 +437335,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000704_02",
@@ -437238,7 +437358,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000804_01",
@@ -437261,7 +437381,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000804_02",
@@ -437284,7 +437404,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000903_01",
@@ -437307,7 +437427,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000903_02",
@@ -437330,7 +437450,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000912_01",
@@ -437353,7 +437473,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "000912_02",
@@ -437376,7 +437496,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001201_01",
@@ -437399,7 +437519,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001201_02",
@@ -437422,7 +437542,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001203_01",
@@ -437445,7 +437565,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001203_02",
@@ -437468,7 +437588,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001208_01",
@@ -437491,7 +437611,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001208_02",
@@ -437514,7 +437634,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001212_01",
@@ -437537,7 +437657,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001212_02",
@@ -437560,7 +437680,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001304_01",
@@ -437583,7 +437703,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001304_02",
@@ -437606,7 +437726,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001308_01",
@@ -437629,7 +437749,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001308_02",
@@ -437652,7 +437772,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001312_01",
@@ -437675,7 +437795,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001312_02",
@@ -437698,7 +437818,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001403_01",
@@ -437721,7 +437841,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "001403_02",
@@ -437744,7 +437864,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100102_01",
@@ -437767,7 +437887,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100102_02",
@@ -437790,7 +437910,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100202_01",
@@ -437813,7 +437933,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100202_02",
@@ -437836,7 +437956,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100303_01",
@@ -437859,7 +437979,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100303_02",
@@ -437882,7 +438002,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100403_01",
@@ -437905,7 +438025,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100403_02",
@@ -437928,7 +438048,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100502_01",
@@ -437951,7 +438071,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100502_02",
@@ -437974,7 +438094,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100602_01",
@@ -437997,7 +438117,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100602_02",
@@ -438020,7 +438140,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100905_01",
@@ -438043,7 +438163,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "100905_02",
@@ -438066,7 +438186,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101209_01",
@@ -438089,7 +438209,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101209_02",
@@ -438112,7 +438232,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101309_01",
@@ -438135,7 +438255,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101309_02",
@@ -438158,7 +438278,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101409_01",
@@ -438181,7 +438301,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101409_02",
@@ -438204,7 +438324,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101510_01",
@@ -438227,7 +438347,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101510_02",
@@ -438250,7 +438370,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101713_01",
@@ -438273,7 +438393,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101713_02",
@@ -438296,7 +438416,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101814_01",
@@ -438319,7 +438439,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     },
     {
       "id": "101814_02",
@@ -438342,7 +438462,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-06T18:35:12.458Z"
+      "updated_at": "2026-11-07T03:35:11.330Z"
     }
   ],
   "profit_goods_receipt_notes": [

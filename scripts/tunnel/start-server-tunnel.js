@@ -170,9 +170,12 @@ async function publishBackendUrlToGithub(urlPayloadStr, tunnelUrl) {
   }
 }
 
-function saveLocalBackendUrlFiles(url) {
+const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
+
+function saveLocalBackendUrlFiles(tunnelUrl) {
   const payloadObj = {
-    url,
+    url: OFFICIAL_BACKEND_URL,
+    fallbackTunnelUrl: tunnelUrl || undefined,
     lanUrls: [
       `http://192.168.0.6:${PORT}`,
       `http://26.45.7.149:${PORT}`,

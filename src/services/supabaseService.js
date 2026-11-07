@@ -118,66 +118,74 @@ import {
 } from './profitService.js';
 import { broadcastReconcileChange } from './realtimeSyncBridge.js';
 
-const DEFAULT_SUPABASE_URL = 'http://localhost:54321';
+const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
+const DEFAULT_SUPABASE_URL = OFFICIAL_BACKEND_URL;
 const DEFAULT_SUPABASE_ANON_KEY = 'local-free-token';
 
 const configuredSupabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
 const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
 
-/**
- * Resuelve la URL real del servidor Supabase según el equipo que abre el sistema.
- *
- * Si la URL configurada apunta a "localhost", en las computadoras de la oficina
- * "localhost" sería su propio equipo (donde no hay base de datos) y todas las
- * peticiones fallarían con "Failed to fetch". En ese caso se usa el proxy del
- * servidor Vite (`/sb`) en el mismo origen desde el que se abrió la página, así
- * todos los equipos de la red leen y escriben en la MISMA base de datos.
- */
 const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'];
-const STATIC_CLOUD_HOSTS = ['.github.io', '.vercel.app', '.netlify.app', '.pages.dev'];
 const isTestEnv = typeof process !== 'undefined' && Boolean(process.env?.VITEST || process.env?.NODE_ENV === 'test');
 
-const isCloudHostedPage = (() => {
+function isLocalOrLanHostname(h) {
+  if (!h) return false;
+  const lower = String(h).toLowerCase().trim();
+  if (LOCAL_HOSTNAMES.includes(lower)) return true;
+  if (lower.endsWith('.local') || lower.endsWith('.lan')) return true;
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|26\.)/.test(lower)) return true;
+  return false;
+}
+
+function isValidSavedBackendUrl(rawUrl, pageProtocol = 'https:', pageHostname = '') {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  const clean = rawUrl.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(clean)) return false;
+  if (clean.includes('loca.lt') || clean.includes('trycloudflare.com')) return false;
   try {
-    if (typeof window === 'undefined' || !window.location) return false;
-    const host = (window.location.hostname || '').toLowerCase();
-    return STATIC_CLOUD_HOSTS.some(ext => host.endsWith(ext));
+    const parsed = new URL(clean);
+    const isPageLocal = isLocalOrLanHostname(pageHostname);
+    if (!isPageLocal) {
+      if (clean.endsWith('/sb') || isLocalOrLanHostname(parsed.hostname)) return false;
+    }
+    if (pageProtocol === 'https:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    return true;
   } catch (_) {
     return false;
   }
-})();
+}
 
 const resolveInitialSupabaseUrl = (configured) => {
   try {
     if (typeof window === 'undefined' || !window.location || !/^https?:$/.test(window.location.protocol)) {
-      return configured;
+      return configured || OFFICIAL_BACKEND_URL;
     }
 
-    // Servido por Vite (dev o preview): usar siempre el proxy /sb del mismo origen
-    if (import.meta.env?.DEV || Boolean(window.location.port)) {
-      return `${window.location.origin}/sb`;
-    }
+    const { protocol, hostname } = window.location;
 
-    // URL guardada previamente (ignorando túneles muertos loca.lt)
+    // Limpiar automáticamente cualquier URL obsoleta en localStorage (trycloudflare, loca.lt, /sb en nube o HTTP en HTTPS)
     try {
       const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
-      if (savedCustom && /^https?:\/\//i.test(savedCustom.trim()) && !savedCustom.includes('loca.lt')) {
-        return savedCustom.trim().replace(/\/+$/, '');
+      if (savedCustom) {
+        const cleanSaved = savedCustom.trim().replace(/\/+$/, '');
+        if (isValidSavedBackendUrl(cleanSaved, protocol, hostname)) {
+          return cleanSaved;
+        }
+        window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
       }
     } catch (_) {}
 
-    const cfg = new URL(configured);
-    if (!LOCAL_HOSTNAMES.includes(cfg.hostname) && !cfg.hostname.includes('loca.lt')) return configured;
-    if (isCloudHostedPage) return configured;
-    return `${window.location.origin}/sb`;
+    return OFFICIAL_BACKEND_URL;
   } catch (_) {
-    return configured;
+    return OFFICIAL_BACKEND_URL;
   }
 };
 
 let currentBackendUrl = resolveInitialSupabaseUrl(configuredSupabaseUrl);
 
-// Nunca bloquear llamadas a Supabase en GitHub Pages cuando existe auto-discovery o túnel activo
+// Nunca bloquear llamadas a Supabase en GitHub Pages o dominio propio signummotorven.com
 export const isStaticCloudHost = false;
 
 let backendDiscoveryPromise = null;
@@ -220,19 +228,25 @@ export async function discoverActiveBackendUrl(force = false) {
 
   backendDiscoveryPromise = (async () => {
     try {
-      const candidates = [];
+      const candidates = [OFFICIAL_BACKEND_URL];
+      const pageProtocol = window.location?.protocol || 'https:';
+      const pageHostname = window.location?.hostname || '';
+      const isPageLocal = isLocalOrLanHostname(pageHostname);
 
-      // 0. Prioridad en desarrollo y red local: proxy /sb de Vite y servidor central 192.168.0.6:54321
-      if (typeof window !== 'undefined' && window.location) {
-        if (window.location.origin && window.location.origin !== 'null') {
-          candidates.push(`${window.location.origin}/sb`);
+      // 1. Parámetro ?server= en la barra de direcciones (y limpiar barra si estaba viejo)
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const paramUrl = urlParams.get('server') || urlParams.get('backend');
+        if (paramUrl && isValidSavedBackendUrl(paramUrl, pageProtocol, pageHostname)) {
+          const cleanParam = paramUrl.trim().replace(/\/+$/, '');
+          if (!candidates.includes(cleanParam)) candidates.push(cleanParam);
+          if (window.history && typeof window.history.replaceState === 'function') {
+            window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+          }
         }
-        candidates.push('http://192.168.0.6:54321');
-        candidates.push('http://127.0.0.1:54321');
-        candidates.push('http://localhost:54321');
-      }
+      } catch (_) {}
 
-      // 1. backend_url.json publicado por el servidor central SVR-MOTORVEN
+      // 2. backend_url.json publicado por el servidor central SVR-MOTORVEN
       try {
         const basePath = window.location.pathname.endsWith('/')
           ? window.location.pathname
@@ -244,38 +258,42 @@ export async function discoverActiveBackendUrl(force = false) {
         clearTimeout(tid);
         if (resp.ok) {
           const parsed = await resp.json();
-          if (parsed?.url && /^https?:\/\//i.test(parsed.url.trim())) {
-            candidates.push(parsed.url.trim().replace(/\/+$/, ''));
+          if (parsed?.url && isValidSavedBackendUrl(parsed.url, pageProtocol, pageHostname)) {
+            const cleanJsonUrl = parsed.url.trim().replace(/\/+$/, '');
+            if (!candidates.includes(cleanJsonUrl)) candidates.push(cleanJsonUrl);
           }
-          if (Array.isArray(parsed?.lanUrls) && window.location.protocol === 'http:') {
+          if (isPageLocal && pageProtocol === 'http:' && Array.isArray(parsed?.lanUrls)) {
             for (const lan of parsed.lanUrls) {
-              if (lan && /^http:\/\//i.test(lan)) candidates.push(lan.trim().replace(/\/+$/, ''));
+              if (lan && /^http:\/\//i.test(lan)) {
+                const cleanLan = lan.trim().replace(/\/+$/, '');
+                if (!candidates.includes(cleanLan)) candidates.push(cleanLan);
+              }
             }
           }
         }
       } catch (_) {}
 
-      // 2. Parámetro ?server= en la barra de direcciones (y limpiar barra si estaba viejo)
-      try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const paramUrl = urlParams.get('server') || urlParams.get('backend');
-        if (paramUrl && /^https?:\/\//i.test(paramUrl.trim())) {
-          const cleanParam = paramUrl.trim().replace(/\/+$/, '');
-          if (!candidates.includes(cleanParam)) candidates.push(cleanParam);
-          if (window.history && typeof window.history.replaceState === 'function') {
-            window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
-          }
-        }
-      } catch (_) {}
-
-      // 3. Fallback a URL guardada en localStorage solo si aún no está en la lista y no es loca.lt
+      // 3. Fallback a URL guardada en localStorage solo si es válida
       try {
         const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
-        if (savedCustom && /^https?:\/\//i.test(savedCustom.trim()) && !savedCustom.includes('loca.lt')) {
+        if (savedCustom && isValidSavedBackendUrl(savedCustom, pageProtocol, pageHostname)) {
           const cleanSaved = savedCustom.trim().replace(/\/+$/, '');
           if (!candidates.includes(cleanSaved)) candidates.push(cleanSaved);
         }
       } catch (_) {}
+
+      // 4. Candidatos de red local únicamente cuando se abre por HTTP en LAN/localhost
+      if (isPageLocal && pageProtocol === 'http:') {
+        const localCandidates = [
+          'http://192.168.0.6:54321',
+          window.location.origin && window.location.origin !== 'null' ? `${window.location.origin}/sb` : null,
+          'http://127.0.0.1:54321',
+          'http://localhost:54321'
+        ];
+        for (const lc of localCandidates) {
+          if (lc && !candidates.includes(lc)) candidates.push(lc);
+        }
+      }
 
       for (const candidate of candidates) {
         if (!candidate || candidate.includes('loca.lt')) continue;
@@ -292,15 +310,12 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       }
 
-      // Si no se pudo verificar por /health pero hay candidato no-localt, adoptarlo
-      const validCandidate = candidates.find(c => c && !c.includes('loca.lt'));
-      if (validCandidate) {
-        currentBackendUrl = validCandidate;
-        try {
-          window.localStorage.setItem('signum_custom_backend_url', currentBackendUrl);
-          window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: currentBackendUrl } }));
-        } catch (_) {}
-      }
+      // Si ningún /health respondió a tiempo, adoptar siempre el dominio oficial HTTPS
+      currentBackendUrl = OFFICIAL_BACKEND_URL;
+      try {
+        window.localStorage.setItem('signum_custom_backend_url', currentBackendUrl);
+        window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: currentBackendUrl } }));
+      } catch (_) {}
     } catch (_) {}
     initialDiscoveryCompleted = true;
     return currentBackendUrl;
@@ -345,7 +360,7 @@ const dynamicSupabaseFetch = async (input, init) => {
   if (isTestEnv || typeof fetch === 'undefined') {
     return fetch(input, init);
   }
-  // Esperar siempre el descubrimiento inicial contra backend_url.json para no usar un túnel viejo de la laptop
+  // Esperar siempre el descubrimiento inicial para garantizar uso del servidor oficial
   if (!initialDiscoveryCompleted && backendDiscoveryPromise) {
     try {
       await backendDiscoveryPromise;
@@ -353,9 +368,21 @@ const dynamicSupabaseFetch = async (input, init) => {
   }
   const rewrittenUrl = rewriteRequestUrl(input, currentBackendUrl);
   try {
-    return await fetch(rewrittenUrl, init);
+    const res = await fetch(rewrittenUrl, init);
+    if (res.status === 404 && currentBackendUrl !== OFFICIAL_BACKEND_URL) {
+      currentBackendUrl = OFFICIAL_BACKEND_URL;
+      const officialUrl = rewriteRequestUrl(input, OFFICIAL_BACKEND_URL);
+      return await fetch(officialUrl, init);
+    }
+    return res;
   } catch (err) {
-    // Si falló la red contra un túnel viejo, re-descubrir desde backend_url.json y reintentar 1 vez
+    if (currentBackendUrl !== OFFICIAL_BACKEND_URL) {
+      currentBackendUrl = OFFICIAL_BACKEND_URL;
+      try {
+        const officialUrl = rewriteRequestUrl(input, OFFICIAL_BACKEND_URL);
+        return await fetch(officialUrl, init);
+      } catch (_) {}
+    }
     const prevUrl = currentBackendUrl;
     const discovered = await discoverActiveBackendUrl(true);
     if (discovered && discovered !== prevUrl) {
