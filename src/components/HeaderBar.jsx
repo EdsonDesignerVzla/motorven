@@ -1757,7 +1757,7 @@ export default function HeaderBar({
                 type="text"
                 value={customServerInput}
                 onChange={(e) => setCustomServerInput(e.target.value)}
-                placeholder="https://xxxx.trycloudflare.com"
+                placeholder="https://api.signummotorven.com"
                 style={{
                   width: '100%',
                   padding: '10px 12px',

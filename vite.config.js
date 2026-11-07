@@ -105,10 +105,10 @@ const binanceP2pPlugin = () => ({
   }
 });
 
-// Proxy hacia el servidor central de la empresa SVR-MOTORVEN (192.168.0.6:54321).
+// Proxy hacia el servidor central de la empresa SVR-MOTORVEN (https://api.signummotorven.com).
 // Garantiza que la laptop de desarrollo y las computadoras de la oficina usen
 // SIEMPRE la misma base de datos central alojada en el servidor de la empresa.
-const SUPABASE_LOCAL_TARGET = process.env.SUPABASE_LOCAL_TARGET || `http://${COMPANY_SERVER_HOST}:54321`;
+const SUPABASE_LOCAL_TARGET = process.env.SUPABASE_LOCAL_TARGET || 'https://api.signummotorven.com';
 const supabaseProxy = {
   '/sb': {
     target: SUPABASE_LOCAL_TARGET,

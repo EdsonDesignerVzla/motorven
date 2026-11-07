@@ -77,44 +77,62 @@ try {
   broadcastChannel = null;
 }
 
+const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
+
 let activeDiscoveredRealtimeUrl = null;
 
-function resolveRealtimeBaseUrl() {
-  if (activeDiscoveredRealtimeUrl) return activeDiscoveredRealtimeUrl;
-  if (typeof window === 'undefined' || !window.location) {
-    return 'http://127.0.0.1:54321';
-  }
-  const { protocol, hostname, origin } = window.location;
+function isLocalOrLanHostname(h) {
+  if (!h) return false;
+  const lower = String(h).toLowerCase().trim();
+  if (['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'].includes(lower)) return true;
+  if (lower.endsWith('.local') || lower.endsWith('.lan')) return true;
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|26\.)/.test(lower)) return true;
+  return false;
+}
 
-  const isStaticCloud =
-    hostname.endsWith('.vercel.app') ||
-    hostname.endsWith('.netlify.app') ||
-    hostname.endsWith('.github.io') ||
-    hostname.endsWith('.onrender.com') ||
-    hostname.endsWith('.pages.dev') ||
-    hostname.endsWith('.railway.app') ||
-    hostname.endsWith('.fly.dev');
-  if (isStaticCloud) {
-    try {
-      const custom = window.localStorage.getItem('signum_custom_backend_url');
-      if (custom && /^https?:\/\//i.test(custom.trim())) return custom.trim().replace(/\/+$/, '');
-      if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) {
-        const envUrl = import.meta.env.VITE_SUPABASE_URL.trim().replace(/\/+$/, '');
-        if (/^https?:\/\//i.test(envUrl) && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
-          return envUrl;
-        }
+function isValidCustomRealtimeUrl(rawUrl, pageProtocol = 'https:', pageHostname = '') {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  const clean = rawUrl.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(clean)) return false;
+  if (clean.includes('loca.lt') || clean.includes('trycloudflare.com')) return false;
+  try {
+    const parsed = new URL(clean);
+    const isPageLocal = isLocalOrLanHostname(pageHostname);
+    if (!isPageLocal) {
+      if (clean.endsWith('/sb') || isLocalOrLanHostname(parsed.hostname)) return false;
+    }
+    if (pageProtocol === 'https:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveRealtimeBaseUrl() {
+  if (typeof window === 'undefined' || !window.location) {
+    return activeDiscoveredRealtimeUrl || OFFICIAL_BACKEND_URL;
+  }
+  const { protocol, hostname } = window.location;
+
+  if (activeDiscoveredRealtimeUrl && isValidCustomRealtimeUrl(activeDiscoveredRealtimeUrl, protocol, hostname)) {
+    return activeDiscoveredRealtimeUrl;
+  }
+
+  try {
+    const custom = window.localStorage.getItem('signum_custom_backend_url');
+    if (custom) {
+      const clean = custom.trim().replace(/\/+$/, '');
+      if (isValidCustomRealtimeUrl(clean, protocol, hostname)) {
+        return clean;
       }
-    } catch (_) {}
-    return null;
-  }
-  if ((protocol === 'http:' || protocol === 'https:') && origin && origin !== 'null') {
-    try {
-      const custom = window.localStorage.getItem('signum_custom_backend_url');
-      if (custom && /^https?:\/\//i.test(custom.trim())) return custom.trim().replace(/\/+$/, '');
-    } catch (_) {}
-    return `${origin}/sb`;
-  }
-  return 'http://127.0.0.1:54321';
+      // Limpiar automáticamente URLs obsoletas (trycloudflare, loca.lt, /sb en dominio público o HTTP en HTTPS)
+      window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
+    }
+  } catch (_) {}
+
+  return OFFICIAL_BACKEND_URL;
 }
 
 let lastProcessedSeq = 0;
@@ -269,22 +287,35 @@ function connectSseStream() {
       reconnectTimer = setTimeout(async () => {
         if (activeSubscribers.size > 0) {
           try {
-            const basePath = window.location.pathname.endsWith('/')
-              ? window.location.pathname
-              : window.location.pathname.replace(/\/[^/]*$/, '/');
-            const resp = await fetch(`${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`, { cache: 'no-store' });
-            if (resp.ok) {
-              const parsed = await resp.json();
-              if (parsed?.url && /^https?:\/\//i.test(parsed.url.trim())) {
-                const clean = parsed.url.trim().replace(/\/+$/, '');
-                activeDiscoveredRealtimeUrl = clean;
-                window.localStorage.setItem('signum_custom_backend_url', clean);
+            // Verificar primero si el dominio oficial responde antes de adoptar un fallback
+            const ctrl = new AbortController();
+            const tid = setTimeout(() => ctrl.abort(), 2500);
+            const healthResp = await fetch(`${OFFICIAL_BACKEND_URL}/health`, { cache: 'no-store', signal: ctrl.signal });
+            clearTimeout(tid);
+            if (healthResp.ok) {
+              activeDiscoveredRealtimeUrl = OFFICIAL_BACKEND_URL;
+              window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
+            } else {
+              const basePath = window.location.pathname.endsWith('/')
+                ? window.location.pathname
+                : window.location.pathname.replace(/\/[^/]*$/, '/');
+              const resp = await fetch(`${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`, { cache: 'no-store' });
+              if (resp.ok) {
+                const parsed = await resp.json();
+                const candidate = (parsed?.url || '').trim().replace(/\/+$/, '');
+                if (candidate && isValidCustomRealtimeUrl(candidate, window.location.protocol, window.location.hostname)) {
+                  activeDiscoveredRealtimeUrl = candidate;
+                  window.localStorage.setItem('signum_custom_backend_url', candidate);
+                }
               }
             }
-          } catch (_) {}
+          } catch (_) {
+            activeDiscoveredRealtimeUrl = OFFICIAL_BACKEND_URL;
+          }
           connectSseStream();
+          pollDeltaChanges();
         }
-      }, 3500);
+      }, 3000);
     };
   } catch (_) {}
 }
@@ -299,23 +330,18 @@ function ensureNetworkRealtimeStarted() {
   connectSseStream();
   pollDeltaChanges();
 
-  // Si el canal Server-Sent Events (SSE) está abierto (readyState === 1), los cambios llegan
-  // en < 50ms por push directo sin consumir peticiones HTTP. El polling solo actúa como
-  // red de seguridad cada 25s o de inmediato si SSE se desconecta (por ejemplo, en móviles).
+  // Sincronización híbrida continua:
+  // 1) SSE push (< 50ms)
+  // 2) Delta polling ligero cada 3.5s (solo consulta ?since=seq, ~70 bytes) para garantizar
+  //    sincronización instantánea incluso si Cloudflare o redes móviles hacen buffering de SSE.
   pollTimer = setInterval(() => {
     if (activeSubscribers.size > 0) {
-      const isSseConnected = sseSource && sseSource.readyState === 1;
-      if (!isSseConnected) {
-        pollDeltaChanges();
+      pollDeltaChanges();
+      if (!sseSource || sseSource.readyState === 2) {
+        connectSseStream();
       }
     }
   }, 3500);
-
-  setInterval(() => {
-    if (activeSubscribers.size > 0) {
-      pollDeltaChanges();
-    }
-  }, 25000);
 
   const handleWakeUp = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -327,7 +353,10 @@ function ensureNetworkRealtimeStarted() {
 
   const handleBackendUpdated = (evt) => {
     if (evt?.detail?.url) {
-      activeDiscoveredRealtimeUrl = String(evt.detail.url).trim().replace(/\/+$/, '');
+      const candidate = String(evt.detail.url).trim().replace(/\/+$/, '');
+      if (isValidCustomRealtimeUrl(candidate, window.location?.protocol, window.location?.hostname)) {
+        activeDiscoveredRealtimeUrl = candidate;
+      }
     }
     connectSseStream();
     pollDeltaChanges();
@@ -374,27 +403,37 @@ export const broadcastReconcileChange = (payload) => {
     } catch (_) {}
   }
 
-  // 4. Transmitir al servidor Supabase Local para sincronizar otros navegadores y dispositivos (PC, Laptop, iPhone, Android, Tablet)
+  // 4. Transmitir al servidor Supabase Central para sincronizar otros navegadores y dispositivos (PC, Laptop, iPhone, Android, Tablet)
   const baseUrl = resolveRealtimeBaseUrl();
   const isTestEnv = typeof process !== 'undefined' && (process.env?.VITEST || process.env?.NODE_ENV === 'test');
   if (baseUrl && !isTestEnv && typeof fetch !== 'undefined') {
+    const bodyStr = JSON.stringify({
+      table: payload.table || payload.tableId,
+      tableId: payload.tableId || payload.table,
+      action: payload.action || 'RECONCILE',
+      eventType: payload.action === 'DELETE' ? 'DELETE' : 'UPDATE',
+      key: payload.key || null,
+      item: payload.item || null,
+      clientId: CLIENT_ID
+    });
+    const headers = {
+      'Content-Type': 'application/json',
+      'bypass-tunnel-reminder': 'true',
+      'ngrok-skip-browser-warning': 'true'
+    };
     fetch(`${baseUrl}/realtime/v1/broadcast`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'bypass-tunnel-reminder': 'true',
-        'ngrok-skip-browser-warning': 'true'
-      },
-      body: JSON.stringify({
-        table: payload.table || payload.tableId,
-        tableId: payload.tableId || payload.table,
-        action: payload.action || 'RECONCILE',
-        eventType: payload.action === 'DELETE' ? 'DELETE' : 'UPDATE',
-        key: payload.key || null,
-        item: payload.item || null,
-        clientId: CLIENT_ID
-      })
-    }).catch(() => {});
+      headers,
+      body: bodyStr
+    }).catch(() => {
+      if (baseUrl !== OFFICIAL_BACKEND_URL) {
+        fetch(`${OFFICIAL_BACKEND_URL}/realtime/v1/broadcast`, {
+          method: 'POST',
+          headers,
+          body: bodyStr
+        }).catch(() => {});
+      }
+    });
   }
 };
 
