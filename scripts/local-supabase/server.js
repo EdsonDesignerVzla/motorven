@@ -242,12 +242,24 @@ function writeAtomicJson(targetPath, dataObj) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const payload = JSON.stringify(dataObj, null, 2);
   const tmpPath = `${targetPath}.tmp`;
-  fs.writeFileSync(tmpPath, payload, 'utf8');
   try {
-    fs.renameSync(tmpPath, targetPath);
-  } catch (_) {
-    fs.copyFileSync(tmpPath, targetPath);
-    try { fs.unlinkSync(tmpPath); } catch (__) {}
+    fs.writeFileSync(tmpPath, payload, 'utf8');
+    try {
+      fs.renameSync(tmpPath, targetPath);
+    } catch (_) {
+      try {
+        fs.copyFileSync(tmpPath, targetPath);
+        try { fs.unlinkSync(tmpPath); } catch (__) {}
+      } catch (errCopy) {
+        fs.writeFileSync(targetPath, payload, 'utf8');
+      }
+    }
+  } catch (errWrite) {
+    try {
+      fs.writeFileSync(targetPath, payload, 'utf8');
+    } catch (errFinal) {
+      console.warn('[Supabase Local] Aviso no fatal en writeAtomicJson:', errFinal?.message || errFinal);
+    }
   }
   return payload;
 }
