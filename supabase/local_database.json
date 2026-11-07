@@ -431132,8 +431132,8 @@
         "configuracion"
       ],
       "ultimo_acceso": "2026-11-07T03:54:37.414Z",
-      "ultimoAcceso": "2026-11-06T19:43:30.322Z",
-      "last_login": "2026-11-06T19:43:30.322Z",
+      "ultimoAcceso": "2026-11-07T03:54:37.414Z",
+      "last_login": "2026-11-07T03:54:37.414Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-10-26T19:07:04.838Z",
@@ -431181,14 +431181,12 @@
         "cxc"
       ],
       "ultimo_acceso": "2026-11-07T04:54:56.531Z",
-      "ultimoAcceso": "2026-11-06T19:44:23.845Z",
-      "last_login": "2026-11-06T19:44:23.845Z",
+      "ultimoAcceso": "2026-11-07T04:54:56.531Z",
+      "last_login": "2026-11-07T04:54:56.531Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:46:20.002Z",
-      "updatedAt": "2026-10-27T19:55:42.887Z",
-      "color": "#002b7a",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:46:20.002Z"
     },
     {
       "id": "usr-gerencia",
@@ -431315,14 +431313,12 @@
         "dashboard"
       ],
       "ultimo_acceso": "2026-11-07T04:47:09.716Z",
-      "ultimoAcceso": "2026-11-06T20:20:38.641Z",
-      "last_login": "2026-11-06T20:20:38.641Z",
+      "ultimoAcceso": "2026-11-07T04:47:09.716Z",
+      "last_login": "2026-11-07T04:47:09.716Z",
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T20:21:42.612Z",
-      "updatedAt": "2026-11-06T20:21:42.612Z",
-      "color": "#f59e0b",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T20:21:42.612Z"
     },
     {
       "id": "usr-caja",
@@ -431362,9 +431358,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T22:57:43.814Z",
-      "updatedAt": "2026-11-03T12:48:19.581Z",
-      "color": "#10b981",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T22:57:43.814Z"
     },
     {
       "id": "usr-mvgse4to",
@@ -431403,9 +431397,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T20:04:15.474Z",
-      "updatedAt": "2026-11-06T20:04:15.474Z",
-      "color": "#6366f1",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T20:04:15.474Z"
     },
     {
       "id": "usr-mvgsc0hv",
@@ -431528,9 +431520,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-06T20:03:19.789Z",
-      "updatedAt": "2026-11-06T20:03:19.789Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-06T20:03:19.789Z"
     },
     {
       "id": "usr-seller-vv",
@@ -431569,9 +431559,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:03:26.750Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:03:26.750Z"
     },
     {
       "id": "usr-seller-cb",
@@ -431610,9 +431598,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:01:44.498Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:01:44.498Z"
     },
     {
       "id": "usr-seller-cm",
@@ -431651,9 +431637,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:03:49.673Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:03:49.673Z"
     },
     {
       "id": "usr-seller-fs",
@@ -431692,9 +431676,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:02:06.190Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:02:06.190Z"
     },
     {
       "id": "usr-seller-jr",
@@ -431733,9 +431715,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:02:21.131Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:02:21.131Z"
     },
     {
       "id": "usr-seller-kb",
@@ -431774,9 +431754,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:03:37.405Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:03:37.405Z"
     },
     {
       "id": "usr-seller-ms",
@@ -431815,9 +431793,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:02:40.135Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:02:40.135Z"
     },
     {
       "id": "usr-seller-of",
@@ -431856,9 +431832,7 @@
       "created_at": "2026-09-01T00:00:00.000Z",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "updated_at": "2026-11-07T04:03:19.534Z",
-      "updatedAt": "2026-10-26T19:07:04.839Z",
-      "color": "#0ea5e9",
-      "descripcion": ""
+      "updatedAt": "2026-11-07T04:03:19.534Z"
     }
   ],
   "orders": [
@@ -435473,423 +435447,717 @@
     },
     {
       "id": "LOG-1793994210324-VOQT2",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
-      "created_at": "2026-11-06T19:43:30.324Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T19:43:30.324Z",
+      "fecha": "2026-11-06T19:43:30.324Z"
     },
     {
       "id": "LOG-1793994263852-KA6BB",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-06T19:44:23.852Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T19:44:23.852Z",
+      "fecha": "2026-11-06T19:44:23.852Z"
     },
     {
       "id": "LOG-1793994314685-N5ROQ",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
-      "created_at": "2026-11-06T19:45:14.685Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T19:45:14.685Z",
+      "fecha": "2026-11-06T19:45:14.685Z"
     },
     {
       "id": "LOG-1793995247520-KFFKN",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
-      "created_at": "2026-11-06T20:00:47.520Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:00:47.520Z",
+      "fecha": "2026-11-06T20:00:47.520Z"
     },
     {
       "id": "LOG-1793995256509-S4FVT",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:00:56.509Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:00:56.509Z",
+      "fecha": "2026-11-06T20:00:56.509Z"
     },
     {
       "id": "LOG-1793995294178-M6MU0",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
-      "created_at": "2026-11-06T20:01:34.178Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:01:34.178Z",
+      "fecha": "2026-11-06T20:01:34.178Z"
     },
     {
       "id": "LOG-1793995325130-X0ZRB",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @ventas",
-      "created_at": "2026-11-06T20:02:05.130Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:02:05.130Z",
+      "fecha": "2026-11-06T20:02:05.130Z"
     },
     {
       "id": "LOG-1793995400421-Y1OA4",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @ventas (Yheyson Calderón) con rol VENTAS",
-      "created_at": "2026-11-06T20:03:20.421Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:03:20.421Z",
+      "fecha": "2026-11-06T20:03:20.421Z"
     },
     {
       "id": "LOG-1793995416188-0J99H",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:03:36.188Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:03:36.188Z",
+      "fecha": "2026-11-06T20:03:36.188Z"
     },
     {
       "id": "LOG-1793995420952-MMPFX",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @rosibelcxc",
-      "created_at": "2026-11-06T20:03:40.952Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:03:40.952Z",
+      "fecha": "2026-11-06T20:03:40.952Z"
     },
     {
       "id": "LOG-1793995456999-6LE3Y",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
-      "created_at": "2026-11-06T20:04:16.999Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:04:16.999Z",
+      "fecha": "2026-11-06T20:04:16.999Z"
     },
     {
       "id": "LOG-1793995456120-3MKU6",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @rosibelcxc (Rosibel Briceño) con rol COBRANZA",
-      "created_at": "2026-11-06T20:04:16.120Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:04:16.120Z",
+      "fecha": "2026-11-06T20:04:16.120Z"
     },
     {
       "id": "LOG-1793995563464-1M3UP",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @ventas",
-      "created_at": "2026-11-06T20:06:03.464Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:06:03.464Z",
+      "fecha": "2026-11-06T20:06:03.464Z"
     },
     {
       "id": "LOG-1793995576046-94Q6I",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:06:16.046Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:06:16.046Z",
+      "fecha": "2026-11-06T20:06:16.046Z"
     },
     {
       "id": "LOG-1793995824721-ANUDM",
-      "usuario_id": "usr-mu5vswve",
-      "usuario_nombre": "Yheyson Calderón",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-06T20:10:24.721Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:10:24.721Z",
+      "fecha": "2026-11-06T20:10:24.721Z"
     },
     {
       "id": "LOG-1793996210508-7CBP6",
-      "usuario_id": "usr-mvgse4to",
-      "usuario_nombre": "Rosibel Briceño",
-      "usuario_rol": "COBRANZA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol COBRANZA",
-      "created_at": "2026-11-06T20:16:50.508Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:16:50.508Z",
+      "fecha": "2026-11-06T20:16:50.508Z"
     },
     {
       "id": "LOG-1793996438644-TT5HJ",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ALMACEN",
-      "created_at": "2026-11-06T20:20:38.644Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:20:38.644Z",
+      "fecha": "2026-11-06T20:20:38.644Z"
     },
     {
       "id": "LOG-1793996503564-JOBTN",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @almacen (Ray Briceño) con rol ALMACEN",
-      "created_at": "2026-11-06T20:21:43.564Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-06T20:21:43.564Z",
+      "fecha": "2026-11-06T20:21:43.564Z"
     },
     {
       "id": "LOG-1794022455743-NVW0W",
-      "usuario_id": "usr-autotest-1794022455241",
-      "usuario_nombre": "Operador Automatizado",
-      "usuario_rol": "VENTAS",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol VENTAS",
-      "created_at": "2026-11-07T03:34:15.743Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:34:15.743Z",
+      "fecha": "2026-11-07T03:34:15.743Z"
     },
     {
       "id": "LOG-1794023544808-MQ2AK",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-07T03:52:24.809Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:52:24.809Z",
+      "fecha": "2026-11-07T03:52:24.809Z"
     },
     {
       "id": "LOG-1794023580088-7HPV1",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @almacen",
-      "created_at": "2026-11-07T03:53:00.088Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:53:00.088Z",
+      "fecha": "2026-11-07T03:53:00.088Z"
     },
     {
       "id": "LOG-1794023654665-IK4HF",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ALMACEN",
-      "created_at": "2026-11-07T03:54:14.665Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:54:14.665Z",
+      "fecha": "2026-11-07T03:54:14.665Z"
     },
     {
       "id": "LOG-1794023663351-75D27",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @manuel",
-      "created_at": "2026-11-07T03:54:23.351Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:54:23.351Z",
+      "fecha": "2026-11-07T03:54:23.351Z"
     },
     {
       "id": "LOG-1794023677416-F1CCD",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ADMINISTRADOR MASTER",
-      "created_at": "2026-11-07T03:54:37.416Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:54:37.416Z",
+      "fecha": "2026-11-07T03:54:37.416Z"
     },
     {
       "id": "LOG-1794023798132-ACLR5",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @almacen",
-      "created_at": "2026-11-07T03:56:38.133Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T03:56:38.133Z",
+      "fecha": "2026-11-07T03:56:38.133Z"
     },
     {
       "id": "LOG-1794024105290-ETOUJ",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @carlosb (Carlos Becerra) con rol VENTAS",
-      "created_at": "2026-11-07T04:01:45.290Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:01:45.290Z",
+      "fecha": "2026-11-07T04:01:45.290Z"
     },
     {
       "id": "LOG-1794024127019-SA1X0",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @freddys (Freddy Sepúlveda) con rol VENTAS",
-      "created_at": "2026-11-07T04:02:07.019Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:02:07.019Z",
+      "fecha": "2026-11-07T04:02:07.019Z"
     },
     {
       "id": "LOG-1794024142101-KJUX5",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @juanr (Juan Rodríguez) con rol VENTAS",
-      "created_at": "2026-11-07T04:02:22.101Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:02:22.101Z",
+      "fecha": "2026-11-07T04:02:22.101Z"
     },
     {
       "id": "LOG-1794024160801-FMZK9",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @michaels (Michael Santana) con rol VENTAS",
-      "created_at": "2026-11-07T04:02:40.801Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:02:40.801Z",
+      "fecha": "2026-11-07T04:02:40.801Z"
     },
     {
       "id": "LOG-1794024200358-2ONI1",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @oficina (Ventas Mostrador Planta) con rol VENTAS",
-      "created_at": "2026-11-07T04:03:20.358Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:03:20.358Z",
+      "fecha": "2026-11-07T04:03:20.358Z"
     },
     {
       "id": "LOG-1794024207703-8BEHG",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @victorv (Victor Veloz) con rol VENTAS",
-      "created_at": "2026-11-07T04:03:27.703Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:03:27.703Z",
+      "fecha": "2026-11-07T04:03:27.703Z"
     },
     {
       "id": "LOG-1794024218038-4PU7V",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @katherineb (Katherine Becerra) con rol VENTAS",
-      "created_at": "2026-11-07T04:03:38.038Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:03:38.038Z",
+      "fecha": "2026-11-07T04:03:38.038Z"
     },
     {
       "id": "LOG-1794024232067-NQZMF",
-      "usuario_id": "usr-muq3bdll",
-      "usuario_nombre": "Edson Designer",
-      "usuario_rol": "ADMINISTRADOR MASTER",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @carlosm (Carlos Machado) con rol VENTAS",
-      "created_at": "2026-11-07T04:03:52.067Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:03:52.067Z",
+      "fecha": "2026-11-07T04:03:52.067Z"
     },
     {
       "id": "LOG-1794024981006-XBK0I",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-07T04:16:21.006Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:16:21.006Z",
+      "fecha": "2026-11-07T04:16:21.006Z"
     },
     {
       "id": "LOG-1794025013665-SL6LS",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @manuel",
-      "created_at": "2026-11-07T04:16:53.665Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:16:53.665Z",
+      "fecha": "2026-11-07T04:16:53.665Z"
     },
     {
       "id": "LOG-1794026749853-M3OE5",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-07T04:45:49.853Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:45:49.853Z",
+      "fecha": "2026-11-07T04:45:49.853Z"
     },
     {
       "id": "LOG-1794026780690-F96YB",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "EDITAR_USUARIO",
       "modulo": "USUARIOS",
       "detalles": "Actualización de datos para @manuel (Manuel Rosales) con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-07T04:46:20.690Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:46:20.690Z",
+      "fecha": "2026-11-07T04:46:20.690Z"
     },
     {
       "id": "LOG-1794026800669-MIW79",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @manuel",
-      "created_at": "2026-11-07T04:46:40.669Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:46:40.669Z",
+      "fecha": "2026-11-07T04:46:40.669Z"
     },
     {
       "id": "LOG-1794026829728-CDAOM",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol ALMACEN",
-      "created_at": "2026-11-07T04:47:09.728Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:47:09.728Z",
+      "fecha": "2026-11-07T04:47:09.728Z"
     },
     {
       "id": "LOG-1794026860890-E50VA",
-      "usuario_id": "usr-almacen",
-      "usuario_nombre": "Ray Briceño",
-      "usuario_rol": "ALMACEN",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @almacen",
-      "created_at": "2026-11-07T04:47:40.891Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:47:40.891Z",
+      "fecha": "2026-11-07T04:47:40.891Z"
     },
     {
       "id": "LOG-1794027296543-SW3OI",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGIN",
       "modulo": "SEGURIDAD",
       "detalles": "Inicio de sesión exitoso en el sistema con rol TECNOLOGÍA & INFORMÁTICA",
-      "created_at": "2026-11-07T04:54:56.543Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T04:54:56.543Z",
+      "fecha": "2026-11-07T04:54:56.543Z"
     },
     {
       "id": "LOG-1794027716444-951SE",
-      "usuario_id": "usr-muyb8kga",
-      "usuario_nombre": "Manuel Rosales",
-      "usuario_rol": "TECNOLOGÍA & INFORMÁTICA",
+      "user_id": null,
+      "userId": null,
+      "username": "sistema",
+      "user_nombre": "Sistema",
+      "userNombre": "Sistema",
+      "user_rol": "SISTEMA",
+      "userRol": "SISTEMA",
       "accion": "LOGOUT",
       "modulo": "SEGURIDAD",
       "detalles": "Cierre de sesión de @manuel",
-      "created_at": "2026-11-07T05:01:56.444Z"
+      "ip": "127.0.0.1",
+      "dispositivo": "Web Browser",
+      "created_at": "2026-11-07T05:01:56.444Z",
+      "fecha": "2026-11-07T05:01:56.444Z"
     }
   ],
   "order_items": [
@@ -437291,7 +437559,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000003_02",
@@ -437314,7 +437582,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000012_01",
@@ -437337,7 +437605,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000012_02",
@@ -437360,7 +437628,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000212_01",
@@ -437383,7 +437651,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000212_02",
@@ -437406,7 +437674,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000308_01",
@@ -437429,7 +437697,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000308_02",
@@ -437452,7 +437720,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000704_01",
@@ -437475,7 +437743,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000704_02",
@@ -437498,7 +437766,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000804_01",
@@ -437521,7 +437789,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000804_02",
@@ -437544,7 +437812,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000903_01",
@@ -437567,7 +437835,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000903_02",
@@ -437590,7 +437858,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000912_01",
@@ -437613,7 +437881,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "000912_02",
@@ -437636,7 +437904,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001201_01",
@@ -437659,7 +437927,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001201_02",
@@ -437682,7 +437950,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001203_01",
@@ -437705,7 +437973,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001203_02",
@@ -437728,7 +437996,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001208_01",
@@ -437751,7 +438019,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001208_02",
@@ -437774,7 +438042,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001212_01",
@@ -437797,7 +438065,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001212_02",
@@ -437820,7 +438088,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001304_01",
@@ -437843,7 +438111,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001304_02",
@@ -437866,7 +438134,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001308_01",
@@ -437889,7 +438157,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001308_02",
@@ -437912,7 +438180,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001312_01",
@@ -437935,7 +438203,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001312_02",
@@ -437958,7 +438226,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001403_01",
@@ -437981,7 +438249,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "001403_02",
@@ -438004,7 +438272,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100102_01",
@@ -438027,7 +438295,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100102_02",
@@ -438050,7 +438318,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100202_01",
@@ -438073,7 +438341,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100202_02",
@@ -438096,7 +438364,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100303_01",
@@ -438119,7 +438387,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100303_02",
@@ -438142,7 +438410,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100403_01",
@@ -438165,7 +438433,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100403_02",
@@ -438188,7 +438456,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100502_01",
@@ -438211,7 +438479,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100502_02",
@@ -438234,7 +438502,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100602_01",
@@ -438257,7 +438525,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100602_02",
@@ -438280,7 +438548,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100905_01",
@@ -438303,7 +438571,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "100905_02",
@@ -438326,7 +438594,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101209_01",
@@ -438349,7 +438617,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101209_02",
@@ -438372,7 +438640,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101309_01",
@@ -438395,7 +438663,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101309_02",
@@ -438418,7 +438686,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101409_01",
@@ -438441,7 +438709,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101409_02",
@@ -438464,7 +438732,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101510_01",
@@ -438487,7 +438755,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101510_02",
@@ -438510,7 +438778,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101713_01",
@@ -438533,7 +438801,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101713_02",
@@ -438556,7 +438824,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101814_01",
@@ -438579,7 +438847,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     },
     {
       "id": "101814_02",
@@ -438602,7 +438870,7 @@
       "stock_com": 0,
       "stock_lle": 0,
       "stock_des": 0,
-      "updated_at": "2026-11-07T03:35:11.330Z"
+      "updated_at": "2026-11-07T14:25:22.575Z"
     }
   ],
   "profit_goods_receipt_notes": [

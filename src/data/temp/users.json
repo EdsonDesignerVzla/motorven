@@ -40,8 +40,8 @@
       "configuracion"
     ],
     "ultimo_acceso": "2026-11-07T03:54:37.414Z",
-    "ultimoAcceso": "2026-11-06T19:43:30.322Z",
-    "last_login": "2026-11-06T19:43:30.322Z",
+    "ultimoAcceso": "2026-11-07T03:54:37.414Z",
+    "last_login": "2026-11-07T03:54:37.414Z",
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-10-26T19:07:04.838Z",
@@ -89,14 +89,12 @@
       "cxc"
     ],
     "ultimo_acceso": "2026-11-07T04:54:56.531Z",
-    "ultimoAcceso": "2026-11-06T19:44:23.845Z",
-    "last_login": "2026-11-06T19:44:23.845Z",
+    "ultimoAcceso": "2026-11-07T04:54:56.531Z",
+    "last_login": "2026-11-07T04:54:56.531Z",
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:46:20.002Z",
-    "updatedAt": "2026-10-27T19:55:42.887Z",
-    "color": "#002b7a",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:46:20.002Z"
   },
   {
     "id": "usr-gerencia",
@@ -223,14 +221,12 @@
       "dashboard"
     ],
     "ultimo_acceso": "2026-11-07T04:47:09.716Z",
-    "ultimoAcceso": "2026-11-06T20:20:38.641Z",
-    "last_login": "2026-11-06T20:20:38.641Z",
+    "ultimoAcceso": "2026-11-07T04:47:09.716Z",
+    "last_login": "2026-11-07T04:47:09.716Z",
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-06T20:21:42.612Z",
-    "updatedAt": "2026-11-06T20:21:42.612Z",
-    "color": "#f59e0b",
-    "descripcion": ""
+    "updatedAt": "2026-11-06T20:21:42.612Z"
   },
   {
     "id": "usr-caja",
@@ -270,9 +266,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-06T22:57:43.814Z",
-    "updatedAt": "2026-11-03T12:48:19.581Z",
-    "color": "#10b981",
-    "descripcion": ""
+    "updatedAt": "2026-11-06T22:57:43.814Z"
   },
   {
     "id": "usr-mvgse4to",
@@ -311,9 +305,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-06T20:04:15.474Z",
-    "updatedAt": "2026-11-06T20:04:15.474Z",
-    "color": "#6366f1",
-    "descripcion": ""
+    "updatedAt": "2026-11-06T20:04:15.474Z"
   },
   {
     "id": "usr-mvgsc0hv",
@@ -436,9 +428,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-06T20:03:19.789Z",
-    "updatedAt": "2026-11-06T20:03:19.789Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-06T20:03:19.789Z"
   },
   {
     "id": "usr-seller-vv",
@@ -477,9 +467,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:03:26.750Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:03:26.750Z"
   },
   {
     "id": "usr-seller-cb",
@@ -518,9 +506,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:01:44.498Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:01:44.498Z"
   },
   {
     "id": "usr-seller-cm",
@@ -559,9 +545,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:03:49.673Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:03:49.673Z"
   },
   {
     "id": "usr-seller-fs",
@@ -600,9 +584,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:02:06.190Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:02:06.190Z"
   },
   {
     "id": "usr-seller-jr",
@@ -641,9 +623,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:02:21.131Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:02:21.131Z"
   },
   {
     "id": "usr-seller-kb",
@@ -682,9 +662,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:03:37.405Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:03:37.405Z"
   },
   {
     "id": "usr-seller-ms",
@@ -723,9 +701,7 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:02:40.135Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:02:40.135Z"
   },
   {
     "id": "usr-seller-of",
@@ -764,8 +740,6 @@
     "created_at": "2026-09-01T00:00:00.000Z",
     "createdAt": "2026-09-01T00:00:00.000Z",
     "updated_at": "2026-11-07T04:03:19.534Z",
-    "updatedAt": "2026-10-26T19:07:04.839Z",
-    "color": "#0ea5e9",
-    "descripcion": ""
+    "updatedAt": "2026-11-07T04:03:19.534Z"
   }
 ]
