@@ -174,7 +174,7 @@ const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
 
 function saveLocalBackendUrlFiles(tunnelUrl) {
   const payloadObj = {
-    url: tunnelUrl || OFFICIAL_BACKEND_URL,
+    url: OFFICIAL_BACKEND_URL,
     fallbackTunnelUrl: tunnelUrl || undefined,
     lanUrls: [
       `http://192.168.0.6:${PORT}`,
