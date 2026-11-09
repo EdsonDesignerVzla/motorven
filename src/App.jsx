@@ -131,7 +131,8 @@ import {
 } from './services/supabaseService';
 import {
   initOfflineSyncListeners,
-  flushSyncQueue
+  flushSyncQueue,
+  getPendingSyncCount
 } from './services/offlineSyncService';
 import { formatBs } from './services/formatService';
 import { deleteStorageOrder, deleteStorageSale } from './services/storageService';
@@ -384,7 +385,16 @@ function MainApp() {
 
     const initApp = async () => {
       try {
-        
+        // CRÍTICO: Si hay operaciones pendientes en la cola local (cambios guardados mientras el servidor estuvo apagado),
+        // empujarlas al servidor central ANTES de leer las tablas para nunca sobrescribir cambios locales con datos viejos.
+        if (getPendingSyncCount() > 0) {
+          try {
+            await flushSyncQueue();
+          } catch (syncErr) {
+            console.warn('[InitApp] Cola pendiente se reintentará al reconectar servidor:', syncErr);
+          }
+        }
+
         // Obtener datos iniciales en paralelo sin esperas secuenciales
         const [
           cfg, prods, clis, ords, bnks, cdesks, cobs, facs, sups, sls, cash, purs, closures, usrs,
@@ -529,8 +539,16 @@ function MainApp() {
 
     initApp();
 
+    const handleQueueFlushed = () => {
+      if (isMounted) {
+        initApp();
+      }
+    };
+    window.addEventListener('signum_offline_queue_flushed', handleQueueFlushed);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('signum_offline_queue_flushed', handleQueueFlushed);
       if (cleanupOfflineListeners) cleanupOfflineListeners();
     };
   }, []);

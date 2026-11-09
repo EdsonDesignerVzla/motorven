@@ -141,7 +141,7 @@ function isValidSavedBackendUrl(rawUrl, pageProtocol = 'https:', pageHostname = 
   if (!rawUrl || typeof rawUrl !== 'string') return false;
   const clean = rawUrl.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(clean)) return false;
-  if (clean.includes('loca.lt')) return false;
+  if (clean.includes('loca.lt') || clean.includes('trycloudflare.com')) return false;
   try {
     const parsed = new URL(clean);
     const isPageLocal = isLocalOrLanHostname(pageHostname);
@@ -1582,6 +1582,37 @@ export const seedDatabaseIfEmpty = async () => {
 
 // --- Core API Methods ---
 
+function applyPendingQueueToEntities(entityName, list) {
+  if (!Array.isArray(list)) return list;
+  try {
+    const queue = getSyncQueue().filter(q => q && q.entity === entityName);
+    if (queue.length === 0) return list;
+    let result = [...list];
+    for (const item of queue) {
+      const data = item.data;
+      if (!data) continue;
+      const targetId = data.id || data.codigo || data.rif;
+      if (item.action === 'DELETE' && targetId) {
+        result = result.filter(r => r.id !== targetId && r.codigo !== targetId && r.rif !== targetId);
+      } else if (targetId) {
+        const idx = result.findIndex(r =>
+          (data.id && r.id === data.id) ||
+          (data.codigo && r.codigo === data.codigo) ||
+          (data.rif && r.rif === data.rif)
+        );
+        if (idx >= 0) {
+          result[idx] = { ...result[idx], ...data };
+        } else {
+          result.unshift(data);
+        }
+      }
+    }
+    return result;
+  } catch (_) {
+    return list;
+  }
+}
+
 // Config
 export const getSupabaseConfig = async () => {
   if (!isSupabaseAvailable) return getStorageConfig();
@@ -1591,8 +1622,13 @@ export const getSupabaseConfig = async () => {
     );
 
     if (error) throw error;
-    const mapped = mapConfigFromDb(data);
+    let mapped = mapConfigFromDb(data);
     try {
+      const pendingConfig = getSyncQueue().filter(q => q && q.entity === 'config');
+      if (pendingConfig.length > 0) {
+        const lastCfg = pendingConfig[pendingConfig.length - 1]?.data;
+        if (lastCfg) mapped = { ...mapped, ...lastCfg };
+      }
       localStorage.setItem('signum_app_config', JSON.stringify(mapped));
       updateStorageConfig(mapped);
     } catch (_) {}
@@ -1655,7 +1691,7 @@ export const getSupabaseProducts = async () => {
 
       if (!error && Array.isArray(data) && data.length > 0) {
         isSupabaseAvailable = true;
-        const mapped = sortByCodeAsc(data.map(mapProductFromDb));
+        const mapped = sortByCodeAsc(applyPendingQueueToEntities('product', data.map(mapProductFromDb)));
         try {
           localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(mapped));
         } catch (_) {}
@@ -1668,7 +1704,7 @@ export const getSupabaseProducts = async () => {
   }
 
   // 2. Caché local en caso de estar offline
-  return sortByCodeAsc(getStorageProducts());
+  return sortByCodeAsc(applyPendingQueueToEntities('product', getStorageProducts()));
 };
 
 export const saveSupabaseProduct = async (product) => {
@@ -1848,7 +1884,7 @@ export const getSupabaseClients = async () => {
 
       if (!error && Array.isArray(data) && data.length > 0) {
         isSupabaseAvailable = true;
-        const mapped = data.map(mapClientFromDb);
+        const mapped = applyPendingQueueToEntities('client', data.map(mapClientFromDb));
         try {
           localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(mapped));
         } catch (_) {}
@@ -1861,7 +1897,7 @@ export const getSupabaseClients = async () => {
   }
 
   // 2. Caché local en caso de estar offline
-  return getStorageClients();
+  return applyPendingQueueToEntities('client', getStorageClients());
 };
 
 export const saveSupabaseClient = async (client) => {
@@ -2028,7 +2064,7 @@ export const saveSupabaseBatchTable = async (tableName, rowsList) => {
 
 // Suppliers
 export const getSupabaseSuppliers = async () => {
-  if (!isSupabaseAvailable) return getStorageSuppliers();
+  if (!isSupabaseAvailable) return applyPendingQueueToEntities('supplier', getStorageSuppliers());
   try {
     const { data, error } = await withTimeout(
       supabase.from('suppliers').select('*').order('id', { ascending: true })
@@ -2036,17 +2072,17 @@ export const getSupabaseSuppliers = async () => {
 
     if (error || !data || data.length === 0) {
       if (error) markSupabaseOffline(error, 'getSupabaseSuppliers');
-      return getStorageSuppliers();
+      return applyPendingQueueToEntities('supplier', getStorageSuppliers());
     }
     isSupabaseAvailable = true;
-    const mapped = data.map(mapSupplierFromDb);
+    const mapped = applyPendingQueueToEntities('supplier', data.map(mapSupplierFromDb));
     try {
       localStorage.setItem('sm_suppliers_v4_fiscal', JSON.stringify(mapped));
     } catch (_) {}
     return mapped;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseSuppliers');
-    return getStorageSuppliers();
+    return applyPendingQueueToEntities('supplier', getStorageSuppliers());
   }
 };
 
@@ -2113,7 +2149,7 @@ export const deleteSupabaseSupplier = async (id) => {
 
 // Sales
 export const getSupabaseSales = async () => {
-  if (!isSupabaseAvailable) return getStorageSales();
+  if (!isSupabaseAvailable) return applyPendingQueueToEntities('sale', getStorageSales());
   try {
     const { data, error } = await withTimeout(
       supabase.from('sales').select('*').order('fecha', { ascending: false })
@@ -2121,13 +2157,13 @@ export const getSupabaseSales = async () => {
 
     if (error) {
       markSupabaseOffline(error, 'getSupabaseSales');
-      return getStorageSales();
+      return applyPendingQueueToEntities('sale', getStorageSales());
     }
     isSupabaseAvailable = true;
-    return (data || []).map(mapSaleFromDb);
+    return applyPendingQueueToEntities('sale', (data || []).map(mapSaleFromDb));
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseSales');
-    return getStorageSales();
+    return applyPendingQueueToEntities('sale', getStorageSales());
   }
 };
 

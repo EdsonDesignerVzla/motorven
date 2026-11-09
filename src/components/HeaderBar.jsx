@@ -155,6 +155,7 @@ export default function HeaderBar({
               connectedClients: data.connectedClients || 1,
               lastChecked: new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             });
+            flushSyncQueue().catch(() => {});
           }
         } else {
           if (!isCancelled) {
@@ -1760,33 +1761,38 @@ export default function HeaderBar({
             </div>
 
             {/* Estado actual */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '0.85rem 1rem',
-              borderRadius: '10px',
-              background: syncStatus.isOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-              border: `1px solid ${syncStatus.isOnline ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-              marginBottom: '1rem'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {syncStatus.isOnline ? <Cloud size={20} color="#34d399" /> : <CloudOff size={20} color="#f87171" />}
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: syncStatus.isOnline ? '#34d399' : '#f87171' }}>
-                    {syncStatus.isOnline ? 'Servidor Conectado en Tiempo Real' : 'Modo Desconectado (Offline)'}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {syncStatus.isOnline
-                      ? (serverHealth.ping !== null
-                          ? `Enlace activo con el servidor central (${serverHealth.ping} ms de respuesta)`
-                          : 'Sincronización activa con la base de datos central.')
-                      : `${syncStatus.pendingCount} operaciones guardadas en este dispositivo encoladas para sincronizar.`
-                    }
+            {(() => {
+              const isServerReachable = syncStatus.isOnline && serverHealth.status !== 'OFFLINE' && serverHealth.status !== 'ERROR';
+              return (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '10px',
+                  background: isServerReachable ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                  border: `1px solid ${isServerReachable ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.35)'}`,
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {isServerReachable ? <Cloud size={20} color="#34d399" /> : <CloudOff size={20} color="#fbbf24" />}
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: '0.9rem', color: isServerReachable ? '#34d399' : '#fbbf24' }}>
+                        {isServerReachable ? 'Servidor Conectado en Tiempo Real' : 'Servidor Sin Respuesta • Guardando en Cola Local'}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {isServerReachable
+                          ? (serverHealth.ping !== null
+                              ? `Enlace activo con el servidor central (${serverHealth.ping} ms de respuesta)`
+                              : 'Sincronización activa con la base de datos central.')
+                          : `Tus cambios están protegidos en este equipo (${syncStatus.pendingCount} pendientes) y se enviarán automáticamente al reconectar.`
+                        }
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Panel: Estado Real de la Sincronización */}
             <div style={{

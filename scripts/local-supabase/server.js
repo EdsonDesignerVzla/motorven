@@ -35,11 +35,32 @@ setInterval(() => {}, 60000);
 let database = {};
 
 async function initDatabase() {
-  if (fs.existsSync(DB_FILE)) {
+  const candidates = [DB_FILE, `${DB_FILE}.bak`];
+  let loadedFromDisk = false;
+  for (const candidateFile of candidates) {
+    if (fs.existsSync(candidateFile)) {
+      try {
+        console.log(`[Supabase Local] Cargando base de datos persistida desde: ${candidateFile}`);
+        const raw = fs.readFileSync(candidateFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 5) {
+          database = parsed;
+          loadedFromDisk = true;
+          if (candidateFile !== DB_FILE) {
+            console.log(`[Supabase Local] Restaurando ${DB_FILE} desde respaldo íntegro ${candidateFile}...`);
+            try { fs.writeFileSync(DB_FILE, raw, 'utf8'); } catch (_) {}
+          } else if (!fs.existsSync(`${DB_FILE}.bak`)) {
+            try { fs.writeFileSync(`${DB_FILE}.bak`, raw, 'utf8'); } catch (_) {}
+          }
+          break;
+        }
+      } catch (err) {
+        console.warn(`[Supabase Local] Aviso al leer ${candidateFile}:`, err.message);
+      }
+    }
+  }
+  if (loadedFromDisk) {
     try {
-      console.log(`[Supabase Local] Cargando base de datos persistida desde: ${DB_FILE}`);
-      const raw = fs.readFileSync(DB_FILE, 'utf8');
-      database = JSON.parse(raw);
       if (Array.isArray(database.profit_invoices)) {
         database.profit_invoices.forEach(f => {
           const litros = Number(f.totalLitros ?? f.total_litros ?? 0);
@@ -241,9 +262,13 @@ function writeAtomicJson(targetPath, dataObj) {
   const dir = path.dirname(targetPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const payload = JSON.stringify(dataObj, null, 2);
-  const tmpPath = `${targetPath}.tmp`;
+  const tmpPath = `${targetPath}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(tmpPath, payload, 'utf8');
+    const fd = fs.openSync(tmpPath, 'w');
+    fs.writeFileSync(fd, payload, 'utf8');
+    try { fs.fsyncSync(fd); } catch (_) {}
+    fs.closeSync(fd);
+
     try {
       fs.renameSync(tmpPath, targetPath);
     } catch (_) {
@@ -253,6 +278,12 @@ function writeAtomicJson(targetPath, dataObj) {
       } catch (errCopy) {
         fs.writeFileSync(targetPath, payload, 'utf8');
       }
+    }
+
+    if (targetPath === DB_FILE) {
+      try {
+        fs.writeFileSync(`${DB_FILE}.bak`, payload, 'utf8');
+      } catch (_) {}
     }
   } catch (errWrite) {
     try {
@@ -265,21 +296,26 @@ function writeAtomicJson(targetPath, dataObj) {
 }
 
 function saveDatabase() {
+  // 1. Guardado síncrono inmediato en disco duro antes de responder al cliente (a prueba de apagones)
+  let serialized = '';
+  try {
+    serialized = writeAtomicJson(DB_FILE, database);
+  } catch (e) {
+    console.error('[Supabase Local] Error en guardado inmediato:', e);
+  }
+
+  // 2. Respaldos rotativos y archivos secundarios en segundo plano
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     try {
-      const serialized = writeAtomicJson(DB_FILE, database);
-
-      // Respaldo rotativo diario automático en carpeta backups/
+      const contentToBackup = serialized || JSON.stringify(database, null, 2);
       try {
         const today = new Date().toISOString().slice(0, 10);
         if (today !== lastBackupDate) {
           const backupDir = path.join(path.dirname(DB_FILE), 'backups');
           if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
           const backupFile = path.join(backupDir, `local_database_${today}.json`);
-          if (!fs.existsSync(backupFile)) {
-            fs.writeFileSync(backupFile, serialized, 'utf8');
-          }
+          fs.writeFileSync(backupFile, contentToBackup, 'utf8');
           lastBackupDate = today;
         }
       } catch (_) {}
@@ -303,9 +339,20 @@ function saveDatabase() {
         }
       }
     } catch (e) {
-      console.error('[Supabase Local] Error guardando base de datos:', e);
+      console.error('[Supabase Local] Error guardando respaldos secundarios:', e);
     }
-  }, 250);
+  }, 200);
+}
+
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    try {
+      if (database && Object.keys(database).length > 5) {
+        writeAtomicJson(DB_FILE, database);
+      }
+    } catch (_) {}
+    process.exit(0);
+  });
 }
 
 // ============================================================================
