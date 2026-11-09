@@ -960,14 +960,27 @@ const server = http.createServer(async (req, res) => {
       if (fs.existsSync(c)) {
         try {
           const content = fs.readFileSync(c, 'utf8');
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-          res.end(content);
-          return;
+          const parsed = JSON.parse(content);
+          if (parsed && parsed.url && !parsed.url.includes('trycloudflare.com')) {
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify(parsed, null, 2));
+            return;
+          }
         } catch (_) {}
       }
     }
+    const defaultPayload = {
+      url: 'https://api.signummotorven.com',
+      lanUrls: [
+        'http://192.168.0.6:54321',
+        'http://26.45.7.149:54321',
+        'http://192.168.0.5:54321',
+        'http://26.229.220.202:54321'
+      ],
+      updatedAt: new Date().toISOString()
+    };
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ url: `http://${hostHeader}:${PORT}`, updatedAt: new Date().toISOString() }));
+    res.end(JSON.stringify(defaultPayload, null, 2));
     return;
   }
 

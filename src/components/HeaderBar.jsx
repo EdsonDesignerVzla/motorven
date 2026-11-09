@@ -1744,7 +1744,7 @@ export default function HeaderBar({
             }}>
               💡 <strong>¿Cómo funciona la sincronización multi-dispositivo?</strong>
               <div style={{ marginTop: '4px' }}>
-                Tu base de datos con todas las tablas reside en tu <strong>Servidor Local (Laptop)</strong>. Para que tu teléfono, tablet u otros equipos puedan ver y reflejar los cambios en tiempo real desde GitHub Pages, se comunican con tu laptop mediante el <strong>Túnel Seguro Cloudflare HTTPS</strong>.
+                La base de datos central reside en el <strong>Servidor Físico 24/7 de la empresa (SVR-MOTORVEN)</strong>. Cada equipo de oficina, teléfono, tablet o asesor remoto se comunica en tiempo real mediante el <strong>Túnel Seguro Cloudflare HTTPS (api.signummotorven.com)</strong> o por la red local/VPN, manteniendo las operaciones sincronizadas al instante sin depender de ninguna computadora personal.
               </div>
             </div>
 
@@ -1771,7 +1771,7 @@ export default function HeaderBar({
                 }}
               />
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Tip: También puedes abrir en tu celular o tablet el enlace con <code>?server=URL_DEL_TUNEL</code> para sincronizarlo automáticamente.
+                Tip: La dirección oficial predeterminada es <code>https://api.signummotorven.com</code>. Para redes locales de alta velocidad también puedes usar la IP del servidor (ej. <code>http://192.168.0.6:54321</code> o Radmin VPN).
               </div>
             </div>
 

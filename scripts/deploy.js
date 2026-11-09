@@ -53,7 +53,7 @@ async function resolveActiveBackendUrlPayload() {
   if (fromLanServer) {
     try {
       const parsed = JSON.parse(fromLanServer);
-      if (parsed?.url) {
+      if (parsed?.url && !parsed.url.includes('trycloudflare.com')) {
         return JSON.stringify(parsed, null, 2);
       }
     } catch (_) {}
@@ -64,22 +64,13 @@ async function resolveActiveBackendUrlPayload() {
   if (fromLiveSite) {
     try {
       const parsed = JSON.parse(fromLiveSite);
-      if (parsed?.url) {
+      if (parsed?.url && !parsed.url.includes('trycloudflare.com')) {
         return JSON.stringify(parsed, null, 2);
       }
     } catch (_) {}
   }
 
-  // 3. Si existe public/backend_url.json local con una URL válida, conservarla
-  try {
-    const existingLocal = fs.readFileSync(path.join(projectRoot, 'public', 'backend_url.json'), 'utf8');
-    const parsed = JSON.parse(existingLocal);
-    if (parsed?.url) {
-      return JSON.stringify(parsed, null, 2);
-    }
-  } catch (_) {}
-
-  // 4. Fallback por defecto
+  // 3. Fallback oficial y definitivo
   return JSON.stringify(
     {
       url: OFFICIAL_BACKEND_URL,
@@ -96,6 +87,24 @@ async function resolveActiveBackendUrlPayload() {
   );
 }
 
+function safeWriteFile(filePath, content) {
+  try {
+    if (fs.existsSync(filePath)) {
+      try {
+        if (fs.readFileSync(filePath, 'utf8') === content) return;
+      } catch (_) {}
+    }
+    fs.writeFileSync(filePath, content, 'utf8');
+  } catch (err) {
+    try {
+      const tmp = filePath + '.tmp_' + Date.now();
+      fs.writeFileSync(tmp, content, 'utf8');
+      try { fs.unlinkSync(filePath); } catch (_) {}
+      fs.renameSync(tmp, filePath);
+    } catch (_) {}
+  }
+}
+
 export async function ensureProductionFiles() {
   const backendUrlPayload = await resolveActiveBackendUrlPayload();
   const parsedUrl = JSON.parse(backendUrlPayload).url;
@@ -103,22 +112,24 @@ export async function ensureProductionFiles() {
   const distDir = path.join(projectRoot, 'dist');
 
   // 1. Asegurar archivos en raíz y public/
-  fs.writeFileSync(path.join(projectRoot, 'backend_url.json'), backendUrlPayload, 'utf8');
+  safeWriteFile(path.join(projectRoot, 'backend_url.json'), backendUrlPayload);
   if (fs.existsSync(publicDir)) {
-    fs.writeFileSync(path.join(publicDir, 'CNAME'), `${OFFICIAL_DOMAIN}\n`, 'utf8');
-    fs.writeFileSync(path.join(publicDir, 'backend_url.json'), backendUrlPayload, 'utf8');
-    fs.writeFileSync(path.join(publicDir, '.nojekyll'), '', 'utf8');
+    safeWriteFile(path.join(publicDir, 'CNAME'), `${OFFICIAL_DOMAIN}\n`);
+    safeWriteFile(path.join(publicDir, 'backend_url.json'), backendUrlPayload);
+    safeWriteFile(path.join(publicDir, '.nojekyll'), '');
   }
 
   // 2. Asegurar archivos en dist/
   if (fs.existsSync(distDir)) {
-    fs.writeFileSync(path.join(distDir, 'CNAME'), `${OFFICIAL_DOMAIN}\n`, 'utf8');
-    fs.writeFileSync(path.join(distDir, 'backend_url.json'), backendUrlPayload, 'utf8');
-    fs.writeFileSync(path.join(distDir, '.nojekyll'), '', 'utf8');
+    safeWriteFile(path.join(distDir, 'CNAME'), `${OFFICIAL_DOMAIN}\n`);
+    safeWriteFile(path.join(distDir, 'backend_url.json'), backendUrlPayload);
+    safeWriteFile(path.join(distDir, '.nojekyll'), '');
     const indexHtml = path.join(distDir, 'index.html');
     const notFoundHtml = path.join(distDir, '404.html');
     if (fs.existsSync(indexHtml)) {
-      fs.copyFileSync(indexHtml, notFoundHtml);
+      try {
+        fs.copyFileSync(indexHtml, notFoundHtml);
+      } catch (_) {}
     }
   }
   console.log(`✅ Archivos críticos verificados: CNAME (signummotorven.com), backend_url.json (${parsedUrl}), .nojekyll y 404.html`);
