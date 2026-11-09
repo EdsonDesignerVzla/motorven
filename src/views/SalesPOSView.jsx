@@ -26,7 +26,8 @@ import {
   Lock,
   Calendar,
   Building2,
-  User
+  User,
+  Warehouse
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from '../services/formatService';
 import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber } from '../services/fiscalService';
@@ -496,9 +497,10 @@ export default function SalesPOSView({
 
   const tasaBcv = Number(safeConfig.tasaDolar) || 827.73;
 
-  // Motor Fiscal SENIAT
+  // Motor Fiscal SENIAT (En Notas de Entrega NO aplica IVA: 0%)
   const fiscalTaxes = calculateFiscalTaxes({
     items: cartItems,
+    tipoDoc,
     metodoPago,
     condicionPago,
     tasaBcv,
@@ -864,7 +866,13 @@ export default function SalesPOSView({
                 <button
                   key={tipo}
                   className="btn btn-sm"
-                  onClick={() => setTipoDoc(tipo)}
+                  onClick={() => {
+                    setTipoDoc(tipo);
+                    if (!isOrderLocked) {
+                      if (tipo === 'NOTA_ENTREGA') setModalidadVenta('OFICINA');
+                      else if (tipo === 'FACTURA') setModalidadVenta('MOSTRADOR');
+                    }
+                  }}
                   style={{
                     background: tipoDoc === tipo ? 'var(--motorven-red)' : 'transparent',
                     color: tipoDoc === tipo ? '#fff' : '#94a3b8',
@@ -1268,7 +1276,10 @@ export default function SalesPOSView({
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                 <button
                   type="button"
-                  onClick={() => setModalidadVenta('MOSTRADOR')}
+                  onClick={() => {
+                    setModalidadVenta('MOSTRADOR');
+                    if (tipoDoc === 'NOTA_ENTREGA') setTipoDoc('FACTURA');
+                  }}
                   className="btn btn-sm"
                   style={{
                     background: modalidadVenta === 'MOSTRADOR' ? 'linear-gradient(135deg, var(--motorven-navy), #00205b)' : 'transparent',
@@ -1287,7 +1298,10 @@ export default function SalesPOSView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setModalidadVenta('OFICINA')}
+                  onClick={() => {
+                    setModalidadVenta('OFICINA');
+                    setTipoDoc('NOTA_ENTREGA');
+                  }}
                   className="btn btn-sm"
                   style={{
                     background: modalidadVenta === 'OFICINA' ? 'linear-gradient(135deg, #1e40af, #0284c7)' : 'transparent',
@@ -1859,11 +1873,11 @@ export default function SalesPOSView({
             )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-              <span>Base General (16%):</span>
+              <span>{tipoDoc === 'NOTA_ENTREGA' ? 'Subtotal Neto (Sin IVA):' : 'Base General (16%):'}</span>
               <span>{formatUsd(fiscalTaxes.baseGeneralUsd)} ({formatBs(fiscalTaxes.baseGeneralBs)})</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-              <span>IVA General (16%):</span>
+              <span>{tipoDoc === 'NOTA_ENTREGA' ? 'IVA (0% - Sin IVA):' : 'IVA General (16%):'}</span>
               <span>{formatUsd(fiscalTaxes.ivaGeneralUsd)} ({formatBs(fiscalTaxes.ivaGeneralBs)})</span>
             </div>
 

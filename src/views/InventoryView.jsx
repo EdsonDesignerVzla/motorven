@@ -739,7 +739,18 @@ export default function InventoryView({
           {/* BOTÓN IMPRIMIR REPORTE (ALINEADO A LA DERECHA, ROJO MOTORVEN) */}
           <button
             className="btn btn-print-report"
-            onClick={() => generateInventoryPDF({ products: filteredProducts, config, currentUser, kpis: inventoryKpis })}
+            onClick={() => generateInventoryPDF({
+              products: filteredProducts,
+              config,
+              currentUser,
+              kpis: inventoryKpis,
+              warehouseId: selectedWarehouseFilter,
+              warehouseName: selectedWarehouseFilter === '01'
+                ? '01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales)'
+                : selectedWarehouseFilter === '02'
+                ? '02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)'
+                : 'Todos los Almacenes (Consolidado: Alm 01 + Alm 02)'
+            })}
             style={{ marginLeft: 'auto' }}
             title="Descargar Reporte Oficial de Inventario y Valorización en PDF"
           >

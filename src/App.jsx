@@ -1534,18 +1534,20 @@ function MainApp() {
     try {
       const newSale = await processSupabaseSale(saleData);
       
-      // Refrescar estados dependientes desde la base de datos
-      const [prods, cash, clis, sls] = await Promise.all([
+      // Refrescar estados dependientes desde la base de datos (incluyendo CxC / profitInvoices)
+      const [prods, cash, clis, sls, pInvs] = await Promise.all([
         getSupabaseProducts(),
         getSupabaseCashMovements(),
         getSupabaseClients(),
-        getSupabaseSales()
+        getSupabaseSales(),
+        getSupabaseProfitInvoices()
       ]);
       
       setProductsState(prods);
       setCashMovementsState(cash);
       setClientsState(clis);
       setSalesState(sls);
+      setProfitInvoices(pInvs);
 
       // Si la venta se originó de una Nota de Pedido de Preventa, eliminar la orden del pipeline y de la base de datos
       const originOrderId = saleData.pedidoOrigenId || saleData.pedidoOrigenDoc;

@@ -61,16 +61,25 @@ const toIsoDateInput = (dateInput) => {
 };
 
 const inferDocType = (raw) => {
-    const explicit = String(raw?.tipoDoc || raw?.docType || '').toUpperCase().trim();
+    const explicit = String(raw?.tipoDoc || raw?.tipo_doc || raw?.docType || '').toUpperCase().trim();
     if (explicit === 'NOTA_ENTREGA' || explicit === 'N/E' || explicit === 'NE') {
+        return 'NOTA_ENTREGA';
+    }
+    const idStr = String(raw?.id || '').toUpperCase().trim();
+    const factStr = String(raw?.factNum || raw?.factura || raw?.numeroDoc || '').toUpperCase().trim();
+    const origStr = String(raw?.pedidoOrigenDoc || raw?.pedido_origen_doc || '').toUpperCase().trim();
+    if (
+        idStr.startsWith('NE-') ||
+        idStr.startsWith('NDE-') ||
+        factStr.startsWith('NE-') ||
+        factStr.startsWith('NDE-') ||
+        factStr.startsWith('NE') ||
+        origStr.startsWith('PED-NE')
+    ) {
         return 'NOTA_ENTREGA';
     }
     if (explicit === 'FACTURA' || explicit === 'FACT') {
         return 'FACTURA';
-    }
-    const factStr = String(raw?.factNum || raw?.factura || '').toUpperCase().trim();
-    if (factStr.startsWith('NE-') || factStr.startsWith('NDE-') || factStr.startsWith('NE')) {
-        return 'NOTA_ENTREGA';
     }
     return 'FACTURA';
 };
@@ -260,18 +269,56 @@ export function AccountsReceivableModal({
             rawMap.set(key, { ...inv, _source: 'PROFIT' });
         });
 
-        // 2. Cargar documentos a crédito desde sales/invoices (si no están ya en profitInvoices y no están eliminados)
+        // 2. Cargar documentos a crédito y Notas de Entrega desde sales/invoices (si no están ya en profitInvoices y no están eliminados)
         effectiveSales.forEach(sale => {
-            const isCredit = sale.condicionPago === 'CREDITO' || sale.metodoPago === 'CREDITO' || sale.diasCredito > 0 || sale.tipoDoc === 'NOTA_ENTREGA';
+            const saleDocType = inferDocType(sale);
+            const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
+            const condStr = String(sale.condicionPago || '').toUpperCase();
+            const isCredit =
+                condStr === 'CREDITO' ||
+                condStr.includes('CREDITO') ||
+                condStr.includes('DIAS') ||
+                sale.metodoPago === 'CREDITO' ||
+                Number(sale.diasCredito || 0) > 0 ||
+                Number(sale.saldoUsd ?? sale.saldoPendienteUsd ?? 0) > 0 ||
+                sale.estado === 'PENDIENTE' ||
+                isNotaEntregaSale;
             if (!isCredit) return;
             const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
             if (!key || isDocDeleted(sale.id, sale.numeroDoc || sale.factura || sale.factNum)) return;
             if (!rawMap.has(key)) {
+                const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
+                const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
+                const rawSaleSub = Number(
+                    sale.subtotalUsd ??
+                    sale.totBrutoUsd ??
+                    (rawSaleIva > 0 && rawSaleTotal > rawSaleIva ? rawSaleTotal - rawSaleIva : rawSaleTotal)
+                );
+                const neNetoSinIva = round2(
+                    rawSaleSub > 0 && rawSaleSub < rawSaleTotal
+                        ? rawSaleSub
+                        : (rawSaleIva > 0 && rawSaleTotal > rawSaleIva ? rawSaleTotal - rawSaleIva : rawSaleSub)
+                );
+                const effectiveTotBruto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleSub);
+                const effectiveIva = isNotaEntregaSale ? 0 : round2(rawSaleIva);
+                const effectiveTotNeto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleTotal || (effectiveTotBruto + effectiveIva));
+                const effectiveAbonos = sale.abonosUsd !== undefined
+                    ? Number(sale.abonosUsd)
+                    : Number(sale.montoPagadoUsd || 0);
+                const rawSaldoSale = sale.saldoPendienteUsd !== undefined
+                    ? Number(sale.saldoPendienteUsd)
+                    : (sale.saldoUsd !== undefined && Number(sale.saldoUsd) > 0
+                        ? Number(sale.saldoUsd)
+                        : Math.max(0, round2(effectiveTotNeto - effectiveAbonos)));
+                const effectiveSaldo = isNotaEntregaSale
+                    ? Math.max(0, round2(neNetoSinIva - effectiveAbonos))
+                    : Math.min(effectiveTotNeto, Math.max(0, round2(rawSaldoSale)));
+
                 rawMap.set(key, {
                     id: sale.id || `DOC-${key}`,
                     factNum: key,
-                    tipoDoc: sale.tipoDoc || (String(key).toUpperCase().startsWith('NE') ? 'NOTA_ENTREGA' : 'FACTURA'),
-                    fechaEmision: sale.fecha || getTodayIso(),
+                    tipoDoc: saleDocType,
+                    fechaEmision: sale.fechaEmision || sale.fecha || getTodayIso(),
                     fechaVencimiento: sale.fechaVencimiento || null,
                     clienteId: sale.clienteId || '',
                     clienteNombre: sale.cliente || sale.clienteNombre || 'Cliente General',
@@ -281,15 +328,13 @@ export function AccountsReceivableModal({
                     formaPago: sale.formaPago || '03',
                     diasCredito: sale.diasCredito !== undefined ? Number(sale.diasCredito) : 15,
                     diasVencidoCustom: sale.diasVencidoCustom !== undefined ? sale.diasVencidoCustom : null,
-                    totBrutoUsd: Number(sale.subtotalUsd || sale.totalUsd || 0),
-                    ivaUsd: Number(sale.impuestoUsd || sale.ivaUsd || 0),
-                    totNetoUsd: Number(sale.totalUsd || sale.totNetoUsd || 0),
-                    abonosUsd: sale.abonosUsd !== undefined ? Number(sale.abonosUsd) : Number(sale.montoPagadoUsd || 0),
-                    saldoUsd: sale.saldoPendienteUsd !== undefined
-                        ? Number(sale.saldoPendienteUsd)
-                        : Math.max(0, round2(Number(sale.totalUsd || 0) - Number(sale.montoPagadoUsd || 0))),
+                    totBrutoUsd: effectiveTotBruto,
+                    ivaUsd: effectiveIva,
+                    totNetoUsd: effectiveTotNeto,
+                    abonosUsd: effectiveAbonos,
+                    saldoUsd: effectiveSaldo,
                     moneda: sale.moneda || 'USD',
-                    tasa: Number(sale.tasa || tasaBcv),
+                    tasa: Number(sale.tasa || sale.tasaDolar || tasaBcv),
                     anulada: Boolean(sale.anulada),
                     items: sale.items || [],
                     observaciones: sale.observaciones || '',
@@ -325,13 +370,26 @@ export function AccountsReceivableModal({
             const tipoDoc = inferDocType(inv);
             const isNotaEntrega = tipoDoc === 'NOTA_ENTREGA';
 
-            // En Notas de Entrega NO se calcula IVA ni ningún impuesto
+            // En Notas de Entrega NO se calcula IVA ni ningún impuesto (100% Sin IVA)
             const rawNeto = Number(inv.totNetoUsd ?? inv.totalUsd ?? inv.totBrutoUsd ?? 0);
-            const rawBruto = Number(inv.totBrutoUsd ?? inv.subtotalUsd ?? (isNotaEntrega ? rawNeto : round2(rawNeto / 1.16)));
-            const totBrutoUsd = round2(rawBruto);
+            const rawIva = Number(inv.ivaUsd ?? inv.impuestoUsd ?? 0);
+            const rawBrutoCandidate = Number(
+                inv.totBrutoUsd ??
+                inv.subtotalUsd ??
+                (isNotaEntrega
+                    ? (rawIva > 0 && rawNeto > rawIva ? rawNeto - rawIva : rawNeto)
+                    : round2(rawNeto / 1.16))
+            );
+            const totBrutoUsd = isNotaEntrega
+                ? round2(
+                    rawBrutoCandidate > 0 && rawBrutoCandidate < rawNeto
+                        ? rawBrutoCandidate
+                        : (rawIva > 0 && rawNeto > rawIva ? rawNeto - rawIva : rawBrutoCandidate)
+                )
+                : round2(rawBrutoCandidate);
             const ivaUsd = isNotaEntrega ? 0 : round2(inv.ivaUsd !== undefined ? Number(inv.ivaUsd) : Math.max(0, rawNeto - totBrutoUsd));
             const montoFacturaUsd = isNotaEntrega
-                ? round2(Number(inv.totNetoUsd ?? totBrutoUsd))
+                ? totBrutoUsd
                 : round2(Number(inv.totNetoUsd ?? (totBrutoUsd + ivaUsd)));
 
             // Cálculo de Abonos y Restante
@@ -339,7 +397,8 @@ export function AccountsReceivableModal({
             if (inv.abonosUsd !== undefined && inv.abonosUsd !== null && !isNaN(Number(inv.abonosUsd))) {
                 abonosUsd = round2(Math.max(0, Number(inv.abonosUsd)));
             } else if (inv.saldoUsd !== undefined && inv.saldoUsd !== null && !isNaN(Number(inv.saldoUsd))) {
-                abonosUsd = round2(Math.max(0, montoFacturaUsd - Number(inv.saldoUsd)));
+                const baseForAbonos = (!isNotaEntrega || Number(inv.saldoUsd) <= montoFacturaUsd) ? montoFacturaUsd : rawNeto;
+                abonosUsd = round2(Math.max(0, baseForAbonos - Number(inv.saldoUsd)));
             }
             if (abonosUsd > montoFacturaUsd) {
                 abonosUsd = montoFacturaUsd;

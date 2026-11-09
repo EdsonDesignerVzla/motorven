@@ -255,21 +255,30 @@ export default function OrdersSalesModal({
       };
     });
 
+    const isOrdNe =
+      order.tipoDoc === 'NOTA_ENTREGA' ||
+      order.tipo_doc === 'NOTA_ENTREGA' ||
+      order.modalidadVenta === 'OFICINA' ||
+      order.almacen === '02' ||
+      order.co_alma === '02' ||
+      String(order.numeroDoc || order.id || order.nroFactura || '').toUpperCase().startsWith('PED-NE') ||
+      String(order.nroFactura || order.numeroDoc || '').toUpperCase().startsWith('NE-');
     const totUsd = Number(order.totalNetoUsd || order.totalUsd || 0);
-    const baseUsd = totUsd > 0 ? (totUsd / 1.16) : 0;
-    const ivaUsd = totUsd - baseUsd;
+    const baseUsd = isOrdNe ? totUsd : (totUsd > 0 ? (totUsd / 1.16) : 0);
+    const ivaUsd = isOrdNe ? 0 : (totUsd - baseUsd);
     const totBs = totUsd * cfgTasa;
     const baseBs = baseUsd * cfgTasa;
     const ivaBs = ivaUsd * cfgTasa;
 
     const correlativo = String(order.nroFactura || order.numeroDoc || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
-    const isCredit = order.condicionPago === 'CREDITO' || (typeof order.condicionPago === 'string' && order.condicionPago.includes('CREDITO'));
+    const docNum = isOrdNe ? `NE-${correlativo}` : correlativo;
+    const isCredit = isOrdNe || order.condicionPago === 'CREDITO' || (typeof order.condicionPago === 'string' && (order.condicionPago.includes('CREDITO') || order.condicionPago.includes('DIAS')));
 
     return {
-      id: correlativo,
-      numeroDoc: correlativo,
+      id: docNum,
+      numeroDoc: docNum,
       numeroControl: order.nroControl || generateFiscalControlNumber(parseInt(correlativo, 10) || 1),
-      tipoDoc: 'FACTURA',
+      tipoDoc: isOrdNe ? 'NOTA_ENTREGA' : 'FACTURA',
       clienteId: order.clienteId || 'CLI-001',
       clienteNombre: order.clienteNombre || 'Cliente General',
       clienteRif: order.clienteRif || 'J-00000000',
@@ -3357,16 +3366,20 @@ export default function OrdersSalesModal({
                           onClick={async () => {
                             setIsSaving(true);
                             try {
-                              const nextInvoiceNum = getNextInvoiceCorrelativo(sales);
-                              commitInvoiceCorrelativo(nextInvoiceNum);
-                              setCorrelativoRefreshKey(k => k + 1);
-                              const isCredit = isCreditPaymentCondition(selectedOrder.condicionPago, billingPaymentMethod);
+                              const isOrdNotaEntrega = isOrderNotaEntrega(selectedOrder);
+                              const nextInvoiceNum = isOrdNotaEntrega
+                                ? `NE-${String((sales?.length || 0) + 1).padStart(6, '0')}`
+                                : getNextInvoiceCorrelativo(sales);
+                              if (!isOrdNotaEntrega) {
+                                commitInvoiceCorrelativo(nextInvoiceNum);
+                                setCorrelativoRefreshKey(k => k + 1);
+                              }
+                              const isCredit = isOrdNotaEntrega || isCreditPaymentCondition(selectedOrder.condicionPago, billingPaymentMethod);
                               const totNeto = Number(selectedOrder.totalNetoUsd) || 0;
                               const totBs = totNeto * tasaBcv;
 
                               let saleResult = null;
                               if (onProcessSale) {
-                                const isOrdNotaEntrega = isOrderNotaEntrega(selectedOrder);
                                 saleResult = await onProcessSale({
                                   orderId: selectedOrder.id,
                                   pedidoOrigenId: selectedOrder.id,
@@ -3378,10 +3391,13 @@ export default function OrdersSalesModal({
                                   clienteNombre: selectedOrder.clienteNombre,
                                   clienteRif: selectedOrder.clienteRif,
                                   clienteDireccion: selectedOrder.direccionEntrega,
+                                  vendedor: selectedOrder.vendedorId,
+                                  vendedorId: selectedOrder.vendedorId,
                                   items: (selectedOrder.items || []).map(it => {
                                     const precio = Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0);
                                     const cant = Number(it.cantidad || 1);
                                     return {
+                                      articuloId: it.articuloId,
                                       codigo: it.articuloId,
                                       descripcion: it.articuloDescripcion,
                                       cantidad: cant,
@@ -3390,6 +3406,8 @@ export default function OrdersSalesModal({
                                       litros: it.litrosTotales
                                     };
                                   }),
+                                  subtotalUsd: totNeto,
+                                  ivaUsd: 0,
                                   totalUsd: totNeto,
                                   totalBs: totBs,
                                   saldoUsd: isCredit ? totNeto : 0,
@@ -4016,17 +4034,18 @@ export default function OrdersSalesModal({
 
                             <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.75rem 0.85rem' }}>
                               {(() => {
+                                const isNe = isOrderNotaEntrega(selectedOrder);
                                 const totUsd = Number(selectedOrder.totalNetoUsd || selectedOrder.totalUsd || 0);
-                                const baseUsd = totUsd > 0 ? totUsd / 1.16 : 0;
-                                const ivaUsd = totUsd - baseUsd;
+                                const baseUsd = isNe ? totUsd : (totUsd > 0 ? totUsd / 1.16 : 0);
+                                const ivaUsd = isNe ? 0 : (totUsd - baseUsd);
                                 return (
                                   <>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
-                                      <span>Base Imponible General (16%):</span>
+                                      <span>{isNe ? 'Subtotal Neto (Sin IVA):' : 'Base Imponible General (16%):'}</span>
                                       <strong>{formatUsd(baseUsd)} ({formatBs(baseUsd * tasaBcv)})</strong>
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
-                                      <span>Débito Fiscal IVA (16%):</span>
+                                      <span>{isNe ? 'IVA (0% - Sin IVA):' : 'Débito Fiscal IVA (16%):'}</span>
                                       <strong>{formatUsd(ivaUsd)} ({formatBs(ivaUsd * tasaBcv)})</strong>
                                     </div>
                                     <div style={{ borderTop: '2px solid #002b7a', margin: '6px 0 5px 0' }} />

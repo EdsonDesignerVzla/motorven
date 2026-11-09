@@ -1067,7 +1067,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                   <td style={{ padding: '5px 8px', textAlign: 'right' }}>{formatUsd(it.precioUsd)}</td>
                                   <td style={{ padding: '5px 8px', textAlign: 'center' }}>
                                     <span style={{ fontSize: '0.64rem', background: '#e0f2fe', color: '#0369a1', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>
-                                      {it.tipoAlicuota || '16%'}
+                                      {isNe ? 'EXENTO (0%)' : (it.tipoAlicuota || '16%')}
                                     </span>
                                   </td>
                                   <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>{formatUsd(subUsd)}</td>
@@ -1119,12 +1119,12 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             {/* Tarjeta de Totales Fiscales */}
                             <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.75rem 0.85rem' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
-                                <span>Base Imponible General (16%):</span>
-                                <strong>{formatUsd(sale.baseGeneralUsd)} ({formatBs(sale.baseGeneralBs)})</strong>
+                                <span>{isNe ? 'Subtotal Neto (Sin IVA):' : 'Base Imponible General (16%):'}</span>
+                                <strong>{formatUsd(isNe ? (sale.subtotalUsd || sale.totalUsd) : sale.baseGeneralUsd)} ({formatBs(isNe ? (sale.subtotalBs || sale.totalBs) : sale.baseGeneralBs)})</strong>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
-                                <span>Débito Fiscal IVA (16%):</span>
-                                <strong>{formatUsd(sale.ivaGeneralUsd || sale.ivaUsd)} ({formatBs(sale.ivaGeneralBs || sale.ivaBs)})</strong>
+                                <span>{isNe ? 'IVA (0% - Sin IVA):' : 'Débito Fiscal IVA (16%):'}</span>
+                                <strong>{formatUsd(isNe ? 0 : (sale.ivaGeneralUsd || sale.ivaUsd))} ({formatBs(isNe ? 0 : (sale.ivaGeneralBs || sale.ivaBs))})</strong>
                               </div>
 
                               {Number(sale.igtfUsd || 0) > 0 && (

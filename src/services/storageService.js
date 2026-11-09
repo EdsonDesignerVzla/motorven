@@ -251,17 +251,31 @@ export const saveSale = (saleData) => {
   const products = getProducts();
   const config = getConfig();
 
-  const isCredit = isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago);
-  const nextInvoiceCorrelativo = (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc)
+  const isNotaEntrega =
+    String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+    String(saleData.numeroDoc || saleData.id || '').toUpperCase().startsWith('NE-') ||
+    String(saleData.pedidoOrigenDoc || '').toUpperCase().startsWith('PED-NE') ||
+    saleData.modalidadVenta === 'OFICINA' ||
+    saleData.almacen === '02' ||
+    saleData.co_alma === '02';
+  const effectiveTipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : (saleData.tipoDoc || 'FACTURA');
+  const isCredit =
+    isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago) ||
+    Number(saleData.diasCredito || 0) > 0 ||
+    isNotaEntrega;
+  const nextInvoiceCorrelativo = effectiveTipoDoc === 'FACTURA'
     ? getNextInvoiceCorrelativo(sales)
     : String(sales.length + 1).padStart(6, '0');
 
-  const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
-  const resolvedNumeroDoc = saleData.numeroDoc
+  const docPrefix = effectiveTipoDoc === 'NOTA_CREDITO' ? 'NC' : (effectiveTipoDoc === 'NOTA_DEBITO' ? 'ND' : (effectiveTipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+  let resolvedNumeroDoc = saleData.numeroDoc
     ? String(saleData.numeroDoc)
-    : (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc ? nextInvoiceCorrelativo : `${docPrefix}-${nextInvoiceCorrelativo}`);
+    : (effectiveTipoDoc === 'FACTURA' ? nextInvoiceCorrelativo : `${docPrefix}-${nextInvoiceCorrelativo}`);
+  if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
+    resolvedNumeroDoc = `NE-${resolvedNumeroDoc}`;
+  }
 
-  if (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) {
+  if (effectiveTipoDoc === 'FACTURA') {
     commitInvoiceCorrelativo(resolvedNumeroDoc);
   }
 
@@ -272,21 +286,26 @@ export const saveSale = (saleData) => {
 
   const taxes = calculateFiscalTaxes({
     items: itemsConLitros,
+    tipoDoc: effectiveTipoDoc,
     metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
     condicionPago: saleData.condicionPago || 'CONTADO',
     tasaBcv: config.tasaDolar,
     porcentajeRetencionIva: saleData.porcentajeRetencionIva || 75
   });
 
-  const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 7) : 0);
+  const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 15) : 0);
   const effectiveFechaEmision = saleData.fechaEmision || saleData.fecha || new Date().toISOString();
   const effectiveFechaVencimiento = saleData.fechaVencimiento || (isCredit ? calculateExpirationDate(effectiveFechaEmision, effectiveDiasCredito).toISOString() : null);
 
+  const resolvedId = (effectiveTipoDoc === 'FACTURA' || String(resolvedNumeroDoc).toUpperCase().startsWith(`${docPrefix}-`))
+    ? resolvedNumeroDoc
+    : `${docPrefix}-${resolvedNumeroDoc}`;
+
   const newSale = {
-    id: (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) ? resolvedNumeroDoc : `${docPrefix}-${resolvedNumeroDoc}`,
+    id: resolvedId,
     numeroDoc: resolvedNumeroDoc,
     numeroControl: saleData.numeroControl || generateFiscalControlNumber(parseInt(resolvedNumeroDoc.replace(/[^0-9]/g, ''), 10) || (sales.length + 1)),
-    tipoDoc: saleData.tipoDoc || 'FACTURA',
+    tipoDoc: effectiveTipoDoc,
     documentoAfectado: saleData.documentoAfectado || '',
     fecha: effectiveFechaEmision,
     fechaEmision: effectiveFechaEmision,
@@ -297,7 +316,7 @@ export const saveSale = (saleData) => {
     clienteRif: saleData.clienteRif || 'V-18456789-6',
     clienteDireccion: saleData.clienteDireccion || saleData.direccion || '',
     tasaDolar: config.tasaDolar,
-    condicionPago: saleData.condicionPago || 'CONTADO',
+    condicionPago: saleData.condicionPago || (isNotaEntrega ? 'CREDITO' : 'CONTADO'),
     items: itemsConLitros,
     subtotalUsd: taxes.subtotalNetoUsd,
     baseExentaUsd: taxes.baseExentaUsd,
@@ -321,8 +340,8 @@ export const saveSale = (saleData) => {
     ivaBs: taxes.totalIvaBs,
     igtfBs: taxes.igtfBs,
     totalBs: taxes.totalFacturaBs,
-    saldoUsd: isCredit ? (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd) : 0,
-    saldoBs: isCredit ? (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs) : 0,
+    saldoUsd: isCredit ? (isNotaEntrega ? taxes.subtotalNetoUsd : (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd)) : 0,
+    saldoBs: isCredit ? (isNotaEntrega ? taxes.subtotalNetoBs : (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs)) : 0,
     retencionIvaBs: taxes.retencionIvaBs,
     comprobanteRetencionIva: saleData.comprobanteRetencionIva || '',
     estado: isCredit ? 'PENDIENTE' : 'PAGADO',
@@ -377,7 +396,7 @@ export const saveSale = (saleData) => {
   }
 
   // Movimientos de Caja y Cuentas por Cobrar
-  if (newSale.condicionPago !== 'CREDITO') {
+  if (!isCredit) {
     if (newSale.tipoDoc === 'NOTA_CREDITO') {
       addCashMovement({
         tipo: 'EGRESO',

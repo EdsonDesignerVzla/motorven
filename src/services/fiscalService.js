@@ -142,6 +142,7 @@ export const ALICUOTAS_IVA = {
  */
 export const calculateFiscalTaxes = ({
   items = [],
+  tipoDoc = 'FACTURA',
   metodoPago = 'EFECTIVO_USD',
   condicionPago = 'CONTADO',
   tasaBcv = 827.73,
@@ -150,6 +151,7 @@ export const calculateFiscalTaxes = ({
   esSujetoPasivoEspecial = true
 }) => {
   const tasa = Number(tasaBcv) > 0 ? Number(tasaBcv) : 827.73;
+  const isNotaEntrega = String(tipoDoc || '').trim().toUpperCase() === 'NOTA_ENTREGA';
 
   let baseExentaUsd = 0;
   let baseGeneralUsd = 0;
@@ -191,16 +193,16 @@ export const calculateFiscalTaxes = ({
   const subtotalGravableUsd = roundTo2Decimals(baseGeneralUsd + baseReducidaUsd + baseAdicionalUsd);
   const subtotalNetoUsd = roundTo2Decimals(baseExentaUsd + subtotalGravableUsd);
 
-  // Débito Fiscal IVA discriminado
-  const ivaGeneralUsd = roundTo2Decimals(baseGeneralUsd * 0.16);
-  const ivaReducidoUsd = roundTo2Decimals(baseReducidaUsd * 0.08);
-  const ivaAdicionalUsd = roundTo2Decimals(baseAdicionalUsd * 0.31);
-  const totalIvaUsd = roundTo2Decimals(ivaGeneralUsd + ivaReducidoUsd + ivaAdicionalUsd);
+  // Débito Fiscal IVA discriminado (En Notas de Entrega NO aplica IVA: 0%)
+  const ivaGeneralUsd = isNotaEntrega ? 0 : roundTo2Decimals(baseGeneralUsd * 0.16);
+  const ivaReducidoUsd = isNotaEntrega ? 0 : roundTo2Decimals(baseReducidaUsd * 0.08);
+  const ivaAdicionalUsd = isNotaEntrega ? 0 : roundTo2Decimals(baseAdicionalUsd * 0.31);
+  const totalIvaUsd = isNotaEntrega ? 0 : roundTo2Decimals(ivaGeneralUsd + ivaReducidoUsd + ivaAdicionalUsd);
 
   // Percepción de IGTF (3%)
-  // Aplica sobre pagos en divisas o criptomonedas no soberanas
+  // Aplica sobre pagos en divisas o criptomonedas no soberanas (no aplica en Notas de Entrega)
   const esPagoEnDivisas = ['EFECTIVO_USD', 'ZELLE', 'USDT', 'DIVISAS'].includes(metodoPago);
-  const aplicaIgtf = esSujetoPasivoEspecial && esPagoEnDivisas && condicionPago === 'CONTADO';
+  const aplicaIgtf = !isNotaEntrega && esSujetoPasivoEspecial && esPagoEnDivisas && condicionPago === 'CONTADO';
 
   const baseIgtfUsd = aplicaIgtf ? roundTo2Decimals(subtotalNetoUsd + totalIvaUsd) : 0;
   const igtfUsd = aplicaIgtf ? roundTo2Decimals(baseIgtfUsd * 0.03) : 0;
@@ -208,12 +210,12 @@ export const calculateFiscalTaxes = ({
   const totalFacturaUsd = roundTo2Decimals(subtotalNetoUsd + totalIvaUsd + igtfUsd);
 
   // Retención de IVA (75% o 100%)
-  const retencionIvaUsd = porcentajeRetencionIva > 0 
+  const retencionIvaUsd = (!isNotaEntrega && porcentajeRetencionIva > 0)
     ? roundTo2Decimals(totalIvaUsd * (porcentajeRetencionIva / 100))
     : 0;
 
   // Retención de ISLR (generalmente 2% sobre la base imponible de bienes muebles)
-  const retencionIslrUsd = porcentajeRetencionIslr > 0 
+  const retencionIslrUsd = (!isNotaEntrega && porcentajeRetencionIslr > 0)
     ? roundTo2Decimals(subtotalGravableUsd * (porcentajeRetencionIslr / 100))
     : 0;
 

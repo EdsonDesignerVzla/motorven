@@ -923,45 +923,68 @@ const mapSaleToDb = (s) => ({
 
 const mapSaleFromDb = (s) => {
   if (!s) return null;
+  const rawNum = String(s.numero_doc ?? s.numeroDoc ?? s.id ?? '').trim();
+  const isNe =
+    String(s.tipo_doc || s.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+    rawNum.toUpperCase().startsWith('NE-') ||
+    String(s.id || '').toUpperCase().startsWith('NE-');
+  const resolvedTipoDoc = isNe ? 'NOTA_ENTREGA' : (s.tipo_doc || s.tipoDoc || 'FACTURA');
+  const rawSubUsd = Number(s.subtotal_usd ?? s.subtotalUsd ?? s.base_imponible_usd ?? 0);
+  const rawIvaUsd = Number(s.iva_usd ?? s.ivaUsd ?? s.monto_iva_usd ?? 0);
+  const rawTotUsd = Number(s.total_usd ?? s.totalUsd ?? 0);
+  const neBaseUsd = rawSubUsd > 0 && rawSubUsd < rawTotUsd
+    ? rawSubUsd
+    : (rawIvaUsd > 0 && rawTotUsd > rawIvaUsd ? Number((rawTotUsd - rawIvaUsd).toFixed(2)) : (rawSubUsd || rawTotUsd));
+  const effectiveSubUsd = isNe ? neBaseUsd : rawSubUsd;
+  const effectiveTotUsd = isNe ? neBaseUsd : rawTotUsd;
+  const effectiveTasa = Number(s.tasa_dolar ?? s.tasaDolar ?? s.tasa_bcv ?? 0);
+  const effectiveSubBs = isNe && effectiveTasa > 0 ? Number((effectiveSubUsd * effectiveTasa).toFixed(2)) : Number(s.subtotal_bs ?? s.subtotalBs ?? s.base_imponible_bs ?? 0);
+  const effectiveTotBs = isNe ? effectiveSubBs : Number(s.total_bs ?? s.totalBs ?? 0);
+  const isPending = s.estado === 'PENDIENTE' || s.metodo_pago === 'CREDITO' || (s.condicion_pago && s.condicion_pago !== 'CONTADO') || isNe;
+
   return {
     id: s.id,
     numeroDoc: s.numero_doc ?? s.numeroDoc,
     numeroControl: s.numero_control || s.numeroControl || '00-000000',
-    tipoDoc: s.tipo_doc || s.tipoDoc || 'FACTURA',
+    tipoDoc: resolvedTipoDoc,
     documentoAfectado: s.documento_afectado || s.documentoAfectado || '',
     fecha: s.fecha,
     clienteId: s.cliente_id ?? s.clienteId,
     clienteNombre: s.cliente_nombre ?? s.clienteNombre,
     clienteRif: s.cliente_rif ?? s.clienteRif,
-    tasaDolar: Number(s.tasa_dolar ?? s.tasaDolar ?? s.tasa_bcv ?? 0),
+    tasaDolar: effectiveTasa,
     condicionPago: s.condicion_pago ?? s.condicionPago,
     items: s.items || [],
-    subtotalUsd: Number(s.subtotal_usd ?? s.subtotalUsd ?? s.base_imponible_usd ?? 0),
+    subtotalUsd: effectiveSubUsd,
     baseExentaUsd: Number(s.base_exenta_usd ?? s.baseExentaUsd ?? 0),
-    baseGeneralUsd: Number(s.base_general_usd ?? s.subtotal_usd ?? s.subtotalUsd ?? 0),
-    ivaGeneralUsd: Number(s.iva_general_usd ?? s.iva_usd ?? s.ivaUsd ?? 0),
+    baseGeneralUsd: isNe ? effectiveSubUsd : Number(s.base_general_usd ?? s.subtotal_usd ?? s.subtotalUsd ?? 0),
+    ivaGeneralUsd: isNe ? 0 : Number(s.iva_general_usd ?? s.iva_usd ?? s.ivaUsd ?? 0),
     baseReducidaUsd: Number(s.base_reducida_usd ?? s.baseReducidaUsd ?? 0),
-    ivaReducidaUsd: Number(s.iva_reducida_usd ?? s.ivaReducidaUsd ?? 0),
+    ivaReducidaUsd: isNe ? 0 : Number(s.iva_reducida_usd ?? s.ivaReducidaUsd ?? 0),
     baseAdicionalUsd: Number(s.base_adicional_usd ?? s.baseAdicionalUsd ?? 0),
-    ivaAdicionalUsd: Number(s.iva_adicional_usd ?? s.ivaAdicionalUsd ?? 0),
-    ivaUsd: Number(s.iva_usd ?? s.ivaUsd ?? s.monto_iva_usd ?? 0),
-    igtfUsd: Number(s.igtf_usd ?? s.igtfUsd ?? s.monto_igtf_usd ?? 0),
-    totalUsd: Number(s.total_usd ?? s.totalUsd ?? 0),
-    subtotalBs: Number(s.subtotal_bs ?? s.subtotalBs ?? s.base_imponible_bs ?? 0),
+    ivaAdicionalUsd: isNe ? 0 : Number(s.iva_adicional_usd ?? s.ivaAdicionalUsd ?? 0),
+    ivaUsd: isNe ? 0 : rawIvaUsd,
+    igtfUsd: isNe ? 0 : Number(s.igtf_usd ?? s.igtfUsd ?? s.monto_igtf_usd ?? 0),
+    totalUsd: effectiveTotUsd,
+    subtotalBs: effectiveSubBs,
     baseExentaBs: Number(s.base_exenta_bs ?? s.baseExentaBs ?? 0),
-    baseGeneralBs: Number(s.base_general_bs ?? s.subtotal_bs ?? s.subtotalBs ?? 0),
-    ivaGeneralBs: Number(s.iva_general_bs ?? s.iva_bs ?? s.ivaBs ?? 0),
+    baseGeneralBs: isNe ? effectiveSubBs : Number(s.base_general_bs ?? s.subtotal_bs ?? s.subtotalBs ?? 0),
+    ivaGeneralBs: isNe ? 0 : Number(s.iva_general_bs ?? s.iva_bs ?? s.ivaBs ?? 0),
     baseReducidaBs: Number(s.base_reducida_bs ?? s.baseReducidaBs ?? 0),
-    ivaReducidaBs: Number(s.iva_reducida_bs ?? s.ivaReducidaBs ?? 0),
+    ivaReducidaBs: isNe ? 0 : Number(s.iva_reducida_bs ?? s.ivaReducidaBs ?? 0),
     baseAdicionalBs: Number(s.base_adicional_bs ?? s.baseAdicionalBs ?? 0),
-    ivaAdicionalBs: Number(s.iva_adicional_bs ?? s.ivaAdicionalBs ?? 0),
-    ivaBs: Number(s.iva_bs ?? s.ivaBs ?? s.monto_iva_bs ?? 0),
-    igtfBs: Number(s.igtf_bs ?? s.igtfBs ?? s.monto_igtf_bs ?? 0),
-    totalBs: Number(s.total_bs ?? s.totalBs ?? 0),
-    retencionIvaBs: Number(s.retencion_iva_bs ?? s.retencionIvaBs ?? 0),
+    ivaAdicionalBs: isNe ? 0 : Number(s.iva_adicional_bs ?? s.ivaAdicionalBs ?? 0),
+    ivaBs: isNe ? 0 : Number(s.iva_bs ?? s.ivaBs ?? s.monto_iva_bs ?? 0),
+    igtfBs: isNe ? 0 : Number(s.igtf_bs ?? s.igtfBs ?? s.monto_igtf_bs ?? 0),
+    totalBs: effectiveTotBs,
+    retencionIvaBs: isNe ? 0 : Number(s.retencion_iva_bs ?? s.retencionIvaBs ?? 0),
     comprobanteRetencionIva: s.comprobante_retencion_iva || s.comprobanteRetencionIva || '',
-    saldoUsd: Number(s.saldo_usd ?? s.saldoUsd ?? (s.estado === 'PENDIENTE' || s.metodo_pago === 'CREDITO' || (s.condicion_pago && s.condicion_pago !== 'CONTADO') ? (s.total_usd ?? s.totalUsd ?? 0) : 0)),
-    saldoBs: Number(s.saldo_bs ?? s.saldoBs ?? (s.estado === 'PENDIENTE' || s.metodo_pago === 'CREDITO' || (s.condicion_pago && s.condicion_pago !== 'CONTADO') ? (s.total_bs ?? s.totalBs ?? 0) : 0)),
+    saldoUsd: isNe
+      ? (s.saldo_usd !== undefined && s.saldo_usd !== null ? Math.min(effectiveTotUsd, Number(s.saldo_usd)) : effectiveTotUsd)
+      : Number(s.saldo_usd ?? s.saldoUsd ?? (isPending ? effectiveTotUsd : 0)),
+    saldoBs: isNe
+      ? (s.saldo_bs !== undefined && s.saldo_bs !== null ? Math.min(effectiveTotBs, Number(s.saldo_bs)) : effectiveTotBs)
+      : Number(s.saldo_bs ?? s.saldoBs ?? (isPending ? effectiveTotBs : 0)),
     diasCredito: Number(s.dias_credito ?? s.diasCredito ?? 0),
     fechaEmision: s.fecha_emision || s.fechaEmision || s.fecha,
     fechaVencimiento: s.fecha_vencimiento || s.fechaVencimiento || null,
@@ -2141,20 +2164,33 @@ export const processSupabaseSale = async (saleData) => {
       supabase.from('sales').select('*', { count: 'exact', head: true })
     );
     if (countErr) throw countErr;
-    const isCredit = isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago);
-    const docPrefix = saleData.tipoDoc === 'NOTA_CREDITO' ? 'NC' : (saleData.tipoDoc === 'NOTA_DEBITO' ? 'ND' : (saleData.tipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+    const isNotaEntrega =
+      String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+      String(saleData.numeroDoc || saleData.id || '').toUpperCase().startsWith('NE-') ||
+      String(saleData.pedidoOrigenDoc || '').toUpperCase().startsWith('PED-NE') ||
+      saleData.modalidadVenta === 'OFICINA' ||
+      saleData.almacen === '02' ||
+      saleData.co_alma === '02';
+    const effectiveTipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : (saleData.tipoDoc || 'FACTURA');
+    const isCredit =
+      isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago) ||
+      Number(saleData.diasCredito || 0) > 0 ||
+      isNotaEntrega;
+    const docPrefix = effectiveTipoDoc === 'NOTA_CREDITO' ? 'NC' : (effectiveTipoDoc === 'NOTA_DEBITO' ? 'ND' : (effectiveTipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
 
     let resolvedNumeroDoc = saleData.numeroDoc;
     if (!resolvedNumeroDoc) {
-      if (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) {
+      if (effectiveTipoDoc === 'FACTURA') {
         const { data: dbSales } = await supabase.from('sales').select('numero_doc,tipo_doc');
         const mappedSales = (dbSales || []).map(s => ({ numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
         resolvedNumeroDoc = getNextInvoiceCorrelativo(mappedSales);
       } else {
         resolvedNumeroDoc = `${docPrefix}-${String((count || 0) + 1).padStart(6, '0')}`;
       }
+    } else if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
+      resolvedNumeroDoc = `NE-${resolvedNumeroDoc}`;
     }
-    if (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) {
+    if (effectiveTipoDoc === 'FACTURA') {
       commitInvoiceCorrelativo(resolvedNumeroDoc);
     }
 
@@ -2165,21 +2201,26 @@ export const processSupabaseSale = async (saleData) => {
 
     const taxes = calculateFiscalTaxes({
       items: itemsConLitros,
+      tipoDoc: effectiveTipoDoc,
       metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
       condicionPago: saleData.condicionPago || 'CONTADO',
       tasaBcv: config.tasaDolar,
       porcentajeRetencionIva: saleData.porcentajeRetencionIva || 75
     });
 
-    const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 7) : 0);
+    const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 15) : 0);
     const effectiveFechaEmision = saleData.fechaEmision || saleData.fecha || new Date().toISOString();
     const effectiveFechaVencimiento = saleData.fechaVencimiento || (isCredit ? calculateExpirationDate(effectiveFechaEmision, effectiveDiasCredito).toISOString() : null);
 
+    const resolvedId = (effectiveTipoDoc === 'FACTURA' || String(resolvedNumeroDoc).toUpperCase().startsWith(`${docPrefix}-`))
+      ? resolvedNumeroDoc
+      : `${docPrefix}-${resolvedNumeroDoc}`;
+
     const newSale = {
-      id: (saleData.tipoDoc === 'FACTURA' || !saleData.tipoDoc) ? resolvedNumeroDoc : `${docPrefix}-${resolvedNumeroDoc}`,
+      id: resolvedId,
       numeroDoc: resolvedNumeroDoc,
       numeroControl: saleData.numeroControl || generateFiscalControlNumber(parseInt(resolvedNumeroDoc.replace(/[^0-9]/g, ''), 10) || ((count || 0) + 1)),
-      tipoDoc: saleData.tipoDoc || 'FACTURA',
+      tipoDoc: effectiveTipoDoc,
       documentoAfectado: saleData.documentoAfectado || '',
       fecha: effectiveFechaEmision,
       fechaEmision: effectiveFechaEmision,
@@ -2190,7 +2231,7 @@ export const processSupabaseSale = async (saleData) => {
       clienteRif: saleData.clienteRif || 'V-18456789-6',
       clienteDireccion: saleData.clienteDireccion || saleData.direccion || '',
       tasaDolar: config.tasaDolar,
-      condicionPago: saleData.condicionPago || 'CONTADO',
+      condicionPago: saleData.condicionPago || (isNotaEntrega ? 'CREDITO' : 'CONTADO'),
       items: itemsConLitros,
       subtotalUsd: taxes.subtotalNetoUsd,
       baseExentaUsd: taxes.baseExentaUsd,
@@ -2214,8 +2255,8 @@ export const processSupabaseSale = async (saleData) => {
       ivaBs: taxes.totalIvaBs,
       igtfBs: taxes.igtfBs,
       totalBs: taxes.totalFacturaBs,
-      saldoUsd: isCredit ? (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd) : 0,
-      saldoBs: isCredit ? (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs) : 0,
+      saldoUsd: isCredit ? (isNotaEntrega ? taxes.subtotalNetoUsd : (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd)) : 0,
+      saldoBs: isCredit ? (isNotaEntrega ? taxes.subtotalNetoBs : (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs)) : 0,
       retencionIvaBs: taxes.retencionIvaBs,
       comprobanteRetencionIva: saleData.comprobanteRetencionIva || '',
       estado: isCredit ? 'PENDIENTE' : 'PAGADO',
@@ -2283,7 +2324,7 @@ export const processSupabaseSale = async (saleData) => {
     }
 
     // 2. Add cash movement or update client accounts
-    if (newSale.condicionPago !== 'CREDITO') {
+    if (!isCredit) {
       if (newSale.tipoDoc === 'NOTA_CREDITO') {
         await addSupabaseCashMovement({
           tipo: 'EGRESO',
@@ -2320,6 +2361,30 @@ export const processSupabaseSale = async (saleData) => {
           .update({ saldo_deudor_usd: newDebit })
           .eq('id', newSale.clienteId);
       }
+
+      // Sincronizar documento en Cuentas por Cobrar (profit_invoices) — Notas de Entrega llegan SIN IVA (0%)
+      await saveSupabaseProfitInvoice({
+        id: newSale.id,
+        factNum: newSale.numeroDoc,
+        tipoDoc: newSale.tipoDoc,
+        fechaEmision: newSale.fechaEmision,
+        fechaVencimiento: newSale.fechaVencimiento,
+        diasCredito: newSale.diasCredito,
+        clienteId: newSale.clienteId,
+        clienteNombre: newSale.clienteNombre,
+        clienteRif: newSale.clienteRif,
+        vendedorId: saleData.vendedorId || 'OF',
+        vendedorNombre: newSale.vendedor,
+        totBrutoUsd: newSale.subtotalUsd,
+        ivaUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? 0 : newSale.ivaUsd,
+        totNetoUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? newSale.subtotalUsd : newSale.totalUsd,
+        abonosUsd: 0,
+        saldoUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? newSale.subtotalUsd : newSale.saldoUsd,
+        tasa: newSale.tasaDolar,
+        items: newSale.items
+      }).catch(e => {
+        console.warn('[processSupabaseSale] Aviso registrando documento en CxC:', e?.message);
+      });
     }
 
     // 3. Save sale
@@ -3861,10 +3926,20 @@ export const getSupabaseProfitInvoices = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    const mapped = (data || []).map(f => ({
-      id: f.id,
-      factNum: f.fact_num ?? f.factNum,
-      tipoDoc: f.tipo_doc ?? f.tipoDoc ?? 'FACTURA',
+    const mapped = (data || []).map(f => {
+      const rawId = String(f.id ?? '').trim();
+      const rawFactNum = String(f.fact_num ?? f.factNum ?? rawId).trim();
+      const isNePrefix =
+        rawId.toUpperCase().startsWith('NE-') ||
+        rawFactNum.toUpperCase().startsWith('NE-') ||
+        rawFactNum.toUpperCase().startsWith('NDE-');
+      const resolvedTipoDoc = isNePrefix
+        ? 'NOTA_ENTREGA'
+        : (f.tipo_doc ?? f.tipoDoc ?? 'FACTURA');
+      return {
+        id: f.id,
+        factNum: f.fact_num ?? f.factNum,
+        tipoDoc: resolvedTipoDoc,
       fechaEmision: f.fec_emis ?? f.fechaEmision,
       fechaVencimiento: f.fec_venc ?? f.fechaVencimiento,
       diasCredito: f.dias_credito ?? f.diasCredito,
@@ -3894,7 +3969,8 @@ export const getSupabaseProfitInvoices = async () => {
       observaciones: f.observaciones ?? f.descrip ?? '',
       historialCobros: f.historial_cobros ?? f.historialCobros ?? [],
       fechaSincronizacion: f.fecha_sincronizacion ?? f.fechaSincronizacion
-    }));
+      };
+    });
     return applyLocalCxcOverridesToInvoices(mapped);
   } catch (err) {
     console.warn('[Supabase] Error cargando facturas Profit:', err.message);
@@ -3905,16 +3981,29 @@ export const getSupabaseProfitInvoices = async () => {
 export const saveSupabaseProfitInvoice = async (docData) => {
   if (!docData) return null;
   const nowIso = new Date().toISOString();
-  const isNotaEntrega = String(docData.tipoDoc || docData.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA';
   const rawNum = String(docData.factNum ?? docData.fact_num ?? docData.numeroDoc ?? docData.id ?? '').trim();
-  const id = String(docData.id || (isNotaEntrega ? `NE-${rawNum}` : `FAC-${rawNum}`)).trim();
+  const isNotaEntrega =
+    String(docData.tipoDoc || docData.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+    rawNum.toUpperCase().startsWith('NE-') ||
+    String(docData.id || '').toUpperCase().startsWith('NE-');
+  const id = String(
+    docData.id ||
+    (isNotaEntrega
+      ? (rawNum.toUpperCase().startsWith('NE-') ? rawNum : `NE-${rawNum}`)
+      : (rawNum.toUpperCase().startsWith('FAC-') ? rawNum : `FAC-${rawNum}`))
+  ).trim();
 
-  // En Notas de Entrega no se calcula IVA ni ningún impuesto
-  const totBrutoUsd = Number(docData.totBrutoUsd ?? docData.tot_bruto_usd ?? docData.totNetoUsd ?? 0);
-  const ivaUsd = isNotaEntrega ? 0 : Number(docData.ivaUsd ?? docData.iva_usd ?? 0);
+  // En Notas de Entrega no se calcula IVA ni ningún impuesto (100% Sin IVA)
+  const rawNeto = Number(docData.totNetoUsd ?? docData.tot_neto_usd ?? docData.totalUsd ?? docData.totBrutoUsd ?? docData.tot_bruto_usd ?? 0);
+  const rawIva = Number(docData.ivaUsd ?? docData.iva_usd ?? 0);
+  const rawBruto = Number(docData.totBrutoUsd ?? docData.tot_bruto_usd ?? docData.subtotalUsd ?? (isNotaEntrega ? (rawIva > 0 && rawNeto > rawIva ? rawNeto - rawIva : rawNeto) : rawNeto));
+  const totBrutoUsd = isNotaEntrega
+    ? Number((rawBruto > 0 && rawBruto < rawNeto ? rawBruto : (rawIva > 0 && rawNeto > rawIva ? rawNeto - rawIva : rawBruto)).toFixed(2))
+    : Number(rawBruto.toFixed(2));
+  const ivaUsd = isNotaEntrega ? 0 : Number(rawIva.toFixed(2));
   const totNetoUsd = isNotaEntrega
-    ? Number(docData.totNetoUsd ?? docData.tot_neto_usd ?? totBrutoUsd)
-    : Number(docData.totNetoUsd ?? docData.tot_neto_usd ?? (totBrutoUsd + ivaUsd));
+    ? totBrutoUsd
+    : Number((docData.totNetoUsd ?? docData.tot_neto_usd ?? (totBrutoUsd + ivaUsd)).toFixed(2));
   const tasa = Number(docData.tasa ?? docData.tasaDolar ?? 827.73) || 827.73;
   const abonosUsd = docData.abonosUsd !== undefined
     ? Number(docData.abonosUsd)
