@@ -141,7 +141,7 @@ function isValidSavedBackendUrl(rawUrl, pageProtocol = 'https:', pageHostname = 
   if (!rawUrl || typeof rawUrl !== 'string') return false;
   const clean = rawUrl.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(clean)) return false;
-  if (clean.includes('loca.lt') || clean.includes('trycloudflare.com')) return false;
+  if (clean.includes('loca.lt')) return false;
   try {
     const parsed = new URL(clean);
     const isPageLocal = isLocalOrLanHostname(pageHostname);
@@ -165,7 +165,7 @@ const resolveInitialSupabaseUrl = (configured) => {
 
     const { protocol, hostname } = window.location;
 
-    // Limpiar automáticamente cualquier URL obsoleta en localStorage (trycloudflare, loca.lt, /sb en nube o HTTP en HTTPS)
+    // Limpiar automáticamente cualquier URL obsoleta en localStorage (loca.lt, /sb en nube o HTTP en HTTPS)
     try {
       const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
       if (savedCustom) {
@@ -173,7 +173,7 @@ const resolveInitialSupabaseUrl = (configured) => {
         if (isValidSavedBackendUrl(cleanSaved, protocol, hostname)) {
           return cleanSaved;
         }
-        window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
+        window.localStorage.removeItem('signum_custom_backend_url');
       }
     } catch (_) {}
 
@@ -228,7 +228,8 @@ export async function discoverActiveBackendUrl(force = false) {
 
   backendDiscoveryPromise = (async () => {
     try {
-      const candidates = [OFFICIAL_BACKEND_URL];
+      const candidates = [];
+      let publishedPrimaryUrl = null;
       const pageProtocol = window.location?.protocol || 'https:';
       const pageHostname = window.location?.hostname || '';
       const isPageLocal = isLocalOrLanHostname(pageHostname);
@@ -246,7 +247,20 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       } catch (_) {}
 
-      // 2. backend_url.json publicado por el servidor central SVR-MOTORVEN
+      // 2. Si se abre por HTTP en la red local de la oficina (LAN), priorizar el servidor SVR-MOTORVEN directamente
+      if (isPageLocal && pageProtocol === 'http:') {
+        const localCandidates = [
+          'http://192.168.0.6:54321',
+          window.location.origin && window.location.origin !== 'null' ? `${window.location.origin}/sb` : null,
+          'http://127.0.0.1:54321',
+          'http://localhost:54321'
+        ];
+        for (const lc of localCandidates) {
+          if (lc && !candidates.includes(lc)) candidates.push(lc);
+        }
+      }
+
+      // 3. backend_url.json publicado automáticamente por el servidor central SVR-MOTORVEN (192.168.0.6)
       try {
         const basePath = window.location.pathname.endsWith('/')
           ? window.location.pathname
@@ -258,9 +272,12 @@ export async function discoverActiveBackendUrl(force = false) {
         clearTimeout(tid);
         if (resp.ok) {
           const parsed = await resp.json();
-          if (parsed?.url && isValidSavedBackendUrl(parsed.url, pageProtocol, pageHostname)) {
-            const cleanJsonUrl = parsed.url.trim().replace(/\/+$/, '');
-            if (!candidates.includes(cleanJsonUrl)) candidates.push(cleanJsonUrl);
+          for (const rawCandidate of [parsed?.url, parsed?.fallbackTunnelUrl]) {
+            if (rawCandidate && isValidSavedBackendUrl(rawCandidate, pageProtocol, pageHostname)) {
+              const cleanJsonUrl = rawCandidate.trim().replace(/\/+$/, '');
+              if (!publishedPrimaryUrl) publishedPrimaryUrl = cleanJsonUrl;
+              if (!candidates.includes(cleanJsonUrl)) candidates.push(cleanJsonUrl);
+            }
           }
           if (isPageLocal && pageProtocol === 'http:' && Array.isArray(parsed?.lanUrls)) {
             for (const lan of parsed.lanUrls) {
@@ -273,7 +290,10 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       } catch (_) {}
 
-      // 3. Fallback a URL guardada en localStorage solo si es válida
+      // 4. Dominio oficial HTTPS y fallback a URL guardada en localStorage si es válida
+      if (!candidates.includes(OFFICIAL_BACKEND_URL)) {
+        candidates.push(OFFICIAL_BACKEND_URL);
+      }
       try {
         const savedCustom = window.localStorage.getItem('signum_custom_backend_url');
         if (savedCustom && isValidSavedBackendUrl(savedCustom, pageProtocol, pageHostname)) {
@@ -281,19 +301,6 @@ export async function discoverActiveBackendUrl(force = false) {
           if (!candidates.includes(cleanSaved)) candidates.push(cleanSaved);
         }
       } catch (_) {}
-
-      // 4. Candidatos de red local únicamente cuando se abre por HTTP en LAN/localhost
-      if (isPageLocal && pageProtocol === 'http:') {
-        const localCandidates = [
-          'http://192.168.0.6:54321',
-          window.location.origin && window.location.origin !== 'null' ? `${window.location.origin}/sb` : null,
-          'http://127.0.0.1:54321',
-          'http://localhost:54321'
-        ];
-        for (const lc of localCandidates) {
-          if (lc && !candidates.includes(lc)) candidates.push(lc);
-        }
-      }
 
       for (const candidate of candidates) {
         if (!candidate || candidate.includes('loca.lt')) continue;
@@ -310,8 +317,8 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       }
 
-      // Si ningún /health respondió a tiempo, adoptar siempre el dominio oficial HTTPS
-      currentBackendUrl = OFFICIAL_BACKEND_URL;
+      // Si ningún /health respondió a tiempo, adoptar la URL publicada por el servidor central o el dominio oficial
+      currentBackendUrl = publishedPrimaryUrl || OFFICIAL_BACKEND_URL;
       try {
         window.localStorage.setItem('signum_custom_backend_url', currentBackendUrl);
         window.dispatchEvent(new CustomEvent('signum_backend_url_updated', { detail: { url: currentBackendUrl } }));
@@ -360,7 +367,7 @@ const dynamicSupabaseFetch = async (input, init) => {
   if (isTestEnv || typeof fetch === 'undefined') {
     return fetch(input, init);
   }
-  // Esperar siempre el descubrimiento inicial para garantizar uso del servidor oficial
+  // Esperar siempre el descubrimiento inicial para garantizar uso del servidor activo de la oficina
   if (!initialDiscoveryCompleted && backendDiscoveryPromise) {
     try {
       await backendDiscoveryPromise;
@@ -369,20 +376,16 @@ const dynamicSupabaseFetch = async (input, init) => {
   const rewrittenUrl = rewriteRequestUrl(input, currentBackendUrl);
   try {
     const res = await fetch(rewrittenUrl, init);
-    if (res.status === 404 && currentBackendUrl !== OFFICIAL_BACKEND_URL) {
-      currentBackendUrl = OFFICIAL_BACKEND_URL;
-      const officialUrl = rewriteRequestUrl(input, OFFICIAL_BACKEND_URL);
-      return await fetch(officialUrl, init);
+    if ([404, 502, 503, 530].includes(res.status)) {
+      const prevUrl = currentBackendUrl;
+      const discovered = await discoverActiveBackendUrl(true);
+      if (discovered && discovered !== prevUrl) {
+        const retryUrl = rewriteRequestUrl(input, discovered);
+        return await fetch(retryUrl, init);
+      }
     }
     return res;
   } catch (err) {
-    if (currentBackendUrl !== OFFICIAL_BACKEND_URL) {
-      currentBackendUrl = OFFICIAL_BACKEND_URL;
-      try {
-        const officialUrl = rewriteRequestUrl(input, OFFICIAL_BACKEND_URL);
-        return await fetch(officialUrl, init);
-      } catch (_) {}
-    }
     const prevUrl = currentBackendUrl;
     const discovered = await discoverActiveBackendUrl(true);
     if (discovered && discovered !== prevUrl) {

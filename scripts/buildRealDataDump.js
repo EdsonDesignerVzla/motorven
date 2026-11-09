@@ -58,13 +58,24 @@ const cleanConfigRow = {
 db.config = [cleanConfigRow];
 
 // 2. Clean & normalize products (29 canonical Profit SKUs available in Almacén 01 and Almacén 02)
+const existingWhRowsByKey = new Map();
+for (const row of (db.profit_stock_by_warehouse || [])) {
+  if (!row) continue;
+  const art = String(row.co_art || row.codigo || (row.id ? String(row.id).split('_')[0] : '')).trim();
+  const alm = String(row.co_alma || row.coAlma || (row.id ? String(row.id).split('_')[1] : '')).trim().padStart(2, '0');
+  if (art && alm) {
+    existingWhRowsByKey.set(`${art}_${alm}`, row);
+  }
+}
+
 const defaultPailaImg = (db.products || []).find(x => x && x.id === '000704' && x.imagen)?.imagen || null;
 const seenProdIds = new Set();
 db.products = (db.products || [])
   .filter(p => p && p.id && !String(p.id).startsWith('OIL-') && !seenProdIds.has(p.id) && seenProdIds.add(p.id))
   .map(p => {
+    const prodId = String(p.id).trim();
     const litrosPorUnidad = Number(p.litros_por_unidad ?? p.litrosPorUnidad ?? 1);
-    const stock = Number(p.stock ?? 0);
+    const rawStock = Number(p.stock ?? 0);
     const comprometido = Number(p.comprometido ?? 0);
     const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 10);
     const costoUsd = Number(p.costo_usd ?? p.costoUsd ?? 0);
@@ -77,12 +88,25 @@ db.products = (db.products || [])
     const coLin = p.co_lin || p.coLin || 'LUB-GAS';
     const coSubl = p.co_subl || p.coSubl || 'MIN-GAS';
     const coCat = p.co_cat || p.coCat || 'TERM-01';
-    const prodImg = p.imagen || (String(p.id).trim() === '000308' ? defaultPailaImg : null);
+    const prodImg = p.imagen || (prodId === '000308' ? defaultPailaImg : null);
+
+    const wh01Row = existingWhRowsByKey.get(`${prodId}_01`);
+    const wh02Row = existingWhRowsByKey.get(`${prodId}_02`);
+    const hasWhRows = wh01Row !== undefined || wh02Row !== undefined;
+
+    const stockAlm01 = hasWhRows
+      ? Number(wh01Row?.stock_act ?? wh01Row?.stockAct ?? 0)
+      : Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? Math.round(rawStock * 0.4));
+    const stockAlm02 = hasWhRows
+      ? Number(wh02Row?.stock_act ?? wh02Row?.stockAct ?? 0)
+      : Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? Math.max(0, rawStock - stockAlm01));
+    const stock = hasWhRows ? (stockAlm01 + stockAlm02) : rawStock;
+
     return {
       ...p,
-      id: String(p.id).trim(),
-      codigo: String(p.codigo || p.id).trim(),
-      oem: p.oem || `KEY-${String(p.id).trim()}`,
+      id: prodId,
+      codigo: String(p.codigo || prodId).trim(),
+      oem: p.oem || `KEY-${prodId}`,
       descripcion: p.descripcion || '',
       marca: p.marca || 'OILSTONE',
       categoria: p.categoria || 'Motor a Gasolina',
@@ -98,10 +122,10 @@ db.products = (db.products || [])
       comprometido,
       stock_minimo: stockMinimo,
       stockMinimo,
-      stockAlmacen01: Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? Math.round(stock * 0.4)),
-      stock_almacen_01: Number(p.stock_almacen_01 ?? p.stockAlmacen01 ?? Math.round(stock * 0.4)),
-      stockAlmacen02: Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? Math.max(0, stock - Math.round(stock * 0.4))),
-      stock_almacen_02: Number(p.stock_almacen_02 ?? p.stockAlmacen02 ?? Math.max(0, stock - Math.round(stock * 0.4))),
+      stockAlmacen01: stockAlm01,
+      stock_almacen_01: stockAlm01,
+      stockAlmacen02: stockAlm02,
+      stock_almacen_02: stockAlm02,
       costo_usd: costoUsd,
       costoUsd,
       precio_usd_detal: precioUsdDetal,
@@ -152,7 +176,7 @@ db.profit_warehouses = [
     des_alma: 'ALMACÉN CENTRAL / BÓVEDA',
     coAlm: '02',
     co_alm: '02',
-    desAlm: 'ALMACÉN CENTRAL / BÓVEDA',
+    desAlm: 'ALMACÉN PRINCIPAL / MOSTRADOR' === 'ALMACÉN CENTRAL / BÓVEDA' ? '' : 'ALMACÉN CENTRAL / BÓVEDA',
     des_alm: 'ALMACÉN CENTRAL / BÓVEDA',
     campo1: 'Custodia de Tambores y Paletas',
     campo2: '',
@@ -160,55 +184,59 @@ db.profit_warehouses = [
   }
 ];
 
-// 2c. Sync profit_stock_by_warehouse: copy all 29 products from Almacén 01 to Almacén 02 with full data & image
-db.profit_stock_by_warehouse = db.products.flatMap(p => [
-  {
-    id: `${p.id}_01`,
-    co_art: p.id,
-    codigo: p.codigo,
-    oem: p.oem,
-    descripcion: p.descripcion,
-    marca: p.marca,
-    categoria: p.categoria,
-    viscosidad: p.viscosidad,
-    unidad: p.unidad,
-    litros_por_unidad: p.litrosPorUnidad,
-    costo_usd: p.costoUsd,
-    precio_usd_detal: p.precioUsdDetal,
-    precio_usd_mayor: p.precioUsdMayor,
-    imagen: p.imagen,
-    co_alma: '01',
-    alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
-    stock_act: Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? 0),
-    stock_com: p.comprometido,
-    stock_lle: 0,
-    stock_des: 0,
-    updated_at: NOW_ISO
-  },
-  {
-    id: `${p.id}_02`,
-    co_art: p.id,
-    codigo: p.codigo,
-    oem: p.oem,
-    descripcion: p.descripcion,
-    marca: p.marca,
-    categoria: p.categoria,
-    viscosidad: p.viscosidad,
-    unidad: p.unidad,
-    litros_por_unidad: p.litrosPorUnidad,
-    costo_usd: p.costoUsd,
-    precio_usd_detal: p.precioUsdDetal,
-    precio_usd_mayor: p.precioUsdMayor,
-    imagen: p.imagen,
-    co_alma: '02',
-    alma_des: 'ALMACÉN CENTRAL / BÓVEDA',
-    stock_act: Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? 0),
-    stock_com: p.comprometido,
-    stock_lle: 0,
-    stock_des: 0,
-    updated_at: NOW_ISO
-  }
-]);
+// 2c. Sync profit_stock_by_warehouse preserving real stock and timestamps from the server
+db.profit_stock_by_warehouse = db.products.flatMap(p => {
+  const prev01 = existingWhRowsByKey.get(`${p.id}_01`);
+  const prev02 = existingWhRowsByKey.get(`${p.id}_02`);
+  return [
+    {
+      id: `${p.id}_01`,
+      co_art: p.id,
+      codigo: p.codigo,
+      oem: p.oem,
+      descripcion: p.descripcion,
+      marca: p.marca,
+      categoria: p.categoria,
+      viscosidad: p.viscosidad,
+      unidad: p.unidad,
+      litros_por_unidad: p.litrosPorUnidad,
+      costo_usd: p.costoUsd,
+      precio_usd_detal: p.precioUsdDetal,
+      precio_usd_mayor: p.precioUsdMayor,
+      imagen: p.imagen,
+      co_alma: '01',
+      alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
+      stock_act: Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? 0),
+      stock_com: Number(prev01?.stock_com ?? p.comprometido ?? 0),
+      stock_lle: Number(prev01?.stock_lle ?? 0),
+      stock_des: Number(prev01?.stock_des ?? 0),
+      updated_at: prev01?.updated_at || NOW_ISO
+    },
+    {
+      id: `${p.id}_02`,
+      co_art: p.id,
+      codigo: p.codigo,
+      oem: p.oem,
+      descripcion: p.descripcion,
+      marca: p.marca,
+      categoria: p.categoria,
+      viscosidad: p.viscosidad,
+      unidad: p.unidad,
+      litros_por_unidad: p.litrosPorUnidad,
+      costo_usd: p.costoUsd,
+      precio_usd_detal: p.precioUsdDetal,
+      precio_usd_mayor: p.precioUsdMayor,
+      imagen: p.imagen,
+      co_alma: '02',
+      alma_des: 'ALMACÉN CENTRAL / BÓVEDA',
+      stock_act: Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? 0),
+      stock_com: Number(prev02?.stock_com ?? p.comprometido ?? 0),
+      stock_lle: Number(prev02?.stock_lle ?? 0),
+      stock_des: Number(prev02?.stock_des ?? 0),
+      updated_at: prev02?.updated_at || NOW_ISO
+    }
+  ];
+});
 
 // 3. Clean & normalize clients (631 clients)
 const seenClientIds = new Set();

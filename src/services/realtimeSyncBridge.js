@@ -94,7 +94,7 @@ function isValidCustomRealtimeUrl(rawUrl, pageProtocol = 'https:', pageHostname 
   if (!rawUrl || typeof rawUrl !== 'string') return false;
   const clean = rawUrl.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(clean)) return false;
-  if (clean.includes('loca.lt') || clean.includes('trycloudflare.com')) return false;
+  if (clean.includes('loca.lt')) return false;
   try {
     const parsed = new URL(clean);
     const isPageLocal = isLocalOrLanHostname(pageHostname);
@@ -127,8 +127,8 @@ function resolveRealtimeBaseUrl() {
       if (isValidCustomRealtimeUrl(clean, protocol, hostname)) {
         return clean;
       }
-      // Limpiar automáticamente URLs obsoletas (trycloudflare, loca.lt, /sb en dominio público o HTTP en HTTPS)
-      window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
+      // Limpiar automáticamente URLs obsoletas (loca.lt, /sb en dominio público o HTTP en HTTPS)
+      window.localStorage.removeItem('signum_custom_backend_url');
     }
   } catch (_) {}
 
@@ -287,31 +287,41 @@ function connectSseStream() {
       reconnectTimer = setTimeout(async () => {
         if (activeSubscribers.size > 0) {
           try {
-            // Verificar primero si el dominio oficial responde antes de adoptar un fallback
-            const ctrl = new AbortController();
-            const tid = setTimeout(() => ctrl.abort(), 2500);
-            const healthResp = await fetch(`${OFFICIAL_BACKEND_URL}/health`, { cache: 'no-store', signal: ctrl.signal });
-            clearTimeout(tid);
-            if (healthResp.ok) {
-              activeDiscoveredRealtimeUrl = OFFICIAL_BACKEND_URL;
-              window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
-            } else {
-              const basePath = window.location.pathname.endsWith('/')
-                ? window.location.pathname
-                : window.location.pathname.replace(/\/[^/]*$/, '/');
-              const resp = await fetch(`${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`, { cache: 'no-store' });
-              if (resp.ok) {
-                const parsed = await resp.json();
-                const candidate = (parsed?.url || '').trim().replace(/\/+$/, '');
+            // Consultar primero backend_url.json publicado por el servidor de la oficina SVR-MOTORVEN
+            const basePath = window.location.pathname.endsWith('/')
+              ? window.location.pathname
+              : window.location.pathname.replace(/\/[^/]*$/, '/');
+            const resp = await fetch(`${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`, { cache: 'no-store' });
+            let foundHealthy = false;
+            if (resp.ok) {
+              const parsed = await resp.json();
+              for (const rawCand of [parsed?.url, parsed?.fallbackTunnelUrl]) {
+                const candidate = (rawCand || '').trim().replace(/\/+$/, '');
                 if (candidate && isValidCustomRealtimeUrl(candidate, window.location.protocol, window.location.hostname)) {
-                  activeDiscoveredRealtimeUrl = candidate;
-                  window.localStorage.setItem('signum_custom_backend_url', candidate);
+                  const ctrl = new AbortController();
+                  const tid = setTimeout(() => ctrl.abort(), 2500);
+                  const healthResp = await fetch(`${candidate}/health`, { cache: 'no-store', signal: ctrl.signal }).catch(() => null);
+                  clearTimeout(tid);
+                  if (healthResp && healthResp.ok) {
+                    activeDiscoveredRealtimeUrl = candidate;
+                    window.localStorage.setItem('signum_custom_backend_url', candidate);
+                    foundHealthy = true;
+                    break;
+                  }
                 }
               }
             }
-          } catch (_) {
-            activeDiscoveredRealtimeUrl = OFFICIAL_BACKEND_URL;
-          }
+            if (!foundHealthy) {
+              const ctrl = new AbortController();
+              const tid = setTimeout(() => ctrl.abort(), 2500);
+              const healthResp = await fetch(`${OFFICIAL_BACKEND_URL}/health`, { cache: 'no-store', signal: ctrl.signal }).catch(() => null);
+              clearTimeout(tid);
+              if (healthResp && healthResp.ok) {
+                activeDiscoveredRealtimeUrl = OFFICIAL_BACKEND_URL;
+                window.localStorage.setItem('signum_custom_backend_url', OFFICIAL_BACKEND_URL);
+              }
+            }
+          } catch (_) {}
           connectSseStream();
           pollDeltaChanges();
         }
