@@ -140,6 +140,31 @@ export const soundFX = {
     } catch (e) {
       console.debug('Error reproduciendo sonido de confirmación:', e);
     }
+  },
+
+  // Campana de Caja / Nueva orden de preventa recibida en tiempo real
+  cashierOrderChime(enabled = true) {
+    if (!enabled) return;
+    try {
+      playTone({ freq: 659.25, type: 'sine', duration: 0.14, gain: 0.14, startTime: 0 });          // E5
+      playTone({ freq: 830.61, type: 'sine', duration: 0.16, gain: 0.16, startTime: 0.08 });       // G#5
+      playTone({ freq: 987.77, type: 'sine', duration: 0.18, gain: 0.18, startTime: 0.16 });       // B5
+      playTone({ freq: 1318.51, type: 'triangle', duration: 0.35, gain: 0.20, startTime: 0.24 });  // E6 (Campana final brillante)
+    } catch (e) {
+      console.debug('Error reproduciendo campana de orden en caja:', e);
+    }
+  },
+
+  // Alerta de liberación / orden expirada tras 72 horas
+  orderExpired(enabled = true) {
+    if (!enabled) return;
+    try {
+      playTone({ freq: 440.00, type: 'sine', duration: 0.12, gain: 0.10, startTime: 0 });          // A4
+      playTone({ freq: 369.99, type: 'sine', duration: 0.15, gain: 0.11, startTime: 0.08 });       // F#4
+      playTone({ freq: 329.63, type: 'sine', duration: 0.22, gain: 0.12, startTime: 0.16 });       // E4
+    } catch (e) {
+      console.debug('Error reproduciendo sonido de expiración:', e);
+    }
   }
 };
 

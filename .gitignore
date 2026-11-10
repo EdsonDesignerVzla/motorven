@@ -38,3 +38,4 @@ SERVIDOR_EMPRESA_26.229.220.202/
 
 # Test artifacts
 **/user_autotest_*
+*.bak

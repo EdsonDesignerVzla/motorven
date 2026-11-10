@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { formatBs, formatUsd } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -106,6 +106,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
   const handlePrint = () => {
     if (viewMode === 'CARTA') {
+      if (isNe) {
+        generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, autoPrint: true });
+        return;
+      }
       generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
       return;
     }
@@ -463,7 +467,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
               className="btn btn-sm"
               onClick={() => setViewMode('CARTA')}
               style={{
-                background: viewMode === 'CARTA' ? 'var(--motorven-navy-light)' : 'transparent',
+                background: viewMode === 'CARTA' ? (isNe ? 'var(--semaforo-verde)' : 'var(--motorven-navy-light)') : 'transparent',
                 color: viewMode === 'CARTA' ? '#fff' : 'var(--text-secondary)',
                 fontSize: '0.72rem',
                 padding: '4px 10px',
@@ -471,7 +475,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
               }}
             >
               <FileText size={13} style={{ marginRight: '4px' }} />
-              Factura SENIAT (Carta Vertical)
+              {isNe ? 'Nota de Entrega (Carta Vertical)' : 'Factura SENIAT (Carta Vertical)'}
             </button>
           </div>
 
@@ -632,21 +636,27 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => generateLetterInvoiceSeniatPDF({ sale, config, currentUser })}
+                onClick={() => {
+                  if (isNe) {
+                    generateDeliveryNotePDF({ sale, config: safeConfig, currentUser });
+                  } else {
+                    generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
+                  }
+                }}
                 style={{
                   fontSize: '0.75rem',
                   padding: '4px 10px',
-                  background: 'rgba(59, 130, 246, 0.15)',
-                  border: '1px solid rgba(59, 130, 246, 0.4)',
-                  color: '#60a5fa',
+                  background: isNe ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                  border: isNe ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(59, 130, 246, 0.4)',
+                  color: isNe ? 'var(--semaforo-verde)' : '#60a5fa',
                   fontWeight: 600,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '4px'
                 }}
-                title="Descargar PDF oficial SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos"
+                title={isNe ? "Descargar Nota de Entrega oficial tamaño Carta con desbordamiento y numeración" : "Descargar PDF oficial SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos"}
               >
-                <Download size={13} /> PDF Carta
+                <Download size={13} /> {isNe ? 'Nota de Entrega PDF' : 'PDF Carta'}
               </button>
             )}
             <button

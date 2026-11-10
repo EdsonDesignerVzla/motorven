@@ -127,11 +127,14 @@ import {
   getSupabaseUsers,
   saveSupabaseUser,
   deleteSupabaseOrder,
-  deleteSupabaseSale
+  deleteSupabaseSale,
+  checkAndExpireOverdueOrders
 } from './services/supabaseService';
+import soundFX from './services/soundService';
 import {
   initOfflineSyncListeners,
-  flushSyncQueue
+  flushSyncQueue,
+  getPendingSyncCount
 } from './services/offlineSyncService';
 import { formatBs } from './services/formatService';
 import { deleteStorageOrder, deleteStorageSale } from './services/storageService';
@@ -384,7 +387,16 @@ function MainApp() {
 
     const initApp = async () => {
       try {
-        
+        // CRÍTICO: Si hay operaciones pendientes en la cola local (cambios guardados mientras el servidor estuvo apagado),
+        // empujarlas al servidor central ANTES de leer las tablas para nunca sobrescribir cambios locales con datos viejos.
+        if (getPendingSyncCount() > 0) {
+          try {
+            await flushSyncQueue();
+          } catch (syncErr) {
+            console.warn('[InitApp] Cola pendiente se reintentará al reconectar servidor:', syncErr);
+          }
+        }
+
         // Obtener datos iniciales en paralelo sin esperas secuenciales
         const [
           cfg, prods, clis, ords, bnks, cdesks, cobs, facs, sups, sls, cash, purs, closures, usrs,
@@ -529,8 +541,16 @@ function MainApp() {
 
     initApp();
 
+    const handleQueueFlushed = () => {
+      if (isMounted) {
+        initApp();
+      }
+    };
+    window.addEventListener('signum_offline_queue_flushed', handleQueueFlushed);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('signum_offline_queue_flushed', handleQueueFlushed);
       if (cleanupOfflineListeners) cleanupOfflineListeners();
     };
   }, []);
@@ -862,6 +882,15 @@ function MainApp() {
           return;
         }
         if (item) {
+          if (action === 'CREATE') {
+            soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
+            if (notify?.info) {
+              notify.info(
+                `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${Number(item.totalUsd || 0).toFixed(2)})`,
+                { duration: 6000 }
+              );
+            }
+          }
           setOrdersState(prev => {
             const index = prev.findIndex(o => String(o.id) === String(key || item.id) || (item.numeroPedido && o.numeroPedido === item.numeroPedido));
             if (index >= 0) {
@@ -1005,6 +1034,39 @@ function MainApp() {
 
     return () => unsubscribe();
   }, []);
+
+  // Rutina de Expiración Automática de Órdenes Caducadas (>72h) y Liberación de Stock ATP (Sugerencia 2)
+  useEffect(() => {
+    let timerId = null;
+    const runSweep = async () => {
+      try {
+        const expired = await checkAndExpireOverdueOrders();
+        if (Array.isArray(expired) && expired.length > 0) {
+          soundFX.orderExpired(config?.sonidosNotificacion !== false);
+          if (notify?.warning) {
+            notify.warning(
+              `⏰ Se liberó la reserva de stock de ${expired.length} pedido(s) por superar las 72 horas de vigencia.`,
+              { duration: 7000 }
+            );
+          }
+          const freshOrders = await getSupabaseOrders();
+          if (freshOrders) setOrdersState(freshOrders);
+          const freshProds = await getSupabaseProducts();
+          if (freshProds) setProductsState(freshProds);
+        }
+      } catch (sweepErr) {
+        console.warn('[72h Sweep] Error en barrido de órdenes caducadas:', sweepErr);
+      }
+    };
+
+    const initialTimeout = setTimeout(runSweep, 6000);
+    timerId = setInterval(runSweep, 15 * 60 * 1000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      if (timerId) clearInterval(timerId);
+    };
+  }, [config, notify]);
 
   // Sincronizar currentUser de forma atómica con usersList y localStorage
   const handleUpdateCurrentUser = (updatedUser) => {
@@ -1534,8 +1596,8 @@ function MainApp() {
     try {
       const newSale = await processSupabaseSale(saleData);
       
-      // Refrescar estados dependientes desde la base de datos (incluyendo CxC / profitInvoices)
-      const [prods, cash, clis, sls, pInvs] = await Promise.all([
+      // Refrescar estados dependientes desde la base de datos
+      const [prods, cash, clis, sls, facs] = await Promise.all([
         getSupabaseProducts(),
         getSupabaseCashMovements(),
         getSupabaseClients(),
@@ -1547,7 +1609,9 @@ function MainApp() {
       setCashMovementsState(cash);
       setClientsState(clis);
       setSalesState(sls);
-      setProfitInvoices(pInvs);
+      if (Array.isArray(facs) && facs.length > 0) {
+        setProfitInvoices(facs);
+      }
 
       // Si la venta se originó de una Nota de Pedido de Preventa, eliminar la orden del pipeline y de la base de datos
       const originOrderId = saleData.pedidoOrigenId || saleData.pedidoOrigenDoc;
@@ -1658,7 +1722,8 @@ function MainApp() {
           return [enrichedSaved, ...prev];
         }
       });
-      notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado exitosamente`);
+      soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
+      notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado y enviado a Caja exitosamente`);
       return enrichedSaved;
     } catch (err) {
       console.error('Error guardando pedido:', err);
@@ -1925,6 +1990,7 @@ function MainApp() {
         onOpenAccountsPayableModal={() => setActiveTab('cxp')}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={handleToggleSidebar}
+        orders={orders}
       />
 
       <div className="main-wrapper">

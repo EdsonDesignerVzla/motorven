@@ -32,7 +32,8 @@ import {
   ExternalLink,
   Camera,
   Trash2,
-  Activity
+  Activity,
+  Bell
 } from 'lucide-react';
 import { formatBs, formatUsd } from '../services/formatService';
 import { canModifyRates, getRoleMeta, isMasterOrGerencia, isMasterAdmin, canAccessModule } from '../services/authService';
@@ -155,6 +156,7 @@ export default function HeaderBar({
               connectedClients: data.connectedClients || 1,
               lastChecked: new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             });
+            flushSyncQueue().catch(() => {});
           }
         } else {
           if (!isCancelled) {
@@ -660,6 +662,33 @@ export default function HeaderBar({
                     </button>
                   )}
                 </div>
+              )}
+
+              {/* 2.1b Alerta de Pedidos de Preventa Pendientes en Caja */}
+              {Array.isArray(orders) && orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate && onNavigate('ventas')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '4px 10px',
+                    borderRadius: '20px',
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(245, 158, 11, 0.25))',
+                    border: '1.5px solid #f59e0b',
+                    color: '#fbbf24',
+                    fontSize: '0.78rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    boxShadow: '0 0 10px rgba(245, 158, 11, 0.3)',
+                    animation: 'pulse 2.5s infinite'
+                  }}
+                  title={`${orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length} orden(es) de preventa esperando facturación en caja (Clic para ir a Ventas & POS)`}
+                >
+                  <Bell size={13} color="#f59e0b" />
+                  <span>{orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length} en Caja</span>
+                </button>
               )}
 
               {/* 2.2 Badge de Fecha */}
@@ -1760,33 +1789,38 @@ export default function HeaderBar({
             </div>
 
             {/* Estado actual */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '0.85rem 1rem',
-              borderRadius: '10px',
-              background: syncStatus.isOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-              border: `1px solid ${syncStatus.isOnline ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-              marginBottom: '1rem'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {syncStatus.isOnline ? <Cloud size={20} color="#34d399" /> : <CloudOff size={20} color="#f87171" />}
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: syncStatus.isOnline ? '#34d399' : '#f87171' }}>
-                    {syncStatus.isOnline ? 'Servidor Conectado en Tiempo Real' : 'Modo Desconectado (Offline)'}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {syncStatus.isOnline
-                      ? (serverHealth.ping !== null
-                          ? `Enlace activo con el servidor central (${serverHealth.ping} ms de respuesta)`
-                          : 'Sincronización activa con la base de datos central.')
-                      : `${syncStatus.pendingCount} operaciones guardadas en este dispositivo encoladas para sincronizar.`
-                    }
+            {(() => {
+              const isServerReachable = syncStatus.isOnline && serverHealth.status !== 'OFFLINE' && serverHealth.status !== 'ERROR';
+              return (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '10px',
+                  background: isServerReachable ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                  border: `1px solid ${isServerReachable ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.35)'}`,
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {isServerReachable ? <Cloud size={20} color="#34d399" /> : <CloudOff size={20} color="#fbbf24" />}
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: '0.9rem', color: isServerReachable ? '#34d399' : '#fbbf24' }}>
+                        {isServerReachable ? 'Servidor Conectado en Tiempo Real' : 'Servidor Sin Respuesta • Guardando en Cola Local'}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {isServerReachable
+                          ? (serverHealth.ping !== null
+                              ? `Enlace activo con el servidor central (${serverHealth.ping} ms de respuesta)`
+                              : 'Sincronización activa con la base de datos central.')
+                          : `Tus cambios están protegidos en este equipo (${syncStatus.pendingCount} pendientes) y se enviarán automáticamente al reconectar.`
+                        }
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Panel: Estado Real de la Sincronización */}
             <div style={{

@@ -382,6 +382,14 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
   isSyncing = false;
   notifySubscribers();
 
+  if (processedCount > 0 && typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('signum_offline_queue_flushed', {
+        detail: { processedCount, failedCount }
+      })
+    );
+  }
+
   console.log(`[OfflineSync] Proceso finalizado. Sincronizados: ${processedCount}, Fallidos/Pendientes: ${failedCount}`);
   return { success: failedCount === 0, processedCount, failedCount };
 };
@@ -397,7 +405,7 @@ export const initOfflineSyncListeners = () => {
     notifySubscribers();
     setTimeout(() => {
       flushSyncQueue();
-    }, 1000);
+    }, 500);
   };
 
   const handleOffline = () => {
@@ -405,19 +413,37 @@ export const initOfflineSyncListeners = () => {
     notifySubscribers();
   };
 
+  const handleFocusOrVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') {
+      return;
+    }
+    if (isNetworkOnline() && getPendingSyncCount() > 0 && !isSyncing) {
+      flushSyncQueue();
+    }
+  };
+
   window.addEventListener('online', handleOnline);
   window.addEventListener('offline', handleOffline);
+  window.addEventListener('focus', handleFocusOrVisibility);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
+  }
 
-  // Intervalo de latido periódico (cada 30 segundos si hay pendientes)
+  // Intervalo de latido periódico rápido (cada 8 segundos si hay pendientes tras reinicio de servidor)
   const intervalId = setInterval(() => {
     if (isNetworkOnline() && getPendingSyncCount() > 0 && !isSyncing) {
       flushSyncQueue();
     }
-  }, 30000);
+  }, 8000);
 
   return () => {
     window.removeEventListener('online', handleOnline);
     window.removeEventListener('offline', handleOffline);
+    window.removeEventListener('focus', handleFocusOrVisibility);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
+    }
     clearInterval(intervalId);
   };
 };
+

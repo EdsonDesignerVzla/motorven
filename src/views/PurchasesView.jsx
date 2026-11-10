@@ -24,9 +24,10 @@ import {
   CheckCircle2,
   XCircle,
   ExternalLink,
-  Users
+  Users,
+  Warehouse
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, getProductWarehouseStocks } from '../services/formatService';
 import {
   validateRif,
   generateVatRetentionVoucherNumber
@@ -78,6 +79,7 @@ export default function PurchasesView({
   const [tipoDoc, setTipoDoc] = useState('FACTURA');
   const [documentoAfectado, setDocumentoAfectado] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(products[0] || null);
+  const [almacenDestino, setAlmacenDestino] = useState('01'); // '01' (Almacén 01 - Fiscal) | '02' (Almacén 02 - Bóveda / N.Entrega)
   const [tipoAlicuota, setTipoAlicuota] = useState('GENERAL_16');
   const [cantidadRecibida, setCantidadRecibida] = useState(5);
   const [nuevoCostoUsd, setNuevoCostoUsd] = useState(products[0]?.costoUsd || 28);
@@ -337,18 +339,28 @@ export default function PurchasesView({
       retencionIslrUsd: parseFloat(retencionIslrCalculadaUsd.toFixed(2)),
       numeroComprobanteRetencionIva: voucherNum,
       numeroComprobanteRetencionIslr: voucherNum,
-      codigoConceptoIslr: '055',
+      almacen: almacenDestino,
+      almacenNombre: almacenDestino === '01' ? 'Almacén 01 (Fiscal / SENIAT)' : 'Almacén 02 (Central / Bóveda - Notas de Entrega)',
       receptor: currentUser?.nombre || 'Pedro Gómez'
     };
 
     if (onSaveProduct && selectedProduct) {
-      const updatedStock = tipoDoc === 'NOTA_CREDITO'
-        ? Math.max(0, selectedProduct.stock - parseInt(cantidadRecibida))
-        : selectedProduct.stock + parseInt(cantidadRecibida);
+      const wStocks = getProductWarehouseStocks(selectedProduct);
+      const qtyNum = parseInt(cantidadRecibida, 10) || 0;
+      const isNc = tipoDoc === 'NOTA_CREDITO';
+
+      const newStock01 = almacenDestino === '01'
+        ? (isNc ? Math.max(0, wStocks.stock01 - qtyNum) : wStocks.stock01 + qtyNum)
+        : wStocks.stock01;
+      const newStock02 = almacenDestino === '02'
+        ? (isNc ? Math.max(0, wStocks.stock02 - qtyNum) : wStocks.stock02 + qtyNum)
+        : wStocks.stock02;
 
       const updatedProd = {
         ...selectedProduct,
-        stock: updatedStock,
+        stock: newStock01 + newStock02,
+        stockAlmacen01: newStock01,
+        stockAlmacen02: newStock02,
         costoUsd: parseFloat(costoFinalConFlete.toFixed(2))
       };
       onSaveProduct(updatedProd);
@@ -399,6 +411,30 @@ export default function PurchasesView({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setActiveSubTab('registro_seniat');
+              setStatusFilter('TODOS');
+            }}
+            style={{
+              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              borderColor: '#10b981',
+              color: '#ffffff',
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.84rem',
+              boxShadow: '0 3px 10px rgba(16, 185, 129, 0.4)',
+              padding: '0.5rem 1.1rem'
+            }}
+            title="Ingresar nueva compra con factura del proveedor y cargarla directamente al inventario (Alm 01 / Alm 02)"
+          >
+            <Plus size={17} strokeWidth={2.5} />
+            Registrar Compra / Ingresar Mercancía
+          </button>
           <button
             className="btn btn-secondary"
             onClick={() => setShowReorderModal(true)}
@@ -662,16 +698,17 @@ export default function PurchasesView({
             alignItems: 'center',
             gap: '8px',
             padding: '0.65rem 1.15rem',
-            background: activeSubTab === 'registro_seniat' ? 'var(--motorven-navy)' : 'transparent',
-            color: activeSubTab === 'registro_seniat' ? '#ffffff' : 'var(--text-muted)',
-            border: 'none',
+            background: activeSubTab === 'registro_seniat' ? 'linear-gradient(135deg, #059669 0%, #047857 100%)' : 'rgba(16, 185, 129, 0.15)',
+            color: activeSubTab === 'registro_seniat' ? '#ffffff' : 'var(--motorven-emerald)',
+            border: activeSubTab === 'registro_seniat' ? 'none' : '1px solid rgba(16, 185, 129, 0.4)',
             borderRadius: '8px 8px 0 0',
-            fontWeight: 700,
+            fontWeight: 800,
             fontSize: '0.84rem',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            boxShadow: activeSubTab === 'registro_seniat' ? '0 2px 8px rgba(5, 150, 105, 0.4)' : 'none'
           }}
         >
-          <Plus size={16} /> Carga SENIAT & Retenciones
+          <Plus size={16} strokeWidth={2.5} /> + Cargar Mercancía / SENIAT
         </button>
       </div>
 
@@ -704,7 +741,33 @@ export default function PurchasesView({
           </div>
 
           {activeSubTab === 'facturas_profit' && (
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => {
+                  setActiveSubTab('registro_seniat');
+                  setStatusFilter('TODOS');
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  color: '#ffffff',
+                  fontWeight: 800,
+                  fontSize: '0.8rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 14px',
+                  height: '36px',
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 2px 8px rgba(16, 185, 129, 0.35)',
+                  border: 'none',
+                  borderRadius: '8px'
+                }}
+                title="Cargar factura del proveedor e ingresar mercancía al inventario (Alm 01 / Alm 02)"
+              >
+                <Plus size={15} strokeWidth={2.5} /> + Nueva Compra
+              </button>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700 }}>Estado:</span>
               <select
                 className="form-control filter-select"
@@ -1245,9 +1308,9 @@ export default function PurchasesView({
                   </div>
                 </div>
 
-                {/* Lubricante */}
+                {/* Lubricante, Almacén y Alícuota */}
                 <div className="form-row">
-                  <div className="form-group">
+                  <div className="form-group" style={{ flex: '1.4' }}>
                     <label className="form-label">Lubricante / Insumo</label>
                     <select
                       className="form-control"
@@ -1266,7 +1329,21 @@ export default function PurchasesView({
                     </select>
                   </div>
 
-                  <div className="form-group">
+                  <div className="form-group" style={{ flex: '1.2' }}>
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Warehouse size={13} color="var(--motorven-emerald)" /> Almacén Destino
+                    </label>
+                    <select
+                      className="form-control"
+                      value={almacenDestino}
+                      onChange={(e) => setAlmacenDestino(e.target.value)}
+                    >
+                      <option value="01">Almacén 01 (Facturas Fiscales)</option>
+                      <option value="02">Almacén 02 (Notas de Entrega)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group" style={{ flex: '1' }}>
                     <label className="form-label">Alícuota IVA</label>
                     <select
                       className="form-control"

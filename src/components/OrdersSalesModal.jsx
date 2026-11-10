@@ -54,6 +54,7 @@ import {
   generateOrdersPDF,
   generateSellerOrderPDF,
   generateLetterInvoiceSeniatPDF,
+  generateDeliveryNotePDF,
   generateSalesPOSPDF
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
@@ -437,26 +438,80 @@ export default function OrdersSalesModal({
     return Array.from(byName.values()).sort((a, b) => a.venDes.localeCompare(b.venDes));
   }, [profitSellers, safeProfitZones]);
 
+  // Clasificación SENIAT de los 5 tipos de Contribuyentes Ordinarios
+  const SENIAT_CONTRIBUTOR_TYPES = useMemo(() => [
+    {
+      code: 'J',
+      label: 'J - Personas Jurídicas',
+      shortLabel: 'Persona Jurídica',
+      description: 'Empresas privadas, sociedades anónimas (S.A.), compañías anónimas (C.A.) y sociedades de responsabilidad limitada (S.R.L.) que comercializan bienes o servicios gravados.'
+    },
+    {
+      code: 'V',
+      label: 'V - Personas Naturales Venezolanas',
+      shortLabel: 'Persona Natural Venezolana',
+      description: 'Ciudadanos venezolanos que actúan como firmas personales, profesionales independientes o comerciantes que superan el límite de ingresos para ser formales.'
+    },
+    {
+      code: 'E',
+      label: 'E - Personas Naturales Extranjeras',
+      shortLabel: 'Persona Natural Extranjera',
+      description: 'Ciudadanos extranjeros residenciados en el país que realizan actividades económicas independientes sujetas a IVA.'
+    },
+    {
+      code: 'G',
+      label: 'G - Entes Gubernamentales',
+      shortLabel: 'Ente Gubernamental',
+      description: 'Instituciones del Estado, alcaldías o ministerios que, a pesar de ser públicos, realizan actividades comerciales o adquieren bienes/servicios gravados.'
+    },
+    {
+      code: 'P',
+      label: 'P - Personas Jurídicas Extranjeras',
+      shortLabel: 'Persona Jurídica Extranjera',
+      description: 'Empresas de origen extranjero que operan o tienen base legal/sucursales en Venezuela.'
+    }
+  ], []);
+
+  const resolveClientContributorType = (client) => {
+    if (!client) return 'J';
+    const rawRif = String(client.rif || client.codigo || client.id || '').trim().toUpperCase();
+    const match = rawRif.match(/^([JVEGP])/);
+    if (match) return match[1];
+    const rawType = String(client.tipoPersona || client.tipoCliente || '').trim().toUpperCase();
+    if (['J', 'V', 'E', 'G', 'P'].includes(rawType)) return rawType;
+    const name = String(client.nombre || client.razonSocial || '').toUpperCase();
+    if (/(ALCALD|MINISTERIO|GOBERNACI|INSTITUTO|FUNDACI|CONCEJO|ENTE )/.test(name)) return 'G';
+    if (/(C\.A|S\.A|S\.R\.L|R\.L|INVERSIONES|DISTRIBUIDORA|CORPORACI|COMERCIALIZADORA|SERVICIOS|TRANSPORTE|LUBRICANTES|REPUESTOS|AUTO)/.test(name)) return 'J';
+    return 'V';
+  };
+
   // Formulario Nuevo Pedido
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clientSearchText, setClientSearchText] = useState('');
   const [clientTypeFilter, setClientTypeFilter] = useState('ALL');
-  const clientTypes = useMemo(() => {
-    const set = new Set();
-    safeClients.forEach(c => { if (c && c.tipoCliente) set.add(String(c.tipoCliente).trim()); });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  const clientContributorCounts = useMemo(() => {
+    const counts = { J: 0, V: 0, E: 0, G: 0, P: 0 };
+    safeClients.forEach(c => {
+      if (!c) return;
+      const code = resolveClientContributorType(c);
+      if (counts[code] !== undefined) counts[code] += 1;
+    });
+    return counts;
   }, [safeClients]);
+  const selectedContributorTypeMeta = useMemo(
+    () => SENIAT_CONTRIBUTOR_TYPES.find(t => t.code === clientTypeFilter) || null,
+    [SENIAT_CONTRIBUTOR_TYPES, clientTypeFilter]
+  );
   const filteredClients = useMemo(() => {
     const q = clientSearchText.trim().toLowerCase();
     return safeClients.filter(c => {
       if (!c) return false;
-      const selId = c.id || c.codigo;
-      if (selId && selId === selectedClientId) return true;
-      if (clientTypeFilter !== 'ALL' && String(c.tipoCliente || '').trim() !== clientTypeFilter) return false;
+      const contribCode = resolveClientContributorType(c);
+      if (clientTypeFilter !== 'ALL' && contribCode !== clientTypeFilter) return false;
       if (!q) return true;
       return [c.codigo, c.id, c.nombre, c.razonSocial, c.rif].some(v => v && String(v).toLowerCase().includes(q));
     });
-  }, [safeClients, clientSearchText, clientTypeFilter, selectedClientId]);
+  }, [safeClients, clientSearchText, clientTypeFilter]);
   const [modalidadVenta, setModalidadVenta] = useState('PREVENTA'); // 'PREVENTA' | 'OFICINA'
   const [selectedSeller, setSelectedSeller] = useState(currentUser?.nombre || 'Vendedor Directo');
   const [selectedZone, setSelectedZone] = useState('01');
@@ -1479,18 +1534,25 @@ export default function OrdersSalesModal({
   // Imprimir factura individual con correlativo secuencial
   const handlePrintIndividualInvoice = (inv) => {
     const correlativo = formatInvoiceCorrelativo(inv);
+    const isNe = inv.tipoDoc === 'NOTA_ENTREGA' || inv.tipo_doc === 'NOTA_ENTREGA' || String(inv.factNum || inv.numeroDoc || '').toUpperCase().startsWith('NE');
     const saleForPrint = {
       ...inv,
       numeroDoc: correlativo,
       nroFactura: correlativo,
+      tipoDoc: isNe ? 'NOTA_ENTREGA' : (inv.tipoDoc || 'FACTURA'),
       ...buildPrintableInvoice(inv)
     };
     try {
-      generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
-      notify.success(`Factura #${correlativo} enviada a impresión`);
+      if (isNe) {
+        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser });
+        notify.success(`Nota de Entrega #${correlativo} generada con éxito`);
+      } else {
+        generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
+        notify.success(`Factura #${correlativo} enviada a impresión`);
+      }
     } catch (err) {
-      console.error('Error imprimiendo factura:', err);
-      notify.error('Error al generar la impresión de la factura');
+      console.error('Error imprimiendo documento:', err);
+      notify.error('Error al generar la impresión del documento');
     }
   };
 
@@ -1906,25 +1968,49 @@ export default function OrdersSalesModal({
                         className="form-control"
                         value={clientTypeFilter}
                         onChange={(e) => setClientTypeFilter(e.target.value)}
-                        style={{ fontSize: '0.8rem', flex: '1 1 110px', minWidth: 0, boxSizing: 'border-box' }}
-                        title="Filtrar por tipo de cliente"
+                        style={{ fontSize: '0.8rem', flex: '1.2 1 160px', minWidth: 0, boxSizing: 'border-box' }}
+                        title="Filtrar por tipo de Contribuyente Ordinario SENIAT (J, V, E, G, P)"
                       >
-                        <option value="ALL">Todos los tipos</option>
-                        {clientTypes.map(t => (<option key={t} value={t}>{t}</option>))}
+                        <option value="ALL">Todos los tipos ({safeClients.length})</option>
+                        {SENIAT_CONTRIBUTOR_TYPES.map(t => (
+                          <option key={t.code} value={t.code} title={t.description}>
+                            {t.label} ({clientContributorCounts[t.code] || 0})
+                          </option>
+                        ))}
                       </select>
                     </div>
+                    {selectedContributorTypeMeta && (
+                      <div
+                        style={{
+                          fontSize: '0.7rem',
+                          lineHeight: 1.35,
+                          color: 'var(--text-secondary)',
+                          background: 'rgba(14, 165, 233, 0.08)',
+                          border: '1px solid rgba(14, 165, 233, 0.25)',
+                          borderRadius: '6px',
+                          padding: '5px 8px',
+                          marginBottom: '6px'
+                        }}
+                      >
+                        <strong style={{ color: 'var(--neon-cyan)' }}>• {selectedContributorTypeMeta.label}:</strong>{' '}
+                        {selectedContributorTypeMeta.description}
+                      </div>
+                    )}
                     <select
                       className="form-control"
                       value={selectedClientId}
                       onChange={(e) => setSelectedClientId(e.target.value)}
                       style={{ fontSize: '0.82rem', width: '100%' }}
                     >
-                      <option value="">-- Seleccionar Cliente Registrado --</option>
-                      {filteredClients.map(c => (
-                        <option key={c.id || c.codigo} value={c.id || c.codigo}>
-                          {c.codigo || c.id} • {c.nombre || c.razonSocial} ({c.rif}){c.tipoCliente ? ' · ' + c.tipoCliente : ''}
-                        </option>
-                      ))}
+                      <option value="">-- Seleccionar Cliente Registrado ({filteredClients.length}) --</option>
+                      {filteredClients.map(c => {
+                        const cType = resolveClientContributorType(c);
+                        return (
+                          <option key={c.id || c.codigo} value={c.id || c.codigo}>
+                            {c.codigo || c.id} • {c.nombre || c.razonSocial} ({c.rif}) · [{cType}]
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -3617,22 +3703,50 @@ export default function OrdersSalesModal({
                     </div>
 
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenInvoiceModalForOrder(selectedOrder)}
-                        className="btn btn-print-report"
-                        style={{
-                          background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontWeight: 800,
-                          boxShadow: '0 4px 14px rgba(0, 43, 122, 0.4)'
-                        }}
-                        title="Generar e imprimir Factura Fiscal Oficial (Formato Carta SENIAT con correlativo de 6 dígitos)"
-                      >
-                        <Printer size={16} color="#ffffff" /> 📄 Factura Fiscal (Carta)
-                      </button>
+                      {isOrderNotaEntrega(selectedOrder) ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clientMatch = safeClients.find(c => c.id === selectedOrder.clienteId || c.rif === selectedOrder.clienteRif);
+                            generateDeliveryNotePDF({
+                              order: selectedOrder,
+                              config,
+                              currentUser,
+                              client: clientMatch
+                            });
+                            notify.success(`Nota de Entrega descargada en tamaño Carta`);
+                          }}
+                          className="btn btn-print-report"
+                          style={{
+                            background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontWeight: 800,
+                            boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)'
+                          }}
+                          title="Descargar e imprimir Nota de Entrega oficial tamaño Carta (Almacén 02) con desbordamiento y numeración de páginas"
+                        >
+                          <Printer size={16} color="#ffffff" /> 📦 Nota de Entrega (Carta)
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenInvoiceModalForOrder(selectedOrder)}
+                          className="btn btn-print-report"
+                          style={{
+                            background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontWeight: 800,
+                            boxShadow: '0 4px 14px rgba(0, 43, 122, 0.4)'
+                          }}
+                          title="Generar e imprimir Factura Fiscal Oficial (Formato Carta SENIAT con correlativo de 6 dígitos)"
+                        >
+                          <Printer size={16} color="#ffffff" /> 📄 Factura Fiscal (Carta)
+                        </button>
+                      )}
 
                       <button
                         type="button"

@@ -1,7 +1,7 @@
 /**
  * SERVICIO PERMANENTE 24/7 - SERVIDOR EMPRESA SIGNUM MOTORVEN
- * Mantiene activo el servidor de base de datos local (puerto 54321) y el túnel
- * Cloudflare con auto-publicación en GitHub Pages y reconexión automática 24/7.
+ * Mantiene activo el servidor de base de datos central (puerto 54321) y el túnel
+ * oficial fijo https://api.signummotorven.com con reconexión automática 24/7.
  */
 import { spawn, execSync } from 'child_process';
 import path from 'path';
@@ -22,12 +22,16 @@ const serverScriptPath = isStandaloneDir
   : path.join(projectRoot, 'scripts/local-supabase/server.js');
 const cloudflaredCandidates = [
   path.join(__dirname, 'cloudflared.exe'),
+  path.join(projectRoot, 'SERVIDOR_EMPRESA_26.229.220.202/cloudflared.exe'),
   path.join(projectRoot, 'scripts/tunnel/cloudflared.exe'),
-  path.join(projectRoot, 'SERVIDOR_EMPRESA_26.229.220.202/cloudflared.exe')
+  'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe',
+  'C:\\Program Files\\cloudflared\\cloudflared.exe'
 ];
 
 const PORT = Number(process.env.SUPABASE_LOCAL_PORT || 54321);
-let activeTunnelUrl = null;
+const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
+const OFFICIAL_TUNNEL_TOKEN = 'eyJhIjoiMTg5ODZkNGMxYjI3YmZmZmI3ZWVhMGE1N2UwZTc4ZGEiLCJ0IjoiZTJkZWEyNDQtODNjYi00MzI1LTljYzAtZWUzNDc4NzE0YTc2IiwicyI6Ik1HTTNNamMzTm1RdFkyVmtNQzAwTWpOaUxUbGhNREl0WldRME5EWXpNalUyTURSaCJ9';
+
 let currentCfProcess = null;
 let consecutiveHealthFailures = 0;
 
@@ -54,128 +58,25 @@ function isPortOpen(port, host = '127.0.0.1') {
 async function ensureLocalDatabase() {
   const open = await isPortOpen(PORT);
   if (!open) {
-    console.log(`⚡ [1/2] Iniciando Servidor de Base de Datos Local en puerto ${PORT}...`);
+    console.log(`⚡ [1/2] Iniciando Base de Datos Central en puerto ${PORT}...`);
     const srv = spawn(process.execPath, [serverScriptPath], {
       cwd: path.dirname(serverScriptPath),
-      stdio: 'ignore',
-      detached: true,
-      windowsHide: true
+      stdio: 'inherit',
+      detached: false
     });
-    srv.unref();
+    srv.on('error', (err) => {
+      console.error('❌ Error iniciando server.js:', err.message);
+    });
     await new Promise(r => setTimeout(r, 2500));
-    console.log('✅ Base de datos local inicializada.');
+    console.log('✅ Base de datos central inicializada y cargada desde disco.');
   } else {
-    console.log(`✅ [1/2] Base de datos local activa en puerto ${PORT}.`);
+    console.log(`✅ [1/2] Base de datos central activa en puerto ${PORT}.`);
   }
 }
 
-function resolveGithubToken() {
-  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN.trim();
-  const cfgPaths = [
-    path.join(__dirname, '.tunnel_config.json'),
-    path.join(projectRoot, '.tunnel_config.json')
-  ];
-  for (const p of cfgPaths) {
-    if (fs.existsSync(p)) {
-      try {
-        const text = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '').trim();
-        const raw = JSON.parse(text);
-        if (raw?.githubToken) return String(raw.githubToken).trim();
-        if (raw?.tokenB64) return Buffer.from(String(raw.tokenB64), 'base64').toString('utf8').trim();
-      } catch (_) {}
-    }
-  }
-  try {
-    const out = execSync('git credential fill', {
-      input: 'protocol=https\nhost=github.com\n\n',
-      encoding: 'utf8',
-      timeout: 3000,
-      windowsHide: true
-    });
-    const m = out.match(/password=([^\r\n]+)/);
-    if (m && m[1]) return m[1].trim();
-  } catch (_) {}
-  return null;
-}
-
-function githubApiRequest(method, apiPath, token, bodyObj = null) {
-  return new Promise((resolve, reject) => {
-    const bodyStr = bodyObj ? JSON.stringify(bodyObj) : null;
-    const req = https.request({
-      hostname: 'api.github.com',
-      port: 443,
-      path: apiPath,
-      method,
-      headers: {
-        'User-Agent': 'Signum-Motorven-Server-Daemon',
-        'Accept': 'application/vnd.github+json',
-        'Authorization': `Bearer ${token}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-        ...(bodyStr ? {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(bodyStr)
-        } : {})
-      },
-      timeout: 10000
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode, data: data ? JSON.parse(data) : {} });
-        } catch (_) {
-          resolve({ status: res.statusCode, data: {} });
-        }
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy(new Error('GitHub API request timeout'));
-    });
-    if (bodyStr) req.write(bodyStr);
-    req.end();
-  });
-}
-
-async function publishBackendUrlToGithub(urlPayloadStr, tunnelUrl) {
-  const token = resolveGithubToken();
-  if (!token) {
-    console.warn('⚠️  Sin token GitHub para auto-publicar backend_url.json.');
-    return;
-  }
-
-  const contentB64 = Buffer.from(urlPayloadStr, 'utf8').toString('base64');
-  const targets = [
-    { repo: 'EdsonDesignerVzla/motorven', filePath: 'backend_url.json' },
-    { repo: 'EdsonDesignerVzla/motorvenarreglo', filePath: 'public/backend_url.json' },
-    { repo: 'EdsonDesignerVzla/motorvenarreglo', filePath: 'dist/backend_url.json' }
-  ];
-
-  for (const t of targets) {
-    try {
-      const apiPath = `/repos/${t.repo}/contents/${t.filePath}`;
-      const existing = await githubApiRequest('GET', apiPath, token);
-      const sha = existing?.data?.sha || undefined;
-      const putRes = await githubApiRequest('PUT', apiPath, token, {
-        message: `Auto-sync URL servidor empresa: ${tunnelUrl}`,
-        content: contentB64,
-        ...(sha ? { sha } : {})
-      });
-      if (putRes.status >= 200 && putRes.status < 300) {
-        console.log(`☁️  [GitHub Auto-Sync] Actualizado ${t.repo}/${t.filePath} -> ${tunnelUrl}`);
-      }
-    } catch (err) {
-      console.warn(`⚠️  Error auto-publicando en ${t.repo}/${t.filePath}:`, err.message);
-    }
-  }
-}
-
-const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
-
-function saveLocalBackendUrlFiles(tunnelUrl) {
+function saveLocalBackendUrlFiles() {
   const payloadObj = {
     url: OFFICIAL_BACKEND_URL,
-    fallbackTunnelUrl: tunnelUrl || undefined,
     lanUrls: [
       `http://192.168.0.6:${PORT}`,
       `http://26.45.7.149:${PORT}`,
@@ -222,12 +123,21 @@ function checkUrlHealth(urlStr) {
   });
 }
 
-function startPersistentTunnel() {
-  console.log(`🌐 [2/2] Iniciando túnel de alta velocidad con Cloudflare...`);
+function killStaleTryCloudflareTunnels() {
+  try {
+    // Detener cualquier instancia previa de cloudflared que pudiera estar corriendo con URLs temporales
+    execSync('taskkill /F /IM cloudflared.exe /T', { stdio: 'ignore', windowsHide: true });
+  } catch (_) {}
+}
+
+function startOfficialPersistentTunnel() {
+  console.log(`🌐 [2/2] Conectando Túnel Oficial Permanente (${OFFICIAL_BACKEND_URL})...`);
+
+  saveLocalBackendUrlFiles();
 
   const foundBin = cloudflaredCandidates.find(p => fs.existsSync(p)) || 'cloudflared';
 
-  const cf = spawn(foundBin, ['tunnel', '--url', `http://127.0.0.1:${PORT}`], {
+  const cf = spawn(foundBin, ['tunnel', 'run', '--token', OFFICIAL_TUNNEL_TOKEN], {
     cwd: __dirname,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
@@ -238,25 +148,15 @@ function startPersistentTunnel() {
 
   const onData = (chunk) => {
     const text = chunk.toString();
-    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-    if (match && !hasAnnounced) {
+    if ((text.includes('Registered tunnel connection') || text.includes('Connection') || text.includes('Updated to new configuration')) && !hasAnnounced) {
       hasAnnounced = true;
-      const url = match[0];
-      activeTunnelUrl = url;
       consecutiveHealthFailures = 0;
-
-      const urlPayload = saveLocalBackendUrlFiles(url);
-      publishBackendUrlToGithub(urlPayload, url).catch(() => {});
-
       console.log('\n============================================================');
-      console.log('🎉 ¡SERVIDOR DE LA EMPRESA CONECTADO EN TIEMPO REAL!');
-      console.log(`🌐 URL Pública Cloudflare:  ${url}`);
-      console.log(`📊 Base de Datos Local:    http://localhost:${PORT}`);
-      console.log('⚡ Compresión GZIP:        Activa');
-      console.log('☁️  Auto-Discovery GitHub:  Activo (sin escribir ?server=)');
-      console.log('============================================================');
-      console.log(`📲 Enlace directo para los 35 dispositivos:`);
-      console.log(`   https://edsondesignervzla.github.io/motorven/`);
+      console.log('🎉 ¡SERVIDOR CENTRAL CONECTADO EN TIEMPO REAL 24/7!');
+      console.log(`🌐 Dominio Oficial Web:     https://signummotorven.com`);
+      console.log(`🔒 Túnel Oficial API SSL:   ${OFFICIAL_BACKEND_URL}`);
+      console.log(`📊 Base de Datos Central:   http://localhost:${PORT}`);
+      console.log('💾 Persistencia en Disco:   Activa (a prueba de apagones)');
       console.log('============================================================\n');
     }
   };
@@ -266,29 +166,28 @@ function startPersistentTunnel() {
 
   cf.on('close', (code) => {
     if (currentCfProcess === cf) currentCfProcess = null;
-    activeTunnelUrl = null;
-    console.warn(`⚠️  Túnel desconectado (código ${code}). Reconectando automáticamente en 3 segundos...`);
-    setTimeout(startPersistentTunnel, 3000);
+    console.warn(`⚠️  Túnel oficial desconectado (código ${code}). Reconectando en 3 segundos...`);
+    setTimeout(startOfficialPersistentTunnel, 3000);
   });
 
   cf.on('error', (err) => {
-    console.error(`❌ Error en el proceso del túnel: ${err.message}. Reintentando en 5 segundos...`);
-    setTimeout(startPersistentTunnel, 5000);
+    console.error(`❌ Error en cloudflared: ${err.message}. Reintentando en 5 segundos...`);
+    setTimeout(startOfficialPersistentTunnel, 5000);
   });
 }
 
-// Watchdog cada 20s: garantiza que server.js esté vivo en puerto 54321 y el túnel responda /health
+// Watchdog cada 20s: garantiza que server.js esté vivo en puerto 54321 y el túnel oficial responda /health
 setInterval(async () => {
   try {
     await ensureLocalDatabase();
-    if (activeTunnelUrl && currentCfProcess) {
-      const ok = await checkUrlHealth(activeTunnelUrl);
+    if (currentCfProcess) {
+      const ok = await checkUrlHealth(OFFICIAL_BACKEND_URL);
       if (!ok) {
         consecutiveHealthFailures += 1;
-        console.warn(`⚠️  Health check del túnel falló (${consecutiveHealthFailures}/3): ${activeTunnelUrl}`);
-        if (consecutiveHealthFailures >= 3) {
+        console.warn(`⚠️  Verificando enlace del túnel (${consecutiveHealthFailures}/4): ${OFFICIAL_BACKEND_URL}`);
+        if (consecutiveHealthFailures >= 4) {
           consecutiveHealthFailures = 0;
-          console.warn('🔄 Reiniciando túnel Cloudflare para obtener conexión limpia...');
+          console.warn('🔄 Reiniciando conector de Cloudflare para restablecer enlace limpio...');
           try {
             currentCfProcess.kill();
           } catch (_) {}
@@ -302,10 +201,11 @@ setInterval(async () => {
 
 async function main() {
   console.log('============================================================');
-  console.log('🚀 INICIANDO SERVICIOS 24/7 DE SIGNUM MOTORVEN EN SERVIDOR');
+  console.log('🚀 INICIANDO SERVIDOR CENTRAL 24/7 - SIGNUM MOTORVEN');
   console.log('============================================================\n');
+  killStaleTryCloudflareTunnels();
   await ensureLocalDatabase();
-  startPersistentTunnel();
+  startOfficialPersistentTunnel();
 }
 
 main().catch(err => {
