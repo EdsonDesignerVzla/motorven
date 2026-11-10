@@ -4514,6 +4514,14 @@ export const saveSupabaseProfitInvoice = async (docData) => {
     cliente_nombre: docData.clienteNombre || docData.cliente_nombre || 'Cliente General',
     clienteRif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
     cliente_rif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
+    clienteDireccion: docData.clienteDireccion || docData.cliente_direccion || docData.direccion || '',
+    cliente_direccion: docData.clienteDireccion || docData.cliente_direccion || docData.direccion || '',
+    clienteTelefono: docData.clienteTelefono || docData.cliente_telefono || docData.telefono || '',
+    cliente_telefono: docData.clienteTelefono || docData.cliente_telefono || docData.telefono || '',
+    numeroControl: docData.numeroControl || docData.numero_control || '',
+    numero_control: docData.numeroControl || docData.numero_control || '',
+    isExento: Boolean(docData.isExento ?? docData.is_exento ?? isNotaEntrega),
+    is_exento: Boolean(docData.isExento ?? docData.is_exento ?? isNotaEntrega),
     vendedorId: docData.vendedorId || docData.vendedor_id || 'OF',
     vendedor_id: docData.vendedorId || docData.vendedor_id || 'OF',
     vendedorNombre: docData.vendedorNombre || docData.vendedor_nombre || '',
@@ -4607,7 +4615,7 @@ export const saveSupabaseProfitInvoice = async (docData) => {
         5000
       );
       if (rawNum) {
-        await withTimeout(
+        const updateRes = await withTimeout(
           supabase.from('sales').update({
             cliente_id: payload.clienteId,
             cliente_nombre: payload.clienteNombre,
@@ -4622,13 +4630,92 @@ export const saveSupabaseProfitInvoice = async (docData) => {
             fecha_vencimiento: payload.fechaVencimiento,
             vendedor: payload.vendedorNombre,
             estado: payload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
-          }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`),
+          }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
           4000
-        ).catch(() => {});
+        ).catch(() => null);
+
+        // Si la venta no existía en sales (ej. creación manual en modal de cobranzas), insertarla
+        if (!updateRes?.data || updateRes.data.length === 0) {
+          const saleRow = mapSaleToDb({
+            id: payload.id,
+            numeroDoc: rawNum,
+            numeroControl: payload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+            tipoDoc: payload.tipoDoc,
+            fecha: payload.fechaEmision,
+            fechaEmision: payload.fechaEmision,
+            fechaVencimiento: payload.fechaVencimiento,
+            diasCredito: payload.diasCredito,
+            clienteId: payload.clienteId,
+            clienteNombre: payload.clienteNombre,
+            clienteRif: payload.clienteRif,
+            clienteDireccion: payload.clienteDireccion,
+            clienteTelefono: payload.clienteTelefono,
+            vendedor: payload.vendedorNombre,
+            tasaDolar: payload.tasa,
+            condicionPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
+            subtotalUsd: payload.totBrutoUsd,
+            baseExentaUsd: payload.isExento ? payload.totBrutoUsd : 0,
+            baseGeneralUsd: payload.isExento ? 0 : payload.totBrutoUsd,
+            ivaGeneralUsd: payload.ivaUsd,
+            ivaUsd: payload.ivaUsd,
+            totalUsd: payload.totNetoUsd,
+            subtotalBs: payload.totBrutoBs,
+            baseExentaBs: payload.isExento ? payload.totBrutoBs : 0,
+            baseGeneralBs: payload.isExento ? 0 : payload.totBrutoBs,
+            ivaGeneralBs: payload.ivaBs,
+            ivaBs: payload.ivaBs,
+            totalBs: payload.totNetoBs,
+            saldoUsd: payload.saldoUsd,
+            saldoBs: payload.saldoBs,
+            estado: payload.saldoUsd <= 0.01 ? 'PAGADO' : 'PENDIENTE',
+            metodoPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'TRANSFERENCIA_BS',
+            items: payload.items || []
+          });
+          await withTimeout(
+            supabase.from('sales').upsert([saleRow], { onConflict: 'id' }),
+            4000
+          ).catch(() => {});
+        }
       }
     } catch (err) {
       console.warn('[saveSupabaseProfitInvoice] Guardado local activo:', err.message);
     }
+  }
+
+  // Asegurar persistencia local en signum_sales_v1
+  if (rawNum) {
+    try {
+      saveStorageSale({
+        id: payload.id,
+        numeroDoc: rawNum,
+        numeroControl: payload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+        tipoDoc: payload.tipoDoc,
+        fecha: payload.fechaEmision,
+        fechaEmision: payload.fechaEmision,
+        fechaVencimiento: payload.fechaVencimiento,
+        diasCredito: payload.diasCredito,
+        clienteId: payload.clienteId,
+        clienteNombre: payload.clienteNombre,
+        clienteRif: payload.clienteRif,
+        clienteDireccion: payload.clienteDireccion,
+        clienteTelefono: payload.clienteTelefono,
+        vendedor: payload.vendedorNombre,
+        tasaDolar: payload.tasa,
+        subtotalUsd: payload.totBrutoUsd,
+        ivaUsd: payload.ivaUsd,
+        totalUsd: payload.totNetoUsd,
+        subtotalBs: payload.totBrutoBs,
+        ivaBs: payload.ivaBs,
+        totalBs: payload.totNetoBs,
+        saldoUsd: payload.saldoUsd,
+        saldoBs: payload.saldoBs,
+        abonosUsd: payload.abonosUsd,
+        abonosBs: payload.abonosBs,
+        condicionPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
+        estado: payload.saldoUsd <= 0.01 ? 'PAGADO' : 'PENDIENTE',
+        items: payload.items || []
+      }, { skipStockAdjustment: true });
+    } catch (_) {}
   }
 
   return payload;

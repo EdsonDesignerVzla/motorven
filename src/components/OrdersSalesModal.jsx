@@ -61,6 +61,8 @@ import {
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
 import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
+import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
+import { saveSupabaseProfitInvoice } from '../services/supabaseService';
 
 const STATUS_CONFIG = {
   PENDIENTE: {
@@ -154,7 +156,8 @@ export default function OrdersSalesModal({
   currentUser,
   initialTab = 'nuevo',
   initialOrder = null,
-  onProceedToPOS
+  onProceedToPOS,
+  onSaveCxcDocument
 }) {
   const notify = useNotification();
   const [activeTab, setActiveTab] = useState(initialTab || 'nuevo'); // 'nuevo' | 'pipeline' | 'facturar' | 'imprimir' | 'metricas'
@@ -167,6 +170,16 @@ export default function OrdersSalesModal({
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceModalSale, setInvoiceModalSale] = useState(null);
   const [deliveryDocView, setDeliveryDocView] = useState('GUIA'); // 'GUIA' | 'FACTURA'
+
+  // Modal para Cargar Facturas y Notas de Entrega Editables a Cobranzas (CxC)
+  const [showCxcInvoiceModal, setShowCxcInvoiceModal] = useState(false);
+
+  const handleSaveCxcInvoice = async (docPayload) => {
+    if (onSaveCxcDocument) {
+      return await onSaveCxcDocument(docPayload);
+    }
+    return await saveSupabaseProfitInvoice(docPayload);
+  };
 
   // Estados para TAB 6: Listado de Facturas (List View)
   const [invoiceConditionFilter, setInvoiceConditionFilter] = useState('ALL'); // 'ALL' | 'CONTADO' | 'CREDITO'
@@ -1906,6 +1919,30 @@ export default function OrdersSalesModal({
           </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setShowCxcInvoiceModal(true)}
+              className="btn btn-sm"
+              style={{
+                background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                color: '#ffffff',
+                border: 'none',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontWeight: 800,
+                fontSize: '0.80rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 2px 10px rgba(16, 185, 129, 0.35)',
+                cursor: 'pointer'
+              }}
+              title="Cargar Factura o Nota de Entrega editable a Cobranzas (CxC) para cuadrar facturas de noviembre"
+            >
+              <Plus size={15} color="#ffffff" />
+              <span>+ Cargar a Cobranzas (CxC)</span>
+            </button>
+
             <button
               type="button"
               onClick={handleOpenCorrelativoModal}
@@ -4459,6 +4496,31 @@ export default function OrdersSalesModal({
                   </select>
                 </div>
 
+                {/* Botón Cargar a Cobranzas (CxC) */}
+                <button
+                  type="button"
+                  onClick={() => setShowCxcInvoiceModal(true)}
+                  className="btn btn-sm"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.80rem',
+                    padding: '7px 14px',
+                    background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                    color: '#ffffff',
+                    fontWeight: 800,
+                    borderRadius: '8px',
+                    border: 'none',
+                    boxShadow: '0 2px 10px rgba(16, 185, 129, 0.3)',
+                    cursor: 'pointer'
+                  }}
+                  title="Cargar Factura o Nota de Entrega editable a Cobranzas (CxC) para cuadrar facturas de noviembre"
+                >
+                  <Plus size={15} color="#ffffff" />
+                  <span>+ Nueva Factura / N.E. (Cobranzas)</span>
+                </button>
+
                 {/* Botón de Imprimir Reporte General */}
                 <button
                   type="button"
@@ -5987,6 +6049,17 @@ export default function OrdersSalesModal({
             }}
           />
         )}
+
+        {/* MODAL DE CARGA Y CUADRE A COBRANZAS (CxC) */}
+        <CxcInvoiceCreationModal
+          isOpen={showCxcInvoiceModal}
+          onClose={() => setShowCxcInvoiceModal(false)}
+          onSaveDocument={handleSaveCxcInvoice}
+          clients={clients}
+          sellers={profitSellers}
+          config={config}
+          suggestedCorrelativo={currentNextCorrelativo}
+        />
 
         </div>
     </section>

@@ -1828,15 +1828,14 @@ function MainApp() {
       return [saved, ...list];
     });
     setSalesState(prev => {
-      if (!Array.isArray(prev) || prev.length === 0) return prev;
-      const idx = prev.findIndex(s =>
+      const list = Array.isArray(prev) ? [...prev] : [];
+      const idx = list.findIndex(s =>
         String(s.id) === String(saved.id) ||
         String(s.numeroDoc ?? s.factNum ?? '') === String(saved.factNum)
       );
       if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = {
-          ...next[idx],
+        list[idx] = {
+          ...list[idx],
           ...saved,
           numeroDoc: saved.factNum,
           totalUsd: saved.totNetoUsd,
@@ -1846,9 +1845,40 @@ function MainApp() {
           abonosUsd: saved.abonosUsd,
           abonosBs: saved.abonosBs
         };
-        return next;
+        return list;
       }
-      return prev;
+      // Si es un documento nuevo para cuadre de noviembre, agregarlo a la lista de ventas
+      const newSaleItem = {
+        id: saved.id,
+        numeroDoc: saved.factNum,
+        numeroControl: saved.numeroControl || `00-${String(saved.factNum).replace(/\D/g, '').padStart(6, '0')}`,
+        tipoDoc: saved.tipoDoc,
+        fecha: saved.fechaEmision,
+        fechaEmision: saved.fechaEmision,
+        fechaVencimiento: saved.fechaVencimiento,
+        diasCredito: saved.diasCredito,
+        clienteId: saved.clienteId,
+        clienteNombre: saved.clienteNombre,
+        clienteRif: saved.clienteRif,
+        clienteDireccion: saved.clienteDireccion,
+        clienteTelefono: saved.clienteTelefono,
+        vendedor: saved.vendedorNombre,
+        tasaDolar: saved.tasa,
+        subtotalUsd: saved.totBrutoUsd,
+        ivaUsd: saved.ivaUsd,
+        totalUsd: saved.totNetoUsd,
+        subtotalBs: saved.totBrutoBs,
+        ivaBs: saved.ivaBs,
+        totalBs: saved.totNetoBs,
+        saldoUsd: saved.saldoUsd,
+        saldoBs: saved.saldoBs,
+        abonosUsd: saved.abonosUsd,
+        abonosBs: saved.abonosBs,
+        condicionPago: Number(saved.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
+        estado: Number(saved.saldoUsd || 0) <= 0.01 ? 'PAGADO' : 'PENDIENTE',
+        items: saved.items || []
+      };
+      return [newSaleItem, ...list];
     });
     return saved;
   };
@@ -2098,6 +2128,7 @@ function MainApp() {
               initialTab={ordersSalesModalTab}
               initialOrder={ordersSalesModalOrder}
               onProceedToPOS={handleProceedToInvoiceFromOrder}
+              onSaveCxcDocument={handleSaveCxcDocument}
             />
           )}
 
