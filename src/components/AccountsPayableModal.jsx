@@ -236,13 +236,15 @@ export default function AccountsPayableModal({
     if (Array.isArray(cashDesks) && cashDesks.length > 0) {
       cashDesks.forEach(d => {
         if (!d) return;
-        const key = `CAJA-${d.id || d.coCaja || Math.random()}`;
-        const label = `${d.nombre || d.descrip || 'Caja Efectivo'} • Saldo: ${formatUsd(d.saldoUsd || 0)}`;
+        const code = d.coCaja || d.co_caja || d.id || 'CAJA';
+        const desc = d.descripcion || d.desCaja || d.des_caja || d.nombre || d.descrip || 'Caja Efectivo';
+        const key = `CAJA-${d.id || code}`;
+        const label = `[${code} • ${d.moneda || 'USD'}] ${desc} • Saldo: ${formatUsd(d.saldoUsd || 0)}`;
         list.push({
           key,
-          id: d.id || d.coCaja,
-          rawId: d.id || d.coCaja,
-          nombre: d.nombre || d.descrip || 'Caja Operativa',
+          id: d.id || code,
+          rawId: d.id || code,
+          nombre: `${code} - ${desc}`,
           label,
           accountType: 'CAJA',
           kind: 'CAJA',

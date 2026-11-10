@@ -93,6 +93,7 @@ import {
   updateSupabaseProfitBankAccount,
   getSupabaseProfitCashDesks,
   updateSupabaseProfitCashDesk,
+  deleteSupabaseProfitCashDesk,
   getSupabaseProfitCollections,
   saveSupabaseProfitCollection,
   getSupabaseProfitInvoices,
@@ -2448,6 +2449,11 @@ function MainApp() {
               onAddMovement={handleAddCashMovement}
               onUpdateCashDesk={async (desk) => {
                 await updateSupabaseProfitCashDesk(desk);
+                const fresh = await getSupabaseProfitCashDesks();
+                if (fresh) setProfitCashDesks(fresh);
+              }}
+              onDeleteCashDesk={async (deskId) => {
+                await deleteSupabaseProfitCashDesk(deskId);
                 const fresh = await getSupabaseProfitCashDesks();
                 if (fresh) setProfitCashDesks(fresh);
               }}

@@ -3,6 +3,9 @@ import {
   Wallet,
   Landmark,
   PlusCircle,
+  Plus,
+  Edit2,
+  Trash2,
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
@@ -23,6 +26,21 @@ import { formatUsd, formatBs } from '../services/formatService';
 import { generateCashflowPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
+// Calcula el siguiente código correlativo CAJA-XX comenzando desde CAJA-01
+const getNextCajaCorrelative = (desks = []) => {
+  let maxNum = 0;
+  (desks || []).forEach(d => {
+    const code = String(d?.coCaja || d?.co_caja || d?.id || '').toUpperCase();
+    const match = code.match(/(\d+)/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  const nextNum = Math.max(1, maxNum + 1);
+  return `CAJA-${String(nextNum).padStart(2, '0')}`;
+};
+
 export default function CashBankModal({
   isOpen,
   onClose,
@@ -31,6 +49,7 @@ export default function CashBankModal({
   cashMovements = [],
   onAddMovement,
   onUpdateCashDesk,
+  onDeleteCashDesk,
   config = {},
   currentUser
 }) {
@@ -48,6 +67,19 @@ export default function CashBankModal({
   const [movMontoBs, setMovMontoBs] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Estado para crear / editar caja registradora
+  const [showCajaForm, setShowCajaForm] = useState(false);
+  const [editingCajaId, setEditingCajaId] = useState(null);
+  const [cajaForm, setCajaForm] = useState({
+    coCaja: 'CAJA-07',
+    descripcion: '',
+    moneda: 'USD',
+    responsable: 'Administración',
+    activa: true,
+    saldoUsd: '0',
+    saldoBs: '0'
+  });
 
   // Estado para arqueo interactivo
   const [denomCounts, setDenomCounts] = useState({
@@ -188,6 +220,109 @@ export default function CashBankModal({
       notify.error('Error al registrar movimiento: ' + (err.message || 'Error desconocido'));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Abrir formulario para crear nueva caja con correlativo automático CAJA-XX
+  const handleOpenCreateCaja = () => {
+    const nextCode = getNextCajaCorrelative(cashDesks);
+    setEditingCajaId(null);
+    setCajaForm({
+      coCaja: nextCode,
+      descripcion: '',
+      moneda: 'USD',
+      responsable: 'Administración',
+      activa: true,
+      saldoUsd: '0',
+      saldoBs: '0'
+    });
+    setShowCajaForm(true);
+    setShowNewMovForm(false);
+  };
+
+  // Abrir formulario para editar una caja existente
+  const handleOpenEditCaja = (desk) => {
+    if (!desk) return;
+    setEditingCajaId(desk.id);
+    setCajaForm({
+      coCaja: desk.coCaja || desk.co_caja || 'CAJA-01',
+      descripcion: desk.descripcion || desk.desCaja || '',
+      moneda: desk.moneda || 'USD',
+      responsable: desk.responsable || 'Administración',
+      activa: desk.activa !== false,
+      saldoUsd: String(Number(desk.saldoUsd ?? desk.saldo_usd ?? 0)),
+      saldoBs: String(Number(desk.saldoBs ?? desk.saldo_bs ?? 0))
+    });
+    setShowCajaForm(true);
+    setShowNewMovForm(false);
+  };
+
+  // Guardar caja nueva o editada
+  const handleSaveCaja = async (e) => {
+    e.preventDefault();
+    const cleanCode = String(cajaForm.coCaja || '').trim().toUpperCase() || getNextCajaCorrelative(cashDesks);
+    const cleanDesc = String(cajaForm.descripcion || '').trim();
+    if (!cleanDesc) {
+      notify.warning('Por favor ingrese el nombre o descripción de la caja');
+      return;
+    }
+
+    const parsedUsd = Math.max(0, parseFloat(cajaForm.saldoUsd) || 0);
+    const parsedBs = Math.max(0, parseFloat(cajaForm.saldoBs) || 0);
+
+    try {
+      setIsSubmitting(true);
+      const id = editingCajaId || cleanCode.toLowerCase();
+      const payload = {
+        id,
+        coCaja: cleanCode,
+        co_caja: cleanCode,
+        descripcion: cleanDesc,
+        desCaja: cleanDesc,
+        des_caja: cleanDesc,
+        moneda: cajaForm.moneda || 'USD',
+        responsable: String(cajaForm.responsable || 'Administración').trim() || 'Administración',
+        activa: Boolean(cajaForm.activa),
+        saldoUsd: parsedUsd,
+        saldo_usd: parsedUsd,
+        saldoBs: parsedBs,
+        saldo_bs: parsedBs
+      };
+
+      if (onUpdateCashDesk) {
+        await onUpdateCashDesk(payload);
+      }
+
+      setShowCajaForm(false);
+      setEditingCajaId(null);
+      notify.success(
+        editingCajaId
+          ? `Caja ${cleanCode} (${cleanDesc}) actualizada exitosamente`
+          : `Nueva caja ${cleanCode} (${cleanDesc}) creada exitosamente`
+      );
+    } catch (err) {
+      console.error(err);
+      notify.error('Error al guardar la caja: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Eliminar caja registradora
+  const handleDeleteCaja = async (desk) => {
+    if (!desk) return;
+    const code = desk.coCaja || desk.co_caja || desk.id;
+    if (!window.confirm(`¿Está seguro de eliminar la caja ${code} — "${desk.descripcion}"?`)) {
+      return;
+    }
+    try {
+      if (onDeleteCashDesk) {
+        await onDeleteCashDesk(desk.id || code);
+      }
+      notify.info(`Caja ${code} eliminada del catálogo.`);
+    } catch (err) {
+      console.error(err);
+      notify.error('No se pudo eliminar la caja: ' + (err.message || 'Error desconocido'));
     }
   };
 
@@ -435,19 +570,243 @@ export default function CashBankModal({
           {/* 1. PESTAÑA: CAJAS REGISTRADORAS */}
           {activeTab === 'cajas' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                 <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  Cajas de custodia, caja chica y mostradores sincronizados con Supabase.
+                  Catálogo oficial de Cajas Operativas (Efectivo $, Efectivo Bs, Zelle, USDT Binance, USDC Kontigo App) sincronizado con Supabase.
                 </span>
-                <button
-                  onClick={() => setShowNewMovForm(!showNewMovForm)}
-                  className="btn btn-primary"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.85rem' }}
-                >
-                  <PlusCircle size={16} />
-                  <span>{showNewMovForm ? 'Cancelar Movimiento' : 'Nuevo Movimiento de Caja'}</span>
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (showCajaForm && !editingCajaId) {
+                        setShowCajaForm(false);
+                      } else {
+                        handleOpenCreateCaja();
+                      }
+                    }}
+                    className="btn btn-primary"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.85rem',
+                      background: 'linear-gradient(135deg, #059669, #10b981)',
+                      border: 'none',
+                      color: '#fff'
+                    }}
+                  >
+                    <Plus size={16} />
+                    <span>{showCajaForm && !editingCajaId ? 'Cancelar Nueva Caja' : 'Crear Nueva Caja'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewMovForm(!showNewMovForm);
+                      if (!showNewMovForm) setShowCajaForm(false);
+                    }}
+                    className="btn btn-primary"
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+                  >
+                    <PlusCircle size={16} />
+                    <span>{showNewMovForm ? 'Cancelar Movimiento' : 'Nuevo Movimiento de Caja'}</span>
+                  </button>
+                </div>
               </div>
+
+              {/* FORMULARIO PARA CREAR O EDITAR CAJA REGISTRADORA */}
+              {showCajaForm && (
+                <div style={{
+                  background: 'var(--bg-surface)',
+                  padding: '1.35rem',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  marginBottom: '1.5rem',
+                  boxShadow: 'var(--shadow-card)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Wallet size={18} color="#10b981" />
+                      {editingCajaId ? `Editar Caja Registradora (${cajaForm.coCaja})` : `Crear Nueva Caja Operativa (Correlativo Sugerido: ${cajaForm.coCaja})`}
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCajaForm(false);
+                        setEditingCajaId(null);
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveCaja}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Código (Correlativo)
+                        </label>
+                        <input
+                          type="text"
+                          className="input-modern"
+                          placeholder="Ej: CAJA-07"
+                          value={cajaForm.coCaja}
+                          onChange={(e) => setCajaForm(prev => ({ ...prev, coCaja: e.target.value.toUpperCase() }))}
+                          style={{ width: '100%', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                          required
+                        />
+                      </div>
+
+                      <div style={{ gridColumn: 'span 2' }}>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Nombre de la Caja
+                        </label>
+                        <input
+                          type="text"
+                          className="input-modern"
+                          placeholder="Ej: Caja Efectivo $ (Valencia), Caja Zelle, Caja USDT (Binance)..."
+                          value={cajaForm.descripcion}
+                          onChange={(e) => setCajaForm(prev => ({ ...prev, descripcion: e.target.value }))}
+                          style={{ width: '100%' }}
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Moneda
+                        </label>
+                        <select
+                          className="filter-select"
+                          value={cajaForm.moneda}
+                          onChange={(e) => setCajaForm(prev => ({ ...prev, moneda: e.target.value }))}
+                          style={{ width: '100%' }}
+                        >
+                          <option value="USD">$ — Dólares (USD)</option>
+                          <option value="BS">Bs. — Bolívares (VES)</option>
+                          <option value="USDT">USDT — Binance / Cripto</option>
+                          <option value="USDC">USDC — Kontigo App / Digital</option>
+                          <option value="USD/BS">USD / Bs. — Bimonetaria</option>
+                          <option value="EUR">€ — Euros (EUR)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Responsable
+                        </label>
+                        <input
+                          type="text"
+                          list="caja-responsables-list"
+                          className="input-modern"
+                          placeholder="Ej: Administración, Gerencia..."
+                          value={cajaForm.responsable}
+                          onChange={(e) => setCajaForm(prev => ({ ...prev, responsable: e.target.value }))}
+                          style={{ width: '100%' }}
+                        />
+                        <datalist id="caja-responsables-list">
+                          <option value="Administración" />
+                          <option value="Gerencia" />
+                          <option value="Cajero Principal" />
+                          <option value="Tesorería" />
+                        </datalist>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Estado
+                        </label>
+                        <select
+                          className="filter-select"
+                          value={cajaForm.activa ? 'ACTIVA' : 'INACTIVA'}
+                          onChange={(e) => setCajaForm(prev => ({ ...prev, activa: e.target.value === 'ACTIVA' }))}
+                          style={{ width: '100%' }}
+                        >
+                          <option value="ACTIVA">● Activa</option>
+                          <option value="INACTIVA">○ Inactiva</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Saldo Registrado (USD $)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="input-modern"
+                          placeholder="0.00"
+                          value={cajaForm.saldoUsd}
+                          onChange={(e) => {
+                            const valUsd = e.target.value;
+                            const numUsd = parseFloat(valUsd) || 0;
+                            setCajaForm(prev => ({
+                              ...prev,
+                              saldoUsd: valUsd,
+                              saldoBs: numUsd > 0 ? (numUsd * tasaBcv).toFixed(2) : prev.saldoBs
+                            }));
+                          }}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Saldo Registrado (Bs.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="input-modern"
+                          placeholder="0.00"
+                          value={cajaForm.saldoBs}
+                          onChange={(e) => {
+                            const valBs = e.target.value;
+                            const numBs = parseFloat(valBs) || 0;
+                            setCajaForm(prev => ({
+                              ...prev,
+                              saldoBs: valBs,
+                              saldoUsd: prev.moneda === 'BS' && tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : prev.saldoUsd
+                            }));
+                          }}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCajaForm(false);
+                          setEditingCajaId(null);
+                        }}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.5rem 1rem' }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="btn btn-primary"
+                        style={{
+                          padding: '0.5rem 1.35rem',
+                          background: 'linear-gradient(135deg, #059669, #10b981)',
+                          border: 'none',
+                          color: '#fff'
+                        }}
+                      >
+                        {isSubmitting ? 'Guardando...' : (editingCajaId ? 'Guardar Cambios de Caja' : 'Crear Caja Registradora')}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
 
               {/* FORMULARIO DE NUEVO MOVIMIENTO */}
               {showNewMovForm && (
@@ -568,91 +927,249 @@ export default function CashBankModal({
                 </div>
               )}
 
-              {/* GRILLA DE CAJAS */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
-                {cashDesks.map(desk => (
-                  <div
-                    key={desk.id}
-                    style={{
-                      background: 'var(--bg-card-glass)',
-                      border: '1px solid var(--border-glass)',
-                      borderRadius: '14px',
-                      padding: '1.25rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      boxShadow: 'var(--shadow-card)'
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                        <div>
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '0.2rem 0.5rem',
-                            borderRadius: '6px',
-                            background: 'rgba(0,43,122,0.1)',
-                            color: 'var(--brand-blue)',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                            marginBottom: '0.35rem'
-                          }}>
-                            {desk.coCaja || desk.co_caja}
-                          </span>
-                          <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {/* TABLA OFICIAL DE CAJAS OPERATIVAS DEL SISTEMA */}
+              <div style={{
+                overflowX: 'auto',
+                borderRadius: '12px',
+                border: '1px solid var(--border-glass)',
+                marginBottom: '1.5rem',
+                background: 'var(--bg-card-glass)'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.87rem' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Código</th>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Nombre de la Caja</th>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Responsable</th>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Estado</th>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo Registrado</th>
+                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cashDesks.map((desk, idx) => {
+                      const code = desk.coCaja || desk.co_caja || `CAJA-0${idx + 1}`;
+                      const isActiva = desk.activa !== false;
+                      const monedaDisplay = desk.moneda === 'BS' ? 'Bs.' : (desk.moneda === 'USD' ? '$ (USD)' : desk.moneda);
+                      const saldoUsd = Number(desk.saldoUsd ?? desk.saldo_usd ?? 0);
+                      const saldoBs = Number(desk.saldoBs ?? desk.saldo_bs ?? 0);
+
+                      return (
+                        <tr
+                          key={desk.id || code}
+                          style={{
+                            borderBottom: '1px solid var(--border-glass)',
+                            background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'
+                          }}
+                        >
+                          <td style={{ padding: '0.75rem 1rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
+                            {code}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                             {desk.descripcion}
-                          </h3>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>
+                            <span style={{
+                              padding: '0.2rem 0.55rem',
+                              borderRadius: '6px',
+                              fontSize: '0.76rem',
+                              background: desk.moneda === 'BS' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(2, 132, 199, 0.14)',
+                              color: desk.moneda === 'BS' ? '#d97706' : 'var(--brand-blue)'
+                            }}>
+                              {monedaDisplay}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                            {desk.responsable || 'Administración'}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '20px',
+                              background: isActiva ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.15)',
+                              color: isActiva ? '#059669' : 'var(--text-muted)',
+                              fontSize: '0.75rem',
+                              fontWeight: 700
+                            }}>
+                              ● {isActiva ? 'Activa' : 'Inactiva'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                            <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {desk.moneda === 'BS' ? formatBs(saldoBs) : formatUsd(saldoUsd)}
+                            </div>
+                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                              {desk.moneda === 'BS' ? formatUsd(saldoUsd) : formatBs(saldoBs)}
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDeskId(desk.id);
+                                  setShowNewMovForm(true);
+                                  setShowCajaForm(false);
+                                }}
+                                className="btn btn-secondary"
+                                style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', borderRadius: '6px' }}
+                                title="Registrar ingreso o egreso en esta caja"
+                              >
+                                <PlusCircle size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditCaja(desk)}
+                                className="btn"
+                                style={{
+                                  padding: '0.3rem 0.55rem',
+                                  fontSize: '0.75rem',
+                                  borderRadius: '6px',
+                                  background: 'rgba(217, 119, 6, 0.15)',
+                                  color: '#d97706',
+                                  border: '1px solid rgba(217, 119, 6, 0.3)'
+                                }}
+                                title="Editar datos o saldo de la caja"
+                              >
+                                <Edit2 size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCaja(desk)}
+                                className="btn"
+                                style={{
+                                  padding: '0.3rem 0.55rem',
+                                  fontSize: '0.75rem',
+                                  borderRadius: '6px',
+                                  background: 'rgba(239, 68, 68, 0.12)',
+                                  color: '#ef4444',
+                                  border: '1px solid rgba(239, 68, 68, 0.25)'
+                                }}
+                                title="Eliminar caja"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* GRILLA DE TARJETAS DE CAJAS */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: '1.25rem' }}>
+                {cashDesks.map(desk => {
+                  const isActiva = desk.activa !== false;
+                  return (
+                    <div
+                      key={desk.id}
+                      style={{
+                        background: 'var(--bg-card-glass)',
+                        border: '1px solid var(--border-glass)',
+                        borderRadius: '14px',
+                        padding: '1.25rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        boxShadow: 'var(--shadow-card)'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                          <div>
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '0.2rem 0.5rem',
+                              borderRadius: '6px',
+                              background: 'rgba(0,43,122,0.1)',
+                              color: 'var(--brand-blue)',
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              marginBottom: '0.35rem',
+                              fontFamily: 'var(--font-code)'
+                            }}>
+                              {desk.coCaja || desk.co_caja}
+                            </span>
+                            <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {desk.descripcion}
+                            </h3>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '20px',
+                              background: isActiva ? 'rgba(16, 185, 129, 0.1)' : 'rgba(148, 163, 184, 0.15)',
+                              color: isActiva ? '#059669' : 'var(--text-muted)',
+                              fontSize: '0.75rem',
+                              fontWeight: 600
+                            }}>
+                              <CheckCircle2 size={12} /> {isActiva ? 'Activa' : 'Inactiva'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCaja(desk)}
+                              style={{
+                                background: 'rgba(217, 119, 6, 0.12)',
+                                border: '1px solid rgba(217, 119, 6, 0.25)',
+                                color: '#d97706',
+                                borderRadius: '6px',
+                                padding: '0.25rem 0.4rem',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center'
+                              }}
+                              title="Editar Caja"
+                            >
+                              <Edit2 size={12} />
+                            </button>
+                          </div>
                         </div>
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                          padding: '0.2rem 0.6rem',
-                          borderRadius: '20px',
-                          background: 'rgba(16, 185, 129, 0.1)',
-                          color: '#059669',
-                          fontSize: '0.75rem',
-                          fontWeight: 600
+
+                        <div style={{
+                          background: 'var(--bg-surface)',
+                          padding: '1rem',
+                          borderRadius: '10px',
+                          marginBottom: '1rem'
                         }}>
-                          <CheckCircle2 size={12} /> Activa
-                        </span>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible USD:</span>
+                            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente Bs:</span>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
+                            </span>
+                          </div>
+                        </div>
                       </div>
 
                       <div style={{
-                        background: 'var(--bg-surface)',
-                        padding: '1rem',
-                        borderRadius: '10px',
-                        marginBottom: '1rem'
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        borderTop: '1px solid var(--border-glass)',
+                        paddingTop: '0.75rem',
+                        fontSize: '0.78rem',
+                        color: 'var(--text-muted)'
                       }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible USD:</span>
-                          <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                            {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente Bs:</span>
-                          <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
-                          </span>
-                        </div>
+                        <span>Responsable: <strong>{desk.responsable || 'Administración'}</strong></span>
+                        <span>Moneda: <strong>{desk.moneda || 'USD'}</strong></span>
                       </div>
                     </div>
-
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      borderTop: '1px solid var(--border-glass)',
-                      paddingTop: '0.75rem',
-                      fontSize: '0.78rem',
-                      color: 'var(--text-muted)'
-                    }}>
-                      <span>Responsable: <strong>{desk.responsable || 'Caja Central'}</strong></span>
-                      <span>Moneda: <strong>{desk.moneda || 'USD/BS'}</strong></span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

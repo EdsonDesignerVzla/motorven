@@ -174,15 +174,17 @@ export function AccountsReceivableModal({
         const list = [];
         desksSource.forEach((c, idx) => {
             const id = c.id || c.co_caja || c.coCaja || `caja-${idx}`;
+            const code = c.coCaja || c.co_caja || id;
+            const desc = c.descripcion || c.desCaja || c.des_caja || c.nombre || c.descrip || `Caja ${code}`;
             list.push({
                 key: `CAJA:${id}`,
                 accountType: 'CAJA',
                 id,
-                nombre: c.nombre || c.descrip || `Caja ${id}`,
+                nombre: desc,
                 moneda: c.moneda || 'USD',
                 saldoUsd: Number(c.saldoUsd || c.saldo_usd || 0),
                 saldoBs: Number(c.saldoBs || c.saldo_bs || 0),
-                label: `[CAJA ${c.moneda || 'USD'}] ${id} — ${c.nombre || c.descrip || 'Caja'}`
+                label: `[${code} • ${c.moneda || 'USD'}] ${desc}`
             });
         });
 

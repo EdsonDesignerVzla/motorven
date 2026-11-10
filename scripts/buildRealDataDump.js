@@ -785,14 +785,14 @@ db.profit_bank_accounts = (db.profit_bank_accounts || []).map(b => {
   };
 });
 
-// 12. Normalize profit_cash_desks (3 rows)
+// 12. Normalize profit_cash_desks (6+ rows)
 db.profit_cash_desks = (db.profit_cash_desks || []).map(c => {
   const coCaja = String(c.co_caja || c.coCaja || c.id || '').trim();
   const descripcion = String(c.descripcion || c.des_caja || c.desCaja || '').trim();
   const moneda = c.moneda || 'USD';
   const saldoUsd = Number(c.saldo_usd ?? c.saldoUsd ?? 0);
   const saldoBs = Number(c.saldo_bs ?? c.saldoBs ?? c.saldo_actual ?? c.saldoActual ?? 0);
-  const responsable = c.responsable || 'Caja General';
+  const responsable = c.responsable || 'Administración';
   const fechaAct = c.fecha_actualizacion || c.fechaActualizacion || NOW_ISO;
   return {
     id: c.id || coCaja.toLowerCase(),
@@ -809,7 +809,7 @@ db.profit_cash_desks = (db.profit_cash_desks || []).map(c => {
     saldo_actual: saldoBs,
     saldoActual: saldoBs,
     responsable,
-    activa: true,
+    activa: c.activa !== false,
     fecha_actualizacion: fechaAct,
     fechaActualizacion: fechaAct
   };

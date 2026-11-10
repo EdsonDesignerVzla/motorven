@@ -4526,8 +4526,15 @@ export function generateCashflowPDF({ bankAccounts = [], cashDesks = [], cashMov
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
   const tableData = [
-    ...cashDesks.map(c => [c.nombre || 'Caja Mostrador', 'Caja Efectivo', 'USD / Bs', formatUsd(c.saldoUsd || 0), formatBs((c.saldoUsd || 0) * tasa), 'DISPONIBLE']),
-    ...bankAccounts.map(b => [b.banco || b.des_ban || 'Banco Comercial', b.num_cta || 'Cuenta', b.moneda || 'Bs / USD', formatUsd(b.saldoUsd || (b.saldoBs ? b.saldoBs / tasa : 0)), formatBs(b.saldoBs || (b.saldoUsd ? b.saldoUsd * tasa : 0)), 'ACTIVA'])
+    ...cashDesks.map(c => [
+      c.descripcion || c.desCaja || c.nombre || 'Caja Operativa',
+      `${c.coCaja || c.co_caja || 'CAJA'} (${c.responsable || 'Admón'})`,
+      c.moneda || 'USD',
+      formatUsd(c.saldoUsd ?? c.saldo_usd ?? 0),
+      formatBs(c.saldoBs ?? c.saldo_bs ?? ((c.saldoUsd || 0) * tasa)),
+      c.activa === false ? 'INACTIVA' : 'ACTIVA'
+    ]),
+    ...bankAccounts.map(b => [b.bancoNombre || b.banco || b.des_ban || 'Banco Comercial', b.numCta || b.num_cta || 'Cuenta', b.moneda || 'Bs / USD', formatUsd(b.saldoUsd || (b.saldoBs ? b.saldoBs / tasa : 0)), formatBs(b.saldoBs || (b.saldoUsd ? b.saldoUsd * tasa : 0)), 'ACTIVA'])
   ];
 
   autoTable(base.doc, {

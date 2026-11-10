@@ -4135,6 +4135,107 @@ export const getSupabaseProfitBankAccounts = async () => {
   }
 };
 
+const CUSTOM_CASH_DESKS_STORAGE_KEY = 'signum_custom_cash_desks_v1';
+const DELETED_CASH_DESKS_STORAGE_KEY = 'signum_deleted_cash_desks_v1';
+
+const normalizeCashDeskRecord = (r) => {
+  if (!r) return null;
+  let coCaja = String(r.coCaja || r.co_caja || r.id || 'CAJA-01').trim().toUpperCase();
+  if (/^CAJ-\d+$/i.test(coCaja)) {
+    coCaja = coCaja.replace(/^CAJ-/i, 'CAJA-');
+  }
+  const id = String(r.id || coCaja.toLowerCase()).trim();
+  const LegacyMap = {
+    'caja-01': { coCaja: 'CAJA-01', descripcion: 'Caja Efectivo $ (Valencia)', moneda: 'USD', responsable: 'Administración' },
+    'caja-02': { coCaja: 'CAJA-02', descripcion: 'Caja Efectivo Caracas $', moneda: 'USD', responsable: 'Gerencia' },
+    'caja-03': { coCaja: 'CAJA-03', descripcion: 'Caja Efectivo Bs (Valencia)', moneda: 'BS', responsable: 'Administración' }
+  };
+  const legacyNames = ['Caja Principal / Mostrador', 'Caja Chica Administrativa', 'Bóveda / Custodia Efectivo'];
+  const rawDesc = String(r.descripcion || r.des_caja || r.desCaja || '').trim();
+  const isLegacyRecord = legacyNames.includes(rawDesc) && LegacyMap[id];
+
+  const descripcion = isLegacyRecord ? LegacyMap[id].descripcion : (rawDesc || 'Caja Operativa');
+  const moneda = isLegacyRecord ? LegacyMap[id].moneda : (r.moneda || 'USD');
+  const responsable = isLegacyRecord ? LegacyMap[id].responsable : (r.responsable || 'Administración');
+  const saldoUsd = isLegacyRecord && id === 'caja-03' ? 0 : Number(r.saldoUsd ?? r.saldo_usd ?? 0);
+  const saldoBs = isLegacyRecord && id === 'caja-03' ? 0 : Number(r.saldoBs ?? r.saldo_bs ?? 0);
+  const activa = r.activa !== false;
+  const fechaActualizacion = r.fechaActualizacion || r.fecha_actualizacion || new Date().toISOString();
+
+  return {
+    id,
+    co_caja: isLegacyRecord ? LegacyMap[id].coCaja : coCaja,
+    coCaja: isLegacyRecord ? LegacyMap[id].coCaja : coCaja,
+    descripcion,
+    des_caja: descripcion,
+    desCaja: descripcion,
+    moneda,
+    saldo_usd: saldoUsd,
+    saldoUsd,
+    saldo_bs: saldoBs,
+    saldoBs,
+    saldo_actual: saldoBs,
+    saldoActual: saldoBs,
+    responsable,
+    activa,
+    fecha_actualizacion: fechaActualizacion,
+    fechaActualizacion
+  };
+};
+
+const mergeCashDesksWithDefaultsAndLocal = (remoteList = []) => {
+  const byId = new Map();
+  let deletedIds = new Set();
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawDel = localStorage.getItem(DELETED_CASH_DESKS_STORAGE_KEY);
+      if (rawDel) {
+        const parsedDel = JSON.parse(rawDel);
+        if (Array.isArray(parsedDel)) deletedIds = new Set(parsedDel.map(String));
+      }
+    }
+  } catch (_) {}
+
+  // 1. Sembrar las 6 cajas oficiales base (CAJA-01 a CAJA-06)
+  (REAL_PROFIT_CASH_DESKS || []).forEach(base => {
+    const norm = normalizeCashDeskRecord(base);
+    if (norm && !deletedIds.has(norm.id) && !deletedIds.has(norm.coCaja)) {
+      byId.set(norm.id, norm);
+    }
+  });
+
+  // 2. Superponer registros de Supabase
+  (remoteList || []).forEach(rem => {
+    const norm = normalizeCashDeskRecord(rem);
+    if (norm && !deletedIds.has(norm.id) && !deletedIds.has(norm.coCaja)) {
+      byId.set(norm.id, norm);
+    }
+  });
+
+  // 3. Superponer cajas creadas o editadas localmente
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CUSTOM_CASH_DESKS_STORAGE_KEY);
+      if (rawCustom) {
+        const parsedCustom = JSON.parse(rawCustom);
+        if (Array.isArray(parsedCustom)) {
+          parsedCustom.forEach(cust => {
+            const norm = normalizeCashDeskRecord(cust);
+            if (norm && !deletedIds.has(norm.id) && !deletedIds.has(norm.coCaja)) {
+              byId.set(norm.id, norm);
+            }
+          });
+        }
+      }
+    }
+  } catch (_) {}
+
+  return Array.from(byId.values()).sort((a, b) =>
+    String(a.coCaja || '').localeCompare(String(b.coCaja || ''), 'es', { numeric: true })
+  );
+};
+
 export const getSupabaseProfitCashDesks = async () => {
   try {
     const { data, error } = await withTimeout(
@@ -4143,52 +4244,94 @@ export const getSupabaseProfitCashDesks = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(r => ({
-      id: r.id,
-      coCaja: r.co_caja,
-      descripcion: r.descripcion,
-      moneda: r.moneda,
-      saldoUsd: Number(r.saldo_usd || 0),
-      saldoBs: Number(r.saldo_bs || 0),
-      responsable: r.responsable,
-      fechaActualizacion: r.fecha_actualizacion
-    }));
+    return mergeCashDesksWithDefaultsAndLocal(data || []);
   } catch (err) {
     console.warn('[Supabase] Error cargando cajas registradoras Profit:', err.message);
-    return REAL_PROFIT_CASH_DESKS;
+    return mergeCashDesksWithDefaultsAndLocal(REAL_PROFIT_CASH_DESKS);
   }
 };
 
 export const updateSupabaseProfitCashDesk = async (cashDesk) => {
+  const normalized = normalizeCashDeskRecord({
+    ...cashDesk,
+    id: cashDesk.id || String(cashDesk.coCaja || cashDesk.co_caja || 'caja-01').toLowerCase(),
+    fecha_actualizacion: new Date().toISOString()
+  });
+
+  // Persistir inmediatamente en localStorage como respaldo instantáneo
   try {
-    const payload = {
-      id: cashDesk.id || `CAJA-${cashDesk.coCaja || cashDesk.co_caja || '01'}`,
-      co_caja: cashDesk.coCaja || cashDesk.co_caja,
-      coCaja: cashDesk.coCaja || cashDesk.co_caja,
-      descripcion: cashDesk.descripcion,
-      moneda: cashDesk.moneda || 'USD',
-      saldo_usd: cashDesk.saldoUsd ?? cashDesk.saldo_usd ?? 0,
-      saldoUsd: cashDesk.saldoUsd ?? cashDesk.saldo_usd ?? 0,
-      saldo_bs: cashDesk.saldoBs ?? cashDesk.saldo_bs ?? 0,
-      saldoBs: cashDesk.saldoBs ?? cashDesk.saldo_bs ?? 0,
-      responsable: cashDesk.responsable || 'Caja General',
-      fecha_actualizacion: new Date().toISOString()
-    };
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CUSTOM_CASH_DESKS_STORAGE_KEY);
+      const customList = rawCustom ? JSON.parse(rawCustom) : [];
+      const filtered = Array.isArray(customList)
+        ? customList.filter(item => item.id !== normalized.id && item.coCaja !== normalized.coCaja)
+        : [];
+      filtered.push(normalized);
+      localStorage.setItem(CUSTOM_CASH_DESKS_STORAGE_KEY, JSON.stringify(filtered));
+
+      const rawDel = localStorage.getItem(DELETED_CASH_DESKS_STORAGE_KEY);
+      if (rawDel) {
+        const delList = JSON.parse(rawDel);
+        if (Array.isArray(delList)) {
+          localStorage.setItem(
+            DELETED_CASH_DESKS_STORAGE_KEY,
+            JSON.stringify(delList.filter(k => k !== normalized.id && k !== normalized.coCaja))
+          );
+        }
+      }
+    }
+  } catch (_) {}
+
+  try {
     broadcastReconcileChange({
       tableId: 'cash_desks',
       action: 'RECONCILE',
-      key: payload.id,
-      item: payload
+      key: normalized.id,
+      item: normalized
     });
     const { data, error } = await supabase
       .from('profit_cash_desks')
-      .upsert(payload, { onConflict: 'id' })
+      .upsert(normalized, { onConflict: 'id' })
       .select();
     if (error) throw error;
     return data;
   } catch (err) {
-    console.error('[Supabase] Error actualizando caja registradora:', err.message);
-    throw err;
+    console.warn('[Supabase] Respaldo local aplicado para caja registradora:', err.message);
+    return [normalized];
+  }
+};
+
+export const deleteSupabaseProfitCashDesk = async (deskIdOrCode) => {
+  const target = String(deskIdOrCode || '').trim();
+  if (!target) return;
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawDel = localStorage.getItem(DELETED_CASH_DESKS_STORAGE_KEY);
+      const delList = rawDel ? JSON.parse(rawDel) : [];
+      const set = new Set(Array.isArray(delList) ? delList : []);
+      set.add(target);
+      set.add(target.toLowerCase());
+      set.add(target.toUpperCase());
+      localStorage.setItem(DELETED_CASH_DESKS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+
+      const rawCustom = localStorage.getItem(CUSTOM_CASH_DESKS_STORAGE_KEY);
+      if (rawCustom) {
+        const customList = JSON.parse(rawCustom);
+        if (Array.isArray(customList)) {
+          localStorage.setItem(
+            CUSTOM_CASH_DESKS_STORAGE_KEY,
+            JSON.stringify(customList.filter(c => c.id !== target && c.coCaja !== target))
+          );
+        }
+      }
+    }
+  } catch (_) {}
+
+  try {
+    await supabase.from('profit_cash_desks').delete().or(`id.eq.${target},co_caja.eq.${target}`);
+  } catch (err) {
+    console.warn('[Supabase] Baja local aplicada para caja registradora:', err.message);
   }
 };
 
