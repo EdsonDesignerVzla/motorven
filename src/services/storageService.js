@@ -246,10 +246,59 @@ export const getSales = () => {
   return JSON.parse(localStorage.getItem(KEYS.SALES));
 };
 
+const adjustLocalProductsStockForSale = (saleRecord, { reverse = false } = {}) => {
+  if (!saleRecord || !Array.isArray(saleRecord.items) || saleRecord.items.length === 0) return [];
+  const rawTipo = String(saleRecord.tipoDoc || saleRecord.tipo_doc || 'FACTURA').toUpperCase().trim();
+  const isNotaEntrega =
+    rawTipo === 'NOTA_ENTREGA' ||
+    String(saleRecord.numeroDoc || saleRecord.factNum || saleRecord.id || '').toUpperCase().startsWith('NE-');
+  const isNotaCredito = rawTipo === 'NOTA_CREDITO';
+  const isSaleOut = rawTipo === 'FACTURA' || isNotaEntrega || rawTipo === 'NOTA_DEBITO';
+  if (!isSaleOut && !isNotaCredito) return [];
+
+  const targetWh = isNotaCredito
+    ? (String(saleRecord.documentoAfectado || saleRecord.documento_afectado || '').toUpperCase().startsWith('NE') ? '02' : '01')
+    : (isNotaEntrega ? '02' : '01');
+
+  // Al emitir venta: FACT/NE/ND restan (-1), NC suma (+1). Al eliminar/revertir: se invierte el signo.
+  const sign = (isNotaCredito ? 1 : -1) * (reverse ? -1 : 1);
+
+  const products = getProducts();
+  const touched = [];
+
+  saleRecord.items.forEach(item => {
+    const itemKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+    const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
+    if (!itemKey || qty <= 0) return;
+
+    const prodIndex = products.findIndex(
+      p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey
+    );
+    if (prodIndex < 0) return;
+
+    const currentStocks = getProductWarehouseStocks(products[prodIndex]);
+    if (targetWh === '02') {
+      currentStocks.stock02 = Math.max(0, currentStocks.stock02 + sign * qty);
+    } else {
+      currentStocks.stock01 = Math.max(0, currentStocks.stock01 + sign * qty);
+    }
+    products[prodIndex].stockAlmacen01 = currentStocks.stock01;
+    products[prodIndex].stock_almacen_01 = currentStocks.stock01;
+    products[prodIndex].stockAlmacen02 = currentStocks.stock02;
+    products[prodIndex].stock_almacen_02 = currentStocks.stock02;
+    products[prodIndex].stock = currentStocks.stock01 + currentStocks.stock02;
+    touched.push(products[prodIndex]);
+  });
+
+  if (touched.length > 0) {
+    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+  }
+  return touched;
+};
+
 export const saveSale = (saleData, options = {}) => {
   const { skipStockAdjustment = false } = options || {};
   const sales = getSales();
-  const products = getProducts();
   const config = getConfig();
 
   const isNotaEntrega =
@@ -355,51 +404,8 @@ export const saveSale = (saleData, options = {}) => {
   // Ajuste de Stock Independiente por Almacén:
   // Almacén 01: Facturas Fiscales SENIAT y Notas de Débito
   // Almacén 02: Notas de Entrega / Despacho
-  if (!skipStockAdjustment && (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO')) {
-    const isNotaEntrega = newSale.tipoDoc === 'NOTA_ENTREGA';
-    newSale.items.forEach(item => {
-      const itemKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
-      const prodIndex = itemKey
-        ? products.findIndex(p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey)
-        : -1;
-      if (prodIndex >= 0) {
-        const currentStocks = getProductWarehouseStocks(products[prodIndex]);
-        if (isNotaEntrega) {
-          currentStocks.stock02 = Math.max(0, currentStocks.stock02 - item.cantidad);
-        } else {
-          currentStocks.stock01 = Math.max(0, currentStocks.stock01 - item.cantidad);
-        }
-        products[prodIndex].stockAlmacen01 = currentStocks.stock01;
-        products[prodIndex].stock_almacen_01 = currentStocks.stock01;
-        products[prodIndex].stockAlmacen02 = currentStocks.stock02;
-        products[prodIndex].stock_almacen_02 = currentStocks.stock02;
-        products[prodIndex].stock = currentStocks.stock01 + currentStocks.stock02;
-      }
-    });
-    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
-  } else if (!skipStockAdjustment && newSale.tipoDoc === 'NOTA_CREDITO') {
-    // En Nota de Crédito se reingresa al almacén de origen (si afecta Nota de Entrega a Alm 02, si no a Alm 01)
-    const isAfecNotaEntrega = String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE');
-    newSale.items.forEach(item => {
-      const itemKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
-      const prodIndex = itemKey
-        ? products.findIndex(p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey)
-        : -1;
-      if (prodIndex >= 0) {
-        const currentStocks = getProductWarehouseStocks(products[prodIndex]);
-        if (isAfecNotaEntrega) {
-          currentStocks.stock02 += item.cantidad;
-        } else {
-          currentStocks.stock01 += item.cantidad;
-        }
-        products[prodIndex].stockAlmacen01 = currentStocks.stock01;
-        products[prodIndex].stock_almacen_01 = currentStocks.stock01;
-        products[prodIndex].stockAlmacen02 = currentStocks.stock02;
-        products[prodIndex].stock_almacen_02 = currentStocks.stock02;
-        products[prodIndex].stock = currentStocks.stock01 + currentStocks.stock02;
-      }
-    });
-    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+  if (!skipStockAdjustment) {
+    adjustLocalProductsStockForSale(newSale, { reverse: false });
   }
 
   // Movimientos de Caja y Cuentas por Cobrar
@@ -441,7 +447,8 @@ export const saveSale = (saleData, options = {}) => {
   return newSale;
 };
 
-export const deleteStorageSale = (saleIdOrObj) => {
+export const deleteStorageSale = (saleIdOrObj, options = {}) => {
+  const { skipStockAdjustment = false } = options || {};
   if (!saleIdOrObj) return getSales();
   const rawId = typeof saleIdOrObj === 'object'
     ? (saleIdOrObj.id || saleIdOrObj.numeroDoc || saleIdOrObj.factNum || saleIdOrObj.factura)
@@ -465,16 +472,9 @@ export const deleteStorageSale = (saleIdOrObj) => {
 
   const sales = getSales();
   const target = sales.find(isMatch);
-  if (target && target.items && Array.isArray(target.items)) {
+  if (!skipStockAdjustment && target && Array.isArray(target.items)) {
     try {
-      const products = getProducts();
-      target.items.forEach(item => {
-        const pIdx = products.findIndex(p => p.id === item.articuloId || p.codigo === item.articuloId);
-        if (pIdx >= 0) {
-          products[pIdx].stock = (products[pIdx].stock || 0) + Number(item.cantidad || 0);
-        }
-      });
-      localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+      adjustLocalProductsStockForSale(target, { reverse: true });
     } catch (_) {}
   }
   const filtered = sales.filter(s => !isMatch(s));

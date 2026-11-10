@@ -2190,6 +2190,97 @@ export const getSupabaseSales = async () => {
   }
 };
 
+const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false } = {}) => {
+  if (!saleRecord || !Array.isArray(saleRecord.items) || saleRecord.items.length === 0) return [];
+  const rawTipo = String(saleRecord.tipoDoc || saleRecord.tipo_doc || 'FACTURA').toUpperCase().trim();
+  const isNotaEntrega =
+    rawTipo === 'NOTA_ENTREGA' ||
+    String(saleRecord.numeroDoc || saleRecord.numero_doc || saleRecord.factNum || saleRecord.id || '').toUpperCase().startsWith('NE-');
+  const isNotaCredito = rawTipo === 'NOTA_CREDITO';
+  const isSaleOut = rawTipo === 'FACTURA' || isNotaEntrega || rawTipo === 'NOTA_DEBITO';
+  if (!isSaleOut && !isNotaCredito) return [];
+
+  const targetWh = isNotaCredito
+    ? (String(saleRecord.documentoAfectado || saleRecord.documento_afectado || '').toUpperCase().startsWith('NE') ? '02' : '01')
+    : (isNotaEntrega ? '02' : '01');
+
+  // Al emitir venta: FACT/NE/ND restan (-1), NC suma (+1). Al eliminar/revertir: se invierte el signo.
+  const sign = (isNotaCredito ? 1 : -1) * (reverse ? -1 : 1);
+  const updatedProducts = [];
+
+  for (const item of saleRecord.items) {
+    const prodKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+    const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
+    if (!prodKey || qty <= 0) continue;
+
+    let prodData = null;
+    const { data: byId, error: byIdErr } = await withTimeout(
+      supabase.from('products').select('*').eq('id', prodKey).single(),
+      4000
+    );
+    if (!byIdErr && byId) {
+      prodData = byId;
+    } else {
+      const { data: byCode, error: byCodeErr } = await withTimeout(
+        supabase.from('products').select('*').eq('codigo', prodKey).single(),
+        4000
+      );
+      if (!byCodeErr && byCode) prodData = byCode;
+    }
+
+    if (prodData) {
+      const wStocks = getProductWarehouseStocks(prodData);
+      if (targetWh === '02') {
+        wStocks.stock02 = Math.max(0, wStocks.stock02 + sign * qty);
+      } else {
+        wStocks.stock01 = Math.max(0, wStocks.stock01 + sign * qty);
+      }
+
+      const newTotal = wStocks.stock01 + wStocks.stock02;
+      const nowIso = new Date().toISOString();
+      const stockPatch = {
+        stock: newTotal,
+        stockAlmacen01: wStocks.stock01,
+        stock_almacen_01: wStocks.stock01,
+        stockAlmacen02: wStocks.stock02,
+        stock_almacen_02: wStocks.stock02,
+        updated_at: nowIso
+      };
+
+      const { error: updErr } = await withTimeout(
+        supabase.from('products').update(stockPatch).eq('id', prodData.id),
+        4000
+      );
+      if (updErr) {
+        console.warn('[adjustSupabaseProductsStockForSale] Error actualizando stock en products:', updErr.message);
+      }
+
+      const whStockValue = targetWh === '02' ? wStocks.stock02 : wStocks.stock01;
+      await withTimeout(
+        supabase
+          .from('profit_stock_by_warehouse')
+          .update({ stock_act: whStockValue, updated_at: nowIso })
+          .eq('id', `${prodData.id}_${targetWh}`),
+        3000
+      ).catch(() => {});
+
+      const updatedMapped = mapProductFromDb({ ...prodData, ...stockPatch });
+      if (updatedMapped) {
+        saveStorageProduct(updatedMapped);
+        broadcastReconcileChange({
+          tableId: 'products',
+          action: 'RECONCILE',
+          key: updatedMapped.codigo || updatedMapped.id,
+          item: updatedMapped
+        });
+        updatedProducts.push(updatedMapped);
+      }
+    }
+  }
+
+  return updatedProducts;
+};
+
 const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
   if (!localSale) return;
   try {
@@ -2359,88 +2450,7 @@ export const processSupabaseSale = async (saleData) => {
     };
 
     // 1. Ajuste de inventario independiente por almacén (Alm 01: Factura/ND, Alm 02: Nota de Entrega; NC reingresa)
-    const isReingresarNc = newSale.tipoDoc === 'NOTA_CREDITO';
-    if (
-      newSale.tipoDoc === 'FACTURA' ||
-      newSale.tipoDoc === 'NOTA_ENTREGA' ||
-      newSale.tipoDoc === 'NOTA_DEBITO' ||
-      isReingresarNc
-    ) {
-      const targetWh = isReingresarNc
-        ? (String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE') ? '02' : '01')
-        : (newSale.tipoDoc === 'NOTA_ENTREGA' ? '02' : '01');
-
-      for (const item of newSale.items) {
-        const prodKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
-        const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
-        if (!prodKey || qty <= 0) continue;
-
-        let prodData = null;
-        const { data: byId, error: byIdErr } = await withTimeout(
-          supabase.from('products').select('*').eq('id', prodKey).single(),
-          4000
-        );
-        if (!byIdErr && byId) {
-          prodData = byId;
-        } else {
-          const { data: byCode, error: byCodeErr } = await withTimeout(
-            supabase.from('products').select('*').eq('codigo', prodKey).single(),
-            4000
-          );
-          if (!byCodeErr && byCode) prodData = byCode;
-        }
-
-        if (prodData) {
-          const wStocks = getProductWarehouseStocks(prodData);
-          if (isReingresarNc) {
-            if (targetWh === '02') wStocks.stock02 += qty;
-            else wStocks.stock01 += qty;
-          } else {
-            if (targetWh === '02') wStocks.stock02 = Math.max(0, wStocks.stock02 - qty);
-            else wStocks.stock01 = Math.max(0, wStocks.stock01 - qty);
-          }
-
-          const newTotal = wStocks.stock01 + wStocks.stock02;
-          const nowIso = new Date().toISOString();
-          const stockPatch = {
-            stock: newTotal,
-            stockAlmacen01: wStocks.stock01,
-            stock_almacen_01: wStocks.stock01,
-            stockAlmacen02: wStocks.stock02,
-            stock_almacen_02: wStocks.stock02,
-            updated_at: nowIso
-          };
-
-          const { error: updErr } = await withTimeout(
-            supabase.from('products').update(stockPatch).eq('id', prodData.id),
-            4000
-          );
-          if (updErr) {
-            console.warn('[processSupabaseSale] Error actualizando stock en products:', updErr.message);
-          }
-
-          const whStockValue = targetWh === '02' ? wStocks.stock02 : wStocks.stock01;
-          await withTimeout(
-            supabase
-              .from('profit_stock_by_warehouse')
-              .update({ stock_act: whStockValue, updated_at: nowIso })
-              .eq('id', `${prodData.id}_${targetWh}`),
-            3000
-          ).catch(() => {});
-
-          const updatedMapped = mapProductFromDb({ ...prodData, ...stockPatch });
-          if (updatedMapped) {
-            saveStorageProduct(updatedMapped);
-            broadcastReconcileChange({
-              tableId: 'products',
-              action: 'RECONCILE',
-              key: updatedMapped.codigo || updatedMapped.id,
-              item: updatedMapped
-            });
-          }
-        }
-      }
-    }
+    await adjustSupabaseProductsStockForSale(newSale, { reverse: false });
 
     // 2. Add cash movement or update client accounts
     if (!isCredit) {
@@ -2884,8 +2894,16 @@ export const deleteSupabaseSale = async (saleId) => {
   const candidateKeys = Array.from(
     new Set([cleanId, cleanNum, rawId, rawNum, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean))
   );
+  const candidateSet = new Set(candidateKeys);
 
-  candidateKeys.forEach(k => deleteStorageSale(k));
+  // Capturar ventas locales antes de limpiar localStorage por si necesitamos sus renglones para reingresar stock
+  const localSalesBeforeDelete = getStorageSales().filter(s => {
+    if (!s) return false;
+    const sId = String(s.id || '').trim();
+    const sNum = String(s.numeroDoc || s.factura || s.factNum || '').trim();
+    const sCleanNum = sNum.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+    return candidateSet.has(sId) || candidateSet.has(sNum) || candidateSet.has(sCleanNum);
+  });
 
   try {
     if (typeof localStorage !== 'undefined') {
@@ -2920,26 +2938,94 @@ export const deleteSupabaseSale = async (saleId) => {
   const broadcastKey = cleanNum || cleanId;
   const broadcastItem = { id: cleanId || broadcastKey, factNum: cleanNum, numeroDoc: cleanNum };
 
-  broadcastReconcileChange({
-    tableId: 'sales',
-    action: 'DELETE',
-    key: broadcastKey,
-    item: broadcastItem
-  });
+  const finalizeLocalOfflineDelete = () => {
+    candidateKeys.forEach(k => deleteStorageSale(k));
+    try {
+      const storageProds = getStorageProducts();
+      const fallbackSources = localSalesBeforeDelete.length > 0
+        ? localSalesBeforeDelete
+        : (typeof saleId === 'object' && Array.isArray(saleId.items) ? [saleId] : []);
+      fallbackSources.forEach(s => {
+        (s.items || []).forEach(it => {
+          const itemKey = String(it.articuloId || it.id || it.codigo || it.co_art || '').trim();
+          if (!itemKey) return;
+          const prod = storageProds.find(
+            p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey
+          );
+          if (prod) {
+            enqueueSyncAction('product', 'UPDATE', prod);
+            broadcastReconcileChange({
+              tableId: 'products',
+              action: 'RECONCILE',
+              key: prod.codigo || prod.id,
+              item: prod
+            });
+          }
+        });
+      });
+    } catch (_) {}
 
-  broadcastReconcileChange({
-    tableId: 'invoices',
-    action: 'DELETE',
-    key: broadcastKey,
-    item: broadcastItem
-  });
-
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    broadcastReconcileChange({ tableId: 'sales', action: 'DELETE', key: broadcastKey, item: broadcastItem });
+    broadcastReconcileChange({ tableId: 'invoices', action: 'DELETE', key: broadcastKey, item: broadcastItem });
     enqueueSyncAction('sales', 'DELETE', { id: cleanId || cleanNum });
     enqueueSyncAction('profit_invoices', 'DELETE', { id: cleanId || cleanNum });
+  };
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    finalizeLocalOfflineDelete();
     return true;
   }
+
   try {
+    const orSalesParts = [];
+    if (cleanId) orSalesParts.push(`id.eq.${cleanId}`);
+    if (cleanNum) {
+      orSalesParts.push(`numero_doc.eq.${cleanNum}`);
+      if (cleanId !== cleanNum) orSalesParts.push(`id.eq.${cleanNum}`);
+      orSalesParts.push(`id.eq.NE-${cleanNum}`, `numero_doc.eq.NE-${cleanNum}`);
+    }
+
+    // 1. Obtener registros en `sales` ANTES de borrarlos para reingresar sus artículos al almacén
+    let foundSales = [];
+    if (orSalesParts.length > 0) {
+      const { data: fetchedSales } = await withTimeout(
+        supabase.from('sales').select('*').or(orSalesParts.join(',')),
+        4000
+      ).catch(() => ({ data: [] }));
+      if (Array.isArray(fetchedSales) && fetchedSales.length > 0) {
+        foundSales = fetchedSales.map(mapSaleFromDb).filter(Boolean);
+      }
+    }
+
+    const salesToRevertRaw = foundSales.length > 0
+      ? foundSales
+      : (localSalesBeforeDelete.length > 0
+          ? localSalesBeforeDelete
+          : (typeof saleId === 'object' &&
+             Array.isArray(saleId.items) &&
+             saleId.items.length > 0 &&
+             (saleId._source === 'POS' || /^0+\d+$/.test(cleanNum) || /^NE-0+\d+$/i.test(rawNum))
+              ? [saleId]
+              : []));
+
+    const seenKeys = new Set();
+    const salesToRevert = [];
+    for (const s of salesToRevertRaw) {
+      const k = String(s.id || s.numeroDoc || '').trim();
+      if (k && seenKeys.has(k)) continue;
+      if (k) seenKeys.add(k);
+      salesToRevert.push(s);
+    }
+
+    // 2. Reingresar existencias al almacén correspondiente (Alm 01 o Alm 02)
+    for (const saleRecord of salesToRevert) {
+      await adjustSupabaseProductsStockForSale(saleRecord, { reverse: true });
+    }
+
+    // 3. Limpiar almacenamiento local sin duplicar ajuste de inventario
+    candidateKeys.forEach(k => deleteStorageSale(k, { skipStockAdjustment: true }));
+
+    // 4. Eliminar en Supabase (profit_invoices y sales)
     const orInvParts = [];
     if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
     if (cleanNum) {
@@ -2954,12 +3040,6 @@ export const deleteSupabaseSale = async (saleId) => {
       ).catch(() => {});
     }
 
-    const orSalesParts = [];
-    if (cleanId) orSalesParts.push(`id.eq.${cleanId}`);
-    if (cleanNum) {
-      orSalesParts.push(`numero_doc.eq.${cleanNum}`);
-      if (cleanId !== cleanNum) orSalesParts.push(`id.eq.${cleanNum}`);
-    }
     if (orSalesParts.length > 0) {
       const { error } = await withTimeout(
         supabase.from('sales').delete().or(orSalesParts.join(',')),
@@ -2967,12 +3047,16 @@ export const deleteSupabaseSale = async (saleId) => {
       );
       if (error) console.warn('[deleteSupabaseSale] Aviso sales delete:', error.message);
     }
+
+    broadcastReconcileChange({ tableId: 'sales', action: 'DELETE', key: broadcastKey, item: broadcastItem });
+    broadcastReconcileChange({ tableId: 'invoices', action: 'DELETE', key: broadcastKey, item: broadcastItem });
+
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
     console.warn('[deleteSupabaseSale] Error eliminando venta en Supabase:', err.message);
     markSupabaseOffline(err, 'deleteSupabaseSale');
-    enqueueSyncAction('sales', 'DELETE', { id: cleanId || cleanNum });
+    finalizeLocalOfflineDelete();
     return true;
   }
 };

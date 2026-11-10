@@ -1775,8 +1775,8 @@ function MainApp() {
       const candidateKeys = new Set([cleanId, cleanNum, rawId, rawNum, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean));
 
       await deleteSupabaseSale(saleIdOrDoc);
-      deleteStorageSale(cleanId);
-      const remainingSales = deleteStorageSale(cleanNum);
+      deleteStorageSale(cleanId, { skipStockAdjustment: true });
+      deleteStorageSale(cleanNum, { skipStockAdjustment: true });
       setSalesState(prev => (prev || []).filter(s => {
         const sId = String(s.id || '').trim();
         const sNum = String(s.numeroDoc || s.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();

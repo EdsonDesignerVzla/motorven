@@ -1638,7 +1638,7 @@ export default function OrdersSalesModal({
       setIsDeletingInvoice(true);
       const key = String(invoiceToDelete.id || invoiceToDelete.numeroDoc || invoiceToDelete.factNum);
       if (onDeleteSale) {
-        await onDeleteSale(key);
+        await onDeleteSale(invoiceToDelete);
       }
       setLocalDeletedInvoiceKeys(prev => {
         const next = new Set(prev);
