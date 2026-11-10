@@ -256,10 +256,16 @@ body {
 
 .sidebar.sidebar-collapsed .logo-slogan,
 .sidebar.sidebar-collapsed .brand-full-logo,
-.sidebar.sidebar-collapsed .nav-item button span,
+.sidebar.sidebar-collapsed .nav-item button .nav-item-label,
 .sidebar.sidebar-collapsed .server-explorer-label,
 .sidebar.sidebar-collapsed .theme-switch-wrapper .theme-switch-option span {
   display: none !important;
+}
+
+.sidebar.sidebar-collapsed .nav-item button .nav-icon-wrapper {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar.sidebar-collapsed .brand-collapsed-logo {

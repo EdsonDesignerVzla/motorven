@@ -128,7 +128,7 @@ export default function Navigation({
                 return (
                   <li key={item.id} className={`nav-item ${isActive ? 'active' : ''}`} style={{ position: 'relative' }}>
                     <button onClick={() => handleSelectTab(item.id)} title={showBadge ? `${item.label} (${pendingOrdersCount} pedidos de calle pendientes)` : item.label} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                      <span style={{ position: 'relative', display: 'inline-flex' }}>
+                      <span className="nav-icon-wrapper" style={{ position: 'relative', display: 'inline-flex' }}>
                         <Icon size={18} />
                         {sidebarCollapsed && showBadge && (
                           <span style={{
@@ -151,7 +151,7 @@ export default function Navigation({
                           </span>
                         )}
                       </span>
-                      {!sidebarCollapsed && <span style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>}
+                      {!sidebarCollapsed && <span className="nav-item-label" style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>}
                       {!sidebarCollapsed && showBadge && (
                         <span style={{
                           background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)',
@@ -210,7 +210,9 @@ export default function Navigation({
           >
             <Smartphone size={16} />
             {!sidebarCollapsed && <span style={{ flex: 1 }}>Visor Responsive</span>}
-            <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '6px', background: 'rgba(16, 185, 129, 0.3)', color: '#fff', fontWeight: 800 }}>LIVE</span>
+            {!sidebarCollapsed && (
+              <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '6px', background: 'rgba(16, 185, 129, 0.3)', color: '#fff', fontWeight: 800 }}>LIVE</span>
+            )}
           </button>
 
           {/* Selector de Tema Claro / Oscuro */}
