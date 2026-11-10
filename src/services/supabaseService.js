@@ -4500,12 +4500,82 @@ export const saveSupabaseProfitInvoice = async (docData) => {
     fact_num: isNaN(Number(rawNum)) ? rawNum : Number(rawNum),
     tipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
     tipo_doc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
-    fechaEmision: docData.fechaEmision || docData.fec_emis || nowIso,
-    fec_emis: docData.fechaEmision || docData.fec_emis || nowIso,
-    fechaVencimiento: docData.fechaVencimiento || docData.fec_venc || docData.fechaEmision || nowIso,
-    fec_venc: docData.fechaVencimiento || docData.fec_venc || docData.fechaEmision || nowIso,
-    diasCredito: Number(docData.diasCredito ?? docData.dias_credito ?? 0),
-    dias_credito: Number(docData.diasCredito ?? docData.dias_credito ?? 0),
+    fechaEmision: (() => {
+      const e = docData.fechaEmision || docData.fec_emis || nowIso;
+      return typeof e === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e) ? e.slice(0, 10) : e;
+    })(),
+    fec_emis: (() => {
+      const e = docData.fechaEmision || docData.fec_emis || nowIso;
+      return typeof e === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e) ? e.slice(0, 10) : e;
+    })(),
+    fechaVencimiento: (() => {
+      const e = docData.fechaEmision || docData.fec_emis || nowIso;
+      const em = typeof e === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e) ? e.slice(0, 10) : e;
+      const v = docData.fechaVencimiento || docData.fec_venc;
+      const vm = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+      const dc = Number(docData.diasCredito ?? docData.dias_credito ?? 0);
+      if (vm && vm !== em) return vm;
+      const effectiveDc = dc > 0 ? dc : 15;
+      const dObj = new Date(`${em}T12:00:00`);
+      if (!isNaN(dObj.getTime())) {
+        dObj.setDate(dObj.getDate() + effectiveDc);
+        const y = dObj.getFullYear();
+        const m = String(dObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dObj.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+      return vm || em;
+    })(),
+    fec_venc: (() => {
+      const e = docData.fechaEmision || docData.fec_emis || nowIso;
+      const em = typeof e === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e) ? e.slice(0, 10) : e;
+      const v = docData.fechaVencimiento || docData.fec_venc;
+      const vm = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+      const dc = Number(docData.diasCredito ?? docData.dias_credito ?? 0);
+      if (vm && vm !== em) return vm;
+      const effectiveDc = dc > 0 ? dc : 15;
+      const dObj = new Date(`${em}T12:00:00`);
+      if (!isNaN(dObj.getTime())) {
+        dObj.setDate(dObj.getDate() + effectiveDc);
+        const y = dObj.getFullYear();
+        const m = String(dObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dObj.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+      return vm || em;
+    })(),
+    diasCredito: (() => {
+      const e = docData.fechaEmision || docData.fec_emis || nowIso;
+      const em = typeof e === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e) ? e.slice(0, 10) : e;
+      const v = docData.fechaVencimiento || docData.fec_venc;
+      const vm = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+      const dc = Number(docData.diasCredito ?? docData.dias_credito ?? 0);
+      if (vm && em) {
+        const dE = new Date(`${em}T12:00:00`);
+        const dV = new Date(`${vm}T12:00:00`);
+        if (!isNaN(dE.getTime()) && !isNaN(dV.getTime())) {
+          const diff = Math.round((dV.getTime() - dE.getTime()) / (1000 * 60 * 60 * 24));
+          if (diff > 0) return diff;
+        }
+      }
+      return dc > 0 ? dc : 15;
+    })(),
+    dias_credito: (() => {
+      const e = docData.fechaEmision || docData.fec_emis || nowIso;
+      const em = typeof e === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e) ? e.slice(0, 10) : e;
+      const v = docData.fechaVencimiento || docData.fec_venc;
+      const vm = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+      const dc = Number(docData.diasCredito ?? docData.dias_credito ?? 0);
+      if (vm && em) {
+        const dE = new Date(`${em}T12:00:00`);
+        const dV = new Date(`${vm}T12:00:00`);
+        if (!isNaN(dE.getTime()) && !isNaN(dV.getTime())) {
+          const diff = Math.round((dV.getTime() - dE.getTime()) / (1000 * 60 * 60 * 24));
+          if (diff > 0) return diff;
+        }
+      }
+      return dc > 0 ? dc : 15;
+    })(),
     diasVencidoCustom: docData.diasVencidoCustom ?? docData.dias_vencido_custom ?? null,
     dias_vencido_custom: docData.diasVencidoCustom ?? docData.dias_vencido_custom ?? null,
     clienteId: docData.clienteId || docData.cliente_id || docData.clienteRif || 'CLI-GEN',

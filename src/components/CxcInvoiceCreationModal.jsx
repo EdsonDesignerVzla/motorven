@@ -28,10 +28,13 @@ import { REAL_PROFIT_SELLERS } from '../data/supabaseRealData';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
-const toIsoDate = (d) => {
+const normalizeIsoDateOnly = (d) => {
   if (!d) return '';
-  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-  const dateObj = new Date(d);
+  if (typeof d === 'string') {
+    const match = d.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+  const dateObj = d instanceof Date ? d : new Date(d);
   if (isNaN(dateObj.getTime())) return '';
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -39,29 +42,33 @@ const toIsoDate = (d) => {
   return `${year}-${month}-${day}`;
 };
 
+const toIsoDate = normalizeIsoDateOnly;
+
 const addDaysToIso = (isoStr, days) => {
-  if (!isoStr) return '';
-  const parts = isoStr.split('-').map(Number);
-  if (parts.length !== 3) return '';
-  const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+  const clean = normalizeIsoDateOnly(isoStr);
+  if (!clean) return '';
+  const [y, m, d] = clean.split('-').map(Number);
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0);
   dateObj.setDate(dateObj.getDate() + Number(days || 0));
-  return toIsoDate(dateObj);
+  return normalizeIsoDateOnly(dateObj);
 };
 
 const diffDaysIso = (startIso, endIso) => {
-  if (!startIso || !endIso) return 0;
-  const p1 = startIso.split('-').map(Number);
-  const p2 = endIso.split('-').map(Number);
-  if (p1.length !== 3 || p2.length !== 3) return 0;
-  const d1 = new Date(p1[0], p1[1] - 1, p1[2]);
-  const d2 = new Date(p2[0], p2[1] - 1, p2[2]);
-  return Math.max(0, Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24)));
+  const c1 = normalizeIsoDateOnly(startIso);
+  const c2 = normalizeIsoDateOnly(endIso);
+  if (!c1 || !c2) return 0;
+  const [y1, m1, day1] = c1.split('-').map(Number);
+  const [y2, m2, day2] = c2.split('-').map(Number);
+  const date1 = new Date(y1, m1 - 1, day1, 12, 0, 0);
+  const date2 = new Date(y2, m2 - 1, day2, 12, 0, 0);
+  return Math.round((date2.getTime() - date1.getTime()) / (1000 * 60 * 60 * 24));
 };
 
 export default function CxcInvoiceCreationModal({
   isOpen = false,
   onClose,
   onSaveDocument,
+  initialData = null,
   clients = [],
   sellers = [],
   config = {},
@@ -113,16 +120,49 @@ export default function CxcInvoiceCreationModal({
   // Inicializar o sugerir correlativo al abrir
   useEffect(() => {
     if (isOpen) {
-      if (!factNum) {
-        if (tipoDoc === 'NOTA_ENTREGA') {
-          setFactNum(`NE-${suggestedCorrelativo || '000001'}`);
-        } else {
-          setFactNum(suggestedCorrelativo || '000001');
-          setNumeroControl(`00-${suggestedCorrelativo || '000001'}`);
+      if (initialData) {
+        const nextTipo = initialData.tipoDoc || 'FACTURA';
+        setTipoDoc(nextTipo);
+        setFactNum(initialData.factNum || initialData.factura || initialData.numeroDoc || '');
+        setNumeroControl(initialData.numeroControl || '');
+        const emis = normalizeIsoDateOnly(initialData.fechaEmision || initialData.fecha) || '2026-11-15';
+        const rawDc = Number(initialData.diasCredito ?? initialData.dias_credito);
+        const dc = rawDc > 0 ? rawDc : 15;
+        const rawVenc = normalizeIsoDateOnly(initialData.fechaVencimiento || initialData.fecha_vencimiento);
+        const venc = (rawVenc && rawVenc !== emis) ? rawVenc : addDaysToIso(emis, dc);
+        const calculatedDc = diffDaysIso(emis, venc);
+        setFechaEmision(emis);
+        setDiasCredito(calculatedDc > 0 ? calculatedDc : dc);
+        setFechaVencimiento(venc);
+
+        setClienteCodigo(initialData.clienteId || initialData.cliente_id || '');
+        setClienteRif(initialData.clienteRif || initialData.cliente_rif || initialData.rif || '');
+        setClienteNombre(initialData.clienteNombre || initialData.cliente || '');
+        setClienteDireccion(initialData.clienteDireccion || initialData.direccion || '');
+        setClienteTelefono(initialData.clienteTelefono || initialData.telefono || '');
+        if (initialData.vendedorId || initialData.vendedor) {
+          handleSellerSelect(initialData.vendedorId || initialData.vendedor);
+        }
+        const neto = Number(initialData.totNetoUsd ?? initialData.totalUsd ?? 100);
+        const bruto = Number(initialData.totBrutoUsd ?? initialData.subtotalUsd ?? neto);
+        setPrecioDivisas(bruto.toFixed(2));
+        setIsExento(Boolean(initialData.isExento || nextTipo === 'NOTA_ENTREGA'));
+        setIvaUsd(Number(initialData.ivaUsd ?? 0).toFixed(2));
+        setTotalUsd(neto.toFixed(2));
+        setAbonosUsd(Number(initialData.abonosUsd ?? 0).toFixed(2));
+        setObservaciones(initialData.observaciones || '');
+      } else {
+        if (!factNum) {
+          if (tipoDoc === 'NOTA_ENTREGA') {
+            setFactNum(`NE-${suggestedCorrelativo || '000001'}`);
+          } else {
+            setFactNum(suggestedCorrelativo || '000001');
+            setNumeroControl(`00-${suggestedCorrelativo || '000001'}`);
+          }
         }
       }
     }
-  }, [isOpen, suggestedCorrelativo, tipoDoc]);
+  }, [isOpen, initialData, suggestedCorrelativo, tipoDoc]);
 
   // Recalcular montos al cambiar precioDivisas, isExento, tipoDoc o tasa
   const handlePrecioChange = (val) => {
@@ -191,13 +231,19 @@ export default function CxcInvoiceCreationModal({
   // Manejo de Fechas y Días de Crédito
   const handleFechaEmisionChange = (val) => {
     setFechaEmision(val);
-    if (val && diasCredito !== undefined) {
-      setFechaVencimiento(addDaysToIso(val, diasCredito));
+    if (val) {
+      const dc = Number(diasCredito) > 0 ? Number(diasCredito) : 15;
+      setDiasCredito(dc);
+      setFechaVencimiento(addDaysToIso(val, dc));
     }
   };
 
   const handleDiasCreditoChange = (val) => {
-    const dias = Math.max(0, Number(val || 0));
+    if (val === '') {
+      setDiasCredito('');
+      return;
+    }
+    const dias = Math.max(0, parseInt(val, 10) || 0);
     setDiasCredito(dias);
     if (fechaEmision) {
       setFechaVencimiento(addDaysToIso(fechaEmision, dias));
@@ -208,7 +254,7 @@ export default function CxcInvoiceCreationModal({
     setFechaVencimiento(val);
     if (fechaEmision && val) {
       const calculatedDias = diffDaysIso(fechaEmision, val);
-      setDiasCredito(calculatedDias);
+      setDiasCredito(Math.max(0, calculatedDias));
     }
   };
 
@@ -271,8 +317,11 @@ export default function CxcInvoiceCreationModal({
       handleSellerSelect(sellerCode);
     }
 
-    // Días de crédito
-    const dc = Number(c.diasCredito ?? c.dias_credito ?? 15);
+    // Días de crédito: Si el cliente tiene días de crédito mayores a 0, utilizarlos.
+    // Si tiene 0 o no tiene configurado, mantener los días de crédito actuales (o 15 por defecto).
+    const rawDc = Number(c.diasCredito ?? c.dias_credito);
+    const currentDc = Number(diasCredito);
+    const dc = (rawDc && rawDc > 0) ? rawDc : (currentDc > 0 ? currentDc : 15);
     setDiasCredito(dc);
     if (fechaEmision) {
       setFechaVencimiento(addDaysToIso(fechaEmision, dc));
@@ -312,6 +361,21 @@ export default function CxcInvoiceCreationModal({
         ? (cleanNum.toUpperCase().startsWith('NE-') ? cleanNum : `NE-${cleanNum}`)
         : (cleanNum.toUpperCase().startsWith('FAC-') ? cleanNum : `FAC-${cleanNum}`);
 
+      // Garantizar cálculo consistente de fecha de vencimiento y días de crédito
+      let finalDiasCredito = diasCredito === '' ? 15 : Math.max(0, Number(diasCredito || 0));
+      let finalFechaVenc = fechaVencimiento;
+
+      if (!finalFechaVenc || (finalFechaVenc === fechaEmision && finalDiasCredito <= 0)) {
+        finalDiasCredito = finalDiasCredito > 0 ? finalDiasCredito : 15;
+        finalFechaVenc = addDaysToIso(fechaEmision, finalDiasCredito);
+      } else if (finalFechaVenc && fechaEmision && finalDiasCredito <= 0) {
+        const diff = diffDaysIso(fechaEmision, finalFechaVenc);
+        finalDiasCredito = diff > 0 ? diff : 15;
+        if (diff <= 0) {
+          finalFechaVenc = addDaysToIso(fechaEmision, finalDiasCredito);
+        }
+      }
+
       const payload = {
         id: docId,
         factNum: cleanNum,
@@ -320,10 +384,10 @@ export default function CxcInvoiceCreationModal({
         tipoDoc,
         fechaEmision: fechaEmision,
         fec_emis: fechaEmision,
-        fechaVencimiento: fechaVencimiento,
-        fec_venc: fechaVencimiento,
-        diasCredito: Number(diasCredito || 0),
-        dias_credito: Number(diasCredito || 0),
+        fechaVencimiento: finalFechaVenc,
+        fec_venc: finalFechaVenc,
+        diasCredito: finalDiasCredito,
+        dias_credito: finalDiasCredito,
         clienteId: clienteCodigo || `CLI-${cleanNum}`,
         cliente_id: clienteCodigo || `CLI-${cleanNum}`,
         clienteNombre: clienteNombre.trim(),
@@ -363,8 +427,8 @@ export default function CxcInvoiceCreationModal({
         tasaDolar: tasaNum,
         status: saldoNum <= 0.01 ? 'COBRADA' : 'PENDIENTE',
         estado: saldoNum <= 0.01 ? 'PAGADO' : 'PENDIENTE',
-        formaPago: Number(diasCredito || 0) > 0 ? '03' : '01',
-        condicionPago: Number(diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
+        formaPago: finalDiasCredito > 0 ? '03' : '01',
+        condicionPago: finalDiasCredito > 0 ? 'CREDITO' : 'CONTADO',
         observaciones: observaciones || 'Cuadre facturas noviembre 2026',
         items: [
           {
@@ -407,6 +471,11 @@ export default function CxcInvoiceCreationModal({
         setClienteRif('');
         setClienteDireccion('');
         setClienteTelefono('');
+        const effectiveDc = finalDiasCredito > 0 ? finalDiasCredito : 15;
+        setDiasCredito(effectiveDc);
+        if (fechaEmision) {
+          setFechaVencimiento(addDaysToIso(fechaEmision, effectiveDc));
+        }
       } else {
         if (onClose) onClose();
       }
@@ -751,8 +820,11 @@ export default function CxcInvoiceCreationModal({
 
               {/* Fecha Vencimiento */}
               <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: '4px' }}>
-                  Fecha Vencimiento *
+                <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.74rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  <span>Fecha Vencimiento *</span>
+                  <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: '0.70rem', textTransform: 'none' }}>
+                    ({diasCredito === '' ? 0 : Number(diasCredito || 0)} días crédito)
+                  </span>
                 </label>
                 <input
                   type="date"

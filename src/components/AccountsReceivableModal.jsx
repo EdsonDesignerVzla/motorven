@@ -405,15 +405,22 @@ export function AccountsReceivableModal({
                 fechaVencDate = parseDateSafe(inv.fechaVencimiento);
                 fechaVencIso = toIsoDateInput(inv.fechaVencimiento);
             } else {
-                const dc = diasCredito !== null && !isNaN(diasCredito) ? diasCredito : 15;
+                const dc = diasCredito !== null && !isNaN(diasCredito) && diasCredito > 0 ? diasCredito : 15;
                 fechaVencDate = new Date(fechaEmisionDate);
                 fechaVencDate.setDate(fechaVencDate.getDate() + dc);
                 fechaVencIso = toIsoDateInput(fechaVencDate);
             }
 
-            if (diasCredito === null || isNaN(diasCredito)) {
-                const diffCredit = Math.round((fechaVencDate.getTime() - fechaEmisionDate.getTime()) / (1000 * 60 * 60 * 24));
-                diasCredito = Math.max(0, diffCredit);
+            // Si fechaVencimiento coincide con fechaEmisión y diasCredito es 0 en un documento por cobrar (CxC),
+            // asignar 15 días de crédito estándar para evitar que se marque erróneamente como vencido
+            const diffEmisVenc = Math.round((fechaVencDate.getTime() - fechaEmisionDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffEmisVenc > 0) {
+                diasCredito = diffEmisVenc;
+            } else if (diasCredito === null || isNaN(diasCredito) || diasCredito <= 0) {
+                diasCredito = 15;
+                fechaVencDate = new Date(fechaEmisionDate);
+                fechaVencDate.setDate(fechaVencDate.getDate() + 15);
+                fechaVencIso = toIsoDateInput(fechaVencDate);
             }
 
             const vencMidnight = new Date(fechaVencDate);
