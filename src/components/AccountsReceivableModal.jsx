@@ -2044,6 +2044,29 @@ export function AccountsReceivableModal({
                         .cxc-table-scroll-container::-webkit-scrollbar-thumb:hover {
                             background: #38bdf8;
                         }
+                        .cxc-report-table {
+                            border-collapse: separate;
+                            border-spacing: 0;
+                        }
+                        .cxc-report-table thead th {
+                            position: sticky;
+                            top: 0;
+                            z-index: 20;
+                            background-color: var(--bg-header, #070c18);
+                            border-bottom: 1px solid var(--border-glass);
+                            white-space: nowrap;
+                        }
+                        .cxc-report-table tbody td {
+                            border-bottom: 1px solid var(--border-glass);
+                        }
+                        .cxc-report-table tfoot td {
+                            position: sticky;
+                            bottom: 0;
+                            z-index: 20;
+                            background-color: var(--bg-header, #070c18);
+                            border-top: 2px solid var(--border-glass);
+                            white-space: nowrap;
+                        }
                     `}</style>
 
                     {/* Barra de desplazamiento horizontal superior sincronizada con la tabla */}
@@ -2078,15 +2101,9 @@ export function AccountsReceivableModal({
                             background: 'var(--bg-card)'
                         }}
                     >
-                        <table ref={tableElRef} style={{ width: '100%', minWidth: '1380px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                        <table ref={tableElRef} className="cxc-report-table" style={{ width: '100%', minWidth: '1380px', textAlign: 'left', fontSize: '0.85rem' }}>
                             <thead>
-                                <tr style={{
-                                    position: 'sticky',
-                                    top: 0,
-                                    zIndex: 10,
-                                    background: 'var(--bg-card-header, #0f172a)',
-                                    borderBottom: '1px solid var(--border-glass)'
-                                }}>
+                                <tr>
                                     {/* 1. Vendedor */}
                                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }} onClick={() => handleSort('vendedorId')}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -2425,7 +2442,7 @@ export function AccountsReceivableModal({
                             </tbody>
                             {filteredInvoices.length > 0 && (
                                 <tfoot>
-                                    <tr style={{ position: 'sticky', bottom: 0, zIndex: 10, background: 'var(--bg-card-header, #0f172a)', borderTop: '2px solid var(--border-glass)', fontWeight: 700 }}>
+                                    <tr style={{ fontWeight: 700 }}>
                                         <td colSpan="8" style={{ padding: '0.9rem', textAlign: 'right', textTransform: 'uppercase', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                                             Totales del Reporte ({filteredInvoices.length} documentos):
                                         </td>
