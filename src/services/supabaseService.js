@@ -2281,8 +2281,88 @@ const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false 
   return updatedProducts;
 };
 
+export const CXC_DELETED_DOCS_KEY = 'signum_cxc_deleted_docs_v1';
+const CXC_DELETED_SANITIZED_KEY = 'signum_cxc_deleted_docs_sanitized_v1';
+
+export const getScopedCxcDeleteKeys = (docOrRef) => {
+  if (!docOrRef) return [];
+  const rawId = typeof docOrRef === 'object' ? String(docOrRef.id || '').trim() : String(docOrRef || '').trim();
+  const rawNum = typeof docOrRef === 'object'
+    ? String(docOrRef.factNum ?? docOrRef.fact_num ?? docOrRef.factura ?? docOrRef.numeroDoc ?? docOrRef.id ?? '').trim()
+    : String(docOrRef || '').trim();
+  const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+  const rawTipo = typeof docOrRef === 'object'
+    ? String(docOrRef.tipoDoc || docOrRef.tipo_doc || docOrRef.docType || '').toUpperCase().trim()
+    : '';
+  const isNe =
+    rawTipo === 'NOTA_ENTREGA' ||
+    rawTipo === 'N/E' ||
+    rawTipo === 'NE' ||
+    /^(NE-|NDE-)/i.test(rawId) ||
+    /^(NE-|NDE-)/i.test(rawNum);
+
+  if (isNe) {
+    const nePrefixed = cleanNum ? `NE-${cleanNum}` : '';
+    return Array.from(new Set([rawId, rawNum, nePrefixed].filter(Boolean)));
+  }
+
+  return Array.from(
+    new Set([
+      rawId,
+      rawNum,
+      cleanNum,
+      cleanNum ? `FAC-${cleanNum}` : '',
+      cleanNum ? `DOC-${cleanNum}` : '',
+      cleanNum ? `INV-${cleanNum}` : ''
+    ].filter(Boolean))
+  );
+};
+
+export const sanitizeCxcDeletedDocsStorage = () => {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const rawDel = localStorage.getItem(CXC_DELETED_DOCS_KEY);
+    const parsed = rawDel ? JSON.parse(rawDel) : [];
+    const list = Array.isArray(parsed) ? parsed.map(String) : [];
+
+    if (!localStorage.getItem(CXC_DELETED_SANITIZED_KEY)) {
+      // Limpieza única de entradas POS con ceros a la izquierda (p.ej. 000001 / NE-000001) que causaban colisión cruzada entre Facturas y Notas de Entrega
+      const cleaned = list.filter(k => !/^(FAC-|FACT-|NE-|NDE-|DOC-|INV-)?0+\d+$/i.test(String(k || '').trim()));
+      localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(cleaned));
+      localStorage.setItem(CXC_DELETED_SANITIZED_KEY, '1');
+      return cleaned;
+    }
+    return list;
+  } catch (_) {
+    return [];
+  }
+};
+
+export const isCxcEntryDeleted = (docOrIds, delSet) => {
+  if (!delSet || delSet.size === 0 || !docOrIds) return false;
+  const scopedKeys = getScopedCxcDeleteKeys(docOrIds);
+  return scopedKeys.some(k => delSet.has(k));
+};
+
+export const unmarkCxcDeletedDoc = (docOrRef) => {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const keysToUnmark = new Set(getScopedCxcDeleteKeys(docOrRef));
+    if (keysToUnmark.size === 0) return;
+    const rawDel = localStorage.getItem(CXC_DELETED_DOCS_KEY);
+    if (!rawDel) return;
+    const parsed = JSON.parse(rawDel);
+    if (!Array.isArray(parsed)) return;
+    const next = parsed.filter(k => !keysToUnmark.has(String(k).trim()));
+    if (next.length !== parsed.length) {
+      localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(next));
+    }
+  } catch (_) {}
+};
+
 const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
   if (!localSale) return;
+  unmarkCxcDeletedDoc(localSale);
   try {
     const storageProds = getStorageProducts();
     (localSale.items || saleData.items || []).forEach(it => {
@@ -2448,6 +2528,9 @@ export const processSupabaseSale = async (saleData) => {
       pedidoOrigenId: saleData.pedidoOrigenId || saleData.orderId || null,
       pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
     };
+
+    // Limpiar posible marca previa de borrado en CxC si se reutiliza un correlativo nuevo
+    unmarkCxcDeletedDoc(newSale);
 
     // 1. Ajuste de inventario independiente por almacén (Alm 01: Factura/ND, Alm 02: Nota de Entrega; NC reingresa)
     await adjustSupabaseProductsStockForSale(newSale, { reverse: false });
@@ -2888,12 +2971,19 @@ export const deleteSupabaseSale = async (saleId) => {
   const rawNum = typeof saleId === 'object'
     ? (saleId.factNum || saleId.factura || saleId.numeroDoc || saleId.id || '')
     : String(saleId || '');
-  const cleanNum = String(rawNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+  const cleanNum = String(rawNum).replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
   const cleanId = String(rawId).trim();
+  const rawTipoInput = typeof saleId === 'object'
+    ? String(saleId.tipoDoc || saleId.tipo_doc || saleId.docType || '').toUpperCase().trim()
+    : '';
+  const isTargetNe =
+    rawTipoInput === 'NOTA_ENTREGA' ||
+    rawTipoInput === 'N/E' ||
+    rawTipoInput === 'NE' ||
+    /^(NE-|NDE-)/i.test(cleanId) ||
+    /^(NE-|NDE-)/i.test(String(rawNum || ''));
 
-  const candidateKeys = Array.from(
-    new Set([cleanId, cleanNum, rawId, rawNum, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean))
-  );
+  const candidateKeys = getScopedCxcDeleteKeys(saleId);
   const candidateSet = new Set(candidateKeys);
 
   // Capturar ventas locales antes de limpiar localStorage por si necesitamos sus renglones para reingresar stock
@@ -2901,18 +2991,22 @@ export const deleteSupabaseSale = async (saleId) => {
     if (!s) return false;
     const sId = String(s.id || '').trim();
     const sNum = String(s.numeroDoc || s.factura || s.factNum || '').trim();
-    const sCleanNum = sNum.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-    return candidateSet.has(sId) || candidateSet.has(sNum) || candidateSet.has(sCleanNum);
+    const sIsNe =
+      String(s.tipoDoc || s.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+      /^(NE-|NDE-)/i.test(sId) ||
+      /^(NE-|NDE-)/i.test(sNum);
+    if (sIsNe !== isTargetNe) return false;
+    const sCleanNum = sNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+    return candidateSet.has(sId) || candidateSet.has(sNum) || (!isTargetNe && candidateSet.has(sCleanNum));
   });
 
   try {
     if (typeof localStorage !== 'undefined') {
-      const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
-      const delList = rawDel ? JSON.parse(rawDel) : [];
+      const delList = sanitizeCxcDeletedDocsStorage();
       candidateKeys.forEach(k => {
         if (!delList.includes(k)) delList.push(k);
       });
-      localStorage.setItem('signum_cxc_deleted_docs_v1', JSON.stringify(delList));
+      localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(delList));
 
       const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
       if (rawCustom) {
@@ -2922,9 +3016,8 @@ export const deleteSupabaseSale = async (saleId) => {
           Object.keys(customMap).forEach(k => {
             const item = customMap[k];
             if (item) {
-              const iId = String(item.id || '');
-              const iNum = String(item.factNum || item.fact_num || item.numeroDoc || '');
-              if (candidateKeys.includes(iId) || candidateKeys.includes(iNum)) {
+              const iKeys = getScopedCxcDeleteKeys(item);
+              if (iKeys.some(ik => candidateSet.has(ik))) {
                 delete customMap[k];
               }
             }
@@ -2935,8 +3028,13 @@ export const deleteSupabaseSale = async (saleId) => {
     }
   } catch (_) {}
 
-  const broadcastKey = cleanNum || cleanId;
-  const broadcastItem = { id: cleanId || broadcastKey, factNum: cleanNum, numeroDoc: cleanNum };
+  const broadcastKey = isTargetNe ? (cleanId || `NE-${cleanNum}`) : (cleanNum || cleanId);
+  const broadcastItem = {
+    id: cleanId || broadcastKey,
+    factNum: isTargetNe ? (rawNum || `NE-${cleanNum}`) : cleanNum,
+    numeroDoc: isTargetNe ? (rawNum || `NE-${cleanNum}`) : cleanNum,
+    tipoDoc: isTargetNe ? 'NOTA_ENTREGA' : 'FACTURA'
+  };
 
   const finalizeLocalOfflineDelete = () => {
     candidateKeys.forEach(k => deleteStorageSale(k));
@@ -2980,16 +3078,21 @@ export const deleteSupabaseSale = async (saleId) => {
     const orSalesParts = [];
     if (cleanId) orSalesParts.push(`id.eq.${cleanId}`);
     if (cleanNum) {
-      orSalesParts.push(`numero_doc.eq.${cleanNum}`);
-      if (cleanId !== cleanNum) orSalesParts.push(`id.eq.${cleanNum}`);
-      orSalesParts.push(`id.eq.NE-${cleanNum}`, `numero_doc.eq.NE-${cleanNum}`);
+      if (isTargetNe) {
+        const neCode = `NE-${cleanNum}`;
+        orSalesParts.push(`id.eq.${neCode}`, `numero_doc.eq.${neCode}`);
+      } else {
+        orSalesParts.push(`numero_doc.eq.${cleanNum}`);
+        if (cleanId !== cleanNum) orSalesParts.push(`id.eq.${cleanNum}`);
+      }
     }
+    const uniqueOrSalesParts = Array.from(new Set(orSalesParts));
 
     // 1. Obtener registros en `sales` ANTES de borrarlos para reingresar sus artículos al almacén
     let foundSales = [];
-    if (orSalesParts.length > 0) {
+    if (uniqueOrSalesParts.length > 0) {
       const { data: fetchedSales } = await withTimeout(
-        supabase.from('sales').select('*').or(orSalesParts.join(',')),
+        supabase.from('sales').select('*').or(uniqueOrSalesParts.join(',')),
         4000
       ).catch(() => ({ data: [] }));
       if (Array.isArray(fetchedSales) && fetchedSales.length > 0) {
@@ -3029,20 +3132,25 @@ export const deleteSupabaseSale = async (saleId) => {
     const orInvParts = [];
     if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
     if (cleanNum) {
-      orInvParts.push(`fact_num.eq.${cleanNum}`);
-      orInvParts.push(`id.eq.FAC-${cleanNum}`);
-      orInvParts.push(`id.eq.NE-${cleanNum}`);
+      if (isTargetNe) {
+        const neCode = `NE-${cleanNum}`;
+        orInvParts.push(`id.eq.${neCode}`, `fact_num.eq.${neCode}`);
+      } else {
+        orInvParts.push(`fact_num.eq.${cleanNum}`);
+        orInvParts.push(`id.eq.FAC-${cleanNum}`);
+      }
     }
-    if (orInvParts.length > 0) {
+    const uniqueOrInvParts = Array.from(new Set(orInvParts));
+    if (uniqueOrInvParts.length > 0) {
       await withTimeout(
-        supabase.from('profit_invoices').delete().or(orInvParts.join(',')),
+        supabase.from('profit_invoices').delete().or(uniqueOrInvParts.join(',')),
         4000
       ).catch(() => {});
     }
 
-    if (orSalesParts.length > 0) {
+    if (uniqueOrSalesParts.length > 0) {
       const { error } = await withTimeout(
-        supabase.from('sales').delete().or(orSalesParts.join(',')),
+        supabase.from('sales').delete().or(uniqueOrSalesParts.join(',')),
         4000
       );
       if (error) console.warn('[deleteSupabaseSale] Aviso sales delete:', error.message);
@@ -4006,8 +4114,7 @@ export const updateSupabaseProfitCashDesk = async (cashDesk) => {
 const applyLocalCxcOverridesToInvoices = (rawList = []) => {
   try {
     if (typeof localStorage === 'undefined') return rawList;
-    const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
-    const delSet = new Set(rawDel ? JSON.parse(rawDel).map(String) : []);
+    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
     const customMap = rawCustom ? JSON.parse(rawCustom) : {};
 
@@ -4016,11 +4123,11 @@ const applyLocalCxcOverridesToInvoices = (rawList = []) => {
 
     for (const inv of rawList) {
       if (!inv) continue;
-      const idKey = String(inv.id || '').trim();
-      const numKey = String(inv.factNum ?? inv.fact_num ?? inv.numeroDoc ?? '').trim();
-      if ((idKey && delSet.has(idKey)) || (numKey && delSet.has(numKey))) {
+      if (isCxcEntryDeleted(inv, delSet)) {
         continue;
       }
+      const idKey = String(inv.id || '').trim();
+      const numKey = String(inv.factNum ?? inv.fact_num ?? inv.numeroDoc ?? '').trim();
       const override = (idKey && customMap[idKey]) || (numKey && customMap[numKey]);
       if (override) {
         if (idKey) matchedCustomKeys.add(idKey);
@@ -4039,7 +4146,7 @@ const applyLocalCxcOverridesToInvoices = (rawList = []) => {
         if (!doc) return;
         const dId = String(doc.id || k).trim();
         const dNum = String(doc.factNum ?? doc.fact_num ?? '').trim();
-        if (delSet.has(dId) || (dNum && delSet.has(dNum))) return;
+        if (isCxcEntryDeleted(doc, delSet)) return;
         if (!matchedCustomKeys.has(dId) && (!dNum || !matchedCustomKeys.has(dNum)) && !addedIds.has(dId)) {
           addedIds.add(dId);
           if (dNum) addedIds.add(dNum);
@@ -4362,6 +4469,8 @@ export const saveSupabaseProfitInvoice = async (docData) => {
     fecha_sincronizacion: nowIso,
     updated_at: nowIso
   };
+
+  unmarkCxcDeletedDoc(payload);
 
   try {
     if (typeof localStorage !== 'undefined') {

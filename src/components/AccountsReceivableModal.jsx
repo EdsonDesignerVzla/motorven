@@ -11,6 +11,12 @@ import {
     REAL_PROFIT_SELLERS
 } from '../data/supabaseRealData';
 import { formatUsd, formatBs } from '../services/formatService';
+import {
+    CXC_DELETED_DOCS_KEY,
+    getScopedCxcDeleteKeys,
+    isCxcEntryDeleted,
+    sanitizeCxcDeletedDocsStorage
+} from '../services/supabaseService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
@@ -228,44 +234,14 @@ export function AccountsReceivableModal({
         const rawMap = new Map();
         const effectiveSales = Array.isArray(invoices) && invoices.length > 0 ? invoices : (Array.isArray(sales) ? sales : []);
 
-        // Leer documentos eliminados de forma persistente desde localStorage
-        let delSet = new Set();
-        try {
-            if (typeof localStorage !== 'undefined') {
-                const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
-                if (rawDel) {
-                    const parsedDel = JSON.parse(rawDel);
-                    if (Array.isArray(parsedDel)) {
-                        parsedDel.forEach(k => {
-                            if (k) {
-                                const s = String(k).trim();
-                                delSet.add(s);
-                                const clean = s.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-                                if (clean) delSet.add(clean);
-                            }
-                        });
-                    }
-                }
-            }
-        } catch (_) {}
-
-        const isDocDeleted = (dId, dNum, dFact) => {
-            const idStr = String(dId || '').trim();
-            const numStr = String(dNum || '').trim();
-            const factStr = String(dFact || '').trim();
-            const cleanNum = (numStr || factStr || idStr).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-            return (
-                (idStr && delSet.has(idStr)) ||
-                (numStr && delSet.has(numStr)) ||
-                (factStr && delSet.has(factStr)) ||
-                (cleanNum && delSet.has(cleanNum))
-            );
-        };
+        // Leer documentos eliminados de forma persistente desde localStorage (con limpieza única de colisiones previas)
+        const delSet = new Set(sanitizeCxcDeletedDocsStorage().map(k => String(k).trim()).filter(Boolean));
+        const isDocDeleted = (docOrObj) => isCxcEntryDeleted(docOrObj, delSet);
 
         // 1. Cargar documentos desde profitInvoices (omitiendo eliminados)
         (profitInvoices || []).forEach(inv => {
             const key = String(inv.factNum || inv.id || '').trim();
-            if (!key || isDocDeleted(inv.id, inv.factNum, inv.factura)) return;
+            if (!key || isDocDeleted(inv)) return;
             const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
             rawMap.set(key, { ...inv, _source: isPosFormat ? 'POS' : 'PROFIT', _isPosSale: isPosFormat });
         });
@@ -277,7 +253,7 @@ export function AccountsReceivableModal({
             const saleDocType = inferDocType(sale);
             const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
             const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
-            if (!key || isDocDeleted(sale.id, sale.numeroDoc || sale.factura || sale.factNum)) return;
+            if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
 
             const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
             const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
@@ -1119,11 +1095,8 @@ export function AccountsReceivableModal({
             return;
         }
         const rawNum = String(inv.factNum || inv.factura || inv.numeroDoc || '').trim();
-        const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
         const rawId = String(inv.id || '').trim();
-        const keysToDelete = Array.from(
-            new Set([rawNum, cleanNum, rawId, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean))
-        );
+        const keysToDelete = getScopedCxcDeleteKeys(inv);
 
         setDeletingKey(rawId || rawNum);
         try {
@@ -1136,15 +1109,14 @@ export function AccountsReceivableModal({
                 return next;
             });
 
-            // 2. Persistir inmediatamente en localStorage para garantizar que nunca reaparezca al refrescar
+            // 2. Persistir inmediatamente en localStorage sin colisionar entre Factura y Nota de Entrega
             try {
                 if (typeof localStorage !== 'undefined') {
-                    const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
-                    const delList = rawDel ? JSON.parse(rawDel) : [];
+                    const delList = sanitizeCxcDeletedDocsStorage();
                     keysToDelete.forEach(k => {
                         if (!delList.includes(k)) delList.push(k);
                     });
-                    localStorage.setItem('signum_cxc_deleted_docs_v1', JSON.stringify(delList));
+                    localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(delList));
 
                     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
                     if (rawCustom) {

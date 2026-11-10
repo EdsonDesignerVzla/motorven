@@ -459,14 +459,20 @@ export const deleteStorageSale = (saleIdOrObj, options = {}) => {
 
   const cleanStr = String(rawId || '').trim();
   const cleanNum = String(rawNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+  const isInputNe = typeof saleIdOrObj === 'object'
+    ? (String(saleIdOrObj.tipoDoc || saleIdOrObj.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' || /^(NE-|NDE-)/i.test(cleanStr) || /^(NE-|NDE-)/i.test(String(rawNum || '')))
+    : /^(NE-|NDE-)/i.test(cleanStr);
 
   const isMatch = (s) => {
     if (!s) return false;
     const sId = String(s.id || '').trim();
-    const sNum = String(s.numeroDoc || s.factura || s.factNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+    const sRawNum = String(s.numeroDoc || s.factura || s.factNum || '').trim();
+    const sIsNe = String(s.tipoDoc || s.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' || /^(NE-|NDE-)/i.test(sId) || /^(NE-|NDE-)/i.test(sRawNum);
+    if (sIsNe !== isInputNe) return false;
+    const sNum = sRawNum.replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
     return (
-      (cleanStr && (sId === cleanStr || String(s.id) === cleanStr || String(s.numeroDoc) === cleanStr)) ||
-      (cleanNum && (sNum === cleanNum || String(s.numeroDoc) === cleanNum || String(s.id) === cleanNum))
+      (cleanStr && (sId === cleanStr || sRawNum === cleanStr)) ||
+      (cleanNum && (sNum === cleanNum || sRawNum === cleanNum || sId === cleanNum))
     );
   };
 
