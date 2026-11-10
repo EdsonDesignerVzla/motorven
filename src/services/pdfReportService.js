@@ -13,6 +13,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
+import { getProductRetailPrice } from './pricingService.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -2550,6 +2551,49 @@ export function generateInventoryPDF({
   const is01 = wh === '01';
   const is02 = wh === '02';
 
+  const whSpec = is01
+    ? {
+        stockKey: 'stock01',
+        minFactor: 0.4,
+        stockCol: 'STOCK 01 (FISC)',
+        litersCol: 'LITROS FISC.',
+        cardLabel: 'Volumen 01: Alm. Principal',
+        regime: 'Facturas Fiscales',
+        regimeSub: 'Mostrador Barquisimeto SENIAT',
+        cardColor: COLORS.emerald,
+        footerValLabel: 'VALORIZACIÓN ALM 01',
+        footerVolLabel: 'VOLUMEN 01 (FISCAL)',
+        footerRopLabel: 'ALERTAS ROP ALM 01',
+        filePrefix: 'Reporte_Inventario_Alm01_Principal_SIGNUM_'
+      }
+    : is02
+    ? {
+        stockKey: 'stock02',
+        minFactor: 0.6,
+        stockCol: 'STOCK 02 (ENTR)',
+        litersCol: 'LITROS ENTR.',
+        cardLabel: 'Volumen 02: Alm. Central',
+        regime: 'Notas de Entrega',
+        regimeSub: 'Control Operativo Bóveda',
+        cardColor: COLORS.cyan,
+        footerValLabel: 'VALORIZACIÓN ALM 02',
+        footerVolLabel: 'VOLUMEN 02 (ENTREGA)',
+        footerRopLabel: 'ALERTAS ROP ALM 02',
+        filePrefix: 'Reporte_Inventario_Alm02_Central_SIGNUM_'
+      }
+    : null;
+
+  const getProductCost = (p) => Number(p?.costoUsd ?? p?.costo_usd ?? p?.costo ?? 0) || 0;
+  const getStockForWarehouse = (p) => {
+    const wStocks = getProductWarehouseStocks(p);
+    if (whSpec) return Number(wStocks[whSpec.stockKey] || 0);
+    return Number(wStocks.total ?? p?.stock ?? 0);
+  };
+  const getMinForWarehouse = (p) => {
+    const baseMin = Number(p?.stockMinimo) || 5;
+    return whSpec ? Math.max(1, Math.round(baseMin * whSpec.minFactor)) : baseMin;
+  };
+
   const reportTitle = isPhysicalTake
     ? 'HOJA OFICIAL DE TOMA FÍSICA & AUDITORÍA DE INVENTARIO'
     : is01
@@ -2577,20 +2621,30 @@ export function generateInventoryPDF({
   });
 
   const totalSkus = products.length;
-  const totalLitros = is01
-    ? (Number(kpis?.alm01TotalLitros) || products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock01 * resolveProductLitersPerUnit(p)), 0))
-    : is02
-    ? (Number(kpis?.alm02TotalLitros) || products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * resolveProductLitersPerUnit(p)), 0))
-    : (Number(kpis?.totalLitros) || products.reduce((acc, p) => acc + (Number(getProductWarehouseStocks(p).total || p.stock || 0) * resolveProductLitersPerUnit(p)), 0));
+  const computedLitros = products.reduce(
+    (acc, p) => acc + (getStockForWarehouse(p) * resolveProductLitersPerUnit(p)),
+    0
+  );
+  const kpiLitros = is01 ? kpis?.alm01TotalLitros : is02 ? kpis?.alm02TotalLitros : kpis?.totalLitros;
+  const totalLitros = kpiLitros != null ? Number(kpiLitros) : computedLitros;
+
+  const alm01LitrosSummary = kpis?.alm01TotalLitros != null
+    ? Number(kpis.alm01TotalLitros)
+    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock01 * resolveProductLitersPerUnit(p)), 0);
+  const alm02LitrosSummary = kpis?.alm02TotalLitros != null
+    ? Number(kpis.alm02TotalLitros)
+    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * resolveProductLitersPerUnit(p)), 0);
+  const alm01ValorUsdSummary = kpis?.alm01TotalValorUsd != null
+    ? Number(kpis.alm01TotalValorUsd)
+    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock01 * getProductCost(p)), 0);
+  const alm02ValorUsdSummary = kpis?.alm02TotalValorUsd != null
+    ? Number(kpis.alm02TotalValorUsd)
+    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * getProductCost(p)), 0);
 
   const breakdownByUnit = { Caja: 0, Paila: 0, Tambor: 0, Totem: 0, Litros: 0 };
   products.forEach((p) => {
     const u = resolveProductUnit(p, 'Caja');
-    const stockForWh = is01
-      ? getProductWarehouseStocks(p).stock01
-      : is02
-      ? getProductWarehouseStocks(p).stock02
-      : Number(getProductWarehouseStocks(p).total ?? p.stock ?? 0);
+    const stockForWh = getStockForWarehouse(p);
     if (breakdownByUnit[u] !== undefined) {
       breakdownByUnit[u] += Number(stockForWh || 0);
     }
@@ -2604,21 +2658,18 @@ export function generateInventoryPDF({
   ].filter(Boolean).join(' • ') || '0 Unidades';
 
   const tasa = Number(config?.tasaDolar) || 827.73;
-  const totalValorUsd = is01
-    ? (Number(kpis?.alm01TotalValorUsd) || products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock01 * Number(p.costoUsd || 0)), 0))
-    : is02
-    ? (Number(kpis?.alm02TotalValorUsd) || products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * Number(p.costoUsd || 0)), 0))
-    : (Number(kpis?.totalValorUsd) || products.reduce((acc, p) => acc + (Number(getProductWarehouseStocks(p).total || p.stock || 0) * Number(p.costoUsd || 0)), 0));
-  const totalValorBs = is01
-    ? (Number(kpis?.alm01TotalValorBs) || (totalValorUsd * tasa))
-    : is02
-    ? (Number(kpis?.alm02TotalValorBs) || (totalValorUsd * tasa))
-    : (Number(kpis?.totalValorBs) || (totalValorUsd * tasa));
-  const countCriticos = is01
-    ? (kpis?.alm01CountCriticos ?? products.filter(p => getProductWarehouseStocks(p).stock01 <= Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.4))).length)
-    : is02
-    ? (kpis?.alm02CountCriticos ?? products.filter(p => getProductWarehouseStocks(p).stock02 <= Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.6))).length)
-    : (kpis?.countCriticos ?? products.filter(p => Number(getProductWarehouseStocks(p).total || p.stock || 0) <= Number(p.stockMinimo || 5)).length);
+  const computedValorUsd = products.reduce(
+    (acc, p) => acc + (getStockForWarehouse(p) * getProductCost(p)),
+    0
+  );
+  const kpiValorUsd = is01 ? kpis?.alm01TotalValorUsd : is02 ? kpis?.alm02TotalValorUsd : kpis?.totalValorUsd;
+  const totalValorUsd = kpiValorUsd != null ? Number(kpiValorUsd) : computedValorUsd;
+  const kpiValorBs = is01 ? kpis?.alm01TotalValorBs : is02 ? kpis?.alm02TotalValorBs : kpis?.totalValorBs;
+  const totalValorBs = kpiValorBs != null ? Number(kpiValorBs) : (totalValorUsd * tasa);
+
+  const computedCriticos = products.filter(p => getStockForWarehouse(p) <= getMinForWarehouse(p)).length;
+  const kpiCriticos = is01 ? kpis?.alm01CountCriticos : is02 ? kpis?.alm02CountCriticos : kpis?.countCriticos;
+  const countCriticos = kpiCriticos != null ? Number(kpiCriticos) : computedCriticos;
 
   let cards;
   if (isPhysicalTake) {
@@ -2630,7 +2681,8 @@ export function generateInventoryPDF({
       const count = physicalCounts[key];
       if (count !== undefined && count !== '') {
         countAuditados++;
-        const diff = Number(count) - Number(p.stock || 0);
+        const sysStock = whSpec ? getStockForWarehouse(p) : Number(p.stock ?? getStockForWarehouse(p));
+        const diff = Number(count) - sysStock;
         if (diff === 0) countCuadrados++;
         else countDescuadres++;
       }
@@ -2642,25 +2694,28 @@ export function generateInventoryPDF({
       { label: 'SKUs Auditados', value: `${countAuditados} / ${totalSkus}`, subtext: `${countCuadrados} Cuadrados Exactos`, color: COLORS.emerald },
       { label: 'Discrepancias / Mermas', value: `${countDescuadres} SKUs`, subtext: countDescuadres > 0 ? 'Requiere Ajuste' : 'Inventario Conforme', color: countDescuadres > 0 ? COLORS.red : COLORS.emerald }
     ];
-  } else if (is01) {
+  } else if (whSpec) {
+    const kpiSkus = is01 ? kpis?.alm01TotalSkus : kpis?.alm02TotalSkus;
+    const activeSkus = kpiSkus != null ? Number(kpiSkus) : products.filter(p => getStockForWarehouse(p) > 0).length;
+    const kpiReorden = is01 ? kpis?.alm01CountReorden : kpis?.alm02CountReorden;
+    const countReorden = kpiReorden != null
+      ? Number(kpiReorden)
+      : products.filter(p => {
+          const s = getStockForWarehouse(p);
+          const minW = getMinForWarehouse(p);
+          return s > minW && s <= minW * 2;
+        }).length;
     cards = [
-      { label: 'Volumen 01: Alm. Principal', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.emerald },
-      { label: 'Régimen de Despacho', value: 'Facturas Fiscales', subtext: 'Mostrador Barquisimeto SENIAT', color: COLORS.navy },
-      { label: 'Existencia Activa', value: `${kpis?.alm01TotalSkus || products.filter(p => getProductWarehouseStocks(p).stock01 > 0).length} SKUs con Stock`, subtext: `${kpis?.alm01CountCriticos || 0} Críticos • ${kpis?.alm01CountReorden || 0} Reorden`, color: (kpis?.alm01CountCriticos || 0) > 0 ? COLORS.amber : COLORS.emerald },
-      { label: 'Valoración al Costo', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy }
-    ];
-  } else if (is02) {
-    cards = [
-      { label: 'Volumen 02: Alm. Central', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
-      { label: 'Régimen de Despacho', value: 'Notas de Entrega', subtext: 'Control Operativo Bóveda', color: COLORS.navy },
-      { label: 'Existencia Activa', value: `${kpis?.alm02TotalSkus || products.filter(p => getProductWarehouseStocks(p).stock02 > 0).length} SKUs con Stock`, subtext: `${kpis?.alm02CountCriticos || 0} Críticos • ${kpis?.alm02CountReorden || 0} Reorden`, color: (kpis?.alm02CountCriticos || 0) > 0 ? COLORS.amber : COLORS.emerald },
+      { label: whSpec.cardLabel, value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: whSpec.cardColor },
+      { label: 'Régimen de Despacho', value: whSpec.regime, subtext: whSpec.regimeSub, color: COLORS.navy },
+      { label: 'Existencia Activa', value: `${activeSkus} SKUs con Stock`, subtext: `${countCriticos} Críticos • ${countReorden} Reorden`, color: countCriticos > 0 ? COLORS.amber : COLORS.emerald },
       { label: 'Valoración al Costo', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy }
     ];
   } else {
     cards = [
       { label: 'Volumen Total en Bodega (Σ Alm 01 + 02)', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
-      { label: '01: Alm. Principal (Fiscal)', value: `${(Number(kpis?.alm01TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L`, subtext: kpis?.alm01BreakdownLabel || 'Facturas Fiscales SENIAT', color: COLORS.emerald },
-      { label: '02: Alm. Central (N/Entrega)', value: `${(Number(kpis?.alm02TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L`, subtext: kpis?.alm02BreakdownLabel || 'Notas de Entrega Bóveda', color: COLORS.cyan },
+      { label: '01: Alm. Principal (Fiscal)', value: `${alm01LitrosSummary.toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L`, subtext: kpis?.alm01BreakdownLabel || 'Facturas Fiscales SENIAT', color: COLORS.emerald },
+      { label: '02: Alm. Central (N/Entrega)', value: `${alm02LitrosSummary.toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L`, subtext: kpis?.alm02BreakdownLabel || 'Notas de Entrega Bóveda', color: COLORS.cyan },
       { label: 'Valoración Total al Costo', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy }
     ];
   }
@@ -2681,7 +2736,7 @@ export function generateInventoryPDF({
     ? `El inventario de 01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales SENIAT) registra un volumen disponible de ${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros (${breakdownLabel}) con valorización total al costo de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Todas las transacciones de salida de este almacén son soportadas fiscalmente. Se identifican ${countCriticos} ítems en umbral de alerta que ameritan atención o reposición.`
     : is02
     ? `El inventario de 02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega Comerciales) registra un volumen disponible de ${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros (${breakdownLabel}) con valorización total al costo de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Todas las transacciones de salida corresponden a entregas comerciales directas. Se identifican ${countCriticos} ítems en umbral de alerta que ameritan atención o reposición.`
-    : `El inventario consolidado total (Almacén 01 + Almacén 02) registra un volumen global de ${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros (${breakdownLabel}) con valorización total al costo de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Desglose Operativo por Almacén: [01: Almacén Principal (Facturas Fiscales SENIAT)]: ${(Number(kpis?.alm01TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })} L (${formatUsd(kpis?.alm01TotalValorUsd || 0)}) | [02: Almacén Central (Notas de Entrega Bóveda)]: ${(Number(kpis?.alm02TotalLitros) || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })} L (${formatUsd(kpis?.alm02TotalValorUsd || 0)}). Se auditan ${totalSkus} SKUs totales en catálogo con ${countCriticos} ítems en umbral de alerta que ameritan reposición con planta.`;
+    : `El inventario consolidado total (Almacén 01 + Almacén 02) registra un volumen global de ${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros (${breakdownLabel}) con valorización total al costo de ${formatUsd(totalValorUsd)} (${formatBs(totalValorBs)}). Desglose Operativo por Almacén: [01: Almacén Principal (Facturas Fiscales SENIAT)]: ${alm01LitrosSummary.toLocaleString('es-VE', { minimumFractionDigits: 2 })} L (${formatUsd(alm01ValorUsdSummary)}) | [02: Almacén Central (Notas de Entrega Bóveda)]: ${alm02LitrosSummary.toLocaleString('es-VE', { minimumFractionDigits: 2 })} L (${formatUsd(alm02ValorUsdSummary)}). Se auditan ${totalSkus} SKUs totales en catálogo con ${countCriticos} ítems en umbral de alerta que ameritan reposición con planta.`;
 
   currentY = addAnalyticalBox(
     base.doc,
@@ -2698,7 +2753,7 @@ export function generateInventoryPDF({
 
   if (isPhysicalTake) {
     const tableData = sortedProducts.map((p) => {
-      const stock = Number(p.stock || 0);
+      const stock = whSpec ? getStockForWarehouse(p) : Number(p.stock ?? getStockForWarehouse(p));
       const key = p.codigo || p.id;
       const rawCount = physicalCounts[key];
       const hasCount = rawCount !== undefined && rawCount !== '';
@@ -2774,22 +2829,23 @@ export function generateInventoryPDF({
       base.startX
     );
 
-    finalizeAndSave(base.doc, `Toma_Fisica_Inventario_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+    const physWhTag = is01 ? 'Alm01_' : is02 ? 'Alm02_' : '';
+    finalizeAndSave(base.doc, `Toma_Fisica_Inventario_${physWhTag}SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
     return;
   }
 
   let tableHead;
   let tableBody;
   let tableColStyles;
+  let emptyTableRow;
 
-  if (is01) {
-    tableHead = [['CÓDIGO', 'DESCRIPCIÓN LUBRICANTE', 'PRESENTACIÓN', 'STOCK 01 (FISC)', 'LITROS FISC.', 'COSTO U.', 'PRECIO V.', 'VALOR TOTAL', 'ESTADO']];
+  if (whSpec) {
+    tableHead = [['CÓDIGO', 'DESCRIPCIÓN LUBRICANTE', 'PRESENTACIÓN', whSpec.stockCol, whSpec.litersCol, 'COSTO U.', 'PRECIO V.', 'VALOR TOTAL', 'ESTADO']];
     tableBody = sortedProducts.map((p) => {
-      const wStocks = getProductWarehouseStocks(p);
-      const stock = Number(wStocks.stock01 || 0);
-      const min = Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.4));
-      const costo = Number(p.costoUsd || 0);
-      const precio = Number(p.precioUsd || p.precioA || p.precioUsdDetal || 0);
+      const stock = getStockForWarehouse(p);
+      const min = getMinForWarehouse(p);
+      const costo = getProductCost(p);
+      const precio = getProductRetailPrice(p) || Number(p.precioA || 0);
       const valTotal = stock * costo;
       const lts = (stock * resolveProductLitersPerUnit(p)).toFixed(1);
       const estado = stock <= 0 ? 'AGOTADO' : stock <= min ? 'CRÍTICO' : 'ÓPTIMO';
@@ -2808,7 +2864,7 @@ export function generateInventoryPDF({
     });
     tableColStyles = {
       0: { fontStyle: 'bold', halign: 'center', cellWidth: 16 },
-      1: { cellWidth: 46 },
+      1: { cellWidth: 42 },
       2: { halign: 'center', cellWidth: 18 },
       3: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
       4: { halign: 'center', cellWidth: 16 },
@@ -2817,49 +2873,15 @@ export function generateInventoryPDF({
       7: { halign: 'right', fontStyle: 'bold', cellWidth: 20 },
       8: { halign: 'center', fontStyle: 'bold', cellWidth: 17.9 }
     };
-  } else if (is02) {
-    tableHead = [['CÓDIGO', 'DESCRIPCIÓN LUBRICANTE', 'PRESENTACIÓN', 'STOCK 02 (ENTR)', 'LITROS ENTR.', 'COSTO U.', 'PRECIO V.', 'VALOR TOTAL', 'ESTADO']];
-    tableBody = sortedProducts.map((p) => {
-      const wStocks = getProductWarehouseStocks(p);
-      const stock = Number(wStocks.stock02 || 0);
-      const min = Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.6));
-      const costo = Number(p.costoUsd || 0);
-      const precio = Number(p.precioUsd || p.precioA || p.precioUsdDetal || 0);
-      const valTotal = stock * costo;
-      const lts = (stock * resolveProductLitersPerUnit(p)).toFixed(1);
-      const estado = stock <= 0 ? 'AGOTADO' : stock <= min ? 'CRÍTICO' : 'ÓPTIMO';
-
-      return [
-        p.codigo || 'SKU-00',
-        p.descripcion || 'Producto',
-        resolveProductUnit(p, 'Caja'),
-        `${stock} ${resolveProductUnit(p, 'Caja')}`,
-        `${lts} L`,
-        formatUsd(costo),
-        formatUsd(precio),
-        formatUsd(valTotal),
-        estado
-      ];
-    });
-    tableColStyles = {
-      0: { fontStyle: 'bold', halign: 'center', cellWidth: 16 },
-      1: { cellWidth: 46 },
-      2: { halign: 'center', cellWidth: 18 },
-      3: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
-      4: { halign: 'center', cellWidth: 16 },
-      5: { halign: 'right', cellWidth: 16 },
-      6: { halign: 'right', cellWidth: 16 },
-      7: { halign: 'right', fontStyle: 'bold', cellWidth: 20 },
-      8: { halign: 'center', fontStyle: 'bold', cellWidth: 17.9 }
-    };
+    emptyTableRow = [['SIN STOCK', 'No hay productos registrados en existencias', '-', '0', '0 L', '$ 0.00', '$ 0.00', '$ 0.00', 'AGOTADO']];
   } else {
     tableHead = [['CÓDIGO', 'DESCRIPCIÓN LUBRICANTE', 'PRESENTACIÓN', 'ALM 01 (FISC)', 'ALM 02 (ENTR)', 'TOTAL (Σ 01+02)', 'LITROS TOT.', 'COSTO U.', 'PRECIO V.', 'VALOR TOTAL', 'ESTADO']];
     tableBody = sortedProducts.map((p) => {
       const wStocks = getProductWarehouseStocks(p);
       const stock = Number(wStocks.total || 0);
       const min = Number(p.stockMinimo || 5);
-      const costo = Number(p.costoUsd || 0);
-      const precio = Number(p.precioUsd || p.precioA || p.precioUsdDetal || 0);
+      const costo = getProductCost(p);
+      const precio = getProductRetailPrice(p) || Number(p.precioA || 0);
       const valTotal = stock * costo;
       const lts = (stock * resolveProductLitersPerUnit(p)).toFixed(1);
       const estado = stock <= 0 ? 'AGOTADO' : stock <= min ? 'CRÍTICO' : 'ÓPTIMO';
@@ -2880,7 +2902,7 @@ export function generateInventoryPDF({
     });
     tableColStyles = {
       0: { fontStyle: 'bold', halign: 'center', cellWidth: 14 },
-      1: { cellWidth: 36 },
+      1: { cellWidth: 35.9 },
       2: { halign: 'center', cellWidth: 14 },
       3: { halign: 'center', fontStyle: 'bold', cellWidth: 13 },
       4: { halign: 'center', fontStyle: 'bold', cellWidth: 13 },
@@ -2891,6 +2913,7 @@ export function generateInventoryPDF({
       9: { halign: 'right', fontStyle: 'bold', cellWidth: 18 },
       10: { halign: 'center', fontStyle: 'bold', cellWidth: 14 }
     };
+    emptyTableRow = [['SIN STOCK', 'No hay productos registrados en existencias', '-', '0', '0', '0', '0 L', '$ 0.00', '$ 0.00', '$ 0.00', 'AGOTADO']];
   }
 
   const statusColIdx = tableHead[0].length - 1;
@@ -2900,7 +2923,7 @@ export function generateInventoryPDF({
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
     head: tableHead,
-    body: tableBody.length > 0 ? tableBody : [['SIN STOCK', 'No hay productos registrados en existencias', '-', '-', '-', '0', '0 L', '$ 0.00', '$ 0.00', '$ 0.00', 'AGOTADO']],
+    body: tableBody.length > 0 ? tableBody : emptyTableRow,
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
@@ -2931,17 +2954,11 @@ export function generateInventoryPDF({
   });
 
   const finalYInv = base.doc.lastAutoTable?.finalY || currentY;
-  const footerCards = is01
+  const footerCards = whSpec
     ? [
-        { label: 'VALORIZACIÓN ALM 01', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy },
-        { label: 'VOLUMEN 01 (FISCAL)', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.emerald },
-        { label: 'ALERTAS ROP ALM 01', value: `${countCriticos} Productos`, subtext: 'Stock crítico o reposición', color: countCriticos > 0 ? COLORS.amber : COLORS.emerald }
-      ]
-    : is02
-    ? [
-        { label: 'VALORIZACIÓN ALM 02', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy },
-        { label: 'VOLUMEN 02 (ENTREGA)', value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: COLORS.cyan },
-        { label: 'ALERTAS ROP ALM 02', value: `${countCriticos} Productos`, subtext: 'Stock crítico o reposición', color: countCriticos > 0 ? COLORS.amber : COLORS.emerald }
+        { label: whSpec.footerValLabel, value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy },
+        { label: whSpec.footerVolLabel, value: `${totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Litros`, subtext: breakdownLabel, color: whSpec.cardColor },
+        { label: whSpec.footerRopLabel, value: `${countCriticos} Productos`, subtext: 'Stock crítico o reposición', color: countCriticos > 0 ? COLORS.amber : COLORS.emerald }
       ]
     : [
         { label: 'VALORIZACIÓN TOTAL (AMBOS)', value: formatUsd(totalValorUsd), subtext: formatBs(totalValorBs), color: COLORS.navy },
@@ -2951,10 +2968,8 @@ export function generateInventoryPDF({
 
   addGrandTotalBox(base.doc, finalYInv + 3.5, footerCards, base.tableWidth, base.startX);
 
-  const pdfFileName = is01
-    ? `Reporte_Inventario_Alm01_Principal_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`
-    : is02
-    ? `Reporte_Inventario_Alm02_Central_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`
+  const pdfFileName = whSpec
+    ? `${whSpec.filePrefix}${new Date().toISOString().slice(0, 10)}.pdf`
     : `Reporte_Inventario_Consolidado_Total_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`;
 
   finalizeAndSave(base.doc, pdfFileName, currentUser);

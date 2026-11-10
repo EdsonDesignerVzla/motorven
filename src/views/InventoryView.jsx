@@ -38,6 +38,14 @@ import { uploadImageToStorage, STORAGE_FOLDERS } from '../services/imageStorageS
 import { compressImageToBase64 } from '../services/imageCompression';
 import { generateInventoryPDF } from '../services/pdfReportService';
 
+function getPhysicalSysStock(p, warehouse) {
+  const stocks = getProductWarehouseStocks(p);
+  const normWh = String(warehouse || '').replace(/^ALM-/, '').trim();
+  if (normWh === '01') return stocks.stock01;
+  if (normWh === '02') return stocks.stock02;
+  return Number(p?.stock ?? stocks.total ?? 0) || 0;
+}
+
 export default function InventoryView({
   products = [],
   config = {},
@@ -347,7 +355,7 @@ export default function InventoryView({
     let totalLitrosSistema = 0;
 
     targetPhysicalProducts.forEach(p => {
-      const sysStock = Number(p.stock) || 0;
+      const sysStock = getPhysicalSysStock(p, physicalTakeWarehouse);
       totalCajasSistema += sysStock;
       totalLitrosSistema += sysStock * resolveProductLitersPerUnit(p);
 
@@ -372,12 +380,12 @@ export default function InventoryView({
       totalCajasSistema,
       totalLitrosSistema
     };
-  }, [targetPhysicalProducts, physicalCounts]);
+  }, [targetPhysicalProducts, physicalCounts, physicalTakeWarehouse]);
 
   const handleAutoFillCounts = () => {
     const counts = {};
     targetPhysicalProducts.forEach(p => {
-      counts[p.codigo || p.id] = Number(p.stock) || 0;
+      counts[p.codigo || p.id] = getPhysicalSysStock(p, physicalTakeWarehouse);
     });
     setPhysicalCounts(counts);
   };
@@ -391,7 +399,7 @@ export default function InventoryView({
     const headers = ['Codigo', 'Descripcion', 'Ubicacion', 'Stock_Sistema_Cajas', 'Conteo_Fisico_Cajas', 'Diferencia_Cajas', 'Estado_Cuadre'];
     const rows = targetPhysicalProducts.map(p => {
       const key = p.codigo || p.id;
-      const sysStock = Number(p.stock) || 0;
+      const sysStock = getPhysicalSysStock(p, physicalTakeWarehouse);
       const count = physicalCounts[key] !== undefined && physicalCounts[key] !== '' ? Number(physicalCounts[key]) : '';
       const diff = count !== '' ? count - sysStock : '';
       const status = count === '' ? 'PENDIENTE' : diff === 0 ? 'CUADRADO' : diff < 0 ? `FALTANTE_${diff}` : `SOBRANTE_+${diff}`;
@@ -743,11 +751,11 @@ export default function InventoryView({
               products: filteredProducts,
               config,
               currentUser,
-              kpis: inventoryKpis,
-              warehouseId: selectedWarehouseFilter,
-              warehouseName: selectedWarehouseFilter === '01'
+              kpis: filteredProducts.length === products.length ? inventoryKpis : null,
+              warehouseId: normSelW || 'TODOS',
+              warehouseName: normSelW === '01'
                 ? '01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales)'
-                : selectedWarehouseFilter === '02'
+                : normSelW === '02'
                 ? '02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)'
                 : 'Todos los Almacenes (Consolidado: Alm 01 + Alm 02)'
             })}
@@ -2054,7 +2062,7 @@ export default function InventoryView({
                   ) : (
                     targetPhysicalProducts.map((p, idx) => {
                       const key = p.codigo || p.id;
-                      const sysStock = Number(p.stock) || 0;
+                      const sysStock = getPhysicalSysStock(p, physicalTakeWarehouse);
                       const rawCount = physicalCounts[key];
                       const hasCount = rawCount !== undefined && rawCount !== '';
                       const countNum = hasCount ? Number(rawCount) : null;
@@ -2177,10 +2185,15 @@ export default function InventoryView({
                   products: targetPhysicalProducts,
                   config,
                   currentUser,
-                  kpis: inventoryKpis,
+                  kpis: targetPhysicalProducts.length === products.length ? inventoryKpis : null,
                   isPhysicalTake: true,
                   physicalCounts,
-                  warehouseName: physicalTakeWarehouse === 'TODOS' ? 'Todos los Almacenes' : physicalTakeWarehouse,
+                  warehouseId: physicalTakeWarehouse,
+                  warehouseName: physicalTakeWarehouse === '01'
+                    ? '01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales)'
+                    : physicalTakeWarehouse === '02'
+                    ? '02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)'
+                    : 'Todos los Almacenes (Consolidado)',
                   auditorName
                 })}
                 title="Generar y descargar el Reporte Oficial de Toma Física en PDF"

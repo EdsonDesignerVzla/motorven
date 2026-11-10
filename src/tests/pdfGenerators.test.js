@@ -278,6 +278,63 @@ async function runPdfTests() {
     });
   });
 
+  testGen('Inventario por Almacén 01 (Principal / Facturas Fiscales)', () => {
+    generateInventoryPDF({
+      products: [
+        { codigo: '000003', descripcion: 'Lubricante Diesel SAE 50', stock: 760, stockAlmacen01: 300, stockAlmacen02: 460, unidad: 'Litros', costoUsd: 4.2, precioUsdDetal: 6.5, stockMinimo: 20 },
+        { codigo: '000012', descripcion: 'Lubricante Diesel SAE 50 Totem', stock: 1, stockAlmacen01: 0, stockAlmacen02: 1, unidad: 'Totem', costoUsd: 2400, precioUsdDetal: 3200, stockMinimo: 2 }
+      ],
+      config: mockConfig,
+      currentUser: mockUser,
+      warehouseId: '01',
+      warehouseName: '01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales)'
+    });
+  });
+
+  testGen('Inventario por Almacén 02 (Central / Notas de Entrega)', () => {
+    generateInventoryPDF({
+      products: [
+        { codigo: '000003', descripcion: 'Lubricante Diesel SAE 50', stock: 760, stockAlmacen01: 300, stockAlmacen02: 460, unidad: 'Litros', costoUsd: 4.2, precioUsdDetal: 6.5, stockMinimo: 20 },
+        { codigo: '000012', descripcion: 'Lubricante Diesel SAE 50 Totem', stock: 1, stockAlmacen01: 0, stockAlmacen02: 1, unidad: 'Totem', costoUsd: 2400, precioUsdDetal: 3200, stockMinimo: 2 }
+      ],
+      config: mockConfig,
+      currentUser: mockUser,
+      warehouseId: 'ALM-02',
+      warehouseName: '02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)'
+    });
+  });
+
+  testGen('Inventario por Almacén 01 y 02 (vacíos)', () => {
+    generateInventoryPDF({ products: [], config: mockConfig, currentUser: mockUser, warehouseId: '01' });
+    generateInventoryPDF({ products: [], config: mockConfig, currentUser: mockUser, warehouseId: '02' });
+  });
+
+  testGen('Inventario Toma Física por Almacén 01 y 02', () => {
+    const sampleProducts = [
+      { codigo: '001201', descripcion: '15W-40 Semi', stock: 152, stockAlmacen01: 60, stockAlmacen02: 92, unidad: 'Caja' }
+    ];
+    generateInventoryPDF({
+      products: sampleProducts,
+      config: mockConfig,
+      currentUser: mockUser,
+      isPhysicalTake: true,
+      physicalCounts: { '001201': 60 },
+      warehouseId: '01',
+      warehouseName: '01: ALMACÉN PRINCIPAL / MOSTRADOR (Facturas Fiscales)',
+      auditorName: 'Auditor Test'
+    });
+    generateInventoryPDF({
+      products: sampleProducts,
+      config: mockConfig,
+      currentUser: mockUser,
+      isPhysicalTake: true,
+      physicalCounts: { '001201': 90 },
+      warehouseId: '02',
+      warehouseName: '02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)',
+      auditorName: 'Auditor Test'
+    });
+  });
+
   // 8. Pedidos & Pipeline
   testGen('Pedidos & Pipeline', () => {
     generateOrdersPDF({
