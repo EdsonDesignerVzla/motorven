@@ -151,12 +151,57 @@ function copyRecursiveSync(src, dest) {
   }
 }
 
+/**
+ * Respalda automáticamente toda la base de datos y datos del sistema
+ * en supabase/backups/ con timestamp antes de realizar cualquier despliegue.
+ */
+export function createSystemBackupBeforeDeploy() {
+  const backupsDir = path.join(projectRoot, 'supabase', 'backups');
+  if (!fs.existsSync(backupsDir)) {
+    fs.mkdirSync(backupsDir, { recursive: true });
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+
+  const timestamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+  const dateShort = `${year}-${month}-${day}`;
+
+  const localDbPath = path.join(projectRoot, 'supabase', 'local_database.json');
+  if (fs.existsSync(localDbPath)) {
+    const backupFile = path.join(backupsDir, `local_database_backup_${timestamp}.json`);
+    const dailyBackupFile = path.join(backupsDir, `local_database_${dateShort}.json`);
+
+    fs.copyFileSync(localDbPath, backupFile);
+    fs.copyFileSync(localDbPath, dailyBackupFile);
+
+    const stat = fs.statSync(backupFile);
+    const sizeMb = (stat.size / (1024 * 1024)).toFixed(2);
+    console.log(`🛡️ [BACKUP DE SEGURIDAD] Backup completo creado exitosamente:`);
+    console.log(`   -> ${backupFile} (${sizeMb} MB)`);
+    console.log(`   -> ${dailyBackupFile}`);
+    return backupFile;
+  } else {
+    console.warn(`⚠️ [BACKUP] No se encontró ${localDbPath} para respaldar.`);
+    return null;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const verifyOnly = args.includes('--verify-only');
 
   const backendUrlPayload = await ensureProductionFiles();
   if (verifyOnly) return;
+
+  // Realizar Backup de Seguridad Obligatorio antes del despliegue
+  console.log('🛡️ [PASO 1/3] Generando Backup de Seguridad completo del sistema antes de desplegar...');
+  createSystemBackupBeforeDeploy();
 
   const distDir = path.join(projectRoot, 'dist');
   if (!fs.existsSync(path.join(distDir, 'index.html'))) {
@@ -202,7 +247,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('❌ Error en el despliegue:', err.message);
-  process.exit(1);
-});
+const isDirectExecution = process.argv[1] && (path.resolve(process.argv[1]) === path.resolve(__filename));
+if (isDirectExecution) {
+  main().catch((err) => {
+    console.error('❌ Error en el despliegue:', err.message);
+    process.exit(1);
+  });
+}

@@ -4856,6 +4856,95 @@ export const getSupabaseProfitPurchases = async () => {
   }
 };
 
+export const CXP_DELETED_DOCS_KEY = 'signum_cxp_deleted_docs_v1';
+export const CXP_CUSTOM_DOCS_KEY = 'signum_cxp_custom_docs_v1';
+export const CXP_PAYMENTS_KEY = 'signum_cxp_payments_v1';
+
+export const getScopedCxpDeleteKeys = (docOrRef) => {
+  if (!docOrRef) return [];
+  if (typeof docOrRef === 'string') return [docOrRef.trim()];
+  const keys = new Set();
+  const rawId = String(docOrRef.id || '').trim();
+  const rawNum = String(docOrRef.nroDoc || docOrRef.nro_doc || docOrRef.id || '').trim();
+  const tipo = String(docOrRef.tipoDoc || docOrRef.tipo_doc || '').trim();
+  const rif = String(docOrRef.provRif || docOrRef.prov_rif || docOrRef.coProv || docOrRef.co_prov || '').trim();
+
+  if (rawId) keys.add(rawId);
+  if (rawNum) {
+    keys.add(rawNum);
+    if (tipo) keys.add(`${tipo}-${rawNum}`);
+    if (tipo && rif) keys.add(`DOC-CP-${tipo}-${rawNum}-${rif}`);
+  }
+  return Array.from(keys);
+};
+
+export const sanitizeCxpDeletedDocsStorage = () => {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const rawDel = localStorage.getItem(CXP_DELETED_DOCS_KEY);
+    const parsed = rawDel ? JSON.parse(rawDel) : [];
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+export const isCxpEntryDeleted = (docOrIds, delSet) => {
+  if (!delSet || delSet.size === 0 || !docOrIds) return false;
+  const scopedKeys = getScopedCxpDeleteKeys(docOrIds);
+  return scopedKeys.some(k => delSet.has(k));
+};
+
+export const applyLocalCxpOverridesToPayables = (rawList = []) => {
+  try {
+    if (typeof localStorage === 'undefined') return rawList;
+    const delSet = new Set(sanitizeCxpDeletedDocsStorage());
+    const rawCustom = localStorage.getItem(CXP_CUSTOM_DOCS_KEY);
+    const customMap = rawCustom ? JSON.parse(rawCustom) : {};
+
+    const matchedCustomKeys = new Set();
+    const result = [];
+
+    for (const p of rawList) {
+      if (!p) continue;
+      if (isCxpEntryDeleted(p, delSet)) {
+        continue;
+      }
+      const idKey = String(p.id || '').trim();
+      const numKey = String(p.nroDoc ?? p.nro_doc ?? '').trim();
+      const override = (idKey && customMap[idKey]) || (numKey && customMap[numKey]);
+      if (override) {
+        if (idKey) matchedCustomKeys.add(idKey);
+        if (numKey) matchedCustomKeys.add(numKey);
+        if (override.id) matchedCustomKeys.add(String(override.id));
+        if (override.nroDoc) matchedCustomKeys.add(String(override.nroDoc));
+        result.push({ ...p, ...override });
+      } else {
+        result.push(p);
+      }
+    }
+
+    if (customMap && typeof customMap === 'object') {
+      const addedIds = new Set();
+      Object.entries(customMap).forEach(([k, doc]) => {
+        if (!doc) return;
+        const dId = String(doc.id || k).trim();
+        const dNum = String(doc.nroDoc ?? doc.nro_doc ?? '').trim();
+        if (isCxpEntryDeleted(doc, delSet)) return;
+        if (!matchedCustomKeys.has(dId) && (!dNum || !matchedCustomKeys.has(dNum)) && !addedIds.has(dId)) {
+          addedIds.add(dId);
+          if (dNum) addedIds.add(dNum);
+          result.unshift(doc);
+        }
+      });
+    }
+
+    return result;
+  } catch (_) {
+    return rawList;
+  }
+};
+
 export const getSupabaseProfitAccountsPayable = async () => {
   try {
     const { data, error } = await withTimeout(
@@ -4864,7 +4953,7 @@ export const getSupabaseProfitAccountsPayable = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(d => ({
+    const mapped = (data || []).map(d => ({
       id: d.id,
       tipoDoc: d.tipo_doc,
       nroDoc: d.nro_doc,
@@ -4877,15 +4966,145 @@ export const getSupabaseProfitAccountsPayable = async () => {
       montoNetBs: Number(d.monto_net_bs || 0),
       saldoUsd: Number(d.saldo_usd || 0),
       saldoBs: Number(d.saldo_bs || 0),
+      abonosUsd: d.abonos_usd !== undefined ? Number(d.abonos_usd) : Math.max(0, Number(d.monto_net_usd || 0) - Number(d.saldo_usd || 0)),
       tasa: Number(d.tasa || 1),
       moneda: d.moneda || 'BS',
       anulado: Boolean(d.anulado),
+      historialPagos: d.historial_pagos || [],
       fechaSincronizacion: d.fecha_sincronizacion
     }));
+    return applyLocalCxpOverridesToPayables(mapped);
   } catch (err) {
     console.warn('[Supabase] Error cargando CxP Profit:', err.message);
-    return REAL_PROFIT_ACCOUNTS_PAYABLE;
+    return applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE);
   }
+};
+
+export const saveSupabaseProfitAccountsPayable = async (payableData) => {
+  if (!payableData) return null;
+  const nowIso = new Date().toISOString();
+  const rawNum = String(payableData.nroDoc ?? payableData.nro_doc ?? payableData.id ?? '').trim();
+  const tipoDoc = String(payableData.tipoDoc || payableData.tipo_doc || 'FACT').toUpperCase().trim();
+  const provRif = String(payableData.provRif || payableData.prov_rif || payableData.coProv || payableData.co_prov || 'J-00000000').trim();
+  const id = String(payableData.id || `DOC-CP-${tipoDoc}-${rawNum}-${provRif.replace(/[^A-Za-z0-9]/g, '')}`).trim();
+
+  const montoNetUsd = Number(payableData.montoNetUsd ?? payableData.monto_net_usd ?? 0);
+  const montoNetBs = Number(payableData.montoNetBs ?? payableData.monto_net_bs ?? 0);
+  const saldoUsd = Number(payableData.saldoUsd ?? payableData.saldo_usd ?? montoNetUsd);
+  const saldoBs = Number(payableData.saldoBs ?? payableData.saldo_bs ?? montoNetBs);
+  const abonosUsd = Number(payableData.abonosUsd ?? payableData.abonos_usd ?? Math.max(0, montoNetUsd - saldoUsd));
+
+  const normalized = {
+    ...payableData,
+    id,
+    tipoDoc,
+    tipo_doc: tipoDoc,
+    nroDoc: rawNum,
+    nro_doc: rawNum,
+    coProv: provRif,
+    co_prov: provRif,
+    provNombre: payableData.provNombre || payableData.prov_nombre || 'Proveedor General',
+    prov_nombre: payableData.provNombre || payableData.prov_nombre || 'Proveedor General',
+    provRif,
+    prov_rif: provRif,
+    fechaEmision: payableData.fechaEmision || payableData.fec_emis || nowIso,
+    fec_emis: payableData.fechaEmision || payableData.fec_emis || nowIso,
+    fechaVencimiento: payableData.fechaVencimiento || payableData.fec_venc || nowIso,
+    fec_venc: payableData.fechaVencimiento || payableData.fec_venc || nowIso,
+    diasCredito: Number(payableData.diasCredito ?? payableData.dias_credito ?? 15),
+    dias_credito: Number(payableData.diasCredito ?? payableData.dias_credito ?? 15),
+    montoNetUsd,
+    monto_net_usd: montoNetUsd,
+    montoNetBs,
+    monto_net_bs: montoNetBs,
+    saldoUsd,
+    saldo_usd: saldoUsd,
+    saldoBs,
+    saldo_bs: saldoBs,
+    abonosUsd,
+    abonos_usd: abonosUsd,
+    tasa: Number(payableData.tasa || 1),
+    moneda: payableData.moneda || 'US$',
+    anulado: Boolean(payableData.anulado),
+    historialPagos: payableData.historialPagos || payableData.historial_pagos || [],
+    fechaSincronizacion: nowIso,
+    fecha_sincronizacion: nowIso
+  };
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CXP_CUSTOM_DOCS_KEY);
+      const customMap = rawCustom ? JSON.parse(rawCustom) : {};
+      customMap[id] = normalized;
+      if (rawNum) customMap[rawNum] = normalized;
+      localStorage.setItem(CXP_CUSTOM_DOCS_KEY, JSON.stringify(customMap));
+    }
+  } catch (_) {}
+
+  broadcastReconcileChange({
+    tableId: 'accounts_payable',
+    action: 'RECONCILE',
+    key: id,
+    item: normalized
+  });
+
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      await withTimeout(
+        supabase.from('profit_accounts_payable').upsert(normalized, { onConflict: 'id' }),
+        5000
+      );
+    } catch (err) {
+      console.warn('[saveSupabaseProfitAccountsPayable] Guardado local activo:', err.message);
+    }
+  }
+
+  return normalized;
+};
+
+export const deleteSupabaseProfitAccountsPayable = async (payableIdOrDoc) => {
+  const keysToDelete = getScopedCxpDeleteKeys(payableIdOrDoc);
+  if (keysToDelete.length === 0) return false;
+  const primaryKey = keysToDelete[0];
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const delList = sanitizeCxpDeletedDocsStorage();
+      keysToDelete.forEach(k => {
+        if (!delList.includes(k)) delList.push(k);
+      });
+      localStorage.setItem(CXP_DELETED_DOCS_KEY, JSON.stringify(delList));
+
+      const rawCustom = localStorage.getItem(CXP_CUSTOM_DOCS_KEY);
+      if (rawCustom) {
+        const customMap = JSON.parse(rawCustom);
+        if (customMap && typeof customMap === 'object') {
+          keysToDelete.forEach(k => delete customMap[k]);
+          localStorage.setItem(CXP_CUSTOM_DOCS_KEY, JSON.stringify(customMap));
+        }
+      }
+    }
+  } catch (_) {}
+
+  broadcastReconcileChange({
+    tableId: 'accounts_payable',
+    action: 'DELETE',
+    key: primaryKey
+  });
+
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      for (const k of keysToDelete) {
+        await withTimeout(
+          supabase.from('profit_accounts_payable').delete().eq('id', k),
+          5000
+        );
+      }
+    } catch (err) {
+      console.warn('[deleteSupabaseProfitAccountsPayable] Aviso borrado:', err.message);
+    }
+  }
+  return true;
 };
 
 export const getSupabaseProfitSupplierPayments = async () => {
@@ -4896,7 +5115,7 @@ export const getSupabaseProfitSupplierPayments = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(p => ({
+    const mapped = (data || []).map(p => ({
       id: p.id,
       pagoNum: p.pago_num,
       fechaPago: p.fec_pago,
@@ -4908,13 +5127,111 @@ export const getSupabaseProfitSupplierPayments = async () => {
       tasa: Number(p.tasa || 1),
       moneda: p.moneda || 'BS',
       descrip: p.descrip || '',
+      cuentaId: p.cuenta_id || '',
+      cuentaNombre: p.cuenta_nombre || '',
+      accountType: p.account_type || '',
+      referencia: p.referencia || '',
       anulado: Boolean(p.anulado),
       fechaSincronizacion: p.fecha_sincronizacion
     }));
+
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const rawLocalPays = localStorage.getItem(CXP_PAYMENTS_KEY);
+        const localPays = rawLocalPays ? JSON.parse(rawLocalPays) : [];
+        if (Array.isArray(localPays) && localPays.length > 0) {
+          const remoteIds = new Set(mapped.map(m => String(m.id)));
+          localPays.forEach(lp => {
+            if (!remoteIds.has(String(lp.id))) {
+              mapped.unshift(lp);
+            }
+          });
+        }
+      } catch (_) {}
+    }
+
+    return mapped;
   } catch (err) {
     console.warn('[Supabase] Error cargando pagos de proveedores Profit:', err.message);
-    return REAL_PROFIT_SUPPLIER_PAYMENTS;
+    let list = [...REAL_PROFIT_SUPPLIER_PAYMENTS];
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const rawLocalPays = localStorage.getItem(CXP_PAYMENTS_KEY);
+        const localPays = rawLocalPays ? JSON.parse(rawLocalPays) : [];
+        if (Array.isArray(localPays) && localPays.length > 0) {
+          list = [...localPays, ...list];
+        }
+      } catch (_) {}
+    }
+    return list;
   }
+};
+
+export const saveSupabaseProfitSupplierPayment = async (paymentData) => {
+  const nowIso = new Date().toISOString();
+  const pagoNum = paymentData.pagoNum || paymentData.pago_num || `PAG-${Date.now().toString().slice(-6)}`;
+  const id = paymentData.id || `pag-${pagoNum}`;
+  const normalized = {
+    id,
+    pagoNum,
+    pago_num: pagoNum,
+    fechaPago: paymentData.fechaPago || paymentData.fec_pago || nowIso,
+    fec_pago: paymentData.fechaPago || paymentData.fec_pago || nowIso,
+    coProv: paymentData.coProv || paymentData.co_prov || '',
+    co_prov: paymentData.coProv || paymentData.co_prov || '',
+    provNombre: paymentData.provNombre || paymentData.prov_nombre || 'Proveedor General',
+    prov_nombre: paymentData.provNombre || paymentData.prov_nombre || 'Proveedor General',
+    provRif: paymentData.provRif || paymentData.prov_rif || '',
+    prov_rif: paymentData.provRif || paymentData.prov_rif || '',
+    montoUsd: Number(paymentData.montoUsd || 0),
+    monto_usd: Number(paymentData.montoUsd || 0),
+    montoBs: Number(paymentData.montoBs || 0),
+    monto_bs: Number(paymentData.montoBs || 0),
+    tasa: Number(paymentData.tasa || 1),
+    moneda: paymentData.moneda || 'US$',
+    cuentaId: paymentData.cuentaId || '',
+    cuenta_id: paymentData.cuentaId || '',
+    cuentaNombre: paymentData.cuentaNombre || '',
+    cuenta_nombre: paymentData.cuentaNombre || '',
+    accountType: paymentData.accountType || 'BANCO',
+    referencia: paymentData.referencia || '',
+    descrip: paymentData.descrip || paymentData.observaciones || '',
+    anulado: false,
+    documentosAfectados: paymentData.documentosAfectados || [],
+    documentos_afectados: paymentData.documentosAfectados || [],
+    fechaSincronizacion: nowIso,
+    fecha_sincronizacion: nowIso
+  };
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawLocalPays = localStorage.getItem(CXP_PAYMENTS_KEY);
+      const localPays = rawLocalPays ? JSON.parse(rawLocalPays) : [];
+      const filtered = Array.isArray(localPays) ? localPays.filter(p => String(p?.id) !== String(id)) : [];
+      filtered.unshift(normalized);
+      localStorage.setItem(CXP_PAYMENTS_KEY, JSON.stringify(filtered));
+    }
+  } catch (_) {}
+
+  broadcastReconcileChange({
+    tableId: 'supplier_payments',
+    action: 'RECONCILE',
+    key: id,
+    item: normalized
+  });
+
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      await withTimeout(
+        supabase.from('profit_supplier_payments').upsert(normalized, { onConflict: 'id' }),
+        5000
+      );
+    } catch (err) {
+      console.warn('[saveSupabaseProfitSupplierPayment] Guardado local activo:', err.message);
+    }
+  }
+
+  return normalized;
 };
 
 export const getSupabaseProfitSellers = async () => {

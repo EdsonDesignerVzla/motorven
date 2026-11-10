@@ -100,7 +100,10 @@ import {
   getSupabaseProfitSuppliers,
   getSupabaseProfitPurchases,
   getSupabaseProfitAccountsPayable,
+  saveSupabaseProfitAccountsPayable,
+  deleteSupabaseProfitAccountsPayable,
   getSupabaseProfitSupplierPayments,
+  saveSupabaseProfitSupplierPayment,
   getSupabaseProfitSellers,
   updateSupabaseSellerPhoto,
   updateSupabaseSellerTarget,
@@ -1937,6 +1940,94 @@ function MainApp() {
     return savedDoc;
   };
 
+  // Guardar o Editar Documento CxP (Factura de Compra, Adelanto, etc.)
+  const handleSaveCxpDocument = async (payableData) => {
+    const saved = await saveSupabaseProfitAccountsPayable(payableData);
+    if (!saved) return null;
+    setProfitAccountsPayable(prev => {
+      const list = Array.isArray(prev) ? [...prev] : [];
+      const idx = list.findIndex(p =>
+        String(p.id) === String(saved.id) ||
+        (String(p.nroDoc ?? p.nro_doc ?? '') === String(saved.nroDoc) && String(p.tipoDoc ?? p.tipo_doc ?? '') === String(saved.tipoDoc))
+      );
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...saved };
+        return list;
+      }
+      return [saved, ...list];
+    });
+    return saved;
+  };
+
+  // Eliminar / Anular Documento CxP
+  const handleDeleteCxpDocument = async (payableOrId) => {
+    try {
+      const rawId = typeof payableOrId === 'object' ? (payableOrId?.id || '') : String(payableOrId || '');
+      const rawNum = typeof payableOrId === 'object' ? (payableOrId?.nroDoc || payableOrId?.nro_doc || payableOrId?.id || '') : String(payableOrId || '');
+      await deleteSupabaseProfitAccountsPayable(payableOrId);
+      setProfitAccountsPayable(prev => (prev || []).filter(p => {
+        const pId = String(p.id || '').trim();
+        const pNum = String(p.nroDoc ?? p.nro_doc ?? '').trim();
+        return pId !== rawId && pNum !== rawNum;
+      }));
+      notify.success('Documento de Cuenta por Pagar eliminado con éxito');
+      return true;
+    } catch (err) {
+      console.error('Error eliminando documento CxP:', err);
+      notify.error('Error al eliminar el documento de Cuenta por Pagar');
+      throw err;
+    }
+  };
+
+  // Registrar Pago a Proveedor en Cuentas por Pagar (Parte A) y actualizar Saldo y Abonos
+  const handleRegisterCxpPayment = async ({ updatedDoc, paymentPayload, selectedAccount }) => {
+    const savedDoc = await handleSaveCxpDocument(updatedDoc);
+    if (paymentPayload) {
+      const savedPay = await saveSupabaseProfitSupplierPayment(paymentPayload);
+      if (savedPay) {
+        setProfitSupplierPayments(prev => [savedPay, ...(Array.isArray(prev) ? prev : [])]);
+      }
+    }
+    if (selectedAccount) {
+      const montoUsd = Number(paymentPayload?.montoUsd || 0);
+      const montoBs = Number(paymentPayload?.montoBs || 0);
+      if (selectedAccount.kind === 'CAJA') {
+        setProfitCashDesks(prev => {
+          const list = Array.isArray(prev) ? [...prev] : [];
+          return list.map(d => {
+            if (String(d.id || d.coCaja) === String(selectedAccount.rawId)) {
+              const updatedDesk = {
+                ...d,
+                saldoUsd: Number((Math.max(0, (Number(d.saldoUsd || 0)) - montoUsd)).toFixed(2)),
+                saldoBs: Number((Math.max(0, (Number(d.saldoBs || 0)) - montoBs)).toFixed(2))
+              };
+              updateSupabaseProfitCashDesk(updatedDesk).catch(() => {});
+              return updatedDesk;
+            }
+            return d;
+          });
+        });
+      } else if (selectedAccount.kind === 'BANCO') {
+        setProfitBankAccounts(prev => {
+          const list = Array.isArray(prev) ? [...prev] : [];
+          return list.map(b => {
+            if (String(b.id || b.codCta) === String(selectedAccount.rawId)) {
+              const updatedBank = {
+                ...b,
+                saldoUsd: Number((Math.max(0, (Number(b.saldoUsd || 0)) - montoUsd)).toFixed(2)),
+                saldoBs: Number((Math.max(0, (Number(b.saldoBs || 0)) - montoBs)).toFixed(2))
+              };
+              updateSupabaseProfitBankAccount(updatedBank).catch(() => {});
+              return updatedBank;
+            }
+            return b;
+          });
+        });
+      }
+    }
+    return savedDoc;
+  };
+
   // Proceder a facturar un Pedido en el POS
   const handleProceedToInvoiceFromOrder = (order) => {
     setPendingOrderToBill(order);
@@ -2392,8 +2483,14 @@ function MainApp() {
               profitAccountsPayable={profitAccountsPayable}
               suppliers={profitSuppliers}
               profitSuppliers={profitSuppliers}
+              bankAccounts={profitBankAccounts}
+              cashDesks={profitCashDesks}
+              supplierPayments={profitSupplierPayments}
               config={config}
               currentUser={currentUser}
+              onRegisterPayment={handleRegisterCxpPayment}
+              onSaveDocument={handleSaveCxpDocument}
+              onDeleteDocument={handleDeleteCxpDocument}
             />
           )}
 
