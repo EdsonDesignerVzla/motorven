@@ -6,6 +6,9 @@ import {
   Plus,
   Edit2,
   Trash2,
+  Save,
+  ShieldAlert,
+  Lock,
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
@@ -41,6 +44,21 @@ const getNextCajaCorrelative = (desks = []) => {
   return `CAJA-${String(nextNum).padStart(2, '0')}`;
 };
 
+// Calcula el siguiente código correlativo de Cuenta Bancaria (01, 02... 11...)
+const getNextBankCorrelative = (accounts = []) => {
+  let maxNum = 0;
+  (accounts || []).forEach(b => {
+    const code = String(b?.codCta || b?.cod_cta || b?.id || '').toUpperCase();
+    const match = code.match(/(\d+)/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  const nextNum = Math.max(1, maxNum + 1);
+  return String(nextNum).padStart(2, '0');
+};
+
 export default function CashBankModal({
   isOpen,
   onClose,
@@ -50,6 +68,8 @@ export default function CashBankModal({
   onAddMovement,
   onUpdateCashDesk,
   onDeleteCashDesk,
+  onUpdateBankAccount,
+  onDeleteBankAccount,
   config = {},
   currentUser
 }) {
@@ -79,6 +99,32 @@ export default function CashBankModal({
     activa: true,
     saldoUsd: '0',
     saldoBs: '0'
+  });
+
+  // Estado para crear / editar / guardar cuentas bancarias
+  const [showBankForm, setShowBankForm] = useState(false);
+  const [editingBankId, setEditingBankId] = useState(null);
+  const [bankForm, setBankForm] = useState({
+    codCta: '11',
+    bancoNombre: '',
+    cuentaANombreDe: 'GRUPO MOTORVEN, C.A.',
+    numCta: '',
+    moneda: 'BS',
+    saldoBs: '0',
+    saldoUsd: '0'
+  });
+
+  // Edición rápida en línea por fila de cuenta bancaria
+  const [inlineBankEditId, setInlineBankEditId] = useState(null);
+  const [inlineBankDraft, setInlineBankDraft] = useState(null);
+
+  // Estado de Doble Seguridad para Eliminar Cuenta Bancaria
+  const [bankDeleteSecurityModal, setBankDeleteSecurityModal] = useState({
+    isOpen: false,
+    step: 1, // 1 = Primera Confirmación, 2 = Segunda Confirmación (Bloqueo Final)
+    bank: null,
+    confirmChecked: false,
+    confirmText: ''
   });
 
   // Estado para arqueo interactivo
@@ -128,8 +174,10 @@ export default function CashBankModal({
       const q = searchFilter.toLowerCase();
       list = list.filter(b => 
         (b.bancoNombre || b.banco_nombre || '').toLowerCase().includes(q) ||
-        (b.numCta || b.num_cta || '').includes(q) ||
-        (b.codCta || b.cod_cta || '').toLowerCase().includes(q)
+        (b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.').toLowerCase().includes(q) ||
+        (b.numCta || b.num_cta || '').toLowerCase().includes(q) ||
+        (b.codCta || b.cod_cta || '').toLowerCase().includes(q) ||
+        (b.moneda || '').toLowerCase().includes(q)
       );
     }
     return list;
@@ -326,6 +374,176 @@ export default function CashBankModal({
     }
   };
 
+  // =========================================================
+  // ACCIONES DE CUENTAS BANCARIAS: CREAR, EDITAR, GUARDAR, ELIMINAR (DOBLE SEGURIDAD)
+  // =========================================================
+  const handleOpenCreateBank = () => {
+    const nextCode = getNextBankCorrelative(bankAccounts);
+    setEditingBankId(null);
+    setInlineBankEditId(null);
+    setInlineBankDraft(null);
+    setBankForm({
+      codCta: nextCode,
+      bancoNombre: '',
+      cuentaANombreDe: 'GRUPO MOTORVEN, C.A.',
+      numCta: '',
+      moneda: 'BS',
+      saldoBs: '0',
+      saldoUsd: '0'
+    });
+    setShowBankForm(true);
+  };
+
+  const handleOpenEditBank = (b) => {
+    if (!b) return;
+    const code = b.codCta || b.cod_cta || '01';
+    const id = b.id || `CTA-${code}`;
+    const holder = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
+    const sBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
+    const sUsd = Number(b.saldoUsd ?? b.saldo_usd ?? (tasaBcv > 0 ? sBs / tasaBcv : 0));
+
+    setEditingBankId(id);
+    setBankForm({
+      codCta: code,
+      bancoNombre: b.bancoNombre || b.banco_nombre || '',
+      cuentaANombreDe: holder,
+      numCta: b.numCta || b.num_cta || '',
+      moneda: b.moneda || 'BS',
+      saldoBs: String(Number(sBs.toFixed(2))),
+      saldoUsd: String(Number(sUsd.toFixed(2)))
+    });
+    setInlineBankEditId(id);
+    setInlineBankDraft({
+      id,
+      codCta: code,
+      bancoNombre: b.bancoNombre || b.banco_nombre || '',
+      cuentaANombreDe: holder,
+      numCta: b.numCta || b.num_cta || '',
+      moneda: b.moneda || 'BS',
+      saldoBs: String(Number(sBs.toFixed(2))),
+      saldoUsd: String(Number(sUsd.toFixed(2)))
+    });
+    setShowBankForm(true);
+  };
+
+  const handleSaveBankRecord = async (recordData, isInline = false) => {
+    const cleanCode = String(recordData.codCta || '').trim() || getNextBankCorrelative(bankAccounts);
+    const cleanBanco = String(recordData.bancoNombre || '').trim();
+    const cleanTitular = String(recordData.cuentaANombreDe || 'GRUPO MOTORVEN, C.A.').trim() || 'GRUPO MOTORVEN, C.A.';
+    const cleanNumCta = String(recordData.numCta || '').trim();
+
+    if (!cleanBanco) {
+      notify.warning('Por favor ingrese el nombre de la Institución Bancaria');
+      return;
+    }
+
+    const parsedBs = parseFloat(recordData.saldoBs) || 0;
+    const parsedUsd =
+      recordData.saldoUsd !== undefined && recordData.saldoUsd !== ''
+        ? parseFloat(recordData.saldoUsd) || 0
+        : (tasaBcv > 0 ? Number((parsedBs / tasaBcv).toFixed(2)) : 0);
+
+    try {
+      setIsSubmitting(true);
+      const id = recordData.id || editingBankId || `CTA-${cleanCode}`;
+      const payload = {
+        id,
+        codCta: cleanCode,
+        cod_cta: cleanCode,
+        bancoNombre: cleanBanco,
+        banco_nombre: cleanBanco,
+        cuentaANombreDe: cleanTitular,
+        cuenta_a_nombre_de: cleanTitular,
+        titular: cleanTitular,
+        numCta: cleanNumCta,
+        num_cta: cleanNumCta,
+        moneda: String(recordData.moneda || 'BS').toUpperCase(),
+        saldoBs: parsedBs,
+        saldo_bs: parsedBs,
+        saldoUsd: parsedUsd,
+        saldo_usd: parsedUsd,
+        fechaActualizacion: new Date().toISOString()
+      };
+
+      if (onUpdateBankAccount) {
+        await onUpdateBankAccount(payload);
+      }
+
+      setShowBankForm(false);
+      setEditingBankId(null);
+      setInlineBankEditId(null);
+      setInlineBankDraft(null);
+      notify.success(
+        isInline || editingBankId
+          ? `Cuenta bancaria ${cleanCode} (${cleanBanco}) guardada exitosamente`
+          : `Nueva cuenta bancaria ${cleanCode} (${cleanBanco}) creada y guardada exitosamente`
+      );
+    } catch (err) {
+      console.error(err);
+      notify.error('Error al guardar la cuenta bancaria: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSaveBankForm = async (e) => {
+    e.preventDefault();
+    await handleSaveBankRecord(bankForm, false);
+  };
+
+  // Iniciar flujo de Doble Seguridad para Eliminar Cuenta Bancaria
+  const handleRequestDeleteBank = (b) => {
+    if (!b) return;
+    setBankDeleteSecurityModal({
+      isOpen: true,
+      step: 1,
+      bank: b,
+      confirmChecked: false,
+      confirmText: ''
+    });
+  };
+
+  const handleConfirmDeleteBankFinal = async () => {
+    const targetBank = bankDeleteSecurityModal.bank;
+    if (!targetBank) return;
+    const code = String(targetBank.codCta || targetBank.cod_cta || '').trim();
+    const typed = String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase();
+    const isTextValid = typed === 'ELIMINAR' || (code && typed === code.toUpperCase());
+
+    if (!bankDeleteSecurityModal.confirmChecked || !isTextValid) {
+      notify.warning('Complete la doble verificación de seguridad (casilla + escribir ELIMINAR) para continuar.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      if (onDeleteBankAccount) {
+        await onDeleteBankAccount(targetBank.id || `CTA-${code}`);
+      }
+      setBankDeleteSecurityModal({
+        isOpen: false,
+        step: 1,
+        bank: null,
+        confirmChecked: false,
+        confirmText: ''
+      });
+      if (editingBankId === targetBank.id) {
+        setShowBankForm(false);
+        setEditingBankId(null);
+      }
+      if (inlineBankEditId === targetBank.id) {
+        setInlineBankEditId(null);
+        setInlineBankDraft(null);
+      }
+      notify.info(`Cuenta bancaria ${code} — ${targetBank.bancoNombre || targetBank.banco_nombre} eliminada definitivamente.`);
+    } catch (err) {
+      console.error(err);
+      notify.error('No se pudo eliminar la cuenta bancaria: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Función de reporte PDF oficial
   const handlePrint = () => {
     generateCashflowPDF({
@@ -441,7 +659,7 @@ export default function CashBankModal({
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
               <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                Disponibilidad Bancaria (10 Cuentas)
+                Disponibilidad Bancaria ({bankAccounts?.length || 0} Cuentas)
               </span>
               <Landmark size={16} style={{ color: '#0284c7' }} />
             </div>
@@ -1178,86 +1396,538 @@ export default function CashBankModal({
           {activeTab === 'bancos' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem', flexWrap: 'wrap' }}>
-                <div className="search-wrapper" style={{ flex: '1 1 300px' }}>
+                <div className="search-wrapper" style={{ flex: '1 1 320px' }}>
                   <Search size={16} className="search-icon" />
                   <input
                     type="text"
-                    placeholder="Buscar por banco, cuenta o código..."
+                    placeholder="Buscar por institución bancaria, cuenta a nombre de, número de cuenta o código..."
                     value={searchFilter}
                     onChange={(e) => setSearchFilter(e.target.value)}
                     className="input-modern"
                     style={{ width: '100%', paddingLeft: '2.4rem' }}
                   />
                 </div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  Total Cuentas: <strong>{filteredBankAccounts.length}</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Total Cuentas: <strong>{filteredBankAccounts.length}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (showBankForm && !editingBankId) {
+                        setShowBankForm(false);
+                      } else {
+                        handleOpenCreateBank();
+                      }
+                    }}
+                    className="btn btn-primary"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.5rem 1.1rem',
+                      fontSize: '0.85rem',
+                      background: 'linear-gradient(135deg, #0284c7, #0369a1)',
+                      border: 'none',
+                      color: '#fff',
+                      fontWeight: 600
+                    }}
+                  >
+                    <Plus size={16} />
+                    <span>{showBankForm && !editingBankId ? 'Cancelar Creación' : 'Crear Cuenta Bancaria'}</span>
+                  </button>
                 </div>
               </div>
 
+              {/* FORMULARIO PARA CREAR / EDITAR / GUARDAR CUENTA BANCARIA */}
+              {showBankForm && (
+                <div style={{
+                  background: 'var(--bg-surface)',
+                  padding: '1.35rem',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(2, 132, 199, 0.45)',
+                  marginBottom: '1.5rem',
+                  boxShadow: 'var(--shadow-card)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Landmark size={18} color="#0284c7" />
+                      {editingBankId
+                        ? `Editar Cuenta Bancaria (Cód: ${bankForm.codCta})`
+                        : `Crear Nueva Cuenta Bancaria (Correlativo Sugerido: ${bankForm.codCta})`}
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowBankForm(false);
+                        setEditingBankId(null);
+                        setInlineBankEditId(null);
+                        setInlineBankDraft(null);
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveBankForm}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Código (Cód)
+                        </label>
+                        <input
+                          type="text"
+                          className="input-modern"
+                          placeholder="Ej: 11"
+                          value={bankForm.codCta}
+                          onChange={(e) => setBankForm(prev => ({ ...prev, codCta: e.target.value.toUpperCase() }))}
+                          style={{ width: '100%', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Institución Bancaria
+                        </label>
+                        <input
+                          type="text"
+                          list="bancos-venezuela-list"
+                          className="input-modern"
+                          placeholder="Ej: BANCO MERCANTIL, C.A."
+                          value={bankForm.bancoNombre}
+                          onChange={(e) => setBankForm(prev => ({ ...prev, bancoNombre: e.target.value.toUpperCase() }))}
+                          style={{ width: '100%', fontWeight: 600 }}
+                          required
+                        />
+                        <datalist id="bancos-venezuela-list">
+                          <option value="BANCO NACIONAL DE CREDITO" />
+                          <option value="BANCO MERCANTIL, C.A." />
+                          <option value="BANESCO BANCO UNIVERSAL" />
+                          <option value="BANCO PROVINCIAL, S.A. BANCO UNIVERSAL" />
+                          <option value="BANCAMIGA BANCO UNIVERSAL" />
+                          <option value="BANCO DEL CARIBE" />
+                          <option value="BANCO DE VENEZUELA" />
+                          <option value="BANPLUS BANCO UNIVERSAL" />
+                          <option value="BANCO EXTERIOR" />
+                          <option value="BANCARIBE" />
+                        </datalist>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Cuenta a Nombre de:
+                        </label>
+                        <input
+                          type="text"
+                          list="titulares-motorven-list"
+                          className="input-modern"
+                          placeholder="Ej: GRUPO MOTORVEN, C.A."
+                          value={bankForm.cuentaANombreDe}
+                          onChange={(e) => setBankForm(prev => ({ ...prev, cuentaANombreDe: e.target.value }))}
+                          style={{ width: '100%', fontWeight: 600 }}
+                          required
+                        />
+                        <datalist id="titulares-motorven-list">
+                          <option value="GRUPO MOTORVEN, C.A." />
+                          <option value="MOTORVEN, C.A." />
+                          <option value="ADMINISTRACIÓN MOTORVEN" />
+                          <option value="GERENCIA GENERAL" />
+                        </datalist>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Número de Cuenta
+                        </label>
+                        <input
+                          type="text"
+                          className="input-modern"
+                          placeholder="Ej: 01050000000000000000"
+                          value={bankForm.numCta}
+                          onChange={(e) => setBankForm(prev => ({ ...prev, numCta: e.target.value }))}
+                          style={{ width: '100%', fontFamily: 'monospace' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Moneda
+                        </label>
+                        <select
+                          className="filter-select"
+                          value={bankForm.moneda}
+                          onChange={(e) => setBankForm(prev => ({ ...prev, moneda: e.target.value }))}
+                          style={{ width: '100%' }}
+                        >
+                          <option value="BS">BS — Bolívares</option>
+                          <option value="USD">USD — Dólares ($)</option>
+                          <option value="EUR">EUR — Euros (€)</option>
+                          <option value="USDT">USDT — Digital</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Saldo en Bs
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="input-modern"
+                          placeholder="0.00"
+                          value={bankForm.saldoBs}
+                          onChange={(e) => {
+                            const valBs = e.target.value;
+                            const numBs = parseFloat(valBs) || 0;
+                            setBankForm(prev => ({
+                              ...prev,
+                              saldoBs: valBs,
+                              saldoUsd: tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : prev.saldoUsd
+                            }));
+                          }}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Contravalor USD ($)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="input-modern"
+                          placeholder="0.00"
+                          value={bankForm.saldoUsd}
+                          onChange={(e) => {
+                            const valUsd = e.target.value;
+                            const numUsd = parseFloat(valUsd) || 0;
+                            setBankForm(prev => ({
+                              ...prev,
+                              saldoUsd: valUsd,
+                              saldoBs: numUsd !== 0 ? (numUsd * tasaBcv).toFixed(2) : prev.saldoBs
+                            }));
+                          }}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowBankForm(false);
+                          setEditingBankId(null);
+                          setInlineBankEditId(null);
+                          setInlineBankDraft(null);
+                        }}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.5rem 1rem' }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="btn btn-primary"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.45rem',
+                          padding: '0.5rem 1.35rem',
+                          background: 'linear-gradient(135deg, #059669, #10b981)',
+                          border: 'none',
+                          color: '#fff',
+                          fontWeight: 700
+                        }}
+                      >
+                        <Save size={15} />
+                        <span>{isSubmitting ? 'Guardando...' : 'Guardar Cuenta Bancaria'}</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
               <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
                   <thead>
                     <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
-                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Cód</th>
-                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Institución Bancaria</th>
-                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Número de Cuenta</th>
-                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Moneda</th>
-                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo en Bs</th>
-                      <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Contravalor USD</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Cód</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Institución Bancaria</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Cuenta a Nombre de:</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Número de Cuenta</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo en Bs</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Contravalor USD</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredBankAccounts.map((b, idx) => {
-                      const saldoBs = Number(b.saldoBs || b.saldo_bs || 0);
-                      const saldoUsd = Number(b.saldoUsd || b.saldo_usd || (tasaBcv > 0 ? saldoBs / tasaBcv : 0));
+                      const code = b.codCta || b.cod_cta || String(idx + 1).padStart(2, '0');
+                      const rowId = b.id || `CTA-${code}`;
+                      const isEditingRow = inlineBankEditId === rowId && inlineBankDraft;
+                      const saldoBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
+                      const saldoUsd = Number(b.saldoUsd ?? b.saldo_usd ?? (tasaBcv > 0 ? saldoBs / tasaBcv : 0));
                       const isNegative = saldoBs < 0;
+                      const titularNombre = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
 
                       return (
                         <tr 
-                          key={b.id || idx}
+                          key={rowId}
                           style={{
                             borderBottom: '1px solid var(--border-glass)',
-                            background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'
+                            background: isEditingRow
+                              ? 'rgba(2, 132, 199, 0.08)'
+                              : (idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)')
                           }}
                         >
-                          <td style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--brand-blue)' }}>
-                            {b.codCta || b.cod_cta}
+                          <td style={{ padding: '0.8rem 0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
+                            {isEditingRow ? (
+                              <input
+                                type="text"
+                                className="input-modern"
+                                value={inlineBankDraft.codCta}
+                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, codCta: e.target.value.toUpperCase() }))}
+                                style={{ width: '58px', padding: '0.3rem 0.45rem', fontSize: '0.82rem', fontWeight: 700 }}
+                              />
+                            ) : (
+                              code
+                            )}
                           </td>
-                          <td style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <Building2 size={16} style={{ color: 'var(--brand-blue)' }} />
-                              {b.bancoNombre || b.banco_nombre}
-                            </div>
+
+                          <td style={{ padding: '0.8rem 0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                            {isEditingRow ? (
+                              <input
+                                type="text"
+                                className="input-modern"
+                                value={inlineBankDraft.bancoNombre}
+                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, bancoNombre: e.target.value.toUpperCase() }))}
+                                style={{ width: '100%', minWidth: '170px', padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600 }}
+                              />
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Building2 size={16} style={{ color: 'var(--brand-blue)', flexShrink: 0 }} />
+                                <span>{b.bancoNombre || b.banco_nombre}</span>
+                              </div>
+                            )}
                           </td>
-                          <td style={{ padding: '0.85rem 1rem', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
-                            {b.numCta || b.num_cta || 'N/A'}
+
+                          {/* NUEVA COLUMNA AL LADO DERECHO DE INSTITUCIÓN BANCARIA: CUENTA A NOMBRE DE: */}
+                          <td style={{ padding: '0.8rem 0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                            {isEditingRow ? (
+                              <input
+                                type="text"
+                                list="titulares-motorven-list"
+                                className="input-modern"
+                                value={inlineBankDraft.cuentaANombreDe}
+                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, cuentaANombreDe: e.target.value }))}
+                                style={{ width: '100%', minWidth: '170px', padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600 }}
+                              />
+                            ) : (
+                              <span style={{
+                                display: 'inline-block',
+                                padding: '0.22rem 0.6rem',
+                                borderRadius: '6px',
+                                background: 'rgba(15, 23, 42, 0.05)',
+                                border: '1px solid var(--border-glass)',
+                                fontSize: '0.82rem',
+                                fontWeight: 600,
+                                color: 'var(--text-primary)'
+                              }}>
+                                {titularNombre}
+                              </span>
+                            )}
                           </td>
-                          <td style={{ padding: '0.85rem 1rem' }}>
-                            <span style={{
-                              padding: '0.2rem 0.5rem',
-                              borderRadius: '4px',
-                              background: 'rgba(0,43,122,0.08)',
-                              fontSize: '0.75rem',
-                              fontWeight: 600
-                            }}>
-                              {b.moneda || 'BS'}
-                            </span>
+
+                          <td style={{ padding: '0.8rem 0.9rem', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
+                            {isEditingRow ? (
+                              <input
+                                type="text"
+                                className="input-modern"
+                                value={inlineBankDraft.numCta}
+                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, numCta: e.target.value }))}
+                                style={{ width: '100%', minWidth: '165px', padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
+                              />
+                            ) : (
+                              b.numCta || b.num_cta || 'N/A'
+                            )}
                           </td>
+
+                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'center' }}>
+                            {isEditingRow ? (
+                              <select
+                                className="filter-select"
+                                value={inlineBankDraft.moneda}
+                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, moneda: e.target.value }))}
+                                style={{ padding: '0.28rem 0.45rem', fontSize: '0.8rem' }}
+                              >
+                                <option value="BS">BS</option>
+                                <option value="USD">USD</option>
+                                <option value="EUR">EUR</option>
+                                <option value="USDT">USDT</option>
+                              </select>
+                            ) : (
+                              <span style={{
+                                padding: '0.2rem 0.5rem',
+                                borderRadius: '4px',
+                                background: 'rgba(0,43,122,0.08)',
+                                fontSize: '0.75rem',
+                                fontWeight: 700
+                              }}>
+                                {b.moneda || 'BS'}
+                              </span>
+                            )}
+                          </td>
+
                           <td style={{
-                            padding: '0.85rem 1rem',
+                            padding: '0.8rem 0.9rem',
                             textAlign: 'right',
                             fontWeight: 700,
                             color: isNegative ? 'var(--brand-red)' : 'var(--text-primary)'
                           }}>
-                            {formatBs(saldoBs)}
+                            {isEditingRow ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="input-modern"
+                                value={inlineBankDraft.saldoBs}
+                                onChange={(e) => {
+                                  const vBs = e.target.value;
+                                  const nBs = parseFloat(vBs) || 0;
+                                  setInlineBankDraft(prev => ({
+                                    ...prev,
+                                    saldoBs: vBs,
+                                    saldoUsd: tasaBcv > 0 ? (nBs / tasaBcv).toFixed(2) : prev.saldoUsd
+                                  }));
+                                }}
+                                style={{ width: '125px', textAlign: 'right', padding: '0.3rem 0.45rem', fontSize: '0.82rem', fontWeight: 700 }}
+                              />
+                            ) : (
+                              formatBs(saldoBs)
+                            )}
                           </td>
+
                           <td style={{
-                            padding: '0.85rem 1rem',
+                            padding: '0.8rem 0.9rem',
                             textAlign: 'right',
                             fontWeight: 700,
                             color: isNegative ? 'var(--brand-red)' : '#059669'
                           }}>
-                            {formatUsd(saldoUsd)}
+                            {isEditingRow ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="input-modern"
+                                value={inlineBankDraft.saldoUsd}
+                                onChange={(e) => {
+                                  const vUsd = e.target.value;
+                                  const nUsd = parseFloat(vUsd) || 0;
+                                  setInlineBankDraft(prev => ({
+                                    ...prev,
+                                    saldoUsd: vUsd,
+                                    saldoBs: nUsd !== 0 ? (nUsd * tasaBcv).toFixed(2) : prev.saldoBs
+                                  }));
+                                }}
+                                style={{ width: '110px', textAlign: 'right', padding: '0.3rem 0.45rem', fontSize: '0.82rem', fontWeight: 700 }}
+                              />
+                            ) : (
+                              formatUsd(saldoUsd)
+                            )}
+                          </td>
+
+                          {/* COLUMNA DE ACCIONES: CREAR, EDITAR, GUARDAR, ELIMINAR */}
+                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.35rem' }}>
+                              {/* Acción: Editar */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditBank(b)}
+                                className="btn"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.28rem',
+                                  padding: '0.32rem 0.55rem',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  borderRadius: '6px',
+                                  background: 'rgba(217, 119, 6, 0.14)',
+                                  color: '#d97706',
+                                  border: '1px solid rgba(217, 119, 6, 0.3)'
+                                }}
+                                title="Editar esta cuenta bancaria"
+                              >
+                                <Edit2 size={12} />
+                                <span>Editar</span>
+                              </button>
+
+                              {/* Acción: Guardar */}
+                              <button
+                                type="button"
+                                disabled={isSubmitting}
+                                onClick={() => {
+                                  if (isEditingRow && inlineBankDraft) {
+                                    handleSaveBankRecord(inlineBankDraft, true);
+                                  } else {
+                                    handleSaveBankRecord({
+                                      id: rowId,
+                                      codCta: code,
+                                      bancoNombre: b.bancoNombre || b.banco_nombre,
+                                      cuentaANombreDe: titularNombre,
+                                      numCta: b.numCta || b.num_cta,
+                                      moneda: b.moneda || 'BS',
+                                      saldoBs,
+                                      saldoUsd
+                                    }, true);
+                                  }
+                                }}
+                                className="btn"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.28rem',
+                                  padding: '0.32rem 0.55rem',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  borderRadius: '6px',
+                                  background: isEditingRow ? 'linear-gradient(135deg, #059669, #10b981)' : 'rgba(16, 185, 129, 0.14)',
+                                  color: isEditingRow ? '#ffffff' : '#059669',
+                                  border: '1px solid rgba(16, 185, 129, 0.35)'
+                                }}
+                                title="Guardar cambios de la cuenta bancaria"
+                              >
+                                <Save size={12} />
+                                <span>Guardar</span>
+                              </button>
+
+                              {/* Acción: Eliminar (Doble Seguridad) */}
+                              <button
+                                type="button"
+                                onClick={() => handleRequestDeleteBank(b)}
+                                className="btn"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.28rem',
+                                  padding: '0.32rem 0.55rem',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  borderRadius: '6px',
+                                  background: 'rgba(239, 68, 68, 0.12)',
+                                  color: '#ef4444',
+                                  border: '1px solid rgba(239, 68, 68, 0.28)'
+                                }}
+                                title="Eliminar cuenta bancaria (Protegido con Doble Seguridad)"
+                              >
+                                <Trash2 size={12} />
+                                <span>Eliminar</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1265,6 +1935,342 @@ export default function CashBankModal({
                   </tbody>
                 </table>
               </div>
+
+              {/* MODAL DE DOBLE SEGURIDAD PARA ELIMINAR CUENTA BANCARIA */}
+              {bankDeleteSecurityModal.isOpen && bankDeleteSecurityModal.bank && (
+                <div
+                  style={{
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 9999,
+                    background: 'rgba(15, 23, 42, 0.72)',
+                    backdropFilter: 'blur(4px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '1rem'
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '100%',
+                      maxWidth: '520px',
+                      background: 'var(--bg-card, #ffffff)',
+                      color: 'var(--text-primary, #0f172a)',
+                      borderRadius: '16px',
+                      border: '2px solid rgba(239, 68, 68, 0.45)',
+                      boxShadow: '0 24px 48px rgba(0, 0, 0, 0.35)',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    {/* Cabecera de Seguridad */}
+                    <div
+                      style={{
+                        padding: '1.15rem 1.4rem',
+                        background: bankDeleteSecurityModal.step === 1
+                          ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(239, 68, 68, 0.16))'
+                          : 'linear-gradient(135deg, rgba(220, 38, 38, 0.22), rgba(153, 27, 27, 0.25))',
+                        borderBottom: '1px solid rgba(239, 68, 68, 0.25)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <div
+                          style={{
+                            width: '38px',
+                            height: '38px',
+                            borderRadius: '10px',
+                            background: 'rgba(239, 68, 68, 0.18)',
+                            color: '#dc2626',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                        >
+                          {bankDeleteSecurityModal.step === 1 ? <ShieldAlert size={22} /> : <Lock size={22} />}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#dc2626' }}>
+                            Protocolo de Doble Seguridad • Paso {bankDeleteSecurityModal.step} de 2
+                          </div>
+                          <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {bankDeleteSecurityModal.step === 1
+                              ? '1ra Confirmación: Solicitud de Baja Bancaria'
+                              : '2da Confirmación: Bloqueo de Seguridad Definitivo'}
+                          </h3>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBankDeleteSecurityModal({
+                            isOpen: false,
+                            step: 1,
+                            bank: null,
+                            confirmChecked: false,
+                            confirmText: ''
+                          })
+                        }
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+
+                    {/* Cuerpo del Modal */}
+                    <div style={{ padding: '1.35rem 1.4rem' }}>
+                      {/* Ficha Resumen de la Cuenta a Eliminar */}
+                      <div
+                        style={{
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border-glass)',
+                          borderRadius: '10px',
+                          padding: '0.9rem 1rem',
+                          marginBottom: '1.1rem',
+                          fontSize: '0.84rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Código:</span>
+                          <strong style={{ fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
+                            {bankDeleteSecurityModal.bank.codCta || bankDeleteSecurityModal.bank.cod_cta}
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Institución Bancaria:</span>
+                          <strong>{bankDeleteSecurityModal.bank.bancoNombre || bankDeleteSecurityModal.bank.banco_nombre}</strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Cuenta a Nombre de:</span>
+                          <strong>
+                            {bankDeleteSecurityModal.bank.cuentaANombreDe ||
+                              bankDeleteSecurityModal.bank.cuenta_a_nombre_de ||
+                              bankDeleteSecurityModal.bank.titular ||
+                              'GRUPO MOTORVEN, C.A.'}
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Número de Cuenta:</span>
+                          <strong style={{ fontFamily: 'monospace' }}>
+                            {bankDeleteSecurityModal.bank.numCta || bankDeleteSecurityModal.bank.num_cta || 'N/A'}
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Saldo Actual:</span>
+                          <strong style={{ color: '#059669' }}>
+                            {formatBs(Number(bankDeleteSecurityModal.bank.saldoBs || bankDeleteSecurityModal.bank.saldo_bs || 0))}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {bankDeleteSecurityModal.step === 1 ? (
+                        <div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: '0.65rem',
+                              alignItems: 'flex-start',
+                              padding: '0.85rem',
+                              borderRadius: '10px',
+                              background: 'rgba(245, 158, 11, 0.12)',
+                              border: '1px solid rgba(245, 158, 11, 0.35)',
+                              color: 'var(--text-primary)',
+                              fontSize: '0.84rem',
+                              marginBottom: '1.2rem'
+                            }}
+                          >
+                            <AlertTriangle size={18} color="#d97706" style={{ flexShrink: 0, marginTop: '2px' }} />
+                            <div>
+                              <strong>Advertencia de Seguridad (Nivel 1/2):</strong> Está a punto de iniciar el proceso de eliminación de una cuenta bancaria oficial de tesorería. Para evitar eliminaciones accidentales, esta acción requiere superar un segundo control de seguridad.
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBankDeleteSecurityModal({
+                                  isOpen: false,
+                                  step: 1,
+                                  bank: null,
+                                  confirmChecked: false,
+                                  confirmText: ''
+                                })
+                              }
+                              className="btn btn-secondary"
+                              style={{ padding: '0.5rem 1rem' }}
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBankDeleteSecurityModal(prev => ({
+                                  ...prev,
+                                  step: 2,
+                                  confirmChecked: false,
+                                  confirmText: ''
+                                }))
+                              }
+                              className="btn"
+                              style={{
+                                padding: '0.5rem 1.15rem',
+                                background: '#d97706',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Continuar a 2da Verificación de Seguridad →
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div
+                            style={{
+                              padding: '0.9rem',
+                              borderRadius: '10px',
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              border: '1px solid rgba(239, 68, 68, 0.35)',
+                              marginBottom: '1rem'
+                            }}
+                          >
+                            <label
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '0.6rem',
+                                cursor: 'pointer',
+                                fontSize: '0.84rem',
+                                fontWeight: 600,
+                                marginBottom: '0.85rem'
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={bankDeleteSecurityModal.confirmChecked}
+                                onChange={(e) =>
+                                  setBankDeleteSecurityModal(prev => ({
+                                    ...prev,
+                                    confirmChecked: e.target.checked
+                                  }))
+                                }
+                                style={{ marginTop: '3px', width: '16px', height: '16px', accentColor: '#dc2626' }}
+                              />
+                              <span>
+                                Confirmo bajo mi responsabilidad administrativa que deseo dar de baja esta cuenta bancaria.
+                              </span>
+                            </label>
+
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.35rem' }}>
+                                Para desbloquear el botón final, escriba la palabra <strong>ELIMINAR</strong> (o el código <strong>{bankDeleteSecurityModal.bank.codCta || bankDeleteSecurityModal.bank.cod_cta}</strong>):
+                              </label>
+                              <input
+                                type="text"
+                                className="input-modern"
+                                placeholder="Escriba ELIMINAR para confirmar"
+                                value={bankDeleteSecurityModal.confirmText}
+                                onChange={(e) =>
+                                  setBankDeleteSecurityModal(prev => ({
+                                    ...prev,
+                                    confirmText: e.target.value
+                                  }))
+                                }
+                                style={{
+                                  width: '100%',
+                                  fontWeight: 700,
+                                  letterSpacing: '0.05em',
+                                  border: '1px solid rgba(239, 68, 68, 0.5)'
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBankDeleteSecurityModal(prev => ({
+                                  ...prev,
+                                  step: 1
+                                }))
+                              }
+                              className="btn btn-secondary"
+                              style={{ padding: '0.5rem 1rem' }}
+                            >
+                              ← Volver al Paso 1
+                            </button>
+
+                            <div style={{ display: 'flex', gap: '0.6rem' }}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setBankDeleteSecurityModal({
+                                    isOpen: false,
+                                    step: 1,
+                                    bank: null,
+                                    confirmChecked: false,
+                                    confirmText: ''
+                                  })
+                                }
+                                className="btn btn-secondary"
+                                style={{ padding: '0.5rem 1rem' }}
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={
+                                  isSubmitting ||
+                                  !bankDeleteSecurityModal.confirmChecked ||
+                                  (String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase() !== 'ELIMINAR' &&
+                                    String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase() !==
+                                      String(bankDeleteSecurityModal.bank.codCta || bankDeleteSecurityModal.bank.cod_cta || '').trim().toUpperCase())
+                                }
+                                onClick={handleConfirmDeleteBankFinal}
+                                className="btn"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.45rem',
+                                  padding: '0.5rem 1.2rem',
+                                  background:
+                                    bankDeleteSecurityModal.confirmChecked &&
+                                    (String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase() === 'ELIMINAR' ||
+                                      String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase() ===
+                                        String(bankDeleteSecurityModal.bank.codCta || bankDeleteSecurityModal.bank.cod_cta || '').trim().toUpperCase())
+                                      ? 'linear-gradient(135deg, #dc2626, #991b1b)'
+                                      : 'rgba(148, 163, 184, 0.35)',
+                                  color: '#ffffff',
+                                  border: 'none',
+                                  borderRadius: '8px',
+                                  fontWeight: 700,
+                                  cursor:
+                                    bankDeleteSecurityModal.confirmChecked &&
+                                    (String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase() === 'ELIMINAR' ||
+                                      String(bankDeleteSecurityModal.confirmText || '').trim().toUpperCase() ===
+                                        String(bankDeleteSecurityModal.bank.codCta || bankDeleteSecurityModal.bank.cod_cta || '').trim().toUpperCase())
+                                      ? 'pointer'
+                                      : 'not-allowed'
+                                }}
+                              >
+                                <Trash2 size={15} />
+                                <span>{isSubmitting ? 'Eliminando...' : 'Eliminar Cuenta Definitivamente'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -748,11 +748,17 @@ db.profit_supplier_payments = (db.profit_supplier_payments || []).map(p => {
   };
 });
 
-// 11. Normalize profit_bank_accounts (10 rows)
+// 11. Normalize profit_bank_accounts (10+ rows)
 db.profit_bank_accounts = (db.profit_bank_accounts || []).map(b => {
   const codCta = String(b.cod_cta || b.codCta || b.co_ban || b.coBan || b.id?.replace(/^CTA-/, '') || '').trim();
   const numCta = String(b.num_cta || b.numCta || b.nro_cta || b.nroCta || '').trim();
   const bancoNombre = String(b.banco_nombre || b.bancoNombre || b.des_ban || b.desBan || '').trim();
+  const titular = String(
+    b.cuenta_a_nombre_de ||
+    b.cuentaANombreDe ||
+    b.titular ||
+    'GRUPO MOTORVEN, C.A.'
+  ).trim();
   const saldoBs = Number(b.saldo_bs ?? b.saldoBs ?? b.saldo_actual ?? b.saldoActual ?? 0);
   const saldoUsd = Number(b.saldo_usd ?? b.saldoUsd ?? 0);
   const moneda = b.moneda || 'BS';
@@ -771,6 +777,9 @@ db.profit_bank_accounts = (db.profit_bank_accounts || []).map(b => {
     bancoNombre,
     des_ban: bancoNombre,
     desBan: bancoNombre,
+    titular,
+    cuenta_a_nombre_de: titular,
+    cuentaANombreDe: titular,
     saldo_bs: saldoBs,
     saldoBs,
     saldo_usd: saldoUsd,

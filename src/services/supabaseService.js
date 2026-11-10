@@ -4111,6 +4111,85 @@ export const pushUserLogToSupabase = async (logData) => {
 //  SUPABASE - TESORERÍA, FACTURAS Y COBROS
 // ==========================================
 
+const CUSTOM_BANK_ACCOUNTS_STORAGE_KEY = 'signum_custom_bank_accounts_v1';
+const DELETED_BANK_ACCOUNTS_STORAGE_KEY = 'signum_deleted_bank_accounts_v1';
+
+const normalizeBankAccountRecord = (r) => {
+  if (!r) return null;
+  const codCta = String(r.codCta || r.cod_cta || r.id?.replace(/^CTA-/i, '') || '01').trim();
+  const id = String(r.id || `CTA-${codCta}`).trim();
+  const cuentaANombreDe = String(
+    r.cuentaANombreDe || r.cuenta_a_nombre_de || r.titular || 'GRUPO MOTORVEN, C.A.'
+  ).trim() || 'GRUPO MOTORVEN, C.A.';
+  return {
+    id,
+    codCta,
+    cod_cta: codCta,
+    numCta: String(r.numCta || r.num_cta || '').trim(),
+    num_cta: String(r.numCta || r.num_cta || '').trim(),
+    bancoNombre: String(r.bancoNombre || r.banco_nombre || '').trim(),
+    banco_nombre: String(r.bancoNombre || r.banco_nombre || '').trim(),
+    cuentaANombreDe,
+    cuenta_a_nombre_de: cuentaANombreDe,
+    titular: cuentaANombreDe,
+    saldoBs: Number(r.saldoBs ?? r.saldo_bs ?? 0),
+    saldo_bs: Number(r.saldoBs ?? r.saldo_bs ?? 0),
+    saldoUsd: Number(r.saldoUsd ?? r.saldo_usd ?? 0),
+    saldo_usd: Number(r.saldoUsd ?? r.saldo_usd ?? 0),
+    moneda: String(r.moneda || 'BS').trim().toUpperCase(),
+    fechaActualizacion: r.fechaActualizacion || r.fecha_actualizacion || new Date().toISOString()
+  };
+};
+
+const mergeBankAccountsList = (remoteList = []) => {
+  let customList = [];
+  let deletedIds = new Set();
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CUSTOM_BANK_ACCOUNTS_STORAGE_KEY);
+      if (rawCustom) {
+        const parsed = JSON.parse(rawCustom);
+        if (Array.isArray(parsed)) customList = parsed;
+      }
+      const rawDel = localStorage.getItem(DELETED_BANK_ACCOUNTS_STORAGE_KEY);
+      if (rawDel) {
+        const parsedDel = JSON.parse(rawDel);
+        if (Array.isArray(parsedDel)) deletedIds = new Set(parsedDel.map(x => String(x).trim().toUpperCase()));
+      }
+    }
+  } catch (_) {}
+
+  const byCode = new Map();
+  (REAL_PROFIT_BANK_ACCOUNTS || []).forEach(r => {
+    const norm = normalizeBankAccountRecord(r);
+    if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
+      byCode.set(norm.codCta.toUpperCase(), norm);
+    }
+  });
+  (remoteList || []).forEach(r => {
+    const norm = normalizeBankAccountRecord(r);
+    if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
+      const existing = byCode.get(norm.codCta.toUpperCase());
+      byCode.set(norm.codCta.toUpperCase(), {
+        ...existing,
+        ...norm,
+        cuentaANombreDe: r.cuentaANombreDe || r.cuenta_a_nombre_de || r.titular || existing?.cuentaANombreDe || 'GRUPO MOTORVEN, C.A.',
+        titular: r.cuentaANombreDe || r.cuenta_a_nombre_de || r.titular || existing?.titular || 'GRUPO MOTORVEN, C.A.'
+      });
+    }
+  });
+  customList.forEach(r => {
+    const norm = normalizeBankAccountRecord(r);
+    if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
+      byCode.set(norm.codCta.toUpperCase(), norm);
+    }
+  });
+
+  return Array.from(byCode.values()).sort((a, b) =>
+    String(a.codCta || '').localeCompare(String(b.codCta || ''), undefined, { numeric: true })
+  );
+};
+
 export const getSupabaseProfitBankAccounts = async () => {
   try {
     const { data, error } = await withTimeout(
@@ -4119,19 +4198,10 @@ export const getSupabaseProfitBankAccounts = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(r => ({
-      id: r.id,
-      codCta: r.cod_cta,
-      numCta: r.num_cta,
-      bancoNombre: r.banco_nombre,
-      saldoBs: Number(r.saldo_bs || 0),
-      saldoUsd: Number(r.saldo_usd || 0),
-      moneda: r.moneda,
-      fechaActualizacion: r.fecha_actualizacion
-    }));
+    return mergeBankAccountsList(data || []);
   } catch (err) {
     console.warn('[Supabase] Error cargando cuentas bancarias Profit:', err.message);
-    return REAL_PROFIT_BANK_ACCOUNTS;
+    return mergeBankAccountsList(REAL_PROFIT_BANK_ACCOUNTS);
   }
 };
 
@@ -4509,39 +4579,123 @@ export const saveSupabaseProfitCollection = async (collectionData) => {
 
 export const updateSupabaseProfitBankAccount = async (bankAcc) => {
   if (!bankAcc) return null;
+  const normalized = normalizeBankAccountRecord({
+    ...bankAcc,
+    fechaActualizacion: new Date().toISOString()
+  });
+  if (!normalized) return null;
+
   try {
-    const payload = {
-      id: bankAcc.id || `CTA-${bankAcc.codCta || bankAcc.cod_cta || '01'}`,
-      cod_cta: bankAcc.codCta || bankAcc.cod_cta,
-      codCta: bankAcc.codCta || bankAcc.cod_cta,
-      num_cta: bankAcc.numCta || bankAcc.num_cta,
-      numCta: bankAcc.numCta || bankAcc.num_cta,
-      banco_nombre: bankAcc.bancoNombre || bankAcc.banco_nombre,
-      bancoNombre: bankAcc.bancoNombre || bankAcc.banco_nombre,
-      saldo_bs: Number(bankAcc.saldoBs ?? bankAcc.saldo_bs ?? 0),
-      saldoBs: Number(bankAcc.saldoBs ?? bankAcc.saldo_bs ?? 0),
-      saldo_usd: Number(bankAcc.saldoUsd ?? bankAcc.saldo_usd ?? 0),
-      saldoUsd: Number(bankAcc.saldoUsd ?? bankAcc.saldo_usd ?? 0),
-      moneda: bankAcc.moneda || 'BS',
-      fecha_actualizacion: new Date().toISOString()
-    };
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CUSTOM_BANK_ACCOUNTS_STORAGE_KEY);
+      const customList = rawCustom ? JSON.parse(rawCustom) : [];
+      const arr = Array.isArray(customList) ? customList : [];
+      const filtered = arr.filter(
+        c => String(c.id || '').toUpperCase() !== normalized.id.toUpperCase() &&
+             String(c.codCta || '').toUpperCase() !== normalized.codCta.toUpperCase()
+      );
+      filtered.push(normalized);
+      localStorage.setItem(CUSTOM_BANK_ACCOUNTS_STORAGE_KEY, JSON.stringify(filtered));
+
+      const rawDel = localStorage.getItem(DELETED_BANK_ACCOUNTS_STORAGE_KEY);
+      if (rawDel) {
+        const parsedDel = JSON.parse(rawDel);
+        if (Array.isArray(parsedDel)) {
+          localStorage.setItem(
+            DELETED_BANK_ACCOUNTS_STORAGE_KEY,
+            JSON.stringify(
+              parsedDel.filter(
+                x => String(x).toUpperCase() !== normalized.id.toUpperCase() &&
+                     String(x).toUpperCase() !== normalized.codCta.toUpperCase()
+              )
+            )
+          );
+        }
+      }
+    }
+  } catch (_) {}
+
+  try {
     broadcastReconcileChange({
       tableId: 'bank_accounts',
       action: 'RECONCILE',
-      key: payload.id,
-      item: payload
+      key: normalized.id,
+      item: normalized
     });
     if (isNetworkOnline() && isSupabaseAvailable) {
+      const dbRow = {
+        id: normalized.id,
+        cod_cta: normalized.codCta,
+        num_cta: normalized.numCta,
+        banco_nombre: normalized.bancoNombre,
+        saldo_bs: normalized.saldoBs,
+        saldo_usd: normalized.saldoUsd,
+        moneda: normalized.moneda,
+        fecha_actualizacion: normalized.fechaActualizacion
+      };
       await withTimeout(
-        supabase.from('profit_bank_accounts').upsert(payload, { onConflict: 'id' }),
+        supabase.from('profit_bank_accounts').upsert(dbRow, { onConflict: 'id' }),
         4000
       );
     }
-    return payload;
+    return normalized;
   } catch (err) {
     console.warn('[updateSupabaseProfitBankAccount] Aviso:', err.message);
-    return bankAcc;
+    return normalized;
   }
+};
+
+export const deleteSupabaseProfitBankAccount = async (bankIdOrCode) => {
+  const target = String(bankIdOrCode || '').trim();
+  if (!target) return false;
+  const upperTarget = target.toUpperCase();
+  const codeTarget = upperTarget.replace(/^CTA-/i, '');
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawDel = localStorage.getItem(DELETED_BANK_ACCOUNTS_STORAGE_KEY);
+      const delList = rawDel ? JSON.parse(rawDel) : [];
+      const set = new Set(Array.isArray(delList) ? delList.map(x => String(x).toUpperCase()) : []);
+      set.add(upperTarget);
+      set.add(codeTarget);
+      set.add(`CTA-${codeTarget}`);
+      localStorage.setItem(DELETED_BANK_ACCOUNTS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+
+      const rawCustom = localStorage.getItem(CUSTOM_BANK_ACCOUNTS_STORAGE_KEY);
+      if (rawCustom) {
+        const customList = JSON.parse(rawCustom);
+        if (Array.isArray(customList)) {
+          localStorage.setItem(
+            CUSTOM_BANK_ACCOUNTS_STORAGE_KEY,
+            JSON.stringify(
+              customList.filter(
+                c => String(c.id || '').toUpperCase() !== upperTarget &&
+                     String(c.codCta || '').toUpperCase() !== codeTarget
+              )
+            )
+          );
+        }
+      }
+    }
+  } catch (_) {}
+
+  try {
+    broadcastReconcileChange({
+      tableId: 'bank_accounts',
+      action: 'DELETE',
+      key: upperTarget.startsWith('CTA-') ? upperTarget : `CTA-${codeTarget}`
+    });
+  } catch (_) {}
+
+  try {
+    await supabase
+      .from('profit_bank_accounts')
+      .delete()
+      .or(`id.eq.${target},cod_cta.eq.${codeTarget},id.eq.CTA-${codeTarget}`);
+  } catch (err) {
+    console.warn('[Supabase] Baja local aplicada para cuenta bancaria:', err.message);
+  }
+  return true;
 };
 
 export const getSupabaseProfitInvoices = async () => {

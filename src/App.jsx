@@ -91,6 +91,7 @@ import {
   updateSupabaseOrderStatus,
   getSupabaseProfitBankAccounts,
   updateSupabaseProfitBankAccount,
+  deleteSupabaseProfitBankAccount,
   getSupabaseProfitCashDesks,
   updateSupabaseProfitCashDesk,
   deleteSupabaseProfitCashDesk,
@@ -2456,6 +2457,16 @@ function MainApp() {
                 await deleteSupabaseProfitCashDesk(deskId);
                 const fresh = await getSupabaseProfitCashDesks();
                 if (fresh) setProfitCashDesks(fresh);
+              }}
+              onUpdateBankAccount={async (bankAcc) => {
+                await updateSupabaseProfitBankAccount(bankAcc);
+                const fresh = await getSupabaseProfitBankAccounts();
+                if (fresh) setProfitBankAccounts(fresh);
+              }}
+              onDeleteBankAccount={async (bankId) => {
+                await deleteSupabaseProfitBankAccount(bankId);
+                const fresh = await getSupabaseProfitBankAccounts();
+                if (fresh) setProfitBankAccounts(fresh);
               }}
               config={config}
               currentUser={currentUser}
