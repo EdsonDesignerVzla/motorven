@@ -2382,6 +2382,35 @@ export const processSupabaseSale = async (saleData) => {
       console.warn('[processSupabaseSale] Aviso sincronizando venta en Supabase:', e.message);
     });
 
+    // Reflejo en tiempo real simultáneo en profit_invoices para visualización inmediata en CxC y Flujo de Fondos
+    try {
+      const isCredit = mapped.condicionPago === 'CREDITO' || isCreditPaymentCondition(mapped.condicionPago, mapped.metodoPago);
+      await saveSupabaseProfitInvoice({
+        id: mapped.id,
+        factNum: mapped.numeroDoc,
+        tipoDoc: mapped.tipoDoc,
+        clienteId: mapped.clienteId,
+        clienteNombre: mapped.clienteNombre,
+        clienteRif: mapped.clienteRif,
+        vendedorId: mapped.vendedor,
+        vendedorNombre: mapped.vendedor,
+        totBrutoUsd: mapped.subtotalUsd,
+        ivaUsd: mapped.ivaUsd,
+        totNetoUsd: mapped.totalUsd,
+        saldoUsd: mapped.saldoUsd !== undefined ? mapped.saldoUsd : (isCredit ? mapped.totalUsd : 0),
+        abonosUsd: mapped.saldoUsd !== undefined ? Math.max(0, mapped.totalUsd - mapped.saldoUsd) : (isCredit ? 0 : mapped.totalUsd),
+        diasCredito: mapped.diasCredito || 0,
+        fechaEmision: mapped.fechaEmision || mapped.fecha,
+        fechaVencimiento: mapped.fechaVencimiento,
+        tasa: mapped.tasaDolar,
+        status: (mapped.saldoUsd || 0) <= 0.01 && !isCredit ? 'COBRADA' : 'PENDIENTE',
+        formaPago: isCredit ? '03' : '01',
+        items: mapped.items
+      });
+    } catch (invErr) {
+      console.warn('[processSupabaseSale] Aviso sincronizando factura en profit_invoices:', invErr?.message);
+    }
+
     return mapped;
   } catch (err) {
     console.warn("Fallo o indisponibilidad en Supabase procesando venta, ejecutando fallback local:", err);
@@ -2538,6 +2567,11 @@ export const saveSupabaseOrder = async (orderData) => {
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
+    broadcastReconcileChange({
+      tableId: 'orders',
+      action: 'CREATE',
+      data: orderData
+    });
     return orderData;
   }
   try {
@@ -2565,9 +2599,19 @@ export const saveSupabaseOrder = async (orderData) => {
     }
 
     isSupabaseAvailable = true;
+    broadcastReconcileChange({
+      tableId: 'orders',
+      action: 'CREATE',
+      data: orderData
+    });
     return getSupabaseOrders();
   } catch (err) {
     markSupabaseOffline(err, 'saveSupabaseOrder');
+    broadcastReconcileChange({
+      tableId: 'orders',
+      action: 'CREATE',
+      data: orderData
+    });
     return orderData;
   }
 };
@@ -2580,6 +2624,12 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
     console.warn('[updateSupabaseOrderStatus] Aviso sincronizando estado con Supabase:', e.message);
   });
 
+  broadcastReconcileChange({
+    tableId: 'orders',
+    action: 'UPDATE',
+    data: { id: orderId, status: newStatus }
+  });
+
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     return true;
   }
@@ -2588,10 +2638,56 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
       supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId)
     );
     if (error) throw error;
+    return true;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseOrderStatus');
     return false;
   }
+};
+
+/**
+ * Rutina de expiración automática de órdenes de preventa con más de 72 horas (3 días) de vigencia.
+ * Libera formalmente el stock físico comprometido en el inventario Available-To-Promise (ATP).
+ */
+export const checkAndExpireOverdueOrders = async (existingOrders = null) => {
+  const HOURS_72_MS = 72 * 60 * 60 * 1000;
+  const now = Date.now();
+  const ordersList = Array.isArray(existingOrders) && existingOrders.length > 0 
+    ? existingOrders 
+    : await getSupabaseOrders();
+
+  if (!Array.isArray(ordersList) || ordersList.length === 0) return [];
+
+  const expiredOrders = [];
+
+  for (const ord of ordersList) {
+    if (!ord) continue;
+    const st = String(ord.status || '').toUpperCase();
+    if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'RETENIDO_CREDITO') continue;
+
+    const rawDate = ord.fechaEmision || ord.fecha || ord.created_at;
+    if (!rawDate) continue;
+
+    const ordTime = new Date(rawDate).getTime();
+    if (!isNaN(ordTime) && (now - ordTime) > HOURS_72_MS) {
+      expiredOrders.push(ord);
+      try {
+        await updateSupabaseOrderStatus(ord.id, 'EXPIRADO');
+      } catch (err) {
+        console.warn(`[checkAndExpireOverdueOrders] Error expirando orden ${ord.id}:`, err?.message);
+      }
+    }
+  }
+
+  if (expiredOrders.length > 0) {
+    broadcastReconcileChange({
+      tableId: 'orders',
+      action: 'RECONCILE',
+      data: expiredOrders
+    });
+  }
+
+  return expiredOrders;
 };
 
 export const deleteSupabaseOrder = async (orderId) => {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -41,8 +41,13 @@ export default function Navigation({
   onOpenAccountsReceivableModal,
   onOpenAccountsPayableModal,
   sidebarCollapsed = false,
-  onToggleSidebar
+  onToggleSidebar,
+  orders = []
 }) {
+  const pendingOrdersCount = useMemo(() => {
+    if (!Array.isArray(orders)) return 0;
+    return orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length;
+  }, [orders]);
   const allMenuItems = [
     { id: 'dashboard', label: 'Dashboard Ejecutivo', icon: LayoutDashboard },
     { id: 'preventa', label: 'Preventa Móvil (Vendedor)', icon: Smartphone },
@@ -118,11 +123,49 @@ export default function Navigation({
               {visibleMenuItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
+                const isOrderRelated = item.id === 'ventas' || item.id === 'pedidos';
+                const showBadge = isOrderRelated && pendingOrdersCount > 0;
                 return (
-                  <li key={item.id} className={`nav-item ${isActive ? 'active' : ''}`}>
-                    <button onClick={() => handleSelectTab(item.id)} title={item.label}>
-                      <Icon size={18} />
-                      {!sidebarCollapsed && <span>{item.label}</span>}
+                  <li key={item.id} className={`nav-item ${isActive ? 'active' : ''}`} style={{ position: 'relative' }}>
+                    <button onClick={() => handleSelectTab(item.id)} title={showBadge ? `${item.label} (${pendingOrdersCount} pedidos de calle pendientes)` : item.label} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                      <span style={{ position: 'relative', display: 'inline-flex' }}>
+                        <Icon size={18} />
+                        {sidebarCollapsed && showBadge && (
+                          <span style={{
+                            position: 'absolute',
+                            top: '-5px',
+                            right: '-6px',
+                            background: 'var(--motorven-red, #dc2626)',
+                            color: '#fff',
+                            fontSize: '0.62rem',
+                            fontWeight: 900,
+                            minWidth: '15px',
+                            height: '15px',
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 0 6px rgba(220, 38, 38, 0.7)'
+                          }}>
+                            {pendingOrdersCount}
+                          </span>
+                        )}
+                      </span>
+                      {!sidebarCollapsed && <span style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>}
+                      {!sidebarCollapsed && showBadge && (
+                        <span style={{
+                          background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)',
+                          color: '#ffffff',
+                          fontSize: '0.68rem',
+                          fontWeight: 900,
+                          padding: '1px 6px',
+                          borderRadius: '10px',
+                          boxShadow: '0 0 8px rgba(239, 68, 68, 0.45)',
+                          animation: 'pulse 2s infinite'
+                        }}>
+                          {pendingOrdersCount}
+                        </span>
+                      )}
                     </button>
                   </li>
                 );

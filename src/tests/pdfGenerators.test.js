@@ -37,6 +37,7 @@ import {
   generateInventoryPDF,
   generateOrdersPDF,
   generateSellerOrderPDF,
+  generateDeliveryNotePDF,
   generateSalesPOSPDF,
   generatePurchasesPDF,
   generateCashflowPDF,
@@ -338,6 +339,60 @@ async function runPdfTests() {
       config: mockConfig,
       currentUser: mockUser
     });
+  });
+
+  // 8C. Nota de Entrega (Formato Carta con Desbordamiento y Paginación 1/1 y 1/2)
+  testGen('Nota de Entrega Tamaño Carta (1 página - formato 1/1)', () => {
+    const result = generateDeliveryNotePDF({
+      deliveryNote: {
+        numeroDoc: 'NE-000101',
+        clienteNombre: 'Distribuidora Carabobo 2026, C.A.',
+        clienteRif: 'J-31998822-1',
+        clienteDireccion: 'Av. Lisandro Alvarado, Valencia',
+        condicionPago: 'CONTADO',
+        totalUsd: 280,
+        items: [
+          { codigo: 'LUB-15W40-01', descripcion: 'Aceite Motorven 15W40 Mineral 1L', cantidad: 4, precioUsd: 35, totalUsd: 140 },
+          { codigo: 'LUB-20W50-01', descripcion: 'Aceite Motorven 20W50 Alto Km 1L', cantidad: 4, precioUsd: 35, totalUsd: 140 }
+        ]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    if (result.totalPages !== 1) {
+      throw new Error(`Se esperaba 1 sola página para pocos renglones, pero generó ${result.totalPages}`);
+    }
+  });
+
+  testGen('Nota de Entrega Tamaño Carta con desbordamiento (múltiples páginas - formato 1/2 y 2/2)', () => {
+    const itemsLlenos = [];
+    for (let i = 1; i <= 18; i++) {
+      itemsLlenos.push({
+        codigo: `LUB-ITEM-${i}`,
+        descripcion: `Aceite Lubricante Motorven Industrial Grado ISO-${i * 10} Tambor 208L`,
+        cantidad: 2,
+        precioUsd: 150,
+        totalUsd: 300
+      });
+    }
+
+    const result = generateDeliveryNotePDF({
+      deliveryNote: {
+        numeroDoc: 'NE-000102',
+        clienteNombre: 'Consorcio Industrial de Transporte del Centro',
+        clienteRif: 'J-50478166-0',
+        clienteDireccion: 'Zona Industrial Castillito, San Diego, Carabobo',
+        condicionPago: 'CRÉDITO 15 DÍAS',
+        diasCredito: 15,
+        totalUsd: 5400,
+        items: itemsLlenos
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    if (result.totalPages < 2) {
+      throw new Error(`Se esperaban al menos 2 páginas para orden con desbordamiento de 18 renglones, pero generó ${result.totalPages}`);
+    }
   });
 
   // 9. Facturación POS

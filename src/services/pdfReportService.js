@@ -607,9 +607,56 @@ export function addGrandTotalBox(doc, startY, items = [], tableWidth = 179.9, st
 }
 
 /**
+ * Imprime un documento jsPDF en el navegador creando un iframe invisible
+ */
+export function printPDFDocument(doc) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return { success: false, message: 'Entorno no gráfico' };
+  }
+  try {
+    const blob = doc.output('blob');
+    const blobUrl = URL.createObjectURL(blob);
+    const existingFrame = document.getElementById('motorven-pdf-print-frame');
+    if (existingFrame) existingFrame.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'motorven-pdf-print-frame';
+    iframe.style.position = 'fixed';
+    iframe.style.top = '-9999px';
+    iframe.style.left = '-9999px';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+
+    iframe.onload = () => {
+      setTimeout(() => {
+        try {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+        } catch (printErr) {
+          console.warn('[PDF Service] Error en print del iframe, abriendo pestaña:', printErr);
+          window.open(blobUrl, '_blank');
+        } finally {
+          setTimeout(() => {
+            iframe.remove();
+            URL.revokeObjectURL(blobUrl);
+          }, 60000);
+        }
+      }, 300);
+    };
+    return { success: true, url: blobUrl };
+  } catch (err) {
+    console.error('[PDF Service] Error en printPDFDocument:', err);
+    return { success: false, error: err };
+  }
+}
+
+/**
  * Finaliza el reporte agregando el marco del contenedor padre y pie de página en cada página
  */
-export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUser = null) {
+export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUser = null, options = {}) {
   const totalPages = doc.internal.getNumberOfPages();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -621,6 +668,7 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
   const startX = margin + innerPadding;
 
   const userName = currentUser?.nombre || currentUser?.username || 'Operador Autorizado';
+  const isSlashFormat = options.pageNumberFormat === 'slash' || filename.toLowerCase().includes('nota_entrega');
 
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
@@ -641,17 +689,18 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
     doc.setFontSize(5.6);
     doc.setTextColor(...COLORS.muted);
     doc.text(
-      'SIGNUM MOTORVEN C.A. • Sistema de Gestión ERP • Documento Oficial Tamaño Carta • Válido para Impresión',
+      options.legalFooter || 'SIGNUM MOTORVEN C.A. • Sistema de Gestión ERP • Documento Oficial Tamaño Carta • Válido para Impresión',
       startX + 1,
       footerY + 3.8
     );
 
-    // Usuario y numeración de página a la derecha
+    // Usuario y numeración de página a la derecha (Ej: "Página 1/1" o "Página 1/2")
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.0);
     doc.setTextColor(...COLORS.slate);
+    const pageLabel = isSlashFormat ? `Página ${i}/${totalPages}` : `Página ${i} de ${totalPages}`;
     doc.text(
-      `Página ${i} de ${totalPages} • Emitido por: ${userName}`,
+      `${pageLabel} • Emitido por: ${userName}`,
       startX + tableWidth - 1,
       footerY + 3.8,
       { align: 'right' }
@@ -3324,6 +3373,349 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
   finalizeAndSave(base.doc, safeFilename, currentUser);
 
   return { doc: base.doc, filename: safeFilename };
+}
+
+// =========================================================================
+// 8.C. FORMATO OFICIAL DE NOTA DE ENTREGA (TAMAÑO CARTA CON DESBORDAMIENTO)
+// =========================================================================
+/**
+ * Genera el documento oficial de NOTA DE ENTREGA en formato Carta (Letter)
+ * Diseñado conforme a los estándares comerciales e institucionales de Grupo Motorven:
+ * - Membrete oficial corporativo (Planta / Depósito y Distribución OILSTONE)
+ * - Indicación expresa de Almacén 02 (Mercancía General / Preventa)
+ * - Tarjetas de resumen operativo (Correlativo, Volumen Lts, Bultos, Montos USD / Bs)
+ * - Bloque bipartito de Adquirente / Receptor vs Trazabilidad Logística y Despacho
+ * - Desglose tabular detallado con precios unitarios, totales en USD y Bs
+ * - Soporte nativo de desbordamiento de renglones con salto automático de página
+ * - Numeración exacta al pie en cada página: "Página 1/1" o "Página 1/2", "Página 2/2"
+ * - Encabezado de continuación en páginas subsiguientes
+ * - Totales de entrega (sin débito fiscal IVA SENIAT por ser Nota de Entrega)
+ * - Bloque tripartito de firmas: Despachador, Transportista y Receptor
+ * - Permite guardar (descarga de PDF) e imprimir en papel tamaño Carta
+ */
+export function generateDeliveryNotePDF({
+  deliveryNote = null,
+  sale = null,
+  order = null,
+  config = {},
+  currentUser = null,
+  client = null,
+  autoPrint = false
+}) {
+  const docData = deliveryNote || sale || order || {};
+  const tasa = Number(docData.tasaDolar || config?.tasaDolar) || 827.73;
+
+  // Extracción y formateo del correlativo oficial de la Nota de Entrega
+  const rawNum = String(docData.numeroDoc || docData.numero || docData.factNum || docData.nroFactura || docData.id || '000001');
+  const numDigits = rawNum.replace(/[^0-9]/g, '');
+  const correlativoDisplay = rawNum.toUpperCase().startsWith('NE-')
+    ? rawNum
+    : (numDigits ? `NE-${numDigits.slice(-6).padStart(6, '0')}` : `NE-${rawNum}`);
+
+  const fechaObj = docData.fechaEmision || docData.fecha || new Date();
+  const fechaStr = new Date(fechaObj).toLocaleDateString('es-VE');
+  const horaStr = new Date(fechaObj).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
+
+  const diasCredito = docData.condicionPago === 'CONTADO' ? 0 : Number(docData.diasCredito ?? 0);
+  const fechaVencObj = docData.fechaVencimiento
+    ? new Date(docData.fechaVencimiento)
+    : new Date(new Date(fechaObj).getTime() + (diasCredito * 24 * 60 * 60 * 1000));
+  const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
+
+  const clienteNombre = String(docData.clienteNombre || docData.cliente || client?.nombre || 'CLIENTE GENERAL');
+  const clienteRif = String(docData.clienteRif || docData.rif || client?.rif || client?.ci || 'J-00000000-0');
+  const clienteDireccion = String(docData.clienteDireccion || docData.direccionEntrega || docData.direccion || client?.direccion || 'Barquisimeto / Caracas, Venezuela');
+  const clienteTelefono = String(docData.clienteTelefono || docData.telefono || client?.telefono || '');
+
+  const almacenOrigen = docData.almacen || 'Almacén 02 (Mercancía General / Preventa)';
+  const vendedor = docData.vendedor || docData.vendedorNombre || currentUser?.nombre || 'Asesor Comercial';
+  const pedidoOrigen = docData.pedidoOrigenDoc || docData.pedidoId || order?.id || docData.pedidoNumero || 'VENTA_DIRECTA_MOSTRADOR';
+  const transportista = docData.transportista || docData.chofer || 'Transporte Motorven (Flota Propia)';
+  const condicionPago = docData.condicionPago || (diasCredito > 0 ? `CRÉDITO ${diasCredito} DÍAS` : 'CONTADO');
+  const metodoPago = docData.metodoPago || 'EFECTIVO USD / TRANSFERENCIA';
+
+  const base = createBaseReport({
+    title: 'NOTA DE ENTREGA COMERCIAL',
+    subtitle: 'Despacho de Mercancía General • Almacén 02 • Entrega Física en Rampa y Custodia',
+    moduleCode: 'NE',
+    currentUser,
+    config
+  });
+
+  const rawItems = docData.items || docData.renglones || [];
+  const items = Array.isArray(rawItems) ? rawItems : [];
+
+  // Cálculos de volúmenes, bultos y totales
+  let totalLitros = 0;
+  let totalBultos = 0;
+  let totalNetoUsd = 0;
+
+  const tableData = items.map((it, idx) => {
+    const qty = Number(it.cantidad || it.qty || 1);
+    const unitLitros = Number(it.litrosUnitarios || it.litrosPorUnidad || resolveProductLitersPerUnit(it) || 0);
+    const rowLitros = it.litrosTotales ? Number(it.litrosTotales) : (qty * unitLitros);
+    const unitPrice = Number(it.precioUsd ?? it.precioUnitarioUsd ?? it.precio ?? 0);
+    const rowSubtotalUsd = Number(it.subtotalUsd ?? it.totalUsd ?? (qty * unitPrice));
+    const rowSubtotalBs = rowSubtotalUsd * tasa;
+
+    totalLitros += rowLitros;
+    totalBultos += qty;
+    totalNetoUsd += rowSubtotalUsd;
+
+    const desc = String(it.descripcion || it.articuloDescripcion || it.art_des || 'Lubricante Motorven');
+    const presentacion = resolveProductUnit(it, 'Caja');
+    const codigo = String(it.codigo || it.articuloId || it.co_art || `LUB-${idx + 1}`);
+
+    return [
+      String(idx + 1),
+      codigo,
+      desc,
+      presentacion,
+      String(qty),
+      rowLitros > 0 ? `${rowLitros.toFixed(1)} L` : '-',
+      `$ ${unitPrice.toFixed(2)}`,
+      `$ ${rowSubtotalUsd.toFixed(2)}`,
+      `Bs. ${rowSubtotalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    ];
+  });
+
+  if (items.length === 0) {
+    totalNetoUsd = Number(docData.totalUsd || docData.total || 0);
+    totalLitros = Number(docData.totalLitros || 0);
+  }
+
+  const totalNetoBs = totalNetoUsd * tasa;
+
+  // 1. Tarjetas Superiores de Control Operativo
+  const cards = [
+    { label: 'Nota de Entrega N°', value: correlativoDisplay, subtext: `Emisión: ${fechaStr}`, color: COLORS.navy },
+    { label: 'Almacén de Origen', value: 'Almacén 02', subtext: 'Mercancía General', color: COLORS.cyan },
+    { label: 'Carga Total', value: `${totalLitros.toFixed(1)} Litros`, subtext: `${totalBultos} Unid / Bultos`, color: COLORS.amber },
+    { label: 'Monto Total USD', value: formatUsd(totalNetoUsd), subtext: formatBs(totalNetoBs), color: COLORS.emerald }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  // 2. Banner de Especificación Comercial y Despacho
+  const bannerH = 8.5;
+  base.doc.setFillColor(240, 253, 244); // Green 50
+  base.doc.setDrawColor(...COLORS.emerald);
+  base.doc.setLineWidth(0.35);
+  base.doc.roundedRect(base.startX, currentY, base.tableWidth, bannerH, 1.2, 1.2, 'FD');
+
+  base.doc.setFillColor(...COLORS.emerald);
+  base.doc.roundedRect(base.startX, currentY, 2.5, bannerH, 0.6, 0.6, 'F');
+
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(6.4);
+  base.doc.setTextColor(...COLORS.emerald);
+  base.doc.text('DOCUMENTO DE ENTREGA COMERCIAL Y DESPACHO DE LUBRICANTES (NO SUJETO A IVA FISCAL):', base.startX + 5, currentY + 3.2);
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.5);
+  base.doc.setTextColor(...COLORS.dark);
+  const bannerText = `Ampara el despacho físico y la transferencia de posesión de los lubricantes desde el Almacén 02. La recepción conforme convalida la integridad de sellos, envases y cantidades en rampa.`;
+  base.doc.text(bannerText, base.startX + 5, currentY + 6.3);
+
+  currentY += bannerH + 2.5;
+
+  // 3. Bloque Bipartito: Datos del Adquirente vs Trazabilidad Logística
+  const boxH = 20;
+  const colW = (base.tableWidth - 2) / 2;
+
+  base.doc.setFillColor(...COLORS.lightBg);
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.setLineWidth(0.3);
+  base.doc.roundedRect(base.startX, currentY, base.tableWidth, boxH, 1.2, 1.2, 'FD');
+
+  // Separador vertical
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.line(base.startX + colW, currentY + 1.5, base.startX + colW, currentY + boxH - 1.5);
+
+  // Columna Izquierda: Datos del Cliente
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(6.4);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text('DATOS DEL RECEPTOR / CLIENTE', base.startX + 3, currentY + 4.2);
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.8);
+  base.doc.setTextColor(...COLORS.dark);
+  base.doc.text(`Cliente: ${clienteNombre.slice(0, 42)}`, base.startX + 3, currentY + 8);
+  base.doc.text(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`, base.startX + 3, currentY + 11.5);
+  base.doc.text(`Dirección Entrega: ${clienteDireccion.slice(0, 48)}`, base.startX + 3, currentY + 15);
+  base.doc.text(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`, base.startX + 3, currentY + 18.5);
+
+  // Columna Derecha: Logística y Despacho
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(6.4);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text('CONTROL LOGÍSTICO Y EXPEDICIÓN', base.startX + colW + 3, currentY + 4.2);
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.8);
+  base.doc.setTextColor(...COLORS.dark);
+  base.doc.text(`Despachado de: ${almacenOrigen}`, base.startX + colW + 3, currentY + 8);
+  base.doc.text(`Pedido de Origen: ${pedidoOrigen} • Vendedor: ${vendedor}`, base.startX + colW + 3, currentY + 11.5);
+  base.doc.text(`Unidad / Transportista: ${transportista.slice(0, 42)}`, base.startX + colW + 3, currentY + 15);
+  base.doc.text(`Método: ${metodoPago} • Tasa Oficial BCV: Bs. ${tasa.toFixed(2)} / USD`, base.startX + colW + 3, currentY + 18.5);
+
+  currentY += boxH + 3.0;
+
+  // 4. Tabla de Renglones con soporte de desbordamiento (autoTable)
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { left: base.startX, right: PAGE_LETTER.margin + PAGE_LETTER.innerPadding, top: 25, bottom: 20 },
+    head: [['#', 'CÓDIGO', 'DESCRIPCIÓN DEL LUBRICANTE', 'PRESENTACIÓN', 'CANT.', 'VOLUMEN', 'P. UNIT ($)', 'TOTAL ($)', 'TOTAL (BS.)']],
+    body: tableData.length > 0 ? tableData : [['1', 'LUB-GEN', 'Aceite Lubricante General', 'Caja', '1', '12.0 L', `$ ${totalNetoUsd.toFixed(2)}`, `$ ${totalNetoUsd.toFixed(2)}`, `Bs. ${totalNetoBs.toFixed(2)}`]],
+    theme: 'grid',
+    headStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 6.2,
+      fontStyle: 'bold',
+      cellPadding: 1.6
+    },
+    styles: {
+      fontSize: 5.8,
+      cellPadding: 1.4,
+      textColor: COLORS.dark
+    },
+    alternateRowStyles: {
+      fillColor: COLORS.lightBg
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 7 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
+      2: { halign: 'left', cellWidth: 54 },
+      3: { halign: 'center', cellWidth: 20 },
+      4: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
+      5: { halign: 'right', cellWidth: 16 },
+      6: { halign: 'right', cellWidth: 17 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 18 },
+      8: { halign: 'right', fontStyle: 'bold', cellWidth: 17.9 }
+    },
+    didDrawPage: (data) => {
+      if (data.pageNumber > 1) {
+        drawParentContainer(base.doc, false);
+
+        // Encabezado institucional de continuación
+        base.doc.setFont('helvetica', 'bold');
+        base.doc.setFontSize(7.2);
+        base.doc.setTextColor(...COLORS.navy);
+        base.doc.text(
+          `CONTINUACIÓN NOTA DE ENTREGA N° ${correlativoDisplay} — Cliente: ${clienteNombre.slice(0, 42)}`,
+          base.startX,
+          19.5
+        );
+
+        base.doc.setFont('helvetica', 'normal');
+        base.doc.setFontSize(5.8);
+        base.doc.setTextColor(...COLORS.slate);
+        base.doc.text(
+          `Despacho Almacén 02 • Emisión: ${fechaStr}`,
+          base.startX + base.tableWidth,
+          19.5,
+          { align: 'right' }
+        );
+
+        base.doc.setDrawColor(...COLORS.border);
+        base.doc.setLineWidth(0.3);
+        base.doc.line(base.startX, 21.5, base.startX + base.tableWidth, 21.5);
+      }
+    }
+  });
+
+  const finalYTable = base.doc.lastAutoTable?.finalY || currentY + 40;
+  let finalYBottom = finalYTable + 3.0;
+
+  // Si no cabe la caja de totales y firmas en la página actual (límite 235 mm), salta de página limpiamente
+  if (finalYBottom + 42 > 255) {
+    base.doc.addPage();
+    drawParentContainer(base.doc, false);
+    finalYBottom = 22;
+  }
+
+  // 5. Caja de Resumen Financiero y Cláusula de Custodia
+  const summaryBoxH = 17;
+  base.doc.setFillColor(...COLORS.lightBg);
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.setLineWidth(0.3);
+  base.doc.roundedRect(base.startX, finalYBottom, base.tableWidth, summaryBoxH, 1.2, 1.2, 'FD');
+
+  // Lado izquierdo: Cláusula de conformidad
+  const noticeW = base.tableWidth * 0.58;
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(6.0);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text('CONDICIONES DE CONFORMIDAD Y ENTREGA:', base.startX + 3, finalYBottom + 4.2);
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.4);
+  base.doc.setTextColor(...COLORS.dark);
+  const clause = `La mercancía amparada en esta Nota de Entrega fue despachada desde Almacén 02 y viaja por cuenta y riesgo del receptor. Una vez recibida y firmada en destino se convalida la entrega conforme y a satisfacción comercial.`;
+  const splitClause = base.doc.splitTextToSize(clause, noticeW - 6);
+  base.doc.text(splitClause, base.startX + 3, finalYBottom + 7.5);
+
+  // Separador vertical interno
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.line(base.startX + noticeW, finalYBottom + 1.5, base.startX + noticeW, finalYBottom + summaryBoxH - 1.5);
+
+  // Lado derecho: Totales en USD y Bs
+  const totalsX = base.startX + noticeW + 3;
+  const totalsW = base.tableWidth - noticeW - 6;
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(6.0);
+  base.doc.setTextColor(...COLORS.slate);
+  base.doc.text('Subtotal Mercancía (Sin IVA):', totalsX, finalYBottom + 4.2);
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setTextColor(...COLORS.dark);
+  base.doc.text(`$ ${totalNetoUsd.toFixed(2)}`, totalsX + totalsW, finalYBottom + 4.2, { align: 'right' });
+
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(7.2);
+  base.doc.setTextColor(...COLORS.emerald);
+  base.doc.text('TOTAL NOTA DE ENTREGA USD:', totalsX, finalYBottom + 9.5);
+  base.doc.text(`$ ${totalNetoUsd.toFixed(2)}`, totalsX + totalsW, finalYBottom + 9.5, { align: 'right' });
+
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(6.6);
+  base.doc.setTextColor(...COLORS.amber);
+  base.doc.text('TOTAL OFICIAL EN BOLÍVARES:', totalsX, finalYBottom + 14.5);
+  base.doc.text(`Bs. ${totalNetoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsW, finalYBottom + 14.5, { align: 'right' });
+
+  finalYBottom += summaryBoxH + 3.0;
+
+  // 6. Bloque Tripartito de Firmas
+  addSignatures(
+    base.doc,
+    finalYBottom,
+    ['Despachado por (Almacén 02)', 'Transportado por (Chofer / C.I.)', 'Recibido Conforme (Cliente / Sello y Firma)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  const safeFilename = `Nota_Entrega_${correlativoDisplay.replace(/[^a-zA-Z0-9_\-]/g, '_')}_${fechaStr.replace(/\//g, '-')}.pdf`;
+
+  // Soporte directo para imprimir si se solicita autoPrint
+  if (autoPrint) {
+    printPDFDocument(base.doc);
+  }
+
+  // Guardado estándar del PDF (con numeración formato slash "Página 1/1" o "Página 1/2")
+  finalizeAndSave(base.doc, safeFilename, currentUser, {
+    pageNumberFormat: 'slash',
+    legalFooter: 'Nota de Entrega Comercial • Despacho Físico de Mercancía Almacén 02 • Grupo Motorven, C.A.'
+  });
+
+  const totalPages = base.doc.internal.getNumberOfPages();
+  return {
+    doc: base.doc,
+    filename: safeFilename,
+    totalPages,
+    print: () => printPDFDocument(base.doc)
+  };
 }
 
 // =========================================================================

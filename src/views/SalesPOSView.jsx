@@ -26,7 +26,8 @@ import {
   Lock,
   Calendar,
   Building2,
-  User
+  User,
+  Warehouse
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from '../services/formatService';
 import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber } from '../services/fiscalService';

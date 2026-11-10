@@ -32,7 +32,8 @@ import {
   ExternalLink,
   Camera,
   Trash2,
-  Activity
+  Activity,
+  Bell
 } from 'lucide-react';
 import { formatBs, formatUsd } from '../services/formatService';
 import { canModifyRates, getRoleMeta, isMasterOrGerencia, isMasterAdmin, canAccessModule } from '../services/authService';
@@ -661,6 +662,33 @@ export default function HeaderBar({
                     </button>
                   )}
                 </div>
+              )}
+
+              {/* 2.1b Alerta de Pedidos de Preventa Pendientes en Caja */}
+              {Array.isArray(orders) && orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate && onNavigate('ventas')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '4px 10px',
+                    borderRadius: '20px',
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(245, 158, 11, 0.25))',
+                    border: '1.5px solid #f59e0b',
+                    color: '#fbbf24',
+                    fontSize: '0.78rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    boxShadow: '0 0 10px rgba(245, 158, 11, 0.3)',
+                    animation: 'pulse 2.5s infinite'
+                  }}
+                  title={`${orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length} orden(es) de preventa esperando facturación en caja (Clic para ir a Ventas & POS)`}
+                >
+                  <Bell size={13} color="#f59e0b" />
+                  <span>{orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length} en Caja</span>
+                </button>
               )}
 
               {/* 2.2 Badge de Fecha */}

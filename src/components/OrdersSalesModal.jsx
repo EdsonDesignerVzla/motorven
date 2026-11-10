@@ -54,6 +54,7 @@ import {
   generateOrdersPDF,
   generateSellerOrderPDF,
   generateLetterInvoiceSeniatPDF,
+  generateDeliveryNotePDF,
   generateSalesPOSPDF
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
@@ -1470,18 +1471,25 @@ export default function OrdersSalesModal({
   // Imprimir factura individual con correlativo secuencial
   const handlePrintIndividualInvoice = (inv) => {
     const correlativo = formatInvoiceCorrelativo(inv);
+    const isNe = inv.tipoDoc === 'NOTA_ENTREGA' || inv.tipo_doc === 'NOTA_ENTREGA' || String(inv.factNum || inv.numeroDoc || '').toUpperCase().startsWith('NE');
     const saleForPrint = {
       ...inv,
       numeroDoc: correlativo,
       nroFactura: correlativo,
+      tipoDoc: isNe ? 'NOTA_ENTREGA' : (inv.tipoDoc || 'FACTURA'),
       ...buildPrintableInvoice(inv)
     };
     try {
-      generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
-      notify.success(`Factura #${correlativo} enviada a impresión`);
+      if (isNe) {
+        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser });
+        notify.success(`Nota de Entrega #${correlativo} generada con éxito`);
+      } else {
+        generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
+        notify.success(`Factura #${correlativo} enviada a impresión`);
+      }
     } catch (err) {
-      console.error('Error imprimiendo factura:', err);
-      notify.error('Error al generar la impresión de la factura');
+      console.error('Error imprimiendo documento:', err);
+      notify.error('Error al generar la impresión del documento');
     }
   };
 
@@ -3599,22 +3607,50 @@ export default function OrdersSalesModal({
                     </div>
 
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenInvoiceModalForOrder(selectedOrder)}
-                        className="btn btn-print-report"
-                        style={{
-                          background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontWeight: 800,
-                          boxShadow: '0 4px 14px rgba(0, 43, 122, 0.4)'
-                        }}
-                        title="Generar e imprimir Factura Fiscal Oficial (Formato Carta SENIAT con correlativo de 6 dígitos)"
-                      >
-                        <Printer size={16} color="#ffffff" /> 📄 Factura Fiscal (Carta)
-                      </button>
+                      {isOrderNotaEntrega(selectedOrder) ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clientMatch = safeClients.find(c => c.id === selectedOrder.clienteId || c.rif === selectedOrder.clienteRif);
+                            generateDeliveryNotePDF({
+                              order: selectedOrder,
+                              config,
+                              currentUser,
+                              client: clientMatch
+                            });
+                            notify.success(`Nota de Entrega descargada en tamaño Carta`);
+                          }}
+                          className="btn btn-print-report"
+                          style={{
+                            background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontWeight: 800,
+                            boxShadow: '0 4px 14px rgba(5, 150, 105, 0.4)'
+                          }}
+                          title="Descargar e imprimir Nota de Entrega oficial tamaño Carta (Almacén 02) con desbordamiento y numeración de páginas"
+                        >
+                          <Printer size={16} color="#ffffff" /> 📦 Nota de Entrega (Carta)
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenInvoiceModalForOrder(selectedOrder)}
+                          className="btn btn-print-report"
+                          style={{
+                            background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontWeight: 800,
+                            boxShadow: '0 4px 14px rgba(0, 43, 122, 0.4)'
+                          }}
+                          title="Generar e imprimir Factura Fiscal Oficial (Formato Carta SENIAT con correlativo de 6 dígitos)"
+                        >
+                          <Printer size={16} color="#ffffff" /> 📄 Factura Fiscal (Carta)
+                        </button>
+                      )}
 
                       <button
                         type="button"
