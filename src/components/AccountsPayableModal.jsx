@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Building2,
   Search,
@@ -70,6 +70,87 @@ const toIsoDateInput = (dateInput) => {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+};
+
+// Generador de texto consolidado para búsqueda omnicanal en CxP (facturas, notas, proveedores, montos, etc.)
+const buildPayableSearchString = (p) => {
+  if (!p) return '';
+  const tipo = String(p.tipoDoc || '').toUpperCase().trim();
+  const nro = String(p.nroDoc || '').trim();
+  const nroNoZeros = nro.replace(/^0+/, '') || nro;
+  const nroPadded = /^\d+$/.test(nro) ? nro.padStart(8, '0') : nro;
+
+  const typeAliases = [];
+  if (tipo === 'FACT' || tipo === 'FACTURA' || tipo.includes('FACT')) {
+    typeAliases.push('factura', 'facturas', 'fact', 'fiscal', 'doc', 'documento');
+  } else if (tipo === 'NE' || tipo === 'NOTA_ENTREGA' || tipo.includes('NOTA')) {
+    typeAliases.push('nota', 'notas', 'entrega', 'entregas', 'nota de entrega', 'remision', 'ne');
+  } else if (tipo === 'ADEL' || tipo.includes('ANTICIP') || tipo.includes('ADEL')) {
+    typeAliases.push('adelanto', 'adelantos', 'anticipo', 'anticipos', 'adel');
+  } else if (tipo === 'N/CR' || tipo === 'NC' || tipo.includes('CREDIT')) {
+    typeAliases.push('nota de credito', 'credito', 'creditos', 'nc', 'n/cr');
+  } else if (tipo === 'N/DB' || tipo === 'ND' || tipo.includes('DEBIT')) {
+    typeAliases.push('nota de debito', 'debito', 'debitos', 'nd', 'n/db');
+  }
+  typeAliases.push(tipo.toLowerCase());
+
+  const docCombos = [
+    nro,
+    `#${nro}`,
+    nroNoZeros,
+    `#${nroNoZeros}`,
+    nroPadded,
+    `${tipo}-${nro}`,
+    `${tipo} ${nro}`,
+    `${tipo} #${nro}`
+  ];
+
+  if (tipo === 'FACT' || tipo === 'FACTURA' || tipo.includes('FACT')) {
+    docCombos.push(
+      `factura ${nro}`,
+      `factura #${nro}`,
+      `facturas ${nro}`,
+      `factura ${nroNoZeros}`,
+      `factura #${nroNoZeros}`,
+      `fact ${nro}`,
+      `fact #${nro}`
+    );
+  } else if (tipo === 'NE' || tipo.includes('NOTA')) {
+    docCombos.push(`nota ${nro}`, `nota #${nro}`, `entrega ${nro}`, `ne ${nro}`);
+  }
+
+  const prov = String(p.provNombre || '').toLowerCase();
+  const rif = String(p.provRif || '').toLowerCase();
+  const rifClean = rif.replace(/[^a-z0-9]/g, '');
+
+  let statusText = '';
+  if (p.isSolvente) {
+    statusText = 'solvente pagado pagada al dia solventes';
+  } else if (p.isVencido) {
+    statusText = `vencido vencida vencidas mora atrasado vencida hace ${p.diffDays}d`;
+  } else {
+    statusText = 'por vencer vigente al dia pendiente pendientes';
+  }
+
+  return [
+    typeAliases.join(' '),
+    docCombos.join(' '),
+    prov,
+    rif,
+    rifClean,
+    String(p.fecEmis || ''),
+    String(p.fecVenc || ''),
+    String(p.fechaEmisionIso || ''),
+    String(p.fechaVencimientoIso || ''),
+    statusText,
+    String(p.montoNetUsd || ''),
+    String(p.saldoUsd || ''),
+    String(p.abonosUsd || ''),
+    String(p.saldoBs || ''),
+    String(p.observaciones || '').toLowerCase(),
+    String(p.descrip || '').toLowerCase(),
+    String(p.comentario || '').toLowerCase()
+  ].join(' ').toLowerCase();
 };
 
 export default function AccountsPayableModal({
@@ -325,13 +406,11 @@ export default function AccountsPayableModal({
   // Documentos filtrados por el buscador dentro del selector de Parte A
   const searchedPayableDocs = useMemo(() => {
     if (!pagoDocSearch.trim()) return payableDocsWithBalance;
-    const q = pagoDocSearch.toLowerCase().trim();
-    return payableDocsWithBalance.filter(d =>
-      String(d.nroDoc).toLowerCase().includes(q) ||
-      String(d.provNombre).toLowerCase().includes(q) ||
-      String(d.provRif).toLowerCase().includes(q) ||
-      String(d.tipoDoc).toLowerCase().includes(q)
-    );
+    const rawTokens = pagoDocSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    return payableDocsWithBalance.filter(d => {
+      const searchStr = buildPayableSearchString(d);
+      return rawTokens.every(token => searchStr.includes(token));
+    });
   }, [payableDocsWithBalance, pagoDocSearch]);
 
   // Documento actualmente seleccionado en Parte A
@@ -342,15 +421,14 @@ export default function AccountsPayableModal({
 
   // Filtrado de la tabla principal (Parte B)
   const filteredPayables = useMemo(() => {
+    const rawTokens = searchFilter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
     return processedPayables.filter(p => {
-      // Búsqueda
-      if (searchFilter.trim()) {
-        const q = searchFilter.toLowerCase();
-        const matchName = p.provNombre.toLowerCase().includes(q);
-        const matchRif = p.provRif.toLowerCase().includes(q);
-        const matchDoc = p.nroDoc.toString().toLowerCase().includes(q);
-        const matchTipo = p.tipoDoc.toLowerCase().includes(q);
-        if (!matchName && !matchRif && !matchDoc && !matchTipo) return false;
+      // Búsqueda inteligente multi-criterio y multi-término (factura, proveedor, RIF, número de documento, etc.)
+      if (rawTokens.length > 0) {
+        const searchStr = buildPayableSearchString(p);
+        const matchesAll = rawTokens.every(token => searchStr.includes(token));
+        if (!matchesAll) return false;
       }
 
       // Tipo de documento
@@ -1427,7 +1505,7 @@ export default function AccountsPayableModal({
                 <Search size={16} className="search-icon" />
                 <input
                   type="text"
-                  placeholder="Buscar por proveedor, RIF o documento #..."
+                  placeholder="Buscar por factura, nota, tipo, proveedor, RIF, doc #..."
                   value={searchFilter}
                   onChange={(e) => setSearchFilter(e.target.value)}
                   className="input-modern"
