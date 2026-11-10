@@ -189,10 +189,15 @@ let currentBackendUrl = resolveInitialSupabaseUrl(configuredSupabaseUrl);
 export const isStaticCloudHost = false;
 
 let backendDiscoveryPromise = null;
+let backendDiscoveryInFlight = false;
 let initialDiscoveryCompleted = false;
 let lastDiscoveryAt = 0;
 
-async function probeBackendHealth(candidateUrl, timeoutMs = 2500) {
+// El túnel HTTPS (Cloudflare) añade 1-5 s de latencia real; con 2.5 s los equipos remotos
+// marcaban el servidor como caído aunque estuviera activo. En LAN se mantiene un timeout corto.
+const getHealthTimeoutFor = (url) => (/^https:\/\//i.test(String(url || '')) ? 9000 : 2500);
+
+async function probeBackendHealth(candidateUrl, timeoutMs = getHealthTimeoutFor(candidateUrl)) {
   if (!candidateUrl || typeof fetch === 'undefined') return false;
   try {
     const clean = candidateUrl.trim().replace(/\/+$/, '');
@@ -221,10 +226,16 @@ export async function discoverActiveBackendUrl(force = false) {
     return currentBackendUrl;
   }
   const now = Date.now();
+  // Reutilizar SIEMPRE un descubrimiento en curso (aunque sea forzado): antes cada petición
+  // fallida lanzaba su propio descubrimiento y saturaba el túnel con decenas de /health.
+  if (backendDiscoveryInFlight && backendDiscoveryPromise) {
+    return backendDiscoveryPromise;
+  }
   if (!force && backendDiscoveryPromise && (now - lastDiscoveryAt < 8000)) {
     return backendDiscoveryPromise;
   }
   lastDiscoveryAt = now;
+  backendDiscoveryInFlight = true;
 
   backendDiscoveryPromise = (async () => {
     try {
@@ -304,7 +315,7 @@ export async function discoverActiveBackendUrl(force = false) {
 
       for (const candidate of candidates) {
         if (!candidate || candidate.includes('loca.lt')) continue;
-        const healthy = await probeBackendHealth(candidate, 2500);
+        const healthy = await probeBackendHealth(candidate);
         if (healthy) {
           currentBackendUrl = candidate;
           try {
@@ -326,7 +337,9 @@ export async function discoverActiveBackendUrl(force = false) {
     } catch (_) {}
     initialDiscoveryCompleted = true;
     return currentBackendUrl;
-  })();
+  })().finally(() => {
+    backendDiscoveryInFlight = false;
+  });
 
   return backendDiscoveryPromise;
 }
@@ -363,6 +376,19 @@ function rewriteRequestUrl(rawInput, targetBaseUrl) {
   }
 }
 
+const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504, 520, 521, 522, 523, 524, 530]);
+let hadReadFallbackSinceOnline = false;
+
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const notifyBackendRecoveredIfNeeded = () => {
+  if (!hadReadFallbackSinceOnline || typeof window === 'undefined') return;
+  hadReadFallbackSinceOnline = false;
+  try {
+    window.dispatchEvent(new CustomEvent('signum_realtime_resync_required', { detail: { reason: 'backend-recovered' } }));
+  } catch (_) {}
+};
+
 const dynamicSupabaseFetch = async (input, init) => {
   if (isTestEnv || typeof fetch === 'undefined') {
     return fetch(input, init);
@@ -373,27 +399,55 @@ const dynamicSupabaseFetch = async (input, init) => {
       await backendDiscoveryPromise;
     } catch (_) {}
   }
-  const rewrittenUrl = rewriteRequestUrl(input, currentBackendUrl);
-  try {
-    const res = await fetch(rewrittenUrl, init);
-    if ([404, 502, 503, 530].includes(res.status)) {
-      const prevUrl = currentBackendUrl;
-      const discovered = await discoverActiveBackendUrl(true);
-      if (discovered && discovered !== prevUrl) {
-        const retryUrl = rewriteRequestUrl(input, discovered);
-        return await fetch(retryUrl, init);
+
+  const maxAttempts = 2;
+  let lastError = null;
+  let lastResponse = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (init?.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    const targetUrl = rewriteRequestUrl(input, currentBackendUrl);
+    try {
+      const res = await fetch(targetUrl, init);
+      if (res.status < 500 && res.status !== 404) {
+        isSupabaseAvailable = true;
+        notifyBackendRecoveredIfNeeded();
+        return res;
+      }
+      if (res.status === 404) {
+        // 404 en /rest/v1/... puede indicar túnel obsoleto; probar descubrimiento una vez
+        if (attempt === 0) {
+          const prevUrl = currentBackendUrl;
+          const discovered = await discoverActiveBackendUrl(true);
+          if (discovered && discovered !== prevUrl) {
+            continue;
+          }
+        }
+        isSupabaseAvailable = true;
+        return res;
+      }
+      lastResponse = res;
+      if (!RETRYABLE_GATEWAY_STATUSES.has(res.status) || attempt === maxAttempts - 1) {
+        return res;
+      }
+    } catch (err) {
+      lastError = err;
+      if (err?.name === 'AbortError' || init?.signal?.aborted || attempt === maxAttempts - 1) {
+        throw err;
       }
     }
-    return res;
-  } catch (err) {
-    const prevUrl = currentBackendUrl;
-    const discovered = await discoverActiveBackendUrl(true);
-    if (discovered && discovered !== prevUrl) {
-      const retryUrl = rewriteRequestUrl(input, discovered);
-      return await fetch(retryUrl, init);
-    }
-    throw err;
+
+    // Reintento tras error transitorio de túnel (502/503/504/red) aunque la URL siga siendo la oficial
+    await sleepMs(550);
+    try {
+      await discoverActiveBackendUrl(false);
+    } catch (_) {}
   }
+
+  if (lastResponse) return lastResponse;
+  throw lastError || new Error('Failed to fetch');
 };
 
 export const supabase = createClient(currentBackendUrl, supabaseAnonKey, {
@@ -455,6 +509,9 @@ const markSupabaseOffline = (err, action = '') => {
   const msg = err?.message || String(err);
   if (!isNetworkOnline()) {
     isSupabaseAvailable = false;
+  }
+  if (/^get/i.test(action)) {
+    hadReadFallbackSinceOnline = true;
   }
   console.warn(`[Supabase Offline Fallback] ${action}:`, msg);
   if (typeof window !== 'undefined' && /^(save|update|delete|create|add|commit)/i.test(action)) {

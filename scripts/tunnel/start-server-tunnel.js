@@ -34,11 +34,14 @@ const OFFICIAL_TUNNEL_TOKEN = 'eyJhIjoiMTg5ODZkNGMxYjI3YmZmZmI3ZWVhMGE1N2UwZTc4Z
 
 let currentCfProcess = null;
 let consecutiveHealthFailures = 0;
+let localServerProcess = null;
+let localPortClosedChecks = 0;
+let tunnelRestartTimer = null;
 
 function isPortOpen(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const socket = new net.Socket();
-    socket.setTimeout(1000);
+    socket.setTimeout(3000);
     socket.once('connect', () => {
       socket.destroy();
       resolve(true);
@@ -55,23 +58,39 @@ function isPortOpen(port, host = '127.0.0.1') {
   });
 }
 
-async function ensureLocalDatabase() {
+function spawnLocalDatabase() {
+  console.log(`⚡ [1/2] Iniciando Base de Datos Central en puerto ${PORT}...`);
+  const srv = spawn(process.execPath, [serverScriptPath], {
+    cwd: path.dirname(serverScriptPath),
+    stdio: 'inherit',
+    detached: false
+  });
+  localServerProcess = srv;
+  srv.on('error', (err) => {
+    console.error('❌ Error iniciando server.js:', err.message);
+  });
+  srv.on('exit', (code) => {
+    if (localServerProcess === srv) localServerProcess = null;
+    console.warn(`⚠️  server.js finalizó (código ${code}). El watchdog lo reiniciará si el puerto queda libre.`);
+  });
+}
+
+async function ensureLocalDatabase({ initial = false } = {}) {
   const open = await isPortOpen(PORT);
-  if (!open) {
-    console.log(`⚡ [1/2] Iniciando Base de Datos Central en puerto ${PORT}...`);
-    const srv = spawn(process.execPath, [serverScriptPath], {
-      cwd: path.dirname(serverScriptPath),
-      stdio: 'inherit',
-      detached: false
-    });
-    srv.on('error', (err) => {
-      console.error('❌ Error iniciando server.js:', err.message);
-    });
-    await new Promise(r => setTimeout(r, 2500));
-    console.log('✅ Base de datos central inicializada y cargada desde disco.');
-  } else {
-    console.log(`✅ [1/2] Base de datos central activa en puerto ${PORT}.`);
+  if (open) {
+    localPortClosedChecks = 0;
+    if (initial) console.log(`✅ [1/2] Base de datos central activa en puerto ${PORT}.`);
+    return;
   }
+  // Nunca lanzar una segunda instancia mientras la nuestra sigue viva (p.ej. cargando 22 MB
+  // desde disco): dos server.js con copias distintas en memoria provocan datos desincronizados.
+  if (localServerProcess && localServerProcess.exitCode === null) return;
+  localPortClosedChecks += 1;
+  if (!initial && localPortClosedChecks < 2) return;
+  localPortClosedChecks = 0;
+  spawnLocalDatabase();
+  await new Promise(r => setTimeout(r, 2500));
+  console.log('✅ Base de datos central inicializada y cargada desde disco.');
 }
 
 function saveLocalBackendUrlFiles() {
@@ -167,22 +186,45 @@ function startOfficialPersistentTunnel() {
   cf.on('close', (code) => {
     if (currentCfProcess === cf) currentCfProcess = null;
     console.warn(`⚠️  Túnel oficial desconectado (código ${code}). Reconectando en 3 segundos...`);
-    setTimeout(startOfficialPersistentTunnel, 3000);
+    scheduleTunnelRestart(3000);
   });
 
   cf.on('error', (err) => {
+    if (currentCfProcess === cf) currentCfProcess = null;
     console.error(`❌ Error en cloudflared: ${err.message}. Reintentando en 5 segundos...`);
-    setTimeout(startOfficialPersistentTunnel, 5000);
+    scheduleTunnelRestart(5000);
   });
 }
 
+// Un solo reinicio programado a la vez: 'error' y 'close' pueden dispararse ambos para el
+// mismo proceso y antes se lanzaban DOS conectores cloudflared en paralelo con el mismo token.
+function scheduleTunnelRestart(delayMs) {
+  if (tunnelRestartTimer) return;
+  tunnelRestartTimer = setTimeout(() => {
+    tunnelRestartTimer = null;
+    if (currentCfProcess) return;
+    startOfficialPersistentTunnel();
+  }, delayMs);
+}
+
 // Watchdog cada 20s: garantiza que server.js esté vivo en puerto 54321 y el túnel oficial responda /health
+let watchdogRunning = false;
 setInterval(async () => {
+  if (watchdogRunning) return;
+  watchdogRunning = true;
   try {
     await ensureLocalDatabase();
     if (currentCfProcess) {
       const ok = await checkUrlHealth(OFFICIAL_BACKEND_URL);
       if (!ok) {
+        // Si el origen local tampoco responde, el problema NO es el túnel: reiniciar cloudflared
+        // sólo cortaría a todos los equipos conectados sin resolver nada.
+        const localOk = await checkUrlHealth(`http://127.0.0.1:${PORT}`);
+        if (!localOk) {
+          console.warn('⚠️  El servidor local no respondió /health a tiempo; se conserva el túnel activo.');
+          consecutiveHealthFailures = 0;
+          return;
+        }
         consecutiveHealthFailures += 1;
         console.warn(`⚠️  Verificando enlace del túnel (${consecutiveHealthFailures}/4): ${OFFICIAL_BACKEND_URL}`);
         if (consecutiveHealthFailures >= 4) {
@@ -196,7 +238,10 @@ setInterval(async () => {
         consecutiveHealthFailures = 0;
       }
     }
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    watchdogRunning = false;
+  }
 }, 20000);
 
 async function main() {
@@ -204,7 +249,7 @@ async function main() {
   console.log('🚀 INICIANDO SERVIDOR CENTRAL 24/7 - SIGNUM MOTORVEN');
   console.log('============================================================\n');
   killStaleTryCloudflareTunnels();
-  await ensureLocalDatabase();
+  await ensureLocalDatabase({ initial: true });
   startOfficialPersistentTunnel();
 }
 

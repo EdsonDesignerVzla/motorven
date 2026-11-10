@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { formatBs, formatUsd } from '../services/formatService';
 import { canModifyRates, getRoleMeta, isMasterOrGerencia, isMasterAdmin, canAccessModule } from '../services/authService';
-import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails, getActiveBackendUrl, setCustomBackendUrl } from '../services/supabaseService';
+import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails, getActiveBackendUrl, setCustomBackendUrl, discoverActiveBackendUrl } from '../services/supabaseService';
 import { subscribeSyncStatus, flushSyncQueue } from '../services/offlineSyncService';
 import { uploadUserProfilePhoto, deleteUserProfilePhoto } from '../services/imageStorageService';
 import { compressProfileImage } from '../services/imageCompression';
@@ -135,38 +135,72 @@ export default function HeaderBar({
     if (!showServerModal) return;
     setCustomServerInput(getActiveBackendUrl());
     let isCancelled = false;
-    const checkHealth = async () => {
-      const activeUrl = getActiveBackendUrl();
+    let checkInFlight = false;
+    const probeOnce = async (targetUrl) => {
       const startTime = performance.now();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), /^https:/i.test(targetUrl) ? 10000 : 4000);
       try {
-        setServerHealth(prev => ({ ...prev, loading: true }));
-        const res = await fetch(`${activeUrl}/health?t=${Date.now()}`, {
-          cache: 'no-store'
+        const res = await fetch(`${targetUrl}/health?t=${Date.now()}`, {
+          cache: 'no-store',
+          signal: controller.signal
         });
         const pingMs = Math.round(performance.now() - startTime);
-        if (res.ok) {
-          const data = await res.json();
-          if (!isCancelled) {
-            setServerHealth({
-              loading: false,
-              ping: pingMs,
-              status: data.status || 'ONLINE',
-              tables: data.tables || 51,
-              totalRecords: data.totalRecords || 0,
-              connectedClients: data.connectedClients || 1,
-              lastChecked: new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            });
-            flushSyncQueue().catch(() => {});
-          }
-        } else {
-          if (!isCancelled) {
-            setServerHealth(prev => ({ ...prev, loading: false, ping: null, status: 'ERROR' }));
-          }
-        }
+        if (!res.ok) return { ok: false, errorStatus: true };
+        const data = await res.json();
+        return { ok: true, pingMs, data };
       } catch (_) {
-        if (!isCancelled) {
-          setServerHealth(prev => ({ ...prev, loading: false, ping: null, status: 'OFFLINE' }));
+        return { ok: false, errorStatus: false };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const checkHealth = async () => {
+      if (checkInFlight) return;
+      checkInFlight = true;
+      try {
+        setServerHealth(prev => ({ ...prev, loading: true }));
+        let targetUrl = getActiveBackendUrl();
+        let result = await probeOnce(targetUrl);
+
+        // Si el primer intento falla (ej. 502 transitorio de Cloudflare o URL obsoleta),
+        // redescubrir el backend activo y reintentar antes de reportar Sin Respuesta.
+        if (!result.ok && !isCancelled) {
+          await new Promise(r => setTimeout(r, 450));
+          const discovered = await discoverActiveBackendUrl(true).catch(() => targetUrl);
+          if (discovered) {
+            targetUrl = discovered;
+            if (!isCancelled) setCustomServerInput(discovered);
+          }
+          if (!isCancelled) {
+            result = await probeOnce(targetUrl);
+          }
         }
+
+        if (isCancelled) return;
+        if (result.ok) {
+          const { data, pingMs } = result;
+          setServerHealth({
+            loading: false,
+            ping: pingMs,
+            status: data.status || 'ONLINE',
+            tables: data.tables || 51,
+            totalRecords: data.totalRecords || 0,
+            connectedClients: data.connectedClients || 1,
+            lastChecked: new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          });
+          flushSyncQueue().catch(() => {});
+        } else {
+          setServerHealth(prev => ({
+            ...prev,
+            loading: false,
+            ping: null,
+            status: result.errorStatus ? 'ERROR' : 'OFFLINE'
+          }));
+        }
+      } finally {
+        checkInFlight = false;
       }
     };
     checkHealth();

@@ -207,7 +207,32 @@ let sseSource = null;
 let pollTimer = null;
 let reconnectTimer = null;
 let isPollingInFlight = false;
+let isReconnectingSse = false;
+let lastSseProbeAt = 0;
 let networkSyncStarted = false;
+let lastResyncAt = 0;
+
+// Timeouts adaptados al túnel HTTPS de Cloudflare (latencia real de 1-5 s). Con 2.5-3 s las
+// consultas se abortaban constantemente y los equipos remotos dejaban de recibir cambios.
+const getNetworkTimeoutFor = (url) => (/^https:\/\//i.test(String(url || '')) ? 10000 : 4000);
+const getHealthTimeoutFor = (url) => (/^https:\/\//i.test(String(url || '')) ? 9000 : 2500);
+
+/**
+ * El servidor indicó que este equipo perdió eventos (estuvo desconectado más tiempo del que
+ * cubre el historial en memoria, o el servidor se reinició). Se solicita una recarga completa
+ * de datos para que el equipo vuelva a quedar sincronizado sin tener que refrescar la página.
+ */
+function requestFullResync(reason) {
+  const now = Date.now();
+  if (now - lastResyncAt < 15000) return;
+  lastResyncAt = now;
+  console.warn(`[RealtimeSyncBridge] Resincronización completa solicitada (${reason}).`);
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('signum_realtime_resync_required', { detail: { reason } }));
+    } catch (_) {}
+  }
+}
 
 async function pollDeltaChanges() {
   if (isPollingInFlight) return;
@@ -218,7 +243,7 @@ async function pollDeltaChanges() {
   isPollingInFlight = true;
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const timeoutId = setTimeout(() => controller.abort(), getNetworkTimeoutFor(baseUrl));
     const res = await fetch(`${baseUrl}/realtime/v1/changes?since=${lastProcessedSeq}`, {
       method: 'GET',
       headers: {
@@ -232,6 +257,11 @@ async function pollDeltaChanges() {
     clearTimeout(timeoutId);
     if (!res.ok) return;
     const data = await res.json();
+    if (data?.resync === true && typeof data?.seq === 'number') {
+      lastProcessedSeq = data.seq;
+      requestFullResync('historial-incompleto');
+      return;
+    }
     if (Array.isArray(data?.changes) && data.changes.length > 0) {
       for (const entry of data.changes) {
         handleRemoteEntry(entry);
@@ -251,6 +281,12 @@ function connectSseStream() {
   const baseUrl = resolveRealtimeBaseUrl();
   if (!baseUrl) return;
 
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  isReconnectingSse = false;
+
   if (sseSource) {
     try {
       sseSource.close();
@@ -267,6 +303,11 @@ function connectSseStream() {
       try {
         const parsed = JSON.parse(evt.data);
         if (parsed.type === 'CONNECTED') {
+          if (typeof parsed.bootSeq === 'number' && lastProcessedSeq > 0 && lastProcessedSeq < parsed.bootSeq) {
+            lastProcessedSeq = Number(parsed.seq || parsed.bootSeq);
+            requestFullResync('servidor-reiniciado');
+            return;
+          }
           if (typeof parsed.seq === 'number' && lastProcessedSeq === 0) {
             lastProcessedSeq = parsed.seq;
           } else if (typeof parsed.seq === 'number' && parsed.seq > lastProcessedSeq) {
@@ -283,9 +324,17 @@ function connectSseStream() {
         es.close();
       } catch (_) {}
       if (sseSource === es) sseSource = null;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (reconnectTimer || isReconnectingSse) return;
+      isReconnectingSse = true;
       reconnectTimer = setTimeout(async () => {
-        if (activeSubscribers.size > 0) {
+        reconnectTimer = null;
+        if (activeSubscribers.size === 0) {
+          isReconnectingSse = false;
+          return;
+        }
+        const now = Date.now();
+        if (now - lastSseProbeAt > 20000) {
+          lastSseProbeAt = now;
           try {
             // Consultar primero backend_url.json publicado por el servidor de la oficina SVR-MOTORVEN
             const basePath = window.location.pathname.endsWith('/')
@@ -299,7 +348,7 @@ function connectSseStream() {
                 const candidate = (rawCand || '').trim().replace(/\/+$/, '');
                 if (candidate && isValidCustomRealtimeUrl(candidate, window.location.protocol, window.location.hostname)) {
                   const ctrl = new AbortController();
-                  const tid = setTimeout(() => ctrl.abort(), 2500);
+                  const tid = setTimeout(() => ctrl.abort(), getHealthTimeoutFor(candidate));
                   const healthResp = await fetch(`${candidate}/health`, { cache: 'no-store', signal: ctrl.signal }).catch(() => null);
                   clearTimeout(tid);
                   if (healthResp && healthResp.ok) {
@@ -313,7 +362,7 @@ function connectSseStream() {
             }
             if (!foundHealthy) {
               const ctrl = new AbortController();
-              const tid = setTimeout(() => ctrl.abort(), 2500);
+              const tid = setTimeout(() => ctrl.abort(), getHealthTimeoutFor(OFFICIAL_BACKEND_URL));
               const healthResp = await fetch(`${OFFICIAL_BACKEND_URL}/health`, { cache: 'no-store', signal: ctrl.signal }).catch(() => null);
               clearTimeout(tid);
               if (healthResp && healthResp.ok) {
@@ -322,9 +371,10 @@ function connectSseStream() {
               }
             }
           } catch (_) {}
-          connectSseStream();
-          pollDeltaChanges();
         }
+        isReconnectingSse = false;
+        connectSseStream();
+        pollDeltaChanges();
       }, 3000);
     };
   } catch (_) {}
@@ -347,7 +397,7 @@ function ensureNetworkRealtimeStarted() {
   pollTimer = setInterval(() => {
     if (activeSubscribers.size > 0) {
       pollDeltaChanges();
-      if (!sseSource || sseSource.readyState === 2) {
+      if (!isReconnectingSse && (!sseSource || sseSource.readyState === 2)) {
         connectSseStream();
       }
     }

@@ -295,27 +295,99 @@ function writeAtomicJson(targetPath, dataObj) {
   return payload;
 }
 
-function saveDatabase() {
-  // 1. Guardado síncrono inmediato en disco duro antes de responder al cliente (a prueba de apagones)
-  let serialized = '';
-  try {
-    serialized = writeAtomicJson(DB_FILE, database);
-  } catch (e) {
-    console.error('[Supabase Local] Error en guardado inmediato:', e);
-  }
+// ----------------------------------------------------------------------------
+// PERSISTENCIA AGRUPADA Y ASÍNCRONA
+// Antes cada POST/PATCH/DELETE serializaba con sangría (~22 MB) y escribía DB + .bak
+// de forma SÍNCRONA (con fsync). Eso bloqueaba el event loop de Node 1-3 s por
+// escritura: durante ese tiempo /health, /realtime/v1/changes y los heartbeats SSE
+// no respondían, los equipos conectados por el túnel agotaban su timeout y quedaban
+// en "Servidor Sin Respuesta" (desincronizados). Ahora las escrituras se agrupan
+// (ventana corta de 300 ms, máx. 1.5 s) y se escriben de forma asíncrona y atómica.
+// ----------------------------------------------------------------------------
+const PERSIST_DEBOUNCE_MS = 300;
+const PERSIST_MAX_WAIT_MS = 1500;
+const BAK_MIN_INTERVAL_MS = 60000;
+let persistTimer = null;
+let persistInFlight = false;
+let persistPending = false;
+let firstDirtyAt = 0;
+let lastBakWriteAt = 0;
 
-  // 2. Respaldos rotativos y archivos secundarios en segundo plano
-  if (saveTimeout) clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
+async function writeAtomicPayloadAsync(targetPath, payload) {
+  const dir = path.dirname(targetPath);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const tmpPath = `${targetPath}.${process.pid}.async.tmp`;
+  const fh = await fs.promises.open(tmpPath, 'w');
+  try {
+    await fh.writeFile(payload, 'utf8');
+    try { await fh.sync(); } catch (_) {}
+  } finally {
+    await fh.close();
+  }
+  try {
+    await fs.promises.rename(tmpPath, targetPath);
+  } catch (_) {
     try {
-      const contentToBackup = serialized || JSON.stringify(database, null, 2);
+      await fs.promises.copyFile(tmpPath, targetPath);
+      try { await fs.promises.unlink(tmpPath); } catch (__) {}
+    } catch (errCopy) {
+      await fs.promises.writeFile(targetPath, payload, 'utf8');
+    }
+  }
+}
+
+function schedulePersist() {
+  persistPending = true;
+  const now = Date.now();
+  if (!firstDirtyAt) firstDirtyAt = now;
+  if (persistInFlight) return; // se reprograma al terminar la escritura en curso
+  if (persistTimer) clearTimeout(persistTimer);
+  const waited = now - firstDirtyAt;
+  const delay = waited >= PERSIST_MAX_WAIT_MS ? 0 : Math.min(PERSIST_DEBOUNCE_MS, PERSIST_MAX_WAIT_MS - waited);
+  persistTimer = setTimeout(runPersist, delay);
+}
+
+async function runPersist() {
+  persistTimer = null;
+  if (persistInFlight || !persistPending) return;
+  persistInFlight = true;
+  persistPending = false;
+  firstDirtyAt = 0;
+  try {
+    // JSON compacto (sin sangría): ~35% menos bytes y mucho menos tiempo de CPU bloqueado
+    const payload = JSON.stringify(database);
+    await writeAtomicPayloadAsync(DB_FILE, payload);
+    const now = Date.now();
+    if (now - lastBakWriteAt >= BAK_MIN_INTERVAL_MS) {
+      lastBakWriteAt = now;
+      try { await fs.promises.writeFile(`${DB_FILE}.bak`, payload, 'utf8'); } catch (_) {}
+    }
+    scheduleSecondaryBackups(payload);
+  } catch (e) {
+    console.error('[Supabase Local] Error en guardado agrupado:', e?.message || e);
+    persistPending = true;
+  } finally {
+    persistInFlight = false;
+    if (persistPending) schedulePersist();
+  }
+}
+
+function saveDatabase() {
+  schedulePersist();
+}
+
+function scheduleSecondaryBackups(serialized) {
+  // Respaldos rotativos y archivos secundarios en segundo plano
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(async () => {
+    try {
       try {
         const today = new Date().toISOString().slice(0, 10);
         if (today !== lastBackupDate) {
           const backupDir = path.join(path.dirname(DB_FILE), 'backups');
-          if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+          await fs.promises.mkdir(backupDir, { recursive: true });
           const backupFile = path.join(backupDir, `local_database_${today}.json`);
-          fs.writeFileSync(backupFile, contentToBackup, 'utf8');
+          await fs.promises.writeFile(backupFile, serialized || JSON.stringify(database), 'utf8');
           lastBackupDate = today;
         }
       } catch (_) {}
@@ -341,7 +413,7 @@ function saveDatabase() {
     } catch (e) {
       console.error('[Supabase Local] Error guardando respaldos secundarios:', e);
     }
-  }, 200);
+  }, 2000);
 }
 
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -359,6 +431,9 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 // MOTOR REALTIME MULTI-DISPOSITIVO Y MULTI-NAVEGADOR (SSE + DELTA POLLING)
 // ============================================================================
 let changeSeq = Date.now();
+// Secuencia de arranque: si un cliente trae un "since" anterior a este valor, el servidor se
+// reinició y el historial en memoria se perdió → el cliente debe recargar los datos completos.
+const SERVER_BOOT_SEQ = changeSeq;
 const recentChanges = [];
 const MAX_RECENT_CHANGES = 500;
 const sseClients = new Set();
@@ -385,6 +460,10 @@ function emitRealtimeChange({ table, tableId, eventType = 'UPDATE', action, key,
 
   const payloadStr = `data: ${JSON.stringify(entry)}\n\n`;
   for (const clientRes of sseClients) {
+    if (clientRes.destroyed || clientRes.writableEnded) {
+      sseClients.delete(clientRes);
+      continue;
+    }
     try {
       clientRes.write(payloadStr);
     } catch (_) {
@@ -399,6 +478,10 @@ setInterval(() => {
   if (sseClients.size === 0) return;
   const ping = `: heartbeat ${changeSeq} ${Date.now()}\n\n`;
   for (const clientRes of sseClients) {
+    if (clientRes.destroyed || clientRes.writableEnded) {
+      sseClients.delete(clientRes);
+      continue;
+    }
     try {
       clientRes.write(ping);
     } catch (_) {
@@ -1074,7 +1157,10 @@ const server = http.createServer(async (req, res) => {
         req.socket.setNoDelay(true);
         req.socket.setTimeout(0);
       }
-      res.write(`data: ${JSON.stringify({ type: 'CONNECTED', seq: changeSeq, timestamp: new Date().toISOString() })}\n\n`);
+      // retry: reconexión rápida del EventSource; el comentario de relleno fuerza a proxies
+      // (Cloudflare Tunnel, redes móviles) a entregar el stream de inmediato sin buffering.
+      res.write(`retry: 3000\n: ${' '.repeat(2048)}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'CONNECTED', seq: changeSeq, bootSeq: SERVER_BOOT_SEQ, timestamp: new Date().toISOString() })}\n\n`);
       sseClients.add(res);
       const cleanup = () => {
         sseClients.delete(res);
@@ -1087,12 +1173,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/realtime/v1/changes') {
       const since = Number(url.searchParams.get('since') || 0);
       const changes = since > 0 ? recentChanges.filter(c => c.seq > since) : [];
+      // Detectar huecos: el cliente estuvo desconectado más tiempo del que cubre el historial
+      // en memoria, o el servidor se reinició. En ese caso debe recargar todo desde el servidor.
+      const oldestSeq = recentChanges.length ? recentChanges[0].seq : changeSeq;
+      const resync = since > 0 && (
+        since < SERVER_BOOT_SEQ ||
+        since > changeSeq ||
+        (recentChanges.length > 0 && since < oldestSeq - 1)
+      );
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate'
       });
       res.end(JSON.stringify({
         seq: changeSeq,
+        bootSeq: SERVER_BOOT_SEQ,
+        resync,
         timestamp: new Date().toISOString(),
         changes
       }));
@@ -1333,8 +1429,7 @@ const server = http.createServer(async (req, res) => {
           deleted.push({ name: p });
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(deleted));
+        sendJson(req, res, 200, deleted);
         return;
       }
     }
@@ -1674,10 +1769,11 @@ const server = http.createServer(async (req, res) => {
 
         const acceptHeader = req.headers['accept'] || '';
         const isSingleRequested = acceptHeader.includes('application/vnd.pgrst.object+json');
-        const responseData = isSingleRequested ? (inserted[0] || null) : (Array.isArray(body) ? inserted : inserted[0]);
+        const responseData = isSingleRequested
+          ? (inserted[0] ?? null)
+          : (Array.isArray(body) ? inserted : (inserted[0] ?? null));
 
-        res.writeHead(201, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(responseData));
+        sendJson(req, res, 201, responseData);
         return;
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1747,8 +1843,7 @@ const server = http.createServer(async (req, res) => {
         const isSingleRequested = acceptHeader.includes('application/vnd.pgrst.object+json');
         const responseData = isSingleRequested ? (updated[0] || {}) : updated;
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(responseData));
+        sendJson(req, res, 200, responseData);
         return;
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1827,8 +1922,7 @@ const server = http.createServer(async (req, res) => {
           saveDatabase();
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(deleted));
+        sendJson(req, res, 200, deleted);
         return;
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1852,13 +1946,27 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Mantener keep-alive más largo que el pool HTTP/1.1 de cloudflared (90s > 60s) para
+// evitar la carrera de cierre de socket que provoca errores 502 (origin_bad_gateway) en Cloudflare.
+server.keepAliveTimeout = 90000;
+server.headersTimeout = 95000;
+server.requestTimeout = 120000;
+
 // Inicializar y arrancar servidor
 await initDatabase();
 
-// Manejo de errores de puerto ocupado o reconexión
+// Manejo de errores de puerto ocupado: reintentar hasta 3 veces ante un reinicio transitorio
+// y salir limpiamente si ya existe otra instancia activa dueña del puerto (evita bucles infinitos).
+let addrInUseRetries = 0;
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.warn(`[Supabase Local] Puerto ${PORT} en uso temporal. Reintentando...`);
+    addrInUseRetries += 1;
+    if (addrInUseRetries > 3) {
+      console.warn(`[Supabase Local] Puerto ${PORT} ya está atendido por otra instancia activa. Saliendo sin duplicar procesos.`);
+      process.exit(0);
+      return;
+    }
+    console.warn(`[Supabase Local] Puerto ${PORT} en uso temporal (${addrInUseRetries}/3). Reintentando...`);
     setTimeout(() => {
       try {
         server.close();

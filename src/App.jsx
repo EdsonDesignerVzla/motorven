@@ -553,10 +553,14 @@ function MainApp() {
       }
     };
     window.addEventListener('signum_offline_queue_flushed', handleQueueFlushed);
+    // El canal realtime detectó eventos perdidos (equipo desconectado o servidor reiniciado):
+    // recargar los datos desde el servidor central para volver a quedar sincronizado.
+    window.addEventListener('signum_realtime_resync_required', handleQueueFlushed);
 
     return () => {
       isMounted = false;
       window.removeEventListener('signum_offline_queue_flushed', handleQueueFlushed);
+      window.removeEventListener('signum_realtime_resync_required', handleQueueFlushed);
       if (cleanupOfflineListeners) cleanupOfflineListeners();
     };
   }, []);
