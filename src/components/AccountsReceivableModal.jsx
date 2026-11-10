@@ -266,67 +266,55 @@ export function AccountsReceivableModal({
         (profitInvoices || []).forEach(inv => {
             const key = String(inv.factNum || inv.id || '').trim();
             if (!key || isDocDeleted(inv.id, inv.factNum, inv.factura)) return;
-            rawMap.set(key, { ...inv, _source: 'PROFIT' });
+            const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
+            rawMap.set(key, { ...inv, _source: isPosFormat ? 'POS' : 'PROFIT', _isPosSale: isPosFormat });
         });
 
-        // 2. Cargar documentos a crédito y Notas de Entrega desde sales/invoices (si no están ya en profitInvoices y no están eliminados)
+        // 2. Cargar todas las Facturas Fiscales y Notas de Entrega emitidas en POS (sales/invoices)
         effectiveSales.forEach(sale => {
+            const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
+            if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
             const saleDocType = inferDocType(sale);
             const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
-            const condStr = String(sale.condicionPago || '').toUpperCase();
-            const isCredit =
-                condStr === 'CREDITO' ||
-                condStr.includes('CREDITO') ||
-                condStr.includes('DIAS') ||
-                sale.metodoPago === 'CREDITO' ||
-                Number(sale.diasCredito || 0) > 0 ||
-                Number(sale.saldoUsd ?? sale.saldoPendienteUsd ?? 0) > 0 ||
-                sale.estado === 'PENDIENTE' ||
-                isNotaEntregaSale;
-            if (!isCredit) return;
             const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
             if (!key || isDocDeleted(sale.id, sale.numeroDoc || sale.factura || sale.factNum)) return;
-            if (!rawMap.has(key)) {
-                const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
-                const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
-                const rawSaleSub = Number(
-                    sale.subtotalUsd ??
-                    sale.totBrutoUsd ??
-                    (rawSaleIva > 0 && rawSaleTotal > rawSaleIva ? rawSaleTotal - rawSaleIva : rawSaleTotal)
-                );
-                const neNetoSinIva = round2(
-                    rawSaleSub > 0 && rawSaleSub < rawSaleTotal
-                        ? rawSaleSub
-                        : (rawSaleIva > 0 && rawSaleTotal > rawSaleIva ? rawSaleTotal - rawSaleIva : rawSaleSub)
-                );
-                const effectiveTotBruto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleSub);
-                const effectiveIva = isNotaEntregaSale ? 0 : round2(rawSaleIva);
-                const effectiveTotNeto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleTotal || (effectiveTotBruto + effectiveIva));
-                const effectiveAbonos = sale.abonosUsd !== undefined
-                    ? Number(sale.abonosUsd)
-                    : Number(sale.montoPagadoUsd || 0);
-                const rawSaldoSale = sale.saldoPendienteUsd !== undefined
-                    ? Number(sale.saldoPendienteUsd)
-                    : (sale.saldoUsd !== undefined && Number(sale.saldoUsd) > 0
-                        ? Number(sale.saldoUsd)
-                        : Math.max(0, round2(effectiveTotNeto - effectiveAbonos)));
-                const effectiveSaldo = isNotaEntregaSale
-                    ? Math.max(0, round2(neNetoSinIva - effectiveAbonos))
-                    : Math.min(effectiveTotNeto, Math.max(0, round2(rawSaldoSale)));
 
+            const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
+            const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
+            const rawSaleSub = Number(
+                sale.subtotalUsd ??
+                sale.totBrutoUsd ??
+                (rawSaleIva > 0 && rawSaleTotal > rawSaleIva ? rawSaleTotal - rawSaleIva : rawSaleTotal)
+            );
+            const neNetoSinIva = round2(
+                rawSaleSub > 0 && rawSaleSub < rawSaleTotal
+                    ? rawSaleSub
+                    : (rawSaleIva > 0 && rawSaleTotal > rawSaleIva ? rawSaleTotal - rawSaleIva : rawSaleSub)
+            );
+            const effectiveTotBruto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleSub);
+            const effectiveIva = isNotaEntregaSale ? 0 : round2(rawSaleIva);
+            const effectiveTotNeto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleTotal || (effectiveTotBruto + effectiveIva));
+
+            const hasExplicitCobros = Array.isArray(sale.historialCobros) && sale.historialCobros.length > 0;
+            const effectiveAbonos = hasExplicitCobros
+                ? Number(sale.abonosUsd ?? sale.montoPagadoUsd ?? 0)
+                : 0;
+            const effectiveSaldo = Math.max(0, round2(effectiveTotNeto - effectiveAbonos));
+
+            if (!rawMap.has(key)) {
                 rawMap.set(key, {
                     id: sale.id || `DOC-${key}`,
                     factNum: key,
                     tipoDoc: saleDocType,
                     fechaEmision: sale.fechaEmision || sale.fecha || getTodayIso(),
-                    fechaVencimiento: sale.fechaVencimiento || null,
+                    fechaVencimiento: sale.fechaVencimiento || sale.fechaEmision || sale.fecha || getTodayIso(),
                     clienteId: sale.clienteId || '',
                     clienteNombre: sale.cliente || sale.clienteNombre || 'Cliente General',
                     clienteRif: sale.rif || sale.clienteRif || 'N/A',
                     vendedorId: sale.vendedorId || 'OF',
                     vendedorNombre: sale.vendedor || sale.vendedorNombre || '',
-                    formaPago: sale.formaPago || '03',
-                    diasCredito: sale.diasCredito !== undefined ? Number(sale.diasCredito) : 15,
+                    formaPago: Number(sale.diasCredito || 0) > 0 ? '03' : '01',
+                    diasCredito: sale.diasCredito !== undefined ? Number(sale.diasCredito) : 0,
                     diasVencidoCustom: sale.diasVencidoCustom !== undefined ? sale.diasVencidoCustom : null,
                     totBrutoUsd: effectiveTotBruto,
                     ivaUsd: effectiveIva,
@@ -339,7 +327,17 @@ export function AccountsReceivableModal({
                     items: sale.items || [],
                     observaciones: sale.observaciones || '',
                     historialCobros: sale.historialCobros || [],
-                    _source: 'POS'
+                    _source: 'POS',
+                    _isPosSale: true
+                });
+            } else {
+                const existing = rawMap.get(key);
+                rawMap.set(key, {
+                    ...existing,
+                    fechaEmision: existing.fechaEmision || sale.fechaEmision || sale.fecha,
+                    vendedorNombre: existing.vendedorNombre || sale.vendedor || sale.vendedorNombre || '',
+                    _source: 'POS',
+                    _isPosSale: true
                 });
             }
         });
@@ -369,6 +367,7 @@ export function AccountsReceivableModal({
             const factNum = String(inv.factNum || inv.factura || mapKey).trim();
             const tipoDoc = inferDocType(inv);
             const isNotaEntrega = tipoDoc === 'NOTA_ENTREGA';
+            const isPosDoc = Boolean(inv._isPosSale) || inv._source === 'POS' || /^0+\d+$/.test(factNum) || /^NE-0+\d+$/i.test(factNum);
 
             // En Notas de Entrega NO se calcula IVA ni ningún impuesto (100% Sin IVA)
             const rawNeto = Number(inv.totNetoUsd ?? inv.totalUsd ?? inv.totBrutoUsd ?? 0);
@@ -393,8 +392,13 @@ export function AccountsReceivableModal({
                 : round2(Number(inv.totNetoUsd ?? (totBrutoUsd + ivaUsd)));
 
             // Cálculo de Abonos y Restante
+            const hasCobroHistory = Array.isArray(inv.historialCobros) && inv.historialCobros.length > 0;
+            const hasManualOverride = Boolean(localDocOverrides[factNum]) || recentlyPaidKeys.has(factNum);
             let abonosUsd = 0;
-            if (inv.abonosUsd !== undefined && inv.abonosUsd !== null && !isNaN(Number(inv.abonosUsd))) {
+            if (isPosDoc && !hasCobroHistory && !hasManualOverride && Number(inv.saldoUsd ?? 0) <= 0.01) {
+                // Facturas emitidas desde el POS sin cobros registrados aún en CxC inician pendientes por cobrar en CxC
+                abonosUsd = 0;
+            } else if (inv.abonosUsd !== undefined && inv.abonosUsd !== null && !isNaN(Number(inv.abonosUsd))) {
                 abonosUsd = round2(Math.max(0, Number(inv.abonosUsd)));
             } else if (inv.saldoUsd !== undefined && inv.saldoUsd !== null && !isNaN(Number(inv.saldoUsd))) {
                 const baseForAbonos = (!isNotaEntrega || Number(inv.saldoUsd) <= montoFacturaUsd) ? montoFacturaUsd : rawNeto;
@@ -405,8 +409,8 @@ export function AccountsReceivableModal({
             }
             const restanteUsd = round2(Math.max(0, montoFacturaUsd - abonosUsd));
 
-            // Visibilidad
-            const hasSessionTouch = Boolean(localDocOverrides[factNum]) || recentlyPaidKeys.has(factNum) || Boolean(inv._customCreated);
+            // Visibilidad (las facturas emitidas en SIGNUM POS siempre son visibles en el listado)
+            const hasSessionTouch = hasManualOverride || Boolean(inv._customCreated) || isPosDoc;
             if (restanteUsd <= 0.01 && !hasSessionTouch && statusFilter !== 'PAGADA') {
                 return;
             }
@@ -450,8 +454,10 @@ export function AccountsReceivableModal({
                 (inv.clienteRif && c.rif === inv.clienteRif) ||
                 (inv.clienteNombre && c.name?.toLowerCase() === inv.clienteNombre?.toLowerCase())
             );
-            const sellerId = String(inv.vendedorId || 'OF').trim();
-            const sellerName = inv.vendedorNombre || sellerCatalog.get(sellerId) || sellerId || 'Oficina';
+            const rawSellerId = String(inv.vendedorId || 'OF').trim();
+            const isFullNameInId = rawSellerId.length > 4 && rawSellerId.includes(' ');
+            const sellerId = isFullNameInId ? 'OF' : rawSellerId;
+            const sellerName = inv.vendedorNombre || (isFullNameInId ? rawSellerId : (sellerCatalog.get(sellerId) || sellerId || 'Oficina'));
             const tasaDoc = Number(inv.tasa || tasaBcv) || tasaBcv;
 
             processed.push({

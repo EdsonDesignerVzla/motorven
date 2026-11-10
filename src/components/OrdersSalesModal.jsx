@@ -35,7 +35,8 @@ import {
   ReceiptText,
   Eye,
   Hash,
-  Check
+  Check,
+  ArrowUpDown
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
@@ -171,10 +172,21 @@ export default function OrdersSalesModal({
   const [invoiceConditionFilter, setInvoiceConditionFilter] = useState('ALL'); // 'ALL' | 'CONTADO' | 'CREDITO'
   const [invoiceSearchQuery, setInvoiceSearchQuery] = useState('');
   const [invoicePeriodFilter, setInvoicePeriodFilter] = useState('ALL'); // 'ALL' | 'TODAY' | 'WEEK' | 'MONTH'
+  const [invoiceSortField, setInvoiceSortField] = useState('fecha'); // 'factura' | 'fecha' | 'cliente' | 'rif' | 'vendedor' | 'condicion' | 'renglones' | 'totalUsd' | 'totalBs'
+  const [invoiceSortDirection, setInvoiceSortDirection] = useState('desc'); // 'asc' | 'desc'
   const [invoiceToDelete, setInvoiceToDelete] = useState(null);
   const [deleteConfirmKeyword, setDeleteConfirmKeyword] = useState('');
   const [isDeletingInvoice, setIsDeletingInvoice] = useState(false);
   const [localDeletedInvoiceKeys, setLocalDeletedInvoiceKeys] = useState(() => new Set());
+
+  const handleInvoiceSort = (field) => {
+    if (invoiceSortField === field) {
+      setInvoiceSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setInvoiceSortField(field);
+      setInvoiceSortDirection('desc');
+    }
+  };
 
   // Modal para Fijar Correlativo / N° de Factura Fiscal Inicial de forma manual
   const [showCorrelativoModal, setShowCorrelativoModal] = useState(false);
@@ -1451,12 +1463,12 @@ export default function OrdersSalesModal({
     };
   };
 
-  // Filtrado de facturas para la tabla list view
+  // Filtrado y Ordenamiento de facturas para la tabla list view
   const filteredInvoices = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    return allInvoices.filter(inv => {
+    const filtered = allInvoices.filter(inv => {
       if (!inv) return false;
 
       // Filtro por Condición de Pago (Contado vs Crédito)
@@ -1497,7 +1509,50 @@ export default function OrdersSalesModal({
 
       return true;
     });
-  }, [allInvoices, invoiceConditionFilter, invoicePeriodFilter, invoiceSearchQuery]);
+
+    const getSortValue = (inv) => {
+      switch (invoiceSortField) {
+        case 'factura':
+          return String(formatInvoiceCorrelativo(inv) || inv.numeroDoc || inv.factNum || '');
+        case 'fecha': {
+          const rawD = inv.fechaEmision || inv.fecha || inv.created_at;
+          const t = rawD ? new Date(rawD).getTime() : 0;
+          return Number.isNaN(t) ? 0 : t;
+        }
+        case 'cliente':
+          return String(inv.clienteNombre || inv.cliente || inv.cliDes || 'Cliente General').toLowerCase();
+        case 'rif':
+          return String(inv.clienteRif || inv.rif || inv.coCli || '').toLowerCase();
+        case 'vendedor':
+          return String(inv.vendedor || inv.venDes || inv.cajera || 'Caja Mostrador').toLowerCase();
+        case 'condicion':
+          return checkIsCredit(inv) ? (Number(inv.diasCredito || 7)) : 0;
+        case 'renglones':
+          return (inv.items || inv.renglones || []).length || 1;
+        case 'totalUsd':
+          return Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.total || 0);
+        case 'totalBs': {
+          const u = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.total || 0);
+          return Number(inv.totalBs || inv.total_bs || (u * tasaBcv));
+        }
+        default:
+          return 0;
+      }
+    };
+
+    return [...filtered].sort((a, b) => {
+      const valA = getSortValue(a);
+      const valB = getSortValue(b);
+      if (typeof valA === 'string' && typeof valB === 'string') {
+        return invoiceSortDirection === 'asc'
+          ? valA.localeCompare(valB, 'es', { numeric: true })
+          : valB.localeCompare(valA, 'es', { numeric: true });
+      }
+      if (valA < valB) return invoiceSortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return invoiceSortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [allInvoices, invoiceConditionFilter, invoicePeriodFilter, invoiceSearchQuery, invoiceSortField, invoiceSortDirection, tasaBcv]);
 
   // Métricas y KPIs consolidados de facturación
   const invoiceKpis = useMemo(() => {
@@ -4446,14 +4501,102 @@ export default function OrdersSalesModal({
                       borderBottom: '1px solid var(--border-glass)'
                     }}>
                       <tr>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem' }}>N° FACTURA</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem' }}>FECHA & HORA</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem' }}>CLIENTE / RAZÓN SOCIAL</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem' }}>ASESOR / CAJA</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center' }}>CONDICIÓN</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center' }}>RENGLONES / LTS</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right' }}>TOTAL USD</th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right' }}>TOTAL BS. (BCV)</th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'factura' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('factura')}
+                          title="Ordenar por N° de Factura"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span>N° FACTURA</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'fecha' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('fecha')}
+                          title="Ordenar por Fecha y Hora"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span>FECHA & HORA</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: (invoiceSortField === 'cliente' || invoiceSortField === 'rif') ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('cliente')}
+                          title="Ordenar por Cliente / Razón Social"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span>CLIENTE / RAZÓN SOCIAL</span>
+                            <ArrowUpDown size={12} />
+                            <span
+                              onClick={(e) => { e.stopPropagation(); handleInvoiceSort('rif'); }}
+                              title="Ordenar por RIF"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '2px',
+                                fontSize: '0.66rem',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                                background: invoiceSortField === 'rif' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.06)',
+                                color: invoiceSortField === 'rif' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)'
+                              }}
+                            >
+                              RIF <ArrowUpDown size={10} />
+                            </span>
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'vendedor' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('vendedor')}
+                          title="Ordenar por Asesor / Caja"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span>ASESOR / CAJA</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'condicion' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('condicion')}
+                          title="Ordenar por Condición de Pago"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                            <span>CONDICIÓN</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'renglones' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('renglones')}
+                          title="Ordenar por Renglones / Litros"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                            <span>RENGLONES / LTS</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'totalUsd' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('totalUsd')}
+                          title="Ordenar por Total USD"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                            <span>TOTAL USD</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
+                        <th
+                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'totalBs' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={() => handleInvoiceSort('totalBs')}
+                          title="Ordenar por Total Bs. (BCV)"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                            <span>TOTAL BS. (BCV)</span>
+                            <ArrowUpDown size={12} />
+                          </div>
+                        </th>
                         <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center' }}>ACCIONES</th>
                       </tr>
                     </thead>

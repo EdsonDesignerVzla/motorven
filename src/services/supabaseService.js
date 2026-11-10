@@ -2450,6 +2450,8 @@ export const processSupabaseSale = async (saleData) => {
     // Reflejo en tiempo real simultáneo en profit_invoices para visualización inmediata en CxC y Flujo de Fondos
     try {
       const isCredit = mapped.condicionPago === 'CREDITO' || isCreditPaymentCondition(mapped.condicionPago, mapped.metodoPago);
+      const isNeDoc = String(mapped.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA';
+      const effectiveNetoUsd = isNeDoc ? Number(mapped.subtotalUsd || mapped.totalUsd || 0) : Number(mapped.totalUsd || 0);
       await saveSupabaseProfitInvoice({
         id: mapped.id,
         factNum: mapped.numeroDoc,
@@ -2457,18 +2459,18 @@ export const processSupabaseSale = async (saleData) => {
         clienteId: mapped.clienteId,
         clienteNombre: mapped.clienteNombre,
         clienteRif: mapped.clienteRif,
-        vendedorId: mapped.vendedor,
+        vendedorId: saleData.vendedorId || 'OF',
         vendedorNombre: mapped.vendedor,
         totBrutoUsd: mapped.subtotalUsd,
-        ivaUsd: mapped.ivaUsd,
-        totNetoUsd: mapped.totalUsd,
-        saldoUsd: mapped.saldoUsd !== undefined ? mapped.saldoUsd : (isCredit ? mapped.totalUsd : 0),
-        abonosUsd: mapped.saldoUsd !== undefined ? Math.max(0, mapped.totalUsd - mapped.saldoUsd) : (isCredit ? 0 : mapped.totalUsd),
+        ivaUsd: isNeDoc ? 0 : mapped.ivaUsd,
+        totNetoUsd: effectiveNetoUsd,
+        saldoUsd: effectiveNetoUsd,
+        abonosUsd: 0,
         diasCredito: mapped.diasCredito || 0,
         fechaEmision: mapped.fechaEmision || mapped.fecha,
-        fechaVencimiento: mapped.fechaVencimiento,
+        fechaVencimiento: mapped.fechaVencimiento || mapped.fechaEmision || mapped.fecha,
         tasa: mapped.tasaDolar,
-        status: (mapped.saldoUsd || 0) <= 0.01 && !isCredit ? 'COBRADA' : 'PENDIENTE',
+        status: 'PENDIENTE',
         formaPago: isCredit ? '03' : '01',
         items: mapped.items
       });
@@ -2488,6 +2490,29 @@ export const processSupabaseSale = async (saleData) => {
       data: localSale
     });
     writeProfitSale(localSale, 'SAVE').catch(() => {});
+    const isNeLocal = String(localSale.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA';
+    const localNeto = isNeLocal ? Number(localSale.subtotalUsd || localSale.totalUsd || 0) : Number(localSale.totalUsd || 0);
+    saveSupabaseProfitInvoice({
+      id: localSale.id,
+      factNum: localSale.numeroDoc,
+      tipoDoc: localSale.tipoDoc,
+      clienteId: localSale.clienteId,
+      clienteNombre: localSale.clienteNombre,
+      clienteRif: localSale.clienteRif,
+      vendedorId: saleData.vendedorId || 'OF',
+      vendedorNombre: localSale.vendedor,
+      totBrutoUsd: localSale.subtotalUsd,
+      ivaUsd: isNeLocal ? 0 : localSale.ivaUsd,
+      totNetoUsd: localNeto,
+      saldoUsd: localNeto,
+      abonosUsd: 0,
+      diasCredito: localSale.diasCredito || 0,
+      fechaEmision: localSale.fechaEmision || localSale.fecha,
+      fechaVencimiento: localSale.fechaVencimiento || localSale.fechaEmision || localSale.fecha,
+      tasa: localSale.tasaDolar,
+      status: 'PENDIENTE',
+      items: localSale.items
+    }).catch(() => {});
     return localSale;
   }
 };
