@@ -246,7 +246,8 @@ export const getSales = () => {
   return JSON.parse(localStorage.getItem(KEYS.SALES));
 };
 
-export const saveSale = (saleData) => {
+export const saveSale = (saleData, options = {}) => {
+  const { skipStockAdjustment = false } = options || {};
   const sales = getSales();
   const products = getProducts();
   const config = getConfig();
@@ -354,10 +355,13 @@ export const saveSale = (saleData) => {
   // Ajuste de Stock Independiente por Almacén:
   // Almacén 01: Facturas Fiscales SENIAT y Notas de Débito
   // Almacén 02: Notas de Entrega / Despacho
-  if (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO') {
+  if (!skipStockAdjustment && (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO')) {
     const isNotaEntrega = newSale.tipoDoc === 'NOTA_ENTREGA';
     newSale.items.forEach(item => {
-      const prodIndex = products.findIndex(p => p.id === item.articuloId || p.codigo === item.articuloId);
+      const itemKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+      const prodIndex = itemKey
+        ? products.findIndex(p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey)
+        : -1;
       if (prodIndex >= 0) {
         const currentStocks = getProductWarehouseStocks(products[prodIndex]);
         if (isNotaEntrega) {
@@ -373,11 +377,14 @@ export const saveSale = (saleData) => {
       }
     });
     localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
-  } else if (newSale.tipoDoc === 'NOTA_CREDITO') {
+  } else if (!skipStockAdjustment && newSale.tipoDoc === 'NOTA_CREDITO') {
     // En Nota de Crédito se reingresa al almacén de origen (si afecta Nota de Entrega a Alm 02, si no a Alm 01)
     const isAfecNotaEntrega = String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE');
     newSale.items.forEach(item => {
-      const prodIndex = products.findIndex(p => p.id === item.articuloId || p.codigo === item.articuloId);
+      const itemKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+      const prodIndex = itemKey
+        ? products.findIndex(p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey)
+        : -1;
       if (prodIndex >= 0) {
         const currentStocks = getProductWarehouseStocks(products[prodIndex]);
         if (isAfecNotaEntrega) {

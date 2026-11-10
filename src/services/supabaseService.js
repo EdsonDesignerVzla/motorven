@@ -2190,9 +2190,65 @@ export const getSupabaseSales = async () => {
   }
 };
 
+const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
+  if (!localSale) return;
+  try {
+    const storageProds = getStorageProducts();
+    (localSale.items || saleData.items || []).forEach(it => {
+      const key = String(it.articuloId || it.id || it.codigo || it.co_art || '').trim();
+      if (!key) return;
+      const updatedProd = storageProds.find(
+        p => String(p.id || '').trim() === key || String(p.codigo || '').trim() === key
+      );
+      if (updatedProd) {
+        enqueueSyncAction('product', 'UPDATE', updatedProd);
+        broadcastReconcileChange({
+          tableId: 'products',
+          action: 'RECONCILE',
+          key: updatedProd.codigo || updatedProd.id,
+          item: updatedProd
+        });
+      }
+    });
+  } catch (_) {}
+
+  enqueueSyncAction('sale', 'INSERT', localSale);
+  broadcastReconcileChange({
+    tableId: 'sales',
+    action: 'CREATE',
+    data: localSale
+  });
+  writeProfitSale(localSale, 'SAVE').catch(() => {});
+  const isNeLocal = String(localSale.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA';
+  const localNeto = isNeLocal ? Number(localSale.subtotalUsd || localSale.totalUsd || 0) : Number(localSale.totalUsd || 0);
+  saveSupabaseProfitInvoice({
+    id: localSale.id,
+    factNum: localSale.numeroDoc,
+    tipoDoc: localSale.tipoDoc,
+    clienteId: localSale.clienteId,
+    clienteNombre: localSale.clienteNombre,
+    clienteRif: localSale.clienteRif,
+    vendedorId: saleData.vendedorId || 'OF',
+    vendedorNombre: localSale.vendedor,
+    totBrutoUsd: localSale.subtotalUsd,
+    ivaUsd: isNeLocal ? 0 : localSale.ivaUsd,
+    totNetoUsd: localNeto,
+    saldoUsd: localNeto,
+    abonosUsd: 0,
+    diasCredito: localSale.diasCredito || 0,
+    fechaEmision: localSale.fechaEmision || localSale.fecha,
+    fechaVencimiento: localSale.fechaVencimiento || localSale.fechaEmision || localSale.fecha,
+    tasa: localSale.tasaDolar,
+    status: 'PENDIENTE',
+    items: localSale.items
+  }).catch(() => {});
+};
+
 export const processSupabaseSale = async (saleData) => {
   if (!isSupabaseAvailable) {
-    return saveStorageSale(saleData);
+    const localSale = saveStorageSale(saleData);
+    syncOfflineSaleInventoryAndCxc(localSale, saleData);
+    return localSale;
   }
   try {
     const config = await getSupabaseConfig();
@@ -2302,59 +2358,86 @@ export const processSupabaseSale = async (saleData) => {
       pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
     };
 
-    // 1. If Factura or Nota de Débito, reduce stock from Alm 01; if Nota de Entrega, reduce from Alm 02
-    if (newSale.tipoDoc === 'FACTURA' || newSale.tipoDoc === 'NOTA_ENTREGA' || newSale.tipoDoc === 'NOTA_DEBITO') {
-      const isNotaEntrega = newSale.tipoDoc === 'NOTA_ENTREGA';
+    // 1. Ajuste de inventario independiente por almacén (Alm 01: Factura/ND, Alm 02: Nota de Entrega; NC reingresa)
+    const isReingresarNc = newSale.tipoDoc === 'NOTA_CREDITO';
+    if (
+      newSale.tipoDoc === 'FACTURA' ||
+      newSale.tipoDoc === 'NOTA_ENTREGA' ||
+      newSale.tipoDoc === 'NOTA_DEBITO' ||
+      isReingresarNc
+    ) {
+      const targetWh = isReingresarNc
+        ? (String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE') ? '02' : '01')
+        : (newSale.tipoDoc === 'NOTA_ENTREGA' ? '02' : '01');
+
       for (const item of newSale.items) {
-        const { data: prodData, error: prodErr } = await supabase
-          .from('products')
-          .select('*')
-          .eq('id', item.articuloId)
-          .single();
-        
-        if (!prodErr && prodData) {
-          const wStocks = getProductWarehouseStocks(prodData);
-          if (isNotaEntrega) {
-            wStocks.stock02 = Math.max(0, wStocks.stock02 - item.cantidad);
-          } else {
-            wStocks.stock01 = Math.max(0, wStocks.stock01 - item.cantidad);
-          }
-          const newTotal = wStocks.stock01 + wStocks.stock02;
-          await supabase
-            .from('products')
-            .update({
-              stock: newTotal,
-              stock_almacen_01: wStocks.stock01,
-              stock_almacen_02: wStocks.stock02
-            })
-            .eq('id', item.articuloId);
+        const prodKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+        const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
+        if (!prodKey || qty <= 0) continue;
+
+        let prodData = null;
+        const { data: byId, error: byIdErr } = await withTimeout(
+          supabase.from('products').select('*').eq('id', prodKey).single(),
+          4000
+        );
+        if (!byIdErr && byId) {
+          prodData = byId;
+        } else {
+          const { data: byCode, error: byCodeErr } = await withTimeout(
+            supabase.from('products').select('*').eq('codigo', prodKey).single(),
+            4000
+          );
+          if (!byCodeErr && byCode) prodData = byCode;
         }
-      }
-    } else if (newSale.tipoDoc === 'NOTA_CREDITO') {
-      const isAfecNotaEntrega = String(newSale.documentoAfectado || '').toUpperCase().startsWith('NE');
-      for (const item of newSale.items) {
-        const { data: prodData, error: prodErr } = await supabase
-          .from('products')
-          .select('*')
-          .eq('id', item.articuloId)
-          .single();
-        
-        if (!prodErr && prodData) {
+
+        if (prodData) {
           const wStocks = getProductWarehouseStocks(prodData);
-          if (isAfecNotaEntrega) {
-            wStocks.stock02 += item.cantidad;
+          if (isReingresarNc) {
+            if (targetWh === '02') wStocks.stock02 += qty;
+            else wStocks.stock01 += qty;
           } else {
-            wStocks.stock01 += item.cantidad;
+            if (targetWh === '02') wStocks.stock02 = Math.max(0, wStocks.stock02 - qty);
+            else wStocks.stock01 = Math.max(0, wStocks.stock01 - qty);
           }
+
           const newTotal = wStocks.stock01 + wStocks.stock02;
-          await supabase
-            .from('products')
-            .update({
-              stock: newTotal,
-              stock_almacen_01: wStocks.stock01,
-              stock_almacen_02: wStocks.stock02
-            })
-            .eq('id', item.articuloId);
+          const nowIso = new Date().toISOString();
+          const stockPatch = {
+            stock: newTotal,
+            stockAlmacen01: wStocks.stock01,
+            stock_almacen_01: wStocks.stock01,
+            stockAlmacen02: wStocks.stock02,
+            stock_almacen_02: wStocks.stock02,
+            updated_at: nowIso
+          };
+
+          const { error: updErr } = await withTimeout(
+            supabase.from('products').update(stockPatch).eq('id', prodData.id),
+            4000
+          );
+          if (updErr) {
+            console.warn('[processSupabaseSale] Error actualizando stock en products:', updErr.message);
+          }
+
+          const whStockValue = targetWh === '02' ? wStocks.stock02 : wStocks.stock01;
+          await withTimeout(
+            supabase
+              .from('profit_stock_by_warehouse')
+              .update({ stock_act: whStockValue, updated_at: nowIso })
+              .eq('id', `${prodData.id}_${targetWh}`),
+            3000
+          ).catch(() => {});
+
+          const updatedMapped = mapProductFromDb({ ...prodData, ...stockPatch });
+          if (updatedMapped) {
+            saveStorageProduct(updatedMapped);
+            broadcastReconcileChange({
+              tableId: 'products',
+              action: 'RECONCILE',
+              key: updatedMapped.codigo || updatedMapped.id,
+              item: updatedMapped
+            });
+          }
         }
       }
     }
@@ -2433,8 +2516,8 @@ export const processSupabaseSale = async (saleData) => {
     if (saleErr) throw saleErr;
     isSupabaseAvailable = true;
     const mapped = mapSaleFromDb(savedSale);
-    // Sincronizar en almacenamiento local
-    saveStorageSale(mapped);
+    // Sincronizar en almacenamiento local (el stock ya fue ajustado arriba desde Supabase)
+    saveStorageSale(mapped, { skipStockAdjustment: true });
 
     broadcastReconcileChange({
       tableId: 'sales',
@@ -2483,36 +2566,7 @@ export const processSupabaseSale = async (saleData) => {
     console.warn("Fallo o indisponibilidad en Supabase procesando venta, ejecutando fallback local:", err);
     markSupabaseOffline(err, 'processSupabaseSale');
     const localSale = saveStorageSale(saleData);
-    enqueueSyncAction('sale', 'INSERT', localSale);
-    broadcastReconcileChange({
-      tableId: 'sales',
-      action: 'CREATE',
-      data: localSale
-    });
-    writeProfitSale(localSale, 'SAVE').catch(() => {});
-    const isNeLocal = String(localSale.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA';
-    const localNeto = isNeLocal ? Number(localSale.subtotalUsd || localSale.totalUsd || 0) : Number(localSale.totalUsd || 0);
-    saveSupabaseProfitInvoice({
-      id: localSale.id,
-      factNum: localSale.numeroDoc,
-      tipoDoc: localSale.tipoDoc,
-      clienteId: localSale.clienteId,
-      clienteNombre: localSale.clienteNombre,
-      clienteRif: localSale.clienteRif,
-      vendedorId: saleData.vendedorId || 'OF',
-      vendedorNombre: localSale.vendedor,
-      totBrutoUsd: localSale.subtotalUsd,
-      ivaUsd: isNeLocal ? 0 : localSale.ivaUsd,
-      totNetoUsd: localNeto,
-      saldoUsd: localNeto,
-      abonosUsd: 0,
-      diasCredito: localSale.diasCredito || 0,
-      fechaEmision: localSale.fechaEmision || localSale.fecha,
-      fechaVencimiento: localSale.fechaVencimiento || localSale.fechaEmision || localSale.fecha,
-      tasa: localSale.tasaDolar,
-      status: 'PENDIENTE',
-      items: localSale.items
-    }).catch(() => {});
+    syncOfflineSaleInventoryAndCxc(localSale, saleData);
     return localSale;
   }
 };

@@ -156,8 +156,32 @@ export const getProductWarehouseStocks = (product) => {
   }
 
   const rawTotal = Number(product.stock ?? product.stockActual ?? product.existencia ?? 0) || 0;
-  const raw01 = product.stockAlmacen01 ?? product.stock_almacen_01 ?? product.stock_01 ?? product.stock01;
-  const raw02 = product.stockAlmacen02 ?? product.stock_almacen_02 ?? product.stock_02 ?? product.stock02;
+  const camel01 = product.stockAlmacen01;
+  const snake01 = product.stock_almacen_01 ?? product.stock_01 ?? product.stock01;
+  const camel02 = product.stockAlmacen02;
+  const snake02 = product.stock_almacen_02 ?? product.stock_02 ?? product.stock02;
+
+  const hasCamel01 = camel01 !== undefined && camel01 !== null && !isNaN(Number(camel01));
+  const hasSnake01 = snake01 !== undefined && snake01 !== null && !isNaN(Number(snake01));
+  const hasCamel02 = camel02 !== undefined && camel02 !== null && !isNaN(Number(camel02));
+  const hasSnake02 = snake02 !== undefined && snake02 !== null && !isNaN(Number(snake02));
+
+  let raw01 = camel01 ?? snake01;
+  let raw02 = camel02 ?? snake02;
+
+  // Si snake_case y camelCase difieren y la suma en snake_case coincide exactamente con stock total, priorizar snake_case (actualizado por PATCH parcial)
+  if (hasCamel01 && hasSnake01 && hasCamel02 && hasSnake02) {
+    const cSum = Number(camel01) + Number(camel02);
+    const sSum = Number(snake01) + Number(snake02);
+    if (sSum === rawTotal && cSum !== rawTotal) {
+      raw01 = snake01;
+      raw02 = snake02;
+    }
+  } else if (hasCamel01 && hasSnake01 && Number(camel01) !== Number(snake01) && Number(snake01) + Number(raw02 || 0) === rawTotal) {
+    raw01 = snake01;
+  } else if (hasCamel02 && hasSnake02 && Number(camel02) !== Number(snake02) && Number(raw01 || 0) + Number(snake02) === rawTotal) {
+    raw02 = snake02;
+  }
 
   const has01 = raw01 !== undefined && raw01 !== null && !isNaN(Number(raw01));
   const has02 = raw02 !== undefined && raw02 !== null && !isNaN(Number(raw02));
