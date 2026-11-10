@@ -262,11 +262,17 @@ function MainApp() {
       if (cached) {
         const parsed = JSON.parse(cached);
         const hasStaleOil = Array.isArray(parsed) && parsed.some(p => String(p?.id || p?.codigo || '').startsWith('OIL-'));
+        const p000003 = Array.isArray(parsed) && parsed.find(p => String(p?.codigo || p?.id || '').trim() === '000003');
+        const p001201 = Array.isArray(parsed) && parsed.find(p => String(p?.codigo || p?.id || '').trim() === '001201');
+        const hasCorruptedDoubledDump =
+          Number(p000003?.stock ?? p000003?.stockAlmacen02 ?? 0) === 730 &&
+          Number(p001201?.stockAlmacen01 ?? 0) === 152 &&
+          Number(p001201?.stockAlmacen02 ?? 0) === 152;
         if (
           Array.isArray(parsed) &&
           parsed.length >= 25 &&
           !hasStaleOil &&
-          parsed.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0)
+          !hasCorruptedDoubledDump
         ) {
           return sortAsc(parsed);
         }

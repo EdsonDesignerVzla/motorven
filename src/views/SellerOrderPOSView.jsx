@@ -255,7 +255,7 @@ export default function SellerOrderPOSView({
     const atpLibre = Math.max(0, rawStock - committed - currentInCart);
 
     if (atpLibre <= 0) {
-      notify.warning(`No hay existencia disponible en ${whLabel} para el artículo ${product.codigo}. (Físico: ${rawStock}, Comprometido: ${committed})`);
+      notify.warning(`No hay disponibilidad en ${whLabel} para el artículo ${product.codigo}.`);
       return;
     }
 
@@ -357,7 +357,7 @@ export default function SellerOrderPOSView({
     const maxAvailable = Math.max(0, rawStock - committed);
 
     if (newQty > maxAvailable) {
-      notify.warning(`La cantidad solicitada (${newQty}) excede la disponibilidad en ${whLabel} (${maxAvailable} disponibles).`);
+      notify.warning(`La cantidad solicitada (${newQty}) excede la disponibilidad actual en ${whLabel}.`);
       return;
     }
 
@@ -1061,9 +1061,9 @@ export default function SellerOrderPOSView({
                             alignItems: 'center',
                             gap: '3px'
                           }}
-                          title={`Existencia física en ${isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'}: ${rawStock} un. (Comprometido: ${committed})`}
+                          title={`Disponibilidad en ${isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'}: ${isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : 'Disponible'}`}
                         >
-                          {isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : `${isNota ? 'Alm 02' : 'Alm 01'}: ${atpLibre} un.`}
+                          {isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : 'Disponible'}
                         </span>
                       </div>
                     </div>
@@ -1889,7 +1889,7 @@ export default function SellerOrderPOSView({
                         </span>
                       </div>
                       <strong style={{ color: isZero ? 'var(--motorven-red)' : 'var(--semaforo-verde)', fontFamily: 'var(--font-code)' }}>
-                        {isZero ? (specCommitted > 0 ? 'COMPROMETIDO' : 'AGOTADO') : `${specDisp} un. disponibles (Físico: ${specRaw})`}
+                        {isZero ? (specCommitted > 0 ? 'COMPROMETIDO' : 'AGOTADO') : 'DISPONIBLE'}
                       </strong>
                     </div>
                   );

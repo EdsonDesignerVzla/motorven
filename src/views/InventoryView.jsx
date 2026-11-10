@@ -485,12 +485,23 @@ export default function InventoryView({
 
     if (product) {
       const stocks = getProductWarehouseStocks(product);
+      const retailPrice = getProductRetailPrice(product);
+      const wholesalePrice = getProductWholesalePrice(product);
+      const costPrice = Number(product.costoUsd ?? product.costo_usd ?? product.costo ?? 0);
       setEditingProduct({
         ...product,
         activeWarehouse: targetWh,
         stockAlmacen01: stocks.stock01,
+        stock_almacen_01: stocks.stock01,
         stockAlmacen02: stocks.stock02,
+        stock_almacen_02: stocks.stock02,
         stock: stocks.total,
+        costoUsd: costPrice,
+        costo_usd: costPrice,
+        precioUsdDetal: retailPrice,
+        precio_usd_detal: retailPrice,
+        precioUsdMayor: wholesalePrice,
+        precio_usd_mayor: wholesalePrice,
         unidad: resolveProductUnit(product, 'Caja'),
         litrosPorUnidad: resolveProductLitersPerUnit(product)
       });
@@ -617,8 +628,23 @@ export default function InventoryView({
     try {
       const s01 = Math.max(0, Number(editingProduct.stockAlmacen01) || 0);
       const s02 = Math.max(0, Number(editingProduct.stockAlmacen02) || 0);
+      const detal = Math.max(0, Number(editingProduct.precioUsdDetal ?? editingProduct.precio_usd_detal ?? editingProduct.precio ?? 0) || 0);
+      const mayorRaw = Math.max(0, Number(editingProduct.precioUsdMayor ?? editingProduct.precio_usd_mayor ?? editingProduct.precioMayor ?? 0) || 0);
+      const mayor = mayorRaw > 0 ? mayorRaw : detal;
+      const costo = Math.max(0, Number(editingProduct.costoUsd ?? editingProduct.costo_usd ?? editingProduct.costo ?? 0) || 0);
       const payloadToSave = {
         ...editingProduct,
+        costoUsd: costo,
+        costo_usd: costo,
+        costo: costo,
+        precioUsdDetal: detal,
+        precio_usd_detal: detal,
+        precio: detal,
+        precioUsd: detal,
+        precioVenta: detal,
+        precioUsdMayor: mayor,
+        precio_usd_mayor: mayor,
+        precioMayor: mayor,
         stockAlmacen01: s01,
         stock_almacen_01: s01,
         stockAlmacen02: s02,

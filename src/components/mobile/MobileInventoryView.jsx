@@ -173,7 +173,7 @@ export default function MobileInventoryView({
                     }}
                   >
                     {isAgotado ? <XCircle size={10} /> : (isBajo ? <AlertTriangle size={10} /> : <CheckCircle2 size={10} />)}
-                    {isAgotado ? 'Agotado' : `${stock} ${unit} disp.`}
+                    {isAgotado ? 'Agotado' : 'Disponible'}
                   </span>
 
                   {onSelectProductForOrder && (

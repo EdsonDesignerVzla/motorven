@@ -70,16 +70,19 @@ export const initStorage = () => {
     const rawProds = localStorage.getItem(KEYS.PRODUCTS);
     const parsedProds = rawProds ? JSON.parse(rawProds) : [];
     const hasStaleOilProds = Array.isArray(parsedProds) && parsedProds.some(p => String(p?.id || p?.codigo || '').startsWith('OIL-'));
-    const hasValidPrices =
-      Array.isArray(parsedProds) &&
-      parsedProds.length >= 25 &&
-      !hasStaleOilProds &&
-      parsedProds.some(p => Number(p.precioUsdDetal || p.precio_usd_detal || p.precio || 0) > 0);
-    if (!hasValidPrices) {
+    const p000003 = Array.isArray(parsedProds) && parsedProds.find(p => String(p?.codigo || p?.id || '').trim() === '000003');
+    const p001201 = Array.isArray(parsedProds) && parsedProds.find(p => String(p?.codigo || p?.id || '').trim() === '001201');
+    const hasCorruptedDoubledDump =
+      Number(p000003?.stock ?? p000003?.stockAlmacen02 ?? 0) === 730 &&
+      Number(p001201?.stockAlmacen01 ?? 0) === 152 &&
+      Number(p001201?.stockAlmacen02 ?? 0) === 152;
+    if (!Array.isArray(parsedProds) || parsedProds.length === 0 || hasStaleOilProds || hasCorruptedDoubledDump) {
       localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(REAL_PRODUCTS));
     }
   } catch (_) {
-    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(REAL_PRODUCTS));
+    try {
+      localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(REAL_PRODUCTS));
+    } catch (_e) {}
   }
 
   try {
@@ -156,16 +159,62 @@ export const updateConfig = (newConfig) => {
   return updated;
 };
 
+let memoryProductsCache = null;
+
+const persistProductsToStorage = (products) => {
+  memoryProductsCache = products;
+  try {
+    const serialized = JSON.stringify(products);
+    localStorage.setItem(KEYS.PRODUCTS, serialized);
+    localStorage.setItem('sm_products_v4_fiscal', serialized);
+  } catch (_) {
+    try {
+      const compact = products.map(({ imagen, ...rest }) => rest);
+      const serializedCompact = JSON.stringify(compact);
+      localStorage.setItem(KEYS.PRODUCTS, serializedCompact);
+      localStorage.setItem('sm_products_v4_fiscal', serializedCompact);
+    } catch (_e) {}
+  }
+};
+
 export const getProducts = () => {
   initStorage();
-  return JSON.parse(localStorage.getItem(KEYS.PRODUCTS));
+  try {
+    const raw = localStorage.getItem(KEYS.PRODUCTS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        memoryProductsCache = parsed;
+        return parsed;
+      }
+    }
+  } catch (_) {}
+  return Array.isArray(memoryProductsCache) && memoryProductsCache.length > 0
+    ? memoryProductsCache
+    : [...REAL_PRODUCTS];
 };
 
 export const saveProduct = (product) => {
-  const products = getProducts();
+  const products = [...getProducts()];
   const stocks = getProductWarehouseStocks(product);
+  const detal = Number(product.precioUsdDetal ?? product.precio_usd_detal ?? product.precio ?? product.precioUsd ?? product.precioVenta ?? 0);
+  const mayorRaw = Number(product.precioUsdMayor ?? product.precio_usd_mayor ?? product.precioMayor ?? 0);
+  const mayor = mayorRaw > 0 ? mayorRaw : detal;
+  const costo = Number(product.costoUsd ?? product.costo_usd ?? product.costo ?? 0);
+
   const normalized = {
     ...product,
+    costoUsd: costo,
+    costo_usd: costo,
+    costo: costo,
+    precioUsdDetal: detal,
+    precio_usd_detal: detal,
+    precio: detal,
+    precioUsd: detal,
+    precioVenta: detal,
+    precioUsdMayor: mayor,
+    precio_usd_mayor: mayor,
+    precioMayor: mayor,
     stockAlmacen01: stocks.stock01,
     stock_almacen_01: stocks.stock01,
     stockAlmacen02: stocks.stock02,
@@ -185,10 +234,7 @@ export const saveProduct = (product) => {
     products.push({ ...normalized, id: newId });
   }
   
-  localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
-  try {
-    localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(products));
-  } catch (_) {}
+  persistProductsToStorage(products);
   return products;
 };
 
@@ -198,10 +244,7 @@ export const deleteProduct = (id) => {
     String(p.id || '').trim().toUpperCase() !== target &&
     String(p.codigo || '').trim().toUpperCase() !== target
   );
-  localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
-  try {
-    localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(products));
-  } catch (_) {}
+  persistProductsToStorage(products);
   return products;
 };
 

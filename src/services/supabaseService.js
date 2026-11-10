@@ -674,15 +674,16 @@ const mapProductToDb = (p) => {
     co_alm: p.co_alm || p.coAlm || '01,02',
     coAlm: p.coAlm || p.co_alm || '01,02',
     almacenes: Array.isArray(p.almacenes) ? p.almacenes : ['01', '02'],
-    ubicacion: p.ubicacion || '01: Almacén Principal • 02: Almacén Central'
+    ubicacion: p.ubicacion || '01: Almacén Principal • 02: Almacén Central',
+    updated_at: p.updated_at || new Date().toISOString()
   };
 };
 
 const mapProductFromDb = (p) => {
   if (!p) return null;
-  const precioUsdDetal = Number(p.precio_usd_detal ?? p.precioUsdDetal ?? p.precio ?? p.precioVenta ?? 0) || 0;
-  const precioUsdMayor = Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
-  const costoUsd = Number(p.costo_usd ?? p.costoUsd ?? p.costo ?? 0) || 0;
+  const precioUsdDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? 0) || Number(p.precio_usd_detal ?? p.precioUsdDetal ?? 0) || 0;
+  const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? 0) || 0;
+  const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || Number(p.costo_usd ?? p.costoUsd ?? 0) || 0;
   const litrosPorUnidad = resolveProductLitersPerUnit(p);
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 0) || 0;
@@ -1731,28 +1732,47 @@ export const getSupabaseProducts = async () => {
 };
 
 export const saveSupabaseProduct = async (product) => {
-  // 1. Normalizar presentación, almacenes y factor de litros antes de guardar
+  // 1. Normalizar presentación, almacenes, precios y factor de litros antes de guardar
   const stocks = getProductWarehouseStocks(product);
+  const detal = Number(product.precioUsdDetal ?? product.precio_usd_detal ?? product.precio ?? product.precioUsd ?? product.precioVenta ?? 0) || 0;
+  const mayorRaw = Number(product.precioUsdMayor ?? product.precio_usd_mayor ?? product.precioMayor ?? 0) || 0;
+  const mayor = mayorRaw > 0 ? mayorRaw : detal;
+  const costo = Number(product.costoUsd ?? product.costo_usd ?? product.costo ?? 0) || 0;
+  const lpu = resolveProductLitersPerUnit(product);
+
   const normalized = {
     ...product,
     id: product.id || product.codigo || `OIL_${Date.now()}`,
+    codigo: product.codigo || product.id || `OIL_${Date.now()}`,
+    costoUsd: costo,
+    costo_usd: costo,
+    costo: costo,
+    precioUsdDetal: detal,
+    precio_usd_detal: detal,
+    precio: detal,
+    precioUsd: detal,
+    precioVenta: detal,
+    precioUsdMayor: mayor,
+    precio_usd_mayor: mayor,
+    precioMayor: mayor,
     stockAlmacen01: stocks.stock01,
     stock_almacen_01: stocks.stock01,
     stockAlmacen02: stocks.stock02,
     stock_almacen_02: stocks.stock02,
     stock: stocks.total,
     unidad: resolveProductUnit(product, 'Caja'),
-    litrosPorUnidad: resolveProductLitersPerUnit(product),
-    litros_por_unidad: resolveProductLitersPerUnit(product)
+    litrosPorUnidad: lpu,
+    litros_por_unidad: lpu,
+    updated_at: new Date().toISOString()
   };
 
   // 2. Guardar en almacenamiento local para respuesta instantánea de la UI
-  saveStorageProduct(normalized);
-  const currentProds = getStorageProducts();
-  const prodToSave = currentProds.find(p => (normalized.id && p.id === normalized.id) || p.codigo === normalized.codigo) || normalized;
+  try {
+    saveStorageProduct(normalized);
+  } catch (_) {}
 
   try {
-    const payload = mapProductToDb(prodToSave);
+    const payload = mapProductToDb(normalized);
     const { data, error } = await withTimeout(
       supabase.from('products').upsert(payload).select().single()
     );
@@ -1760,7 +1780,9 @@ export const saveSupabaseProduct = async (product) => {
     if (error) throw error;
     isSupabaseAvailable = true;
     const mapped = mapProductFromDb(data);
-    saveStorageProduct(mapped);
+    try {
+      saveStorageProduct(mapped);
+    } catch (_) {}
 
     // Sincronizar stock independiente en profit_stock_by_warehouse en Supabase
     try {
@@ -1779,10 +1801,11 @@ export const saveSupabaseProduct = async (product) => {
         costo_usd: Number(mapped.costoUsd || mapped.costo_usd || 0),
         precio_usd_detal: Number(mapped.precioUsdDetal || mapped.precio_usd_detal || 0),
         precio_usd_mayor: Number(mapped.precioUsdMayor || mapped.precio_usd_mayor || 0),
-        imagen: mapped.imagen || '',
         co_alma: '01',
+        des_alma: '01 Almacén Principal (Fiscal)',
         alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
         stock_act: Number(mapped.stockAlmacen01 ?? mapped.stock_almacen_01 ?? pStocks.stock01),
+        stock_disp: Number(mapped.stockAlmacen01 ?? mapped.stock_almacen_01 ?? pStocks.stock01),
         stock_com: Number(mapped.comprometido ?? 0),
         stock_lle: 0,
         stock_des: 0,
@@ -1802,10 +1825,11 @@ export const saveSupabaseProduct = async (product) => {
         costo_usd: Number(mapped.costoUsd || mapped.costo_usd || 0),
         precio_usd_detal: Number(mapped.precioUsdDetal || mapped.precio_usd_detal || 0),
         precio_usd_mayor: Number(mapped.precioUsdMayor || mapped.precio_usd_mayor || 0),
-        imagen: mapped.imagen || '',
         co_alma: '02',
+        des_alma: '02 Almacén Central (Notas de Entrega)',
         alma_des: 'ALMACÉN CENTRAL / BÓVEDA',
         stock_act: Number(mapped.stockAlmacen02 ?? mapped.stock_almacen_02 ?? pStocks.stock02),
+        stock_disp: Number(mapped.stockAlmacen02 ?? mapped.stock_almacen_02 ?? pStocks.stock02),
         stock_com: Number(mapped.comprometido ?? 0),
         stock_lle: 0,
         stock_des: 0,
