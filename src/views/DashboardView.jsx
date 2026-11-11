@@ -100,6 +100,22 @@ function extractMonthNumber(dateVal) {
   return '';
 }
 
+// Normaliza cualquier fecha (ISO, DD/MM/YYYY o Date) a clave 'YYYY-MM-DD'
+function toDateKey(dateVal) {
+  if (!dateVal) return '';
+  if (dateVal instanceof Date) {
+    if (isNaN(dateVal.getTime())) return '';
+    return `${dateVal.getFullYear()}-${String(dateVal.getMonth() + 1).padStart(2, '0')}-${String(dateVal.getDate()).padStart(2, '0')}`;
+  }
+  const str = String(dateVal).trim();
+  const iso = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
+  const lat = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (lat) return `${lat[3]}-${lat[2].padStart(2, '0')}-${lat[1].padStart(2, '0')}`;
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? '' : toDateKey(d);
+}
+
 export default function DashboardView({
   products = [],
   sales = [],
@@ -581,6 +597,179 @@ export default function DashboardView({
     if (totalLitros <= 0) return 0;
     return parseFloat((totalFacturadoUsd / totalLitros).toFixed(2));
   }, [totalFacturadoUsd, totalLitros]);
+
+  // ── VENTAS DEL DÍA & ACUMULADO MENSUAL (Montos y Lubricantes) ─────────────────
+  // Fecha local de hoy (se refresca cada minuto para cubrir el cambio de día con el dashboard abierto)
+  const [todayKey, setTodayKey] = useState(() => toDateKey(new Date()));
+  useEffect(() => {
+    const id = setInterval(() => {
+      const k = toDateKey(new Date());
+      setTodayKey(prev => (prev === k ? prev : k));
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Mes del acumulado (independiente del filtro de cumplimiento; por defecto el mes en curso)
+  const [ventasMesFilter, setVentasMesFilter] = useState(() => String(new Date().getMonth() + 1).padStart(2, '0'));
+  const [ventasDetalleTab, setVentasDetalleTab] = useState('hoy'); // 'hoy' | 'mes'
+
+  // Documentos de venta normalizados (Facturas/N.E. Profit + Ventas POS locales)
+  const ventasDocsNormalizados = useMemo(() => {
+    const productsBySku = new Map();
+    (products || []).forEach(p => {
+      const sku = String(p.codigo || p.id || '').trim();
+      if (sku) productsBySku.set(sku, p);
+    });
+    const isServiceItem = (desc) => {
+      const d = (desc || '').toLowerCase();
+      return d.includes('flete') || d.includes('servicio');
+    };
+    const docs = [];
+
+    (profitInvoices || []).forEach(inv => {
+      if (!inv || inv.anulada) return;
+      const dateKey = toDateKey(inv.fechaEmision || inv.fecEmis || inv.fec_emis || inv.fecha);
+      if (!dateKey) return;
+      const usd = Number(inv.totNetoUsd ?? inv.tot_neto_usd ?? inv.totalNetoUsd ?? 0) || 0;
+      const bsRaw = Number(inv.totNetoBs ?? inv.tot_neto_bs ?? 0) || 0;
+      const tasaDoc = Number(inv.tasa) > 1 ? Number(inv.tasa) : tasaBcv;
+      const items = (inv.items || []).map(it => {
+        const sku = String(it.articuloId || it.codigo || '').trim();
+        const prod = productsBySku.get(sku);
+        const desc = it.descripcion || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
+        const litros = Number(it.litrosTotales ?? (Number(it.cantidad || 0) * Number(it.litrosUnitarios || 0))) || 0;
+        return {
+          sku,
+          desc,
+          cantidad: Number(it.cantidad || 0),
+          litros,
+          usd: (Number(it.totalNeto || 0) || 0) / (tasaDoc > 1 ? tasaDoc : 1),
+          esServicio: isServiceItem(desc)
+        };
+      });
+      docs.push({
+        dateKey,
+        usd,
+        bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
+        litros: Number(inv.totalLitros ?? inv.total_litros ?? 0) || 0,
+        cliente: inv.clienteNombre || inv.cliente_nombre || inv.cli_des || inv.clienteId || '',
+        items
+      });
+    });
+
+    (sales || []).forEach(s => {
+      if (!s || s.anulada) return;
+      const dateKey = toDateKey(s.fecha);
+      if (!dateKey) return;
+      const usd = Number(s.totalUsd) || 0;
+      const bsRaw = Number(s.totalBs) || 0;
+      const items = (s.items || []).map(it => {
+        const sku = String(it.articuloId || it.codigo || it.id || '').trim();
+        const prod = productsBySku.get(sku);
+        const desc = it.descripcion || it.nombre || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
+        const cantidad = Number(it.cantidad || 0);
+        return {
+          sku,
+          desc,
+          cantidad,
+          litros: Number(it.litros || (cantidad * Number(it.litrosPorUnidad || 0))) || 0,
+          usd: Number(it.subtotalUsd ?? it.totalUsd ?? (Number(it.precioUsd || 0) * cantidad)) || 0,
+          esServicio: isServiceItem(desc)
+        };
+      });
+      docs.push({
+        dateKey,
+        usd,
+        bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
+        litros: items.reduce((acc, it) => acc + it.litros, 0),
+        cliente: s.clienteNombre || s.cliente || '',
+        items
+      });
+    });
+
+    return docs;
+  }, [profitInvoices, sales, products, tasaBcv]);
+
+  const resumirVentas = (docs) => {
+    const prodMap = new Map();
+    const clientes = new Set();
+    let usd = 0, bs = 0, litros = 0;
+    docs.forEach(d => {
+      usd += d.usd;
+      bs += d.bs;
+      litros += d.litros;
+      if (d.cliente) clientes.add(d.cliente);
+      d.items.forEach(it => {
+        if (it.esServicio || !it.sku) return;
+        const prev = prodMap.get(it.sku) || { sku: it.sku, desc: it.desc, cantidad: 0, litros: 0, usd: 0 };
+        prev.cantidad += it.cantidad;
+        prev.litros += it.litros;
+        prev.usd += it.usd;
+        prodMap.set(it.sku, prev);
+      });
+    });
+    const topProductos = Array.from(prodMap.values())
+      .sort((a, b) => b.litros - a.litros || b.usd - a.usd)
+      .slice(0, 8);
+    return {
+      usd: parseFloat(usd.toFixed(2)),
+      bs: parseFloat(bs.toFixed(2)),
+      litros: parseFloat(litros.toFixed(2)),
+      cajas: parseFloat((litros / 11.35).toFixed(1)),
+      documentos: docs.length,
+      clientes: clientes.size,
+      skus: prodMap.size,
+      topProductos
+    };
+  };
+
+  const ventasDelDia = useMemo(() => {
+    const hoy = resumirVentas(ventasDocsNormalizados.filter(d => d.dateKey === todayKey));
+    const ayerDate = new Date();
+    ayerDate.setDate(ayerDate.getDate() - 1);
+    const ayerKey = toDateKey(ayerDate);
+    const ayer = ventasDocsNormalizados
+      .filter(d => d.dateKey === ayerKey)
+      .reduce((acc, d) => ({ usd: acc.usd + d.usd, litros: acc.litros + d.litros }), { usd: 0, litros: 0 });
+    return { ...hoy, ayerUsd: parseFloat(ayer.usd.toFixed(2)), ayerLitros: parseFloat(ayer.litros.toFixed(2)) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ventasDocsNormalizados, todayKey]);
+
+  const ventasAcumuladoMes = useMemo(() => {
+    const prefix = `${anioActivo}-${ventasMesFilter}`;
+    const resumen = resumirVentas(ventasDocsNormalizados.filter(d => d.dateKey.startsWith(prefix) && d.dateKey <= todayKey));
+    const monthIdx = Number(ventasMesFilter);
+    const diasDelMes = new Date(Number(anioActivo), monthIdx, 0).getDate();
+    const currentPrefix = todayKey.substring(0, 7);
+    let diasTranscurridos;
+    if (prefix === currentPrefix) diasTranscurridos = Number(todayKey.substring(8, 10));
+    else if (prefix < currentPrefix) diasTranscurridos = diasDelMes;
+    else diasTranscurridos = 0;
+    const esMesEnCurso = prefix === currentPrefix;
+    const promedioDiarioUsd = diasTranscurridos > 0 ? resumen.usd / diasTranscurridos : 0;
+    const promedioDiarioLitros = diasTranscurridos > 0 ? resumen.litros / diasTranscurridos : 0;
+    const meta = Number(metaMensualBase) || 0;
+    return {
+      ...resumen,
+      diasDelMes,
+      diasTranscurridos,
+      esMesEnCurso,
+      esFuturo: prefix > currentPrefix,
+      promedioDiarioUsd: parseFloat(promedioDiarioUsd.toFixed(2)),
+      promedioDiarioLitros: parseFloat(promedioDiarioLitros.toFixed(1)),
+      proyeccionLitros: esMesEnCurso ? parseFloat((promedioDiarioLitros * diasDelMes).toFixed(1)) : resumen.litros,
+      proyeccionUsd: esMesEnCurso ? parseFloat((promedioDiarioUsd * diasDelMes).toFixed(2)) : resumen.usd,
+      metaLitros: meta,
+      pctMeta: meta > 0 ? parseFloat(((resumen.litros / meta) * 100).toFixed(1)) : 0
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ventasDocsNormalizados, ventasMesFilter, anioActivo, todayKey, metaMensualBase]);
+
+  const todayLabel = useMemo(() => {
+    const [y, m, d] = todayKey.split('-').map(Number);
+    if (!y) return '';
+    return new Date(y, m - 1, d).toLocaleDateString('es-VE', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  }, [todayKey]);
 
   // Efectividad de Cobranza (% recaudado vs facturado)
   const efectividadCobranzaPct = useMemo(() => {
@@ -1450,6 +1639,171 @@ export default function DashboardView({
               <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(2, 132, 199, 0.15)', color: '#38bdf8', fontWeight: 800 }}>
                 VENTAS & POS
               </span>
+            </div>
+          </div>
+
+          {/* VENTAS DEL DÍA & ACUMULADO MENSUAL (Montos y Lubricantes) */}
+          <div className="bento-grid">
+            {/* Tarjeta: Ventas del Día */}
+            <div className="bento-card col-span-6" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '10px', border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                <span className="bento-card-header-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <Clock size={16} color="#10b981" /> VENTAS DEL DÍA
+                </span>
+                <span style={{ fontSize: '0.66rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 800, textTransform: 'capitalize' }}>
+                  {todayLabel}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px' }}>
+                <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--surface-input, rgba(255,255,255,0.04))', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ fontSize: '0.62rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <DollarSign size={12} /> Monto Facturado
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: '#10b981' }}>{formatUsd(ventasDelDia.usd)}</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{formatBs(ventasDelDia.bs)}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--surface-input, rgba(255,255,255,0.04))', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ fontSize: '0.62rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Droplet size={12} /> Lubricantes Vendidos
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: 'var(--neon-cyan, #38bdf8)' }}>
+                    {ventasDelDia.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>({ventasDelDia.cajas.toLocaleString('es-VE')} cajas)</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                <span><strong style={{ color: 'var(--text-heading)' }}>{ventasDelDia.documentos}</strong> documentos • <strong style={{ color: 'var(--text-heading)' }}>{ventasDelDia.clientes}</strong> clientes • <strong style={{ color: 'var(--text-heading)' }}>{ventasDelDia.skus}</strong> SKUs</span>
+                <span title="Comparativo contra el día anterior">
+                  Ayer: {formatUsd(ventasDelDia.ayerUsd)} / {ventasDelDia.ayerLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                </span>
+              </div>
+            </div>
+
+            {/* Tarjeta: Acumulado Mensual (filtrable por mes) */}
+            <div className="bento-card col-span-6" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '10px', border: '1px solid rgba(2, 132, 199, 0.45)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                <span className="bento-card-header-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <Calendar size={16} color="#38bdf8" /> ACUMULADO MENSUAL
+                </span>
+                <select
+                  value={ventasMesFilter}
+                  onChange={(e) => setVentasMesFilter(e.target.value)}
+                  className="form-control"
+                  title="Seleccione el mes a consultar"
+                  style={{ fontSize: '0.74rem', fontWeight: 700, padding: '3px 8px', borderRadius: '8px', border: '1px solid rgba(2, 132, 199, 0.45)', width: 'auto', cursor: 'pointer' }}
+                >
+                  {MONTHS_LIST.filter(m => m.id !== 'ALL').map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px' }}>
+                <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--surface-input, rgba(255,255,255,0.04))', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ fontSize: '0.62rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <DollarSign size={12} /> Monto Acumulado
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: '#10b981' }}>{formatUsd(ventasAcumuladoMes.usd)}</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{formatBs(ventasAcumuladoMes.bs)}</div>
+                  <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '2px' }}>Prom. diario: {formatUsd(ventasAcumuladoMes.promedioDiarioUsd)}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--surface-input, rgba(255,255,255,0.04))', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ fontSize: '0.62rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Droplet size={12} /> Lubricantes Acumulados
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: 'var(--neon-cyan, #38bdf8)' }}>
+                    {ventasAcumuladoMes.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>({ventasAcumuladoMes.cajas.toLocaleString('es-VE')} cajas)</div>
+                  <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '2px' }}>Prom. diario: {ventasAcumuladoMes.promedioDiarioLitros.toLocaleString('es-VE')} L</div>
+                </div>
+              </div>
+              {/* Progreso contra la meta mensual */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '4px' }}>
+                  <span>
+                    Meta mes: <strong style={{ color: 'var(--text-heading)' }}>{ventasAcumuladoMes.metaLitros.toLocaleString('es-VE')} L</strong>
+                    {' '}• <strong style={{ color: getSemaforoMeta(ventasAcumuladoMes.pctMeta).color }}>{ventasAcumuladoMes.pctMeta}%</strong>
+                  </span>
+                  <span>
+                    {ventasAcumuladoMes.esFuturo
+                      ? 'Mes aún no iniciado'
+                      : ventasAcumuladoMes.esMesEnCurso
+                        ? `Día ${ventasAcumuladoMes.diasTranscurridos}/${ventasAcumuladoMes.diasDelMes} • Proyección: ${ventasAcumuladoMes.proyeccionLitros.toLocaleString('es-VE')} L`
+                        : `Mes cerrado • ${ventasAcumuladoMes.documentos} documentos`}
+                  </span>
+                </div>
+                <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min(ventasAcumuladoMes.pctMeta, 100)}%`, height: '100%', background: getSemaforoMeta(ventasAcumuladoMes.pctMeta).color, transition: 'width 0.4s ease' }} />
+                </div>
+              </div>
+            </div>
+
+            {/* Detalle: Lubricantes más vendidos (Hoy / Mes seleccionado) */}
+            <div className="bento-card col-span-12" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                <span className="bento-card-header-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <Package size={15} color="var(--motorven-gold)" /> DETALLE DE LUBRICANTES VENDIDOS
+                </span>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {[
+                    { id: 'hoy', label: 'Hoy' },
+                    { id: 'mes', label: MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || 'Mes' }
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setVentasDetalleTab(t.id)}
+                      style={{
+                        fontSize: '0.7rem',
+                        fontWeight: ventasDetalleTab === t.id ? 800 : 600,
+                        padding: '3px 10px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        border: ventasDetalleTab === t.id ? '1px solid var(--motorven-cyan, #0284c7)' : '1px solid var(--border-glass)',
+                        background: ventasDetalleTab === t.id ? 'var(--motorven-cyan, #0284c7)' : 'var(--surface-input, rgba(255,255,255,0.04))',
+                        color: ventasDetalleTab === t.id ? '#fff' : 'var(--text-muted)'
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(() => {
+                const lista = ventasDetalleTab === 'hoy' ? ventasDelDia.topProductos : ventasAcumuladoMes.topProductos;
+                if (!lista || lista.length === 0) {
+                  return (
+                    <div style={{ padding: '0.75rem', textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      {ventasDetalleTab === 'hoy' ? 'Aún no hay lubricantes facturados hoy.' : 'Sin lubricantes facturados en el mes seleccionado.'}
+                    </div>
+                  );
+                }
+                const maxLts = lista[0]?.litros || 1;
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '6px' }}>
+                    {lista.map((p, idx) => (
+                      <div key={p.sku} style={{ display: 'flex', flexDirection: 'column', gap: '3px', padding: '6px 8px', borderRadius: '6px', background: 'var(--surface-input, rgba(255,255,255,0.04))', border: '1px solid var(--border-glass)', fontSize: '0.72rem' }} title={`${p.sku} • ${p.desc}`}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-main)', fontWeight: 700 }}>
+                            {idx + 1}. {p.desc}
+                          </span>
+                          <span style={{ whiteSpace: 'nowrap', color: 'var(--neon-cyan, #38bdf8)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
+                            {p.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.66rem' }}>
+                          <span>{p.cantidad.toLocaleString('es-VE')} und.</span>
+                          <span>{formatUsd(p.usd)}</span>
+                        </div>
+                        <div style={{ width: '100%', height: '3px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min((p.litros / maxLts) * 100, 100)}%`, height: '100%', background: 'var(--motorven-gold, #ffb703)' }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
