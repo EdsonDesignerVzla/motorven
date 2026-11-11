@@ -15,6 +15,7 @@ import TaxReportsView from './views/TaxReportsView';
 import AuditLedgerView from './views/AuditLedgerView';
 import UsersManagementView from './views/UsersManagementView';
 import SupabaseTablesView from './views/SupabaseTablesView';
+import ProfitCxcStandaloneView from './views/ProfitCxcStandaloneView';
 import DeviceSimulatorView from './views/DeviceSimulatorView';
 import SellerOrderPOSView from './views/SellerOrderPOSView';
 import LoginView from './views/LoginView';
@@ -2714,6 +2715,11 @@ export default function App() {
     window.location.hash === '#supabase-tables'
   );
 
+  const isProfitCxcTab = typeof window !== 'undefined' && (
+    window.location.search.includes('view=profit-cxc') ||
+    window.location.hash === '#profit-cxc'
+  );
+
 
   if (isDeviceSimulator) {
     return <DeviceSimulatorView />;
@@ -2721,6 +2727,10 @@ export default function App() {
 
   if (isSupabaseTablesTab) {
     return <SupabaseTablesView />;
+  }
+
+  if (isProfitCxcTab) {
+    return <ProfitCxcStandaloneView />;
   }
 
 

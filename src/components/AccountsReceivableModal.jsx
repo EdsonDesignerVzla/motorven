@@ -3,7 +3,8 @@ import {
     X, Search, FileSpreadsheet, AlertTriangle, CheckCircle, Clock,
     DollarSign, Users, Calendar, Filter, ArrowUpDown, ChevronDown,
     ChevronUp, Printer, ShieldAlert, TrendingDown, Eye, Trash2, Edit2,
-    Plus, Landmark, Wallet, Receipt, FileText, Check, RefreshCw, MessageSquare
+    Plus, Landmark, Wallet, Receipt, FileText, Check, RefreshCw, MessageSquare,
+    ExternalLink, Database
 } from 'lucide-react';
 import {
     REAL_PROFIT_CASH_DESKS,
@@ -1425,6 +1426,30 @@ export function AccountsReceivableModal({
                     >
                         <FileSpreadsheet size={16} color="#10b981" />
                         <span>Excel / CSV</span>
+                    </button>
+
+                    {/* Abrir Página en Blanco Externa (Tabla CxC Profit) */}
+                    <button
+                        type="button"
+                        onClick={() => window.open(`?view=profit-cxc&docType=${activeDocType}`, '_blank', 'noopener,noreferrer')}
+                        className="btn btn-secondary"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            padding: '0.55rem 1rem',
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                            background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.22), rgba(0, 43, 122, 0.38))',
+                            border: '1px solid rgba(56, 189, 248, 0.45)',
+                            color: '#ffffff',
+                            boxShadow: '0 2px 10px rgba(2, 132, 199, 0.25)'
+                        }}
+                        title="Abrir Tabla de Cuentas por Cobrar de Profit en una página en blanco independiente para leer, editar, guardar e imprimir"
+                    >
+                        <Database size={15} color="#38bdf8" />
+                        <span>Tabla CxC Profit</span>
+                        <ExternalLink size={14} color="#38bdf8" />
                     </button>
 
                     {onClose && (
