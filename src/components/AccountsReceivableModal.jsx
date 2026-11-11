@@ -127,7 +127,7 @@ export function AccountsReceivableModal({
     const [selectedClient, setSelectedClient] = useState('ALL');
     const [selectedSeller, setSelectedSeller] = useState('ALL');
     const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'VENCIDA' | 'POR_VENCER' | 'PAGADA'
-    const [sortField, setSortField] = useState('diasVencidos');
+    const [sortField, setSortField] = useState('fechaEmision');
     const [sortDirection, setSortDirection] = useState('desc');
     const [selectedInvoiceDetail, setSelectedInvoiceDetail] = useState(null);
     const [deletingKey, setDeletingKey] = useState(null);
@@ -513,17 +513,45 @@ export function AccountsReceivableModal({
             .sort((a, b) => b.diasVencidos - a.diasVencidos);
     }, [docsForActiveType]);
 
-    // Documentos filtrados por el buscador de la Parte A (N° Factura/Nota, Cliente, Vendedor, RIF)
+    const normalizeKeyword = (str) =>
+        String(str ?? '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim();
+
+    const buildDocSearchBlob = (doc) =>
+        normalizeKeyword([
+            doc.factura,
+            `#${doc.factura}`,
+            doc.factNum,
+            doc.cliente,
+            doc.rif,
+            String(doc.rif || '').replace(/[-.\s]/g, ''),
+            doc.vendedorId,
+            doc.vendedorNombre,
+            doc.fechaEmisionIso,
+            formatDateShort(doc.fechaEmision),
+            doc.fechaVencimientoIso,
+            formatDateShort(doc.fechaVencimiento),
+            `${doc.diasVencidos} dias`,
+            `${doc.diasCredito} dias`,
+            Number(doc.montoFacturaUsd || 0).toFixed(2),
+            Number(doc.montoFacturaUsd || 0).toFixed(2).replace('.', ','),
+            Number(doc.abonosUsd || 0).toFixed(2),
+            Number(doc.restanteUsd || 0).toFixed(2),
+            Number(doc.restanteUsd || 0).toFixed(2).replace('.', ','),
+            doc.estado === 'VENCIDA' ? 'vencida vencido mora' : doc.estado === 'POR_VENCER' ? 'al dia por vencer' : 'pagada solvente',
+            doc.observaciones || ''
+        ].join(' '));
+
+    // Documentos filtrados por el buscador de la Parte A (Multi-palabra clave)
     const searchedPayableDocs = useMemo(() => {
-        const q = cobroDocSearch.trim().toLowerCase();
-        if (!q) return payableDocsForActiveType;
+        const tokens = normalizeKeyword(cobroDocSearch).split(/\s+/).filter(Boolean);
+        if (tokens.length === 0) return payableDocsForActiveType;
         return payableDocsForActiveType.filter(doc => {
-            const mFact = String(doc.factura || doc.factNum || '').toLowerCase().includes(q);
-            const mCli = String(doc.cliente || '').toLowerCase().includes(q);
-            const mVenId = String(doc.vendedorId || '').toLowerCase().includes(q);
-            const mVenNom = String(doc.vendedorNombre || '').toLowerCase().includes(q);
-            const mRif = String(doc.rif || '').toLowerCase().includes(q);
-            return mFact || mCli || mVenId || mVenNom || mRif;
+            const blob = buildDocSearchBlob(doc);
+            return tokens.every(t => blob.includes(t));
         });
     }, [payableDocsForActiveType, cobroDocSearch]);
 
@@ -565,14 +593,12 @@ export function AccountsReceivableModal({
 
     // Filtrado y Ordenamiento para la Parte B
     const filteredInvoices = useMemo(() => {
+        const tokens = normalizeKeyword(searchTerm).split(/\s+/).filter(Boolean);
         return docsForActiveType.filter(inv => {
-            const q = searchTerm.trim().toLowerCase();
-            const matchesSearch = !q ||
-                inv.cliente.toLowerCase().includes(q) ||
-                inv.rif.toLowerCase().includes(q) ||
-                String(inv.factura).toLowerCase().includes(q) ||
-                String(inv.vendedor).toLowerCase().includes(q) ||
-                String(inv.vendedorNombre).toLowerCase().includes(q);
+            const matchesSearch = tokens.length === 0 || (() => {
+                const blob = buildDocSearchBlob(inv);
+                return tokens.every(t => blob.includes(t));
+            })();
 
             const matchesClient = selectedClient === 'ALL' || inv.clienteId === selectedClient || inv.rif === selectedClient;
             const matchesSeller = selectedSeller === 'ALL' || inv.vendedorId === selectedSeller;
@@ -594,7 +620,7 @@ export function AccountsReceivableModal({
 
             if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
             if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-            return 0;
+            return String(b.factura).localeCompare(String(a.factura), 'es', { numeric: true });
         });
     }, [docsForActiveType, searchTerm, selectedClient, selectedSeller, statusFilter, sortField, sortDirection]);
 
@@ -1948,12 +1974,35 @@ export function AccountsReceivableModal({
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 className="input-modern"
-                                placeholder={`Buscar por vendedor, ${isNotaEntregaTab ? 'nota' : 'factura'}, RIF o cliente...`}
+                                placeholder={`Buscar por cualquier palabra clave (vendedor, ${isNotaEntregaTab ? 'nota' : 'factura'}, RIF, cliente, fecha, monto)...`}
                                 style={{ width: '100%', paddingLeft: '2.4rem', fontSize: '0.85rem' }}
                             />
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                            {/* Selector de Orden por Fecha / Campo */}
+                            <select
+                                value={`${sortField}:${sortDirection}`}
+                                onChange={(e) => {
+                                    const [f, d] = String(e.target.value).split(':');
+                                    if (f && d) {
+                                        setSortField(f);
+                                        setSortDirection(d);
+                                    }
+                                }}
+                                className="select-modern"
+                                style={{ padding: '0.55rem 0.85rem', fontSize: '0.82rem' }}
+                                title="Ordenar documentos por fecha de mayor a menor o menor a mayor"
+                            >
+                                <option value="fechaEmision:desc">Fecha Emisión: Mayor a Menor (Más Recientes)</option>
+                                <option value="fechaEmision:asc">Fecha Emisión: Menor a Mayor (Más Antiguas)</option>
+                                <option value="fechaVencimiento:desc">Fecha Venc.: Mayor a Menor</option>
+                                <option value="fechaVencimiento:asc">Fecha Venc.: Menor a Mayor</option>
+                                <option value="diasVencidos:desc">Días Vencido: Mayor a Menor</option>
+                                <option value="restanteUsd:desc">Saldo Restante: Mayor a Menor</option>
+                                <option value="factura:desc">N° Documento: Mayor a Menor</option>
+                            </select>
+
                             {/* Filtro Vendedor */}
                             <select
                                 value={selectedSeller}

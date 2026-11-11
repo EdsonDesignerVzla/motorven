@@ -12,7 +12,11 @@ import {
   Database,
   FileText,
   ArrowUpDown,
-  Check
+  ArrowDown,
+  ArrowUp,
+  Check,
+  X,
+  Calendar
 } from 'lucide-react';
 import {
   REAL_CONFIG,
@@ -48,6 +52,28 @@ const FORMA_PAGO_DIAS = {
   '06': 45,
   '07': 60
 };
+
+const MESES_ES = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre'
+];
+
+const normalizeSearchText = (str) =>
+  String(str ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 
 const getTodayIso = () => new Date().toISOString().split('T')[0];
 
@@ -115,7 +141,7 @@ export default function ProfitCxcStandaloneView() {
   const [statusBanner, setStatusBanner] = useState(null);
   const [lastSyncTime, setLastSyncTime] = useState(() => new Date().toLocaleTimeString('es-VE'));
 
-  // Filtros
+  // Filtros y Ordenamiento (Por defecto: Fecha de Emisión de Mayor a Menor)
   const [docTypeFilter, setDocTypeFilter] = useState(() => {
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('docType');
@@ -126,8 +152,10 @@ export default function ProfitCxcStandaloneView() {
   const [statusFilter, setStatusFilter] = useState('PENDIENTES'); // 'PENDIENTES' | 'VENCIDA' | 'POR_VENCER' | 'PAGADA' | 'ALL'
   const [sellerFilter, setSellerFilter] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState('diasVencidos');
-  const [sortDirection, setSortDirection] = useState('desc');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortField, setSortField] = useState('fechaEmision');
+  const [sortDirection, setSortDirection] = useState('desc'); // 'desc' = Mayor a Menor (Más reciente primero)
 
   // Ediciones en memoria antes o durante el guardado (key -> campos editados)
   const [editedRows, setEditedRows] = useState({});
@@ -148,34 +176,37 @@ export default function ProfitCxcStandaloneView() {
     }, 4500);
   }, []);
 
-  const loadDatabaseData = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    try {
-      const [cfgData, invData, salesData, cliData, selData] = await Promise.all([
-        getSupabaseConfig().catch(() => null),
-        getSupabaseProfitInvoices().catch(() => null),
-        getSupabaseSales().catch(() => null),
-        getSupabaseClients().catch(() => null),
-        getSupabaseProfitSellers().catch(() => null)
-      ]);
-      if (cfgData) setConfig(cfgData);
-      if (Array.isArray(invData) && invData.length > 0) setProfitInvoices(invData);
-      if (Array.isArray(salesData)) setSales(salesData);
-      if (Array.isArray(cliData) && cliData.length > 0) setClients(cliData);
-      if (Array.isArray(selData) && selData.length > 0) setSellers(selData);
-      setLastSyncTime(new Date().toLocaleTimeString('es-VE'));
-      if (!silent) {
-        showNotice('success', 'Datos de Cuentas por Cobrar leídos y sincronizados desde la base de datos Profit.');
+  const loadDatabaseData = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const [cfgData, invData, salesData, cliData, selData] = await Promise.all([
+          getSupabaseConfig().catch(() => null),
+          getSupabaseProfitInvoices().catch(() => null),
+          getSupabaseSales().catch(() => null),
+          getSupabaseClients().catch(() => null),
+          getSupabaseProfitSellers().catch(() => null)
+        ]);
+        if (cfgData) setConfig(cfgData);
+        if (Array.isArray(invData) && invData.length > 0) setProfitInvoices(invData);
+        if (Array.isArray(salesData)) setSales(salesData);
+        if (Array.isArray(cliData) && cliData.length > 0) setClients(cliData);
+        if (Array.isArray(selData) && selData.length > 0) setSellers(selData);
+        setLastSyncTime(new Date().toLocaleTimeString('es-VE'));
+        if (!silent) {
+          showNotice('success', 'Datos de Cuentas por Cobrar leídos y sincronizados desde la base de datos Profit.');
+        }
+      } catch (err) {
+        console.error('Error cargando CxC Profit:', err);
+        if (!silent) {
+          showNotice('error', 'Error leyendo la base de datos; mostrando respaldo activo.');
+        }
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } catch (err) {
-      console.error('Error cargando CxC Profit:', err);
-      if (!silent) {
-        showNotice('error', 'Error leyendo la base de datos; mostrando respaldo activo.');
-      }
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [showNotice]);
+    },
+    [showNotice]
+  );
 
   useEffect(() => {
     loadDatabaseData(false);
@@ -399,6 +430,60 @@ export default function ProfitCxcStandaloneView() {
         inv.vendedorNombre ||
         (isFullNameInId ? rawSellerId : sellerCatalog.get(sellerId) || sellerId || 'Oficina');
       const tasaDoc = Number(inv.tasa || tasaBcv) || tasaBcv;
+      const estado = restanteUsd <= 0.01 ? 'PAGADA' : diasVencidos > 0 ? 'VENCIDA' : 'POR_VENCER';
+
+      const emisionShort = formatDateShort(fechaEmisionDate);
+      const vencShort = formatDateShort(fechaVencDate);
+      const mesEmisionNombre = MESES_ES[fechaEmisionDate.getMonth()] || '';
+      const mesVencNombre = MESES_ES[fechaVencDate.getMonth()] || '';
+      const estadoKeywords =
+        estado === 'VENCIDA'
+          ? 'vencida vencido mora atrasada pendiente'
+          : estado === 'POR_VENCER'
+          ? 'al dia por vencer vigente pendiente'
+          : 'pagada pagado solvente cobrada';
+      const tipoKeywords =
+        tipoDoc === 'NOTA_ENTREGA'
+          ? 'nota de entrega ne n/e sin iva'
+          : 'factura fiscal seniat iva';
+      const rifClean = String(inv.clienteRif || clientObj?.rif || 'J-00000000-0');
+      const restBs = round2(restanteUsd * tasaBcv);
+
+      // Índice completo de palabras clave para búsqueda multicriterio
+      const searchIndex = normalizeSearchText(
+        [
+          sellerId,
+          sellerName,
+          factNum,
+          `#${factNum}`,
+          tipoDoc,
+          tipoKeywords,
+          rifClean,
+          rifClean.replace(/[-.\s]/g, ''),
+          inv.clienteNombre || clientObj?.name || 'Cliente General',
+          inv.clienteId || clientObj?.id || '',
+          fechaEmisionIso,
+          emisionShort,
+          mesEmisionNombre,
+          fechaVencIso,
+          vencShort,
+          mesVencNombre,
+          `${diasVencidos}`,
+          `${diasVencidos} dias`,
+          `${diasCredito}`,
+          `${diasCredito} dias`,
+          montoFacturaUsd.toFixed(2),
+          montoFacturaUsd.toFixed(2).replace('.', ','),
+          abonosUsd.toFixed(2),
+          abonosUsd.toFixed(2).replace('.', ','),
+          restanteUsd.toFixed(2),
+          restanteUsd.toFixed(2).replace('.', ','),
+          restBs.toFixed(2),
+          estado,
+          estadoKeywords,
+          inv.observaciones || ''
+        ].join(' ')
+      );
 
       processed.push({
         id: inv.id || `INV-${factNum}`,
@@ -410,7 +495,7 @@ export default function ProfitCxcStandaloneView() {
         vendedorDisplay: sellerName && sellerName !== sellerId ? `${sellerId} - ${sellerName}` : sellerId,
         clienteId: inv.clienteId || clientObj?.id || 'CLI-GEN',
         cliente: inv.clienteNombre || clientObj?.name || 'Cliente General',
-        rif: inv.clienteRif || clientObj?.rif || 'J-00000000-0',
+        rif: rifClean,
         fechaEmision: fechaEmisionDate,
         fechaEmisionIso,
         fechaVencimiento: fechaVencDate,
@@ -423,66 +508,116 @@ export default function ProfitCxcStandaloneView() {
         abonosUsd,
         restanteUsd,
         tasa: tasaDoc,
-        estado: restanteUsd <= 0.01 ? 'PAGADA' : diasVencidos > 0 ? 'VENCIDA' : 'POR_VENCER',
+        estado,
         observaciones: inv.observaciones || '',
         historialCobros: Array.isArray(inv.historialCobros) ? inv.historialCobros : [],
         _customCreated: Boolean(inv._customCreated),
-        _isPosDoc: isPosDoc
+        _isPosDoc: isPosDoc,
+        _searchIndex: searchIndex
       });
     });
 
     return processed;
   }, [profitInvoices, sales, clients, sellerCatalog, tasaBcv, localOverrides]);
 
-  // Filtrado y ordenamiento
+  // Obtener valores actuales de una fila (combinando fila base + edición en curso)
+  const getRowEffective = useCallback(
+    (row) => {
+      const draft = editedRows[row.factNum];
+      if (!draft) return row;
+      return { ...row, ...draft };
+    },
+    [editedRows]
+  );
+
+  // Filtrado por todas las palabras claves, rango de fechas y ordenamiento (Fecha de Mayor a Menor, etc.)
   const filteredRows = useMemo(() => {
+    const queryTokens = normalizeSearchText(searchTerm)
+      .split(/\s+/)
+      .filter(Boolean);
+
     return allDocuments
       .filter((doc) => {
-        if (docTypeFilter !== 'ALL' && doc.tipoDoc !== docTypeFilter) return false;
+        const eff = getRowEffective(doc);
+
+        if (docTypeFilter !== 'ALL' && eff.tipoDoc !== docTypeFilter) return false;
 
         if (statusFilter === 'PENDIENTES') {
           const hasEdit = Boolean(editedRows[doc.factNum]) || Boolean(localOverrides[doc.factNum]);
-          if (doc.restanteUsd <= 0.01 && !hasEdit && !doc._customCreated && !doc._isPosDoc) return false;
-        } else if (statusFilter !== 'ALL' && doc.estado !== statusFilter) {
+          if (eff.restanteUsd <= 0.01 && !hasEdit && !doc._customCreated && !doc._isPosDoc) return false;
+        } else if (statusFilter !== 'ALL' && eff.estado !== statusFilter) {
           return false;
         }
 
-        if (sellerFilter !== 'ALL' && doc.vendedorId !== sellerFilter) return false;
+        if (sellerFilter !== 'ALL' && eff.vendedorId !== sellerFilter) return false;
 
-        if (searchTerm.trim()) {
-          const q = searchTerm.trim().toLowerCase();
-          const match =
-            String(doc.factNum).toLowerCase().includes(q) ||
-            String(doc.cliente).toLowerCase().includes(q) ||
-            String(doc.rif).toLowerCase().includes(q) ||
-            String(doc.vendedorId).toLowerCase().includes(q) ||
-            String(doc.vendedorNombre).toLowerCase().includes(q) ||
-            String(doc.observaciones || '').toLowerCase().includes(q);
-          if (!match) return false;
+        // Filtro por rango de fecha de emisión (si el usuario especifica Desde / Hasta)
+        if (dateFrom && eff.fechaEmisionIso < dateFrom) return false;
+        if (dateTo && eff.fechaEmisionIso > dateTo) return false;
+
+        // Buscador multi-palabra clave: todas las palabras escritas deben coincidir en cualquier campo del documento
+        if (queryTokens.length > 0) {
+          const dynamicIndex = editedRows[doc.factNum]
+            ? normalizeSearchText(
+                `${doc._searchIndex} ${eff.vendedorId} ${eff.vendedorNombre} ${eff.factura} ${eff.rif} ${eff.cliente} ${eff.fechaEmisionIso} ${eff.fechaVencimientoIso} ${eff.montoFacturaUsd} ${eff.abonosUsd} ${eff.restanteUsd} ${eff.observaciones || ''}`
+              )
+            : doc._searchIndex;
+
+          const allMatch = queryTokens.every((token) => dynamicIndex.includes(token));
+          if (!allMatch) return false;
         }
+
         return true;
       })
       .sort((a, b) => {
-        let valA = a[sortField];
-        let valB = b[sortField];
-        if (valA instanceof Date) valA = valA.getTime();
-        if (valB instanceof Date) valB = valB.getTime();
+        const effA = getRowEffective(a);
+        const effB = getRowEffective(b);
+
+        let valA = effA[sortField];
+        let valB = effB[sortField];
+
+        if (sortField === 'fechaEmision') {
+          valA = parseDateSafe(effA.fechaEmisionIso).getTime();
+          valB = parseDateSafe(effB.fechaEmisionIso).getTime();
+        } else if (sortField === 'fechaVencimiento') {
+          valA = parseDateSafe(effA.fechaVencimientoIso).getTime();
+          valB = parseDateSafe(effB.fechaVencimientoIso).getTime();
+        } else if (valA instanceof Date) {
+          valA = valA.getTime();
+          valB = valB instanceof Date ? valB.getTime() : 0;
+        }
+
         if (typeof valA === 'string' && typeof valB === 'string') {
           return sortDirection === 'asc'
             ? valA.localeCompare(valB, 'es', { numeric: true })
             : valB.localeCompare(valA, 'es', { numeric: true });
         }
+
         if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
         if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-        return 0;
+        // Desempate por número de factura de mayor a menor
+        return String(effB.factura).localeCompare(String(effA.factura), 'es', { numeric: true });
       });
-  }, [allDocuments, docTypeFilter, statusFilter, sellerFilter, searchTerm, sortField, sortDirection, editedRows, localOverrides]);
+  }, [
+    allDocuments,
+    docTypeFilter,
+    statusFilter,
+    sellerFilter,
+    searchTerm,
+    dateFrom,
+    dateTo,
+    sortField,
+    sortDirection,
+    editedRows,
+    localOverrides,
+    getRowEffective
+  ]);
 
   // Resumen KPI
   const summaryMetrics = useMemo(() => {
-    const totalMontoFacturaUsd = round2(filteredRows.reduce((acc, r) => acc + r.montoFacturaUsd, 0));
-    const totalAbonosUsd = round2(filteredRows.reduce((acc, r) => acc + r.abonosUsd, 0));
-    const totalRestanteUsd = round2(filteredRows.reduce((acc, r) => acc + r.restanteUsd, 0));
+    const totalMontoFacturaUsd = round2(filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).montoFacturaUsd || 0), 0));
+    const totalAbonosUsd = round2(filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).abonosUsd || 0), 0));
+    const totalRestanteUsd = round2(filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).restanteUsd || 0), 0));
     const countVencidas = filteredRows.filter((r) => r.estado === 'VENCIDA').length;
     const countPorVencer = filteredRows.filter((r) => r.estado === 'POR_VENCER').length;
     return {
@@ -493,7 +628,7 @@ export default function ProfitCxcStandaloneView() {
       countVencidas,
       countPorVencer
     };
-  }, [filteredRows]);
+  }, [filteredRows, getRowEffective]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -504,11 +639,23 @@ export default function ProfitCxcStandaloneView() {
     }
   };
 
-  // Obtener valores actuales de una fila (combinando fila base + edición en curso)
-  const getRowEffective = (row) => {
-    const draft = editedRows[row.factNum];
-    if (!draft) return row;
-    return { ...row, ...draft };
+  const handleSortPresetChange = (val) => {
+    const [field, dir] = String(val).split(':');
+    if (field && dir) {
+      setSortField(field);
+      setSortDirection(dir);
+    }
+  };
+
+  const renderSortIcon = (field) => {
+    if (sortField !== field) {
+      return <ArrowUpDown size={12} style={{ verticalAlign: 'middle', opacity: 0.45 }} />;
+    }
+    return sortDirection === 'desc' ? (
+      <ArrowDown size={13} style={{ verticalAlign: 'middle', color: '#002b7a' }} />
+    ) : (
+      <ArrowUp size={13} style={{ verticalAlign: 'middle', color: '#002b7a' }} />
+    );
   };
 
   // Manejar cambio en cualquier celda editable
@@ -799,17 +946,22 @@ export default function ProfitCxcStandaloneView() {
   };
 
   const pendingChangesCount = Object.keys(editedRows).length;
+  const activeSortPreset = `${sortField}:${sortDirection}`;
 
   return (
-    <div className="profit-cxc-blank-page">
+    <div className="profit-cxc-blank-page" data-theme="light">
       <style>{`
         .profit-cxc-blank-page {
+          --bg-input: transparent;
+          --surface-input: #ffffff;
+          --text-primary: #0f172a;
+          color-scheme: light !important;
           min-height: 100vh;
           width: 100%;
-          background: #ffffff;
-          color: #0f172a;
+          background: #ffffff !important;
+          color: #0f172a !important;
           font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-          padding: 24px 28px;
+          padding: 22px 26px;
           box-sizing: border-box;
         }
         .profit-cxc-header {
@@ -824,25 +976,56 @@ export default function ProfitCxcStandaloneView() {
         }
         .profit-cxc-toolbar {
           display: flex;
-          flex-wrap: wrap;
+          flex-direction: column;
           gap: 10px;
-          align-items: center;
-          justify-content: space-between;
-          background: #f8fafc;
-          border: 1px solid #cbd5e1;
+          background: #f8fafc !important;
+          border: 1px solid #cbd5e1 !important;
           border-radius: 10px;
           padding: 12px 16px;
           margin-bottom: 16px;
         }
+        .profit-cxc-toolbar-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          align-items: center;
+          justify-content: space-between;
+        }
+        /* Forzar fondo claro y máxima legibilidad en buscador y selectores de barra de herramientas */
+        .profit-cxc-blank-page .profit-cxc-toolbar input,
+        .profit-cxc-blank-page .profit-cxc-toolbar select {
+          background: #ffffff !important;
+          background-color: #ffffff !important;
+          color: #0f172a !important;
+          border: 1px solid #94a3b8 !important;
+          box-shadow: none !important;
+          border-radius: 7px !important;
+          padding: 6px 10px !important;
+          font-size: 12.5px !important;
+          font-weight: 600 !important;
+          color-scheme: light !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-toolbar input::placeholder {
+          color: #64748b !important;
+          font-weight: 400 !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-toolbar input:focus,
+        .profit-cxc-blank-page .profit-cxc-toolbar select:focus {
+          background: #ffffff !important;
+          background-color: #ffffff !important;
+          color: #0f172a !important;
+          border-color: #0284c7 !important;
+          box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.18) !important;
+        }
         .profit-cxc-kpis {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
           gap: 12px;
-          margin-bottom: 18px;
+          margin-bottom: 16px;
         }
         .profit-cxc-kpi-card {
-          background: #ffffff;
-          border: 1px solid #cbd5e1;
+          background: #ffffff !important;
+          border: 1px solid #cbd5e1 !important;
           border-radius: 8px;
           padding: 10px 14px;
         }
@@ -851,63 +1034,102 @@ export default function ProfitCxcStandaloneView() {
           overflow-x: auto;
           border: 1px solid #94a3b8;
           border-radius: 8px;
-          background: #ffffff;
+          background: #ffffff !important;
+          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
         }
         .profit-cxc-table {
           width: 100%;
           border-collapse: collapse;
           font-size: 12.5px;
-          background: #ffffff;
-          color: #0f172a;
+          background: #ffffff !important;
+          color: #0f172a !important;
         }
         .profit-cxc-table th {
-          background: #f1f5f9;
-          color: #0f172a;
-          font-weight: 700;
+          background: #f1f5f9 !important;
+          color: #0f172a !important;
+          font-weight: 800;
           text-align: left;
-          padding: 9px 8px;
-          border-bottom: 2px solid #64748b;
+          padding: 10px 8px;
+          border-bottom: 2px solid #475569;
           border-right: 1px solid #cbd5e1;
           white-space: nowrap;
           user-select: none;
           cursor: pointer;
+          transition: background 0.15s;
+        }
+        .profit-cxc-table th:hover {
+          background: #e2e8f0 !important;
         }
         .profit-cxc-table td {
-          padding: 5px 6px;
+          padding: 4px 6px;
           border-bottom: 1px solid #cbd5e1;
           border-right: 1px solid #e2e8f0;
           vertical-align: middle;
+          background: inherit !important;
+          color: #0f172a !important;
+        }
+        .profit-cxc-table tbody tr {
+          background: #ffffff !important;
         }
         .profit-cxc-table tbody tr:nth-child(even) {
-          background: #f8fafc;
+          background: #f8fafc !important;
         }
         .profit-cxc-table tbody tr:hover {
-          background: #eff6ff;
+          background: #e0f2fe !important;
         }
         .profit-cxc-table tbody tr.row-dirty {
-          background: #fefce8 !important;
+          background: #fef9c3 !important;
         }
-        .profit-cxc-input {
-          width: 100%;
-          box-sizing: border-box;
-          border: 1px solid transparent;
-          background: transparent;
-          color: #0f172a;
-          font-size: 12.5px;
-          font-family: inherit;
-          padding: 4px 5px;
-          border-radius: 4px;
-          transition: border-color 0.15s, background 0.15s;
+        /* Forzar que los inputs y selects de la tabla se adapten al fondo de su celda y sean 100% legibles */
+        .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input,
+        .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input {
+          width: 100% !important;
+          box-sizing: border-box !important;
+          border: 1px solid transparent !important;
+          background: transparent !important;
+          background-color: transparent !important;
+          box-shadow: none !important;
+          color: #0f172a !important;
+          font-size: 12.5px !important;
+          font-family: inherit !important;
+          padding: 5px 6px !important;
+          border-radius: 5px !important;
+          color-scheme: light !important;
+          transition: border-color 0.15s, background-color 0.15s !important;
         }
-        .profit-cxc-input:hover {
-          border-color: #cbd5e1;
-          background: #ffffff;
+        .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input option {
+          background: #ffffff !important;
+          color: #0f172a !important;
         }
-        .profit-cxc-input:focus {
-          outline: none;
-          border-color: #0284c7;
-          background: #ffffff;
-          box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.15);
+        .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input:hover:not(:focus),
+        .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input:hover:not(:focus) {
+          border-color: #94a3b8 !important;
+          background: #ffffff !important;
+          background-color: #ffffff !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input:focus,
+        .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input:focus {
+          outline: none !important;
+          border-color: #0284c7 !important;
+          background: #ffffff !important;
+          background-color: #ffffff !important;
+          box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.22) !important;
+        }
+        /* Colores de texto legibles de alto contraste sobre el fondo claro */
+        .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input.text-navy {
+          color: #002b7a !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input.text-ne {
+          color: #b45309 !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input.text-fact {
+          color: #0369a1 !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input.text-danger {
+          color: #b91c1c !important;
+        }
+        .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input.text-success {
+          color: #047857 !important;
         }
         .profit-btn {
           display: inline-flex;
@@ -916,7 +1138,7 @@ export default function ProfitCxcStandaloneView() {
           padding: 7px 13px;
           border-radius: 7px;
           font-size: 13px;
-          font-weight: 600;
+          font-weight: 700;
           cursor: pointer;
           border: 1px solid #cbd5e1;
           background: #ffffff;
@@ -968,6 +1190,7 @@ export default function ProfitCxcStandaloneView() {
           .profit-cxc-table-wrap {
             border: 1px solid #000000 !important;
             overflow: visible !important;
+            box-shadow: none !important;
           }
           .profit-cxc-table th {
             background: #e2e8f0 !important;
@@ -981,7 +1204,8 @@ export default function ProfitCxcStandaloneView() {
             color: #000000 !important;
             padding: 4px 5px !important;
           }
-          .profit-cxc-input {
+          .profit-cxc-blank-page .profit-cxc-table input.profit-cxc-input,
+          .profit-cxc-blank-page .profit-cxc-table select.profit-cxc-input {
             border: none !important;
             padding: 0 !important;
             background: transparent !important;
@@ -999,10 +1223,10 @@ export default function ProfitCxcStandaloneView() {
               TABLA DE CUENTAS POR COBRAR (BASE DE DATOS PROFIT)
             </h1>
           </div>
-          <div style={{ fontSize: '13px', color: '#475569', marginTop: '4px' }}>
+          <div style={{ fontSize: '13px', color: '#334155', marginTop: '4px' }}>
             <strong>GRUPO MOTORVEN</strong> • RIF: {config?.rif || 'J-50185716-7'} • Tasa BCV:{' '}
             <strong>{formatBs(tasaBcv)}</strong> • Última lectura BD: <strong>{lastSyncTime}</strong> •{' '}
-            <span>{filteredRows.length} registros en vista</span>
+            <strong>{filteredRows.length} registros en vista</strong>
           </div>
         </div>
 
@@ -1127,191 +1351,249 @@ export default function ProfitCxcStandaloneView() {
       {/* RESUMEN DE TOTALES */}
       <div className="profit-cxc-kpis">
         <div className="profit-cxc-kpi-card" style={{ borderLeft: '4px solid #002b7a' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
             Total Monto Documentos
           </div>
           <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
             {formatUsd(summaryMetrics.totalMontoFacturaUsd)}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#475569' }}>
+          <div style={{ fontSize: '11.5px', color: '#334155' }}>
             {formatBs(summaryMetrics.totalMontoFacturaUsd * tasaBcv)}
           </div>
         </div>
 
         <div className="profit-cxc-kpi-card" style={{ borderLeft: '4px solid #059669' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
             Total Abonos Cobrados
           </div>
-          <div style={{ fontSize: '18px', fontWeight: 800, color: '#059669', marginTop: '2px' }}>
+          <div style={{ fontSize: '18px', fontWeight: 800, color: '#047857', marginTop: '2px' }}>
             {formatUsd(summaryMetrics.totalAbonosUsd)}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#475569' }}>
+          <div style={{ fontSize: '11.5px', color: '#334155' }}>
             {formatBs(summaryMetrics.totalAbonosUsd * tasaBcv)}
           </div>
         </div>
 
         <div className="profit-cxc-kpi-card" style={{ borderLeft: '4px solid #dc2626' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
             Total Saldo Restante por Cobrar
           </div>
-          <div style={{ fontSize: '18px', fontWeight: 800, color: '#dc2626', marginTop: '2px' }}>
+          <div style={{ fontSize: '18px', fontWeight: 800, color: '#b91c1c', marginTop: '2px' }}>
             {formatUsd(summaryMetrics.totalRestanteUsd)}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#475569' }}>
+          <div style={{ fontSize: '11.5px', color: '#334155' }}>
             {formatBs(summaryMetrics.totalRestanteUsd * tasaBcv)}
           </div>
         </div>
 
         <div className="profit-cxc-kpi-card" style={{ borderLeft: '4px solid #7c3aed' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
             Estado de Cartera
           </div>
           <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
-            <span style={{ color: '#dc2626' }}>{summaryMetrics.countVencidas} Vencidas</span> /{' '}
-            <span style={{ color: '#059669' }}>{summaryMetrics.countPorVencer} Al Día</span>
+            <span style={{ color: '#b91c1c' }}>{summaryMetrics.countVencidas} Vencidas</span> /{' '}
+            <span style={{ color: '#047857' }}>{summaryMetrics.countPorVencer} Al Día</span>
           </div>
-          <div style={{ fontSize: '11.5px', color: '#475569' }}>
+          <div style={{ fontSize: '11.5px', color: '#334155' }}>
             Total listados: {summaryMetrics.countTotal} documentos
           </div>
         </div>
       </div>
 
-      {/* BARRA DE FILTROS Y BÚSQUEDA (OCULTA AL IMPRIMIR) */}
+      {/* BARRA DE BÚSQUEDA MULTICRITERIO Y FILTROS DE FECHA / ESTADO (OCULTA AL IMPRIMIR) */}
       <div className="profit-cxc-toolbar no-print">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 280px', maxWidth: '420px' }}>
-          <Search size={16} color="#64748b" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar por factura, nota, RIF, cliente o vendedor..."
+        <div className="profit-cxc-toolbar-row">
+          {/* Buscador por todas las palabras claves */}
+          <div
             style={{
-              width: '100%',
-              padding: '7px 10px',
-              borderRadius: '6px',
-              border: '1px solid #cbd5e1',
-              fontSize: '13px',
-              background: '#ffffff',
-              color: '#0f172a'
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              flex: '1 1 340px',
+              position: 'relative'
             }}
-          />
+          >
+            <Search size={16} color="#002b7a" style={{ flexShrink: 0 }} />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Buscar por cualquier palabra clave (cliente, RIF, factura, vendedor, fecha, mes, monto, estado...)"
+              style={{ width: '100%' }}
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                style={{
+                  border: 'none',
+                  background: '#e2e8f0',
+                  color: '#0f172a',
+                  borderRadius: '50%',
+                  width: '22px',
+                  height: '22px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+                title="Limpiar búsqueda"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          {/* Selector directo de Orden por Fecha (Mayor a Menor / Menor a Mayor) */}
+          <label
+            style={{
+              fontSize: '12px',
+              fontWeight: 800,
+              color: '#0f172a',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            Ordenar por:
+            <select
+              value={activeSortPreset}
+              onChange={(e) => handleSortPresetChange(e.target.value)}
+            >
+              <option value="fechaEmision:desc">Fecha Emisión: Mayor a Menor (Más Recientes Primero)</option>
+              <option value="fechaEmision:asc">Fecha Emisión: Menor a Mayor (Más Antiguas Primero)</option>
+              <option value="fechaVencimiento:desc">Fecha Vencimiento: Mayor a Menor</option>
+              <option value="fechaVencimiento:asc">Fecha Vencimiento: Menor a Mayor</option>
+              <option value="diasVencidos:desc">Días de Vencido: Mayor a Menor</option>
+              <option value="diasVencidos:asc">Días de Vencido: Menor a Mayor</option>
+              <option value="restanteUsd:desc">Saldo Restante USD: Mayor a Menor</option>
+              <option value="restanteUsd:asc">Saldo Restante USD: Menor a Mayor</option>
+              <option value="montoFacturaUsd:desc">Monto Factura USD: Mayor a Menor</option>
+              <option value="factura:desc">N° Factura / Documento: Mayor a Menor</option>
+              <option value="factura:asc">N° Factura / Documento: Menor a Mayor</option>
+              <option value="cliente:asc">Nombre Cliente: A → Z</option>
+            </select>
+          </label>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            Tipo Doc:
-            <select
-              value={docTypeFilter}
-              onChange={(e) => setDocTypeFilter(e.target.value)}
-              style={{
-                padding: '6px 10px',
-                borderRadius: '6px',
-                border: '1px solid #cbd5e1',
-                fontSize: '12.5px',
-                background: '#ffffff',
-                color: '#0f172a',
-                fontWeight: 600
-              }}
-            >
-              <option value="ALL">Todos (Facturas + Notas de Entrega)</option>
-              <option value="FACTURA">Solo Facturas Fiscales (SENIAT)</option>
-              <option value="NOTA_ENTREGA">Solo Notas de Entrega (Sin IVA)</option>
-            </select>
-          </label>
+        <div className="profit-cxc-toolbar-row" style={{ borderTop: '1px solid #e2e8f0', paddingTop: '8px' }}>
+          {/* Filtro por Rango de Fechas */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <Calendar size={14} color="#002b7a" /> Filtrar Fecha Emisión:
+            </span>
+            <label style={{ fontSize: '12px', fontWeight: 600, color: '#334155', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              Desde:
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+            </label>
+            <label style={{ fontSize: '12px', fontWeight: 600, color: '#334155', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              Hasta:
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
+            </label>
+            {(dateFrom || dateTo) && (
+              <button
+                type="button"
+                className="profit-btn"
+                onClick={() => {
+                  setDateFrom('');
+                  setDateTo('');
+                }}
+                style={{ padding: '4px 8px', fontSize: '11.5px' }}
+              >
+                Limpiar Fechas
+              </button>
+            )}
+          </div>
 
-          <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            Vendedor:
-            <select
-              value={sellerFilter}
-              onChange={(e) => setSellerFilter(e.target.value)}
-              style={{
-                padding: '6px 10px',
-                borderRadius: '6px',
-                border: '1px solid #cbd5e1',
-                fontSize: '12.5px',
-                background: '#ffffff',
-                color: '#0f172a',
-                fontWeight: 600
-              }}
-            >
-              <option value="ALL">Todos los Vendedores</option>
-              {Array.from(new Set(allDocuments.map((d) => d.vendedorId)))
-                .sort()
-                .map((vId) => (
-                  <option key={vId} value={vId}>
-                    {vId} — {sellerCatalog.get(vId) || vId}
-                  </option>
-                ))}
-            </select>
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Tipo Doc:
+              <select value={docTypeFilter} onChange={(e) => setDocTypeFilter(e.target.value)}>
+                <option value="ALL">Todos (Facturas + Notas de Entrega)</option>
+                <option value="FACTURA">Solo Facturas Fiscales (SENIAT)</option>
+                <option value="NOTA_ENTREGA">Solo Notas de Entrega (Sin IVA)</option>
+              </select>
+            </label>
 
-          <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            Estado:
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              style={{
-                padding: '6px 10px',
-                borderRadius: '6px',
-                border: '1px solid #cbd5e1',
-                fontSize: '12.5px',
-                background: '#ffffff',
-                color: '#0f172a',
-                fontWeight: 600
-              }}
-            >
-              <option value="PENDIENTES">Pendientes por Cobrar</option>
-              <option value="VENCIDA">Solo Vencidas</option>
-              <option value="POR_VENCER">Solo Al Día (Por Vencer)</option>
-              <option value="PAGADA">Pagadas / Solventes</option>
-              <option value="ALL">Todos los Registros</option>
-            </select>
-          </label>
+            <label style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Vendedor:
+              <select value={sellerFilter} onChange={(e) => setSellerFilter(e.target.value)}>
+                <option value="ALL">Todos los Vendedores</option>
+                {Array.from(new Set(allDocuments.map((d) => d.vendedorId)))
+                  .sort()
+                  .map((vId) => (
+                    <option key={vId} value={vId}>
+                      {vId} — {sellerCatalog.get(vId) || vId}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            <label style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Estado:
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="PENDIENTES">Pendientes por Cobrar</option>
+                <option value="VENCIDA">Solo Vencidas</option>
+                <option value="POR_VENCER">Solo Al Día (Por Vencer)</option>
+                <option value="PAGADA">Pagadas / Solventes</option>
+                <option value="ALL">Todos los Registros</option>
+              </select>
+            </label>
+          </div>
         </div>
       </div>
 
-      {/* TABLA DE CUENTAS POR COBRAR DE PROFIT (EDITABLE, IMPRIMIBLE Y GUARDABLE) */}
+      {/* TABLA DE CUENTAS POR COBRAR DE PROFIT (FONDO CLARO ADAPTABLE Y 100% LEGIBLE) */}
       <div className="profit-cxc-table-wrap">
         <table className="profit-cxc-table">
           <thead>
             <tr>
-              <th onClick={() => handleSort('vendedorId')} style={{ width: '90px' }}>
-                Vendedor <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('vendedorId')} style={{ width: '78px' }}>
+                Vendedor {renderSortIcon('vendedorId')}
               </th>
               <th onClick={() => handleSort('factura')} style={{ width: '95px' }}>
-                Factura / Doc <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+                Factura / Doc {renderSortIcon('factura')}
               </th>
-              <th onClick={() => handleSort('tipoDoc')} style={{ width: '95px' }}>
-                Tipo <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('tipoDoc')} style={{ width: '115px' }}>
+                Tipo {renderSortIcon('tipoDoc')}
               </th>
-              <th onClick={() => handleSort('rif')} style={{ width: '115px' }}>
-                RIF <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('rif')} style={{ width: '120px' }}>
+                RIF {renderSortIcon('rif')}
               </th>
-              <th onClick={() => handleSort('cliente')} style={{ minWidth: '210px' }}>
-                Nombre Cliente <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('cliente')} style={{ minWidth: '220px' }}>
+                Nombre Cliente {renderSortIcon('cliente')}
               </th>
-              <th onClick={() => handleSort('fechaEmision')} style={{ width: '115px' }}>
-                Fecha Emisión <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('fechaEmision')} style={{ width: '128px' }}>
+                Fecha Emisión {renderSortIcon('fechaEmision')}
               </th>
-              <th onClick={() => handleSort('fechaVencimiento')} style={{ width: '115px' }}>
-                Fecha Venc. <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('fechaVencimiento')} style={{ width: '128px' }}>
+                Fecha Venc. {renderSortIcon('fechaVencimiento')}
               </th>
-              <th onClick={() => handleSort('diasVencidos')} style={{ width: '85px', textAlign: 'center' }}>
-                Días Venc. <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('diasVencidos')} style={{ width: '88px', textAlign: 'center' }}>
+                Días Venc. {renderSortIcon('diasVencidos')}
               </th>
-              <th onClick={() => handleSort('diasCredito')} style={{ width: '80px', textAlign: 'center' }}>
-                Días Créd. <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+              <th onClick={() => handleSort('diasCredito')} style={{ width: '82px', textAlign: 'center' }}>
+                Días Créd. {renderSortIcon('diasCredito')}
               </th>
               <th onClick={() => handleSort('montoFacturaUsd')} style={{ width: '115px', textAlign: 'right' }}>
-                Monto (USD) <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+                Monto (USD) {renderSortIcon('montoFacturaUsd')}
               </th>
               <th onClick={() => handleSort('abonosUsd')} style={{ width: '110px', textAlign: 'right' }}>
-                Abonos (USD) <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+                Abonos (USD) {renderSortIcon('abonosUsd')}
               </th>
               <th onClick={() => handleSort('restanteUsd')} style={{ width: '115px', textAlign: 'right' }}>
-                Restante (USD) <ArrowUpDown size={11} style={{ verticalAlign: 'middle' }} />
+                Restante (USD) {renderSortIcon('restanteUsd')}
               </th>
-              <th style={{ width: '125px', textAlign: 'right' }}>Equiv. Restante (Bs)</th>
+              <th style={{ width: '130px', textAlign: 'right' }}>Equiv. Restante (Bs)</th>
               <th className="no-print" style={{ width: '115px', textAlign: 'center' }}>
                 Acciones
               </th>
@@ -1320,8 +1602,8 @@ export default function ProfitCxcStandaloneView() {
           <tbody>
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan="14" style={{ padding: '32px', textAlign: 'center', color: '#64748b', fontSize: '14px' }}>
-                  No se encontraron registros de Cuentas por Cobrar con los filtros seleccionados.
+                <td colSpan="14" style={{ padding: '32px', textAlign: 'center', color: '#475569', fontSize: '14px' }}>
+                  No se encontraron registros de Cuentas por Cobrar con las palabras claves o filtros seleccionados.
                 </td>
               </tr>
             ) : (
@@ -1329,16 +1611,17 @@ export default function ProfitCxcStandaloneView() {
                 const eff = getRowEffective(row);
                 const isDirty = Boolean(editedRows[row.factNum]);
                 const isSavingThis = savingRowKey === row.factNum;
+                const isOverdue = Number(eff.diasVencidos) > 0 && Number(eff.restanteUsd) > 0.01;
                 return (
                   <tr key={row.id || row.factNum} className={isDirty ? 'row-dirty' : ''}>
                     {/* 1. Vendedor */}
                     <td>
                       <input
                         type="text"
-                        className="profit-cxc-input"
+                        className="profit-cxc-input text-navy"
                         value={eff.vendedorId}
                         onChange={(e) => handleCellChange(row, 'vendedorId', e.target.value)}
-                        style={{ fontWeight: 700, width: '52px' }}
+                        style={{ fontWeight: 800, textAlign: 'center' }}
                         title={eff.vendedorNombre}
                       />
                     </td>
@@ -1347,24 +1630,20 @@ export default function ProfitCxcStandaloneView() {
                     <td>
                       <input
                         type="text"
-                        className="profit-cxc-input"
+                        className="profit-cxc-input text-navy"
                         value={eff.factura}
                         onChange={(e) => handleCellChange(row, 'factura', e.target.value)}
-                        style={{ fontWeight: 700, color: '#002b7a' }}
+                        style={{ fontWeight: 800 }}
                       />
                     </td>
 
                     {/* 3. Tipo Doc */}
                     <td>
                       <select
-                        className="profit-cxc-input"
+                        className={`profit-cxc-input ${eff.tipoDoc === 'NOTA_ENTREGA' ? 'text-ne' : 'text-fact'}`}
                         value={eff.tipoDoc}
                         onChange={(e) => handleCellChange(row, 'tipoDoc', e.target.value)}
-                        style={{
-                          fontWeight: 600,
-                          fontSize: '11.5px',
-                          color: eff.tipoDoc === 'NOTA_ENTREGA' ? '#b45309' : '#0369a1'
-                        }}
+                        style={{ fontWeight: 700, fontSize: '11.5px' }}
                       >
                         <option value="FACTURA">FACTURA</option>
                         <option value="NOTA_ENTREGA">NOTA ENTREGA</option>
@@ -1378,7 +1657,7 @@ export default function ProfitCxcStandaloneView() {
                         className="profit-cxc-input"
                         value={eff.rif}
                         onChange={(e) => handleCellChange(row, 'rif', e.target.value)}
-                        style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                        style={{ fontFamily: 'monospace', fontWeight: 600 }}
                       />
                     </td>
 
@@ -1389,7 +1668,7 @@ export default function ProfitCxcStandaloneView() {
                         className="profit-cxc-input"
                         value={eff.cliente}
                         onChange={(e) => handleCellChange(row, 'cliente', e.target.value)}
-                        style={{ fontWeight: 600 }}
+                        style={{ fontWeight: 700 }}
                       />
                     </td>
 
@@ -1400,6 +1679,7 @@ export default function ProfitCxcStandaloneView() {
                         className="profit-cxc-input"
                         value={eff.fechaEmisionIso}
                         onChange={(e) => handleCellChange(row, 'fechaEmisionIso', e.target.value)}
+                        style={{ fontWeight: 600 }}
                       />
                     </td>
 
@@ -1410,6 +1690,7 @@ export default function ProfitCxcStandaloneView() {
                         className="profit-cxc-input"
                         value={eff.fechaVencimientoIso}
                         onChange={(e) => handleCellChange(row, 'fechaVencimientoIso', e.target.value)}
+                        style={{ fontWeight: 600 }}
                       />
                     </td>
 
@@ -1417,14 +1698,10 @@ export default function ProfitCxcStandaloneView() {
                     <td style={{ textAlign: 'center' }}>
                       <input
                         type="number"
-                        className="profit-cxc-input"
+                        className={`profit-cxc-input ${isOverdue ? 'text-danger' : 'text-success'}`}
                         value={eff.diasVencidos}
                         onChange={(e) => handleCellChange(row, 'diasVencidos', Number(e.target.value || 0))}
-                        style={{
-                          textAlign: 'center',
-                          fontWeight: 700,
-                          color: eff.diasVencidos > 0 && eff.restanteUsd > 0.01 ? '#dc2626' : '#059669'
-                        }}
+                        style={{ textAlign: 'center', fontWeight: 800 }}
                       />
                     </td>
 
@@ -1435,7 +1712,7 @@ export default function ProfitCxcStandaloneView() {
                         className="profit-cxc-input"
                         value={eff.diasCredito}
                         onChange={(e) => handleCellChange(row, 'diasCredito', Number(e.target.value || 0))}
-                        style={{ textAlign: 'center' }}
+                        style={{ textAlign: 'center', fontWeight: 600 }}
                       />
                     </td>
 
@@ -1447,7 +1724,7 @@ export default function ProfitCxcStandaloneView() {
                         className="profit-cxc-input"
                         value={eff.montoFacturaUsd}
                         onChange={(e) => handleCellChange(row, 'montoFacturaUsd', e.target.value)}
-                        style={{ textAlign: 'right', fontWeight: 700 }}
+                        style={{ textAlign: 'right', fontWeight: 800 }}
                       />
                     </td>
 
@@ -1456,10 +1733,10 @@ export default function ProfitCxcStandaloneView() {
                       <input
                         type="number"
                         step="0.01"
-                        className="profit-cxc-input"
+                        className="profit-cxc-input text-success"
                         value={eff.abonosUsd}
                         onChange={(e) => handleCellChange(row, 'abonosUsd', e.target.value)}
-                        style={{ textAlign: 'right', fontWeight: 700, color: '#059669' }}
+                        style={{ textAlign: 'right', fontWeight: 800 }}
                       />
                     </td>
 
@@ -1468,14 +1745,10 @@ export default function ProfitCxcStandaloneView() {
                       <input
                         type="number"
                         step="0.01"
-                        className="profit-cxc-input"
+                        className={`profit-cxc-input ${Number(eff.restanteUsd) > 0.01 ? 'text-danger' : 'text-navy'}`}
                         value={eff.restanteUsd}
                         onChange={(e) => handleCellChange(row, 'restanteUsd', e.target.value)}
-                        style={{
-                          textAlign: 'right',
-                          fontWeight: 800,
-                          color: Number(eff.restanteUsd) > 0.01 ? '#dc2626' : '#0284c7'
-                        }}
+                        style={{ textAlign: 'right', fontWeight: 800 }}
                       />
                     </td>
 
@@ -1485,7 +1758,8 @@ export default function ProfitCxcStandaloneView() {
                         textAlign: 'right',
                         fontFamily: 'monospace',
                         fontSize: '12px',
-                        color: '#334155',
+                        fontWeight: 700,
+                        color: '#1e293b',
                         whiteSpace: 'nowrap',
                         paddingRight: '8px'
                       }}
@@ -1505,8 +1779,8 @@ export default function ProfitCxcStandaloneView() {
                             borderRadius: '5px',
                             border: '1px solid',
                             borderColor: isDirty ? '#059669' : '#cbd5e1',
-                            background: isDirty ? '#059669' : '#f8fafc',
-                            color: isDirty ? '#ffffff' : '#334155',
+                            background: isDirty ? '#059669' : '#ffffff',
+                            color: isDirty ? '#ffffff' : '#0f172a',
                             fontSize: '11.5px',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -1547,16 +1821,16 @@ export default function ProfitCxcStandaloneView() {
           {filteredRows.length > 0 && (
             <tfoot>
               <tr style={{ background: '#f1f5f9', fontWeight: 800, borderTop: '2px solid #0f172a' }}>
-                <td colSpan="9" style={{ padding: '10px 8px', textAlign: 'right', textTransform: 'uppercase' }}>
+                <td colSpan="9" style={{ padding: '10px 8px', textAlign: 'right', textTransform: 'uppercase', color: '#0f172a' }}>
                   Totales ({filteredRows.length} documentos):
                 </td>
                 <td style={{ padding: '10px 8px', textAlign: 'right', color: '#0f172a' }}>
                   {formatUsd(summaryMetrics.totalMontoFacturaUsd)}
                 </td>
-                <td style={{ padding: '10px 8px', textAlign: 'right', color: '#059669' }}>
+                <td style={{ padding: '10px 8px', textAlign: 'right', color: '#047857' }}>
                   {formatUsd(summaryMetrics.totalAbonosUsd)}
                 </td>
-                <td style={{ padding: '10px 8px', textAlign: 'right', color: '#dc2626' }}>
+                <td style={{ padding: '10px 8px', textAlign: 'right', color: '#b91c1c' }}>
                   {formatUsd(summaryMetrics.totalRestanteUsd)}
                 </td>
                 <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'monospace', color: '#0f172a' }}>
