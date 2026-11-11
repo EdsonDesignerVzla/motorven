@@ -34,13 +34,39 @@ const FORMA_PAGO_DIAS = {
     '07': 60
 };
 
-const getTodayIso = () => new Date().toISOString().split('T')[0];
+const SPANISH_MONTHS = [
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+];
+
+const getTodayIso = () => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+};
 
 const parseDateSafe = (dateStr) => {
     if (!dateStr) return new Date();
+    if (dateStr instanceof Date) {
+        return isNaN(dateStr.getTime()) ? new Date() : dateStr;
+    }
     const s = String(dateStr).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-        const [y, m, d] = s.split('-').map(Number);
+    // Capturar YYYY-MM-DD al inicio (incluyendo timestamps ISO como 2026-10-23T00:00:00.000Z)
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+        const y = Number(isoMatch[1]);
+        const m = Number(isoMatch[2]);
+        const d = Number(isoMatch[3]);
+        return new Date(y, m - 1, d, 12, 0, 0);
+    }
+    // Capturar DD/MM/YYYY o DD-MM-YYYY
+    const dmyMatch = s.match(/^(\d{2})[/-](\d{2})[/-](\d{4})/);
+    if (dmyMatch) {
+        const d = Number(dmyMatch[1]);
+        const m = Number(dmyMatch[2]);
+        const y = Number(dmyMatch[3]);
         return new Date(y, m - 1, d, 12, 0, 0);
     }
     const parsed = new Date(s);
@@ -51,13 +77,20 @@ const formatDateShort = (dateInput) => {
     if (!dateInput) return '—';
     const d = dateInput instanceof Date ? dateInput : parseDateSafe(dateInput);
     if (isNaN(d.getTime())) return '—';
-    return d.toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
 };
 
 const toIsoDateInput = (dateInput) => {
     if (!dateInput) return getTodayIso();
-    if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dateInput)) {
-        return dateInput.slice(0, 10);
+    if (typeof dateInput === 'string') {
+        const s = dateInput.trim();
+        const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+        const dmyMatch = s.match(/^(\d{2})[/-](\d{2})[/-](\d{4})/);
+        if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
     }
     const d = dateInput instanceof Date ? dateInput : parseDateSafe(dateInput);
     if (isNaN(d.getTime())) return getTodayIso();
@@ -65,6 +98,70 @@ const toIsoDateInput = (dateInput) => {
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+};
+
+const normalizeTextSimple = (str) =>
+    String(str ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+
+const canonicalDocLookupKey = (rawKey, tipoDoc = 'FACTURA') => {
+    const clean = String(rawKey || '').trim().toUpperCase();
+    if (!clean) return '';
+    if (tipoDoc === 'NOTA_ENTREGA' || clean.startsWith('NE')) {
+        const numPart = clean.replace(/^NE-?/i, '').replace(/^0+(?=\d)/, '');
+        return `NE:${numPart}`;
+    }
+    const numPart = clean.replace(/^(FAC-|FACT-)/i, '').replace(/^0+(?=\d)/, '');
+    return `FAC:${numPart}`;
+};
+
+const resolveSellerFromCatalog = (rawId, rawName, sellerCatalog) => {
+    const idTrim = String(rawId || '').trim().toUpperCase();
+    const nameTrim = String(rawName || '').trim();
+
+    // 1. Si el código existe directamente en el catálogo y no es genérico 'OF' cuando hay nombre de otro vendedor
+    if (idTrim && idTrim !== 'OF' && sellerCatalog.has(idTrim)) {
+        return {
+            sellerId: idTrim,
+            sellerName: sellerCatalog.get(idTrim) || nameTrim || idTrim
+        };
+    }
+
+    // 2. Buscar coincidencia por nombre en el catálogo (ej. "Katherine Becerra" -> "KB")
+    const candidates = [nameTrim, idTrim].filter(Boolean);
+    for (const candidate of candidates) {
+        const normCandidate = normalizeTextSimple(candidate);
+        if (!normCandidate || normCandidate === 'of' || normCandidate === 'oficina') continue;
+        for (const [catId, catName] of sellerCatalog.entries()) {
+            const normCatName = normalizeTextSimple(catName);
+            if (
+                normCatName === normCandidate ||
+                (normCandidate.length >= 4 && normCatName.includes(normCandidate)) ||
+                (normCatName.length >= 4 && normCandidate.includes(normCatName))
+            ) {
+                return {
+                    sellerId: catId,
+                    sellerName: catName
+                };
+            }
+        }
+    }
+
+    // 3. Si el ID es un código corto válido (ej. KB, CM, OF)
+    if (idTrim && idTrim.length <= 5 && !idTrim.includes(' ')) {
+        return {
+            sellerId: idTrim,
+            sellerName: sellerCatalog.get(idTrim) || nameTrim || (idTrim === 'OF' ? 'Oficina' : idTrim)
+        };
+    }
+
+    return {
+        sellerId: 'OF',
+        sellerName: nameTrim || sellerCatalog.get('OF') || 'Oficina'
+    };
 };
 
 const inferDocType = (raw) => {
@@ -215,14 +312,19 @@ export function AccountsReceivableModal({
         }
     }, [catalogCuentas, cobroCuentaKey]);
 
-    // Catálogo de Vendedores
+    // Catálogo de Vendedores (incluyendo siempre la base completa de vendedores Profit)
     const sellerCatalog = useMemo(() => {
-        const base = Array.isArray(sellers) && sellers.length > 0
-            ? sellers
-            : (Array.isArray(profitSellers) && profitSellers.length > 0 ? profitSellers : REAL_PROFIT_SELLERS);
         const map = new Map();
-        base.forEach(s => {
-            const id = String(s.id || s.co_ven || '').trim();
+        (REAL_PROFIT_SELLERS || []).forEach(s => {
+            const id = String(s.id || s.co_ven || '').trim().toUpperCase();
+            if (id) map.set(id, s.name || s.ven_des || id);
+        });
+        (profitSellers || []).forEach(s => {
+            const id = String(s.id || s.co_ven || '').trim().toUpperCase();
+            if (id) map.set(id, s.name || s.ven_des || id);
+        });
+        (sellers || []).forEach(s => {
+            const id = String(s.id || s.co_ven || '').trim().toUpperCase();
             if (id) map.set(id, s.name || s.ven_des || id);
         });
         return map;
@@ -235,6 +337,7 @@ export function AccountsReceivableModal({
         today.setHours(0, 0, 0, 0);
 
         const rawMap = new Map();
+        const canonicalKeyToRawKey = new Map();
         const effectiveSales = Array.isArray(invoices) && invoices.length > 0 ? invoices : (Array.isArray(sales) ? sales : []);
 
         // Leer documentos eliminados de forma persistente desde localStorage (con limpieza única de colisiones previas)
@@ -245,8 +348,11 @@ export function AccountsReceivableModal({
         (profitInvoices || []).forEach(inv => {
             const key = String(inv.factNum || inv.id || '').trim();
             if (!key || isDocDeleted(inv)) return;
+            const docType = inferDocType(inv);
+            const cKey = canonicalDocLookupKey(key, docType);
             const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
             rawMap.set(key, { ...inv, _source: isPosFormat ? 'POS' : 'PROFIT', _isPosSale: isPosFormat });
+            if (cKey) canonicalKeyToRawKey.set(cKey, key);
         });
 
         // 2. Cargar todas las Facturas Fiscales y Notas de Entrega emitidas en POS (sales/invoices)
@@ -257,6 +363,9 @@ export function AccountsReceivableModal({
             const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
             const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
             if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
+
+            const cKey = canonicalDocLookupKey(key, saleDocType);
+            const existingRawKey = rawMap.has(key) ? key : (cKey ? canonicalKeyToRawKey.get(cKey) : null);
 
             const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
             const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
@@ -280,7 +389,13 @@ export function AccountsReceivableModal({
                 : 0;
             const effectiveSaldo = Math.max(0, round2(effectiveTotNeto - effectiveAbonos));
 
-            if (!rawMap.has(key)) {
+            const resolvedSaleSeller = resolveSellerFromCatalog(
+                sale.vendedorId,
+                sale.vendedor || sale.vendedorNombre,
+                sellerCatalog
+            );
+
+            if (!existingRawKey) {
                 rawMap.set(key, {
                     id: sale.id || `DOC-${key}`,
                     factNum: key,
@@ -290,8 +405,8 @@ export function AccountsReceivableModal({
                     clienteId: sale.clienteId || '',
                     clienteNombre: sale.cliente || sale.clienteNombre || 'Cliente General',
                     clienteRif: sale.rif || sale.clienteRif || 'N/A',
-                    vendedorId: sale.vendedorId || 'OF',
-                    vendedorNombre: sale.vendedor || sale.vendedorNombre || '',
+                    vendedorId: resolvedSaleSeller.sellerId,
+                    vendedorNombre: resolvedSaleSeller.sellerName,
                     formaPago: Number(sale.diasCredito || 0) > 0 ? '03' : '01',
                     diasCredito: sale.diasCredito !== undefined ? Number(sale.diasCredito) : 0,
                     diasVencidoCustom: sale.diasVencidoCustom !== undefined ? sale.diasVencidoCustom : null,
@@ -309,13 +424,20 @@ export function AccountsReceivableModal({
                     _source: 'POS',
                     _isPosSale: true
                 });
+                if (cKey) canonicalKeyToRawKey.set(cKey, key);
             } else {
-                const existing = rawMap.get(key);
-                rawMap.set(key, {
+                const existing = rawMap.get(existingRawKey);
+                const resolvedMergedSeller = resolveSellerFromCatalog(
+                    existing.vendedorId && existing.vendedorId !== 'OF' ? existing.vendedorId : resolvedSaleSeller.sellerId,
+                    existing.vendedorNombre || resolvedSaleSeller.sellerName,
+                    sellerCatalog
+                );
+                rawMap.set(existingRawKey, {
                     ...existing,
                     fechaEmision: existing.fechaEmision || sale.fechaEmision || sale.fecha,
-                    vendedorNombre: existing.vendedorNombre || sale.vendedor || sale.vendedorNombre || '',
-                    _source: 'POS',
+                    vendedorId: resolvedMergedSeller.sellerId,
+                    vendedorNombre: resolvedMergedSeller.sellerName,
+                    _source: existing._source || 'POS',
                     _isPosSale: true
                 });
             }
@@ -388,11 +510,8 @@ export function AccountsReceivableModal({
             }
             const restanteUsd = round2(Math.max(0, montoFacturaUsd - abonosUsd));
 
-            // Visibilidad (las facturas emitidas en SIGNUM POS siempre son visibles en el listado)
             const hasSessionTouch = hasManualOverride || Boolean(inv._customCreated) || isPosDoc;
-            if (restanteUsd <= 0.01 && !hasSessionTouch && statusFilter !== 'PAGADA') {
-                return;
-            }
+            const isCarteraActiva = restanteUsd > 0.01 || hasSessionTouch;
 
             // Fechas de Emisión, Vencimiento, Días de Crédito y Días de Vencido
             const fechaEmisionDate = parseDateSafe(inv.fechaEmision || inv.fecha);
@@ -430,20 +549,27 @@ export function AccountsReceivableModal({
             vencMidnight.setHours(0, 0, 0, 0);
             const diffVencDays = Math.floor((today.getTime() - vencMidnight.getTime()) / (1000 * 60 * 60 * 24));
 
-            const diasVencidos = (inv.diasVencidoCustom !== undefined && inv.diasVencidoCustom !== null && inv.diasVencidoCustom !== '')
-                ? Number(inv.diasVencidoCustom)
-                : Math.max(0, diffVencDays);
+            const hasExplicitSessionCustomDays = localDocOverrides[factNum]?.diasVencidoCustom !== undefined &&
+                localDocOverrides[factNum]?.diasVencidoCustom !== null &&
+                localDocOverrides[factNum]?.diasVencidoCustom !== '';
 
-            // Datos de Cliente y Vendedor
+            const diasVencidos = hasExplicitSessionCustomDays
+                ? Number(localDocOverrides[factNum].diasVencidoCustom)
+                : (inv.diasVencidoCustom !== undefined && inv.diasVencidoCustom !== null && inv.diasVencidoCustom !== '' && Number(inv.diasVencidoCustom) > 0)
+                    ? Math.max(Number(inv.diasVencidoCustom), Math.max(0, diffVencDays))
+                    : Math.max(0, diffVencDays);
+
+            // Datos de Cliente y Vendedor (resolviendo código y nombre contra catálogo)
             const clientObj = clients.find(c =>
                 (inv.clienteId && c.id === inv.clienteId) ||
                 (inv.clienteRif && c.rif === inv.clienteRif) ||
                 (inv.clienteNombre && c.name?.toLowerCase() === inv.clienteNombre?.toLowerCase())
             );
-            const rawSellerId = String(inv.vendedorId || 'OF').trim();
-            const isFullNameInId = rawSellerId.length > 4 && rawSellerId.includes(' ');
-            const sellerId = isFullNameInId ? 'OF' : rawSellerId;
-            const sellerName = inv.vendedorNombre || (isFullNameInId ? rawSellerId : (sellerCatalog.get(sellerId) || sellerId || 'Oficina'));
+            const { sellerId, sellerName } = resolveSellerFromCatalog(
+                inv.vendedorId,
+                inv.vendedorNombre || inv.vendedor,
+                sellerCatalog
+            );
             const tasaDoc = Number(inv.tasa || tasaBcv) || tasaBcv;
 
             processed.push({
@@ -465,7 +591,7 @@ export function AccountsReceivableModal({
                 fechaVencimiento: fechaVencDate,
                 fechaVencimientoIso: fechaVencIso,
                 diasCredito: Number(diasCredito || 0),
-                diasVencidos: Number(diasVencidos || 0),
+                diasVencidos: restanteUsd <= 0.01 ? 0 : Number(diasVencidos || 0),
                 diasVencidoCustom: inv.diasVencidoCustom ?? null,
                 subtotalUsd: totBrutoUsd,
                 ivaUsd,
@@ -481,6 +607,7 @@ export function AccountsReceivableModal({
                 tasa: tasaDoc,
                 formaPago: inv.formaPago || (diasCredito === 0 ? '01' : '03'),
                 estado: restanteUsd <= 0.01 ? 'PAGADA' : (diasVencidos > 0 ? 'VENCIDA' : 'POR_VENCER'),
+                isCarteraActiva,
                 items: inv.items || [],
                 observaciones: inv.observaciones || '',
                 historialCobros: Array.isArray(inv.historialCobros) ? inv.historialCobros : []
@@ -488,23 +615,29 @@ export function AccountsReceivableModal({
         });
 
         return processed;
-    }, [isOpen, profitInvoices, invoices, sales, clients, sellerCatalog, tasaBcv, localDocOverrides, recentlyPaidKeys, statusFilter]);
+    }, [isOpen, profitInvoices, invoices, sales, clients, sellerCatalog, tasaBcv, localDocOverrides, recentlyPaidKeys]);
 
-    // Contadores para el selector superior
+    // Contadores para el selector superior (cartera activa por cobrar)
     const docTypeCounts = useMemo(() => {
         let facturas = 0;
         let notasEntrega = 0;
         allDocuments.forEach(d => {
+            if (!d.isCarteraActiva) return;
             if (d.tipoDoc === 'NOTA_ENTREGA') notasEntrega++;
             else facturas++;
         });
         return { facturas, notasEntrega };
     }, [allDocuments]);
 
-    // Documentos del tipo activo (FACTURA o NOTA_ENTREGA)
-    const docsForActiveType = useMemo(() => {
+    // Todos los documentos del tipo activo (incluyendo solventes históricos para la pestaña Solventes)
+    const allDocsForActiveType = useMemo(() => {
         return allDocuments.filter(doc => doc.tipoDoc === activeDocType);
     }, [allDocuments, activeDocType]);
+
+    // Documentos de cartera activa del tipo seleccionado (para Parte A y vista por defecto)
+    const docsForActiveType = useMemo(() => {
+        return allDocsForActiveType.filter(doc => doc.isCarteraActiva);
+    }, [allDocsForActiveType]);
 
     // Documentos pendientes seleccionables en Parte A
     const payableDocsForActiveType = useMemo(() => {
@@ -520,30 +653,47 @@ export function AccountsReceivableModal({
             .toLowerCase()
             .trim();
 
-    const buildDocSearchBlob = (doc) =>
-        normalizeKeyword([
+    const buildDocSearchBlob = (doc) => {
+        const emisDate = doc.fechaEmision instanceof Date ? doc.fechaEmision : parseDateSafe(doc.fechaEmisionIso);
+        const vencDate = doc.fechaVencimiento instanceof Date ? doc.fechaVencimiento : parseDateSafe(doc.fechaVencimientoIso);
+        const emisMonth = !isNaN(emisDate.getTime()) ? SPANISH_MONTHS[emisDate.getMonth()] || '' : '';
+        const vencMonth = !isNaN(vencDate.getTime()) ? SPANISH_MONTHS[vencDate.getMonth()] || '' : '';
+
+        return normalizeKeyword([
             doc.factura,
             `#${doc.factura}`,
+            String(doc.factura || '').replace(/^0+/, ''),
             doc.factNum,
             doc.cliente,
             doc.rif,
             String(doc.rif || '').replace(/[-.\s]/g, ''),
             doc.vendedorId,
             doc.vendedorNombre,
+            doc.vendedorDisplay,
             doc.fechaEmisionIso,
             formatDateShort(doc.fechaEmision),
+            emisMonth,
             doc.fechaVencimientoIso,
             formatDateShort(doc.fechaVencimiento),
+            vencMonth,
             `${doc.diasVencidos} dias`,
             `${doc.diasCredito} dias`,
             Number(doc.montoFacturaUsd || 0).toFixed(2),
             Number(doc.montoFacturaUsd || 0).toFixed(2).replace('.', ','),
             Number(doc.abonosUsd || 0).toFixed(2),
+            Number(doc.abonosUsd || 0).toFixed(2).replace('.', ','),
             Number(doc.restanteUsd || 0).toFixed(2),
             Number(doc.restanteUsd || 0).toFixed(2).replace('.', ','),
-            doc.estado === 'VENCIDA' ? 'vencida vencido mora' : doc.estado === 'POR_VENCER' ? 'al dia por vencer' : 'pagada solvente',
+            Number(doc.totalFacturaBs || 0).toFixed(2),
+            Number(doc.saldoPendienteBs || 0).toFixed(2),
+            doc.estado === 'VENCIDA'
+                ? 'vencida vencido vencidos mora atrasado'
+                : doc.estado === 'POR_VENCER'
+                    ? 'al dia por vencer vigente corriente'
+                    : 'pagada pagado solvente solventes cancelada',
             doc.observaciones || ''
         ].join(' '));
+    };
 
     // Documentos filtrados por el buscador de la Parte A (Multi-palabra clave)
     const searchedPayableDocs = useMemo(() => {
@@ -591,10 +741,70 @@ export function AccountsReceivableModal({
         }
     }, [activeDocType, payableDocsForActiveType.length]);
 
+    // Lista de vendedores disponibles con conteo de documentos para el filtro de Parte B
+    const sellerFilterOptions = useMemo(() => {
+        const sourcePool = statusFilter === 'PAGADA' ? allDocsForActiveType : docsForActiveType;
+        const counts = new Map();
+        sourcePool.forEach(d => {
+            const vId = d.vendedorId || 'OF';
+            counts.set(vId, (counts.get(vId) || 0) + 1);
+        });
+        const allIds = new Set([...counts.keys(), ...sellerCatalog.keys()]);
+        return Array.from(allIds)
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b, 'es'))
+            .map(vId => ({
+                id: vId,
+                name: sellerCatalog.get(vId) || vId,
+                count: counts.get(vId) || 0
+            }))
+            .filter(item => item.count > 0 || sellerCatalog.has(item.id));
+    }, [docsForActiveType, allDocsForActiveType, statusFilter, sellerCatalog]);
+
+    // Contadores en vivo para los botones de estado (Todos | Vencidos | Al Día | Solventes) respetando búsqueda y vendedor
+    const statusButtonCounts = useMemo(() => {
+        const tokens = normalizeKeyword(searchTerm).split(/\s+/).filter(Boolean);
+        const matchesBaseFilters = (inv) => {
+            const matchesSearch = tokens.length === 0 || (() => {
+                const blob = buildDocSearchBlob(inv);
+                return tokens.every(t => blob.includes(t));
+            })();
+            const matchesClient = selectedClient === 'ALL' || inv.clienteId === selectedClient || inv.rif === selectedClient;
+            const matchesSeller = selectedSeller === 'ALL' || inv.vendedorId === selectedSeller;
+            return matchesSearch && matchesClient && matchesSeller;
+        };
+
+        let allCount = 0;
+        let vencidaCount = 0;
+        let porVencerCount = 0;
+        let pagadaCount = 0;
+
+        allDocsForActiveType.forEach(inv => {
+            if (!matchesBaseFilters(inv)) return;
+            if (inv.estado === 'PAGADA') {
+                pagadaCount++;
+                if (inv.isCarteraActiva) allCount++;
+            } else if (inv.isCarteraActiva) {
+                allCount++;
+                if (inv.estado === 'VENCIDA') vencidaCount++;
+                else if (inv.estado === 'POR_VENCER') porVencerCount++;
+            }
+        });
+
+        return {
+            ALL: allCount,
+            VENCIDA: vencidaCount,
+            POR_VENCER: porVencerCount,
+            PAGADA: pagadaCount
+        };
+    }, [allDocsForActiveType, searchTerm, selectedClient, selectedSeller]);
+
     // Filtrado y Ordenamiento para la Parte B
     const filteredInvoices = useMemo(() => {
         const tokens = normalizeKeyword(searchTerm).split(/\s+/).filter(Boolean);
-        return docsForActiveType.filter(inv => {
+        const sourceDocs = statusFilter === 'PAGADA' ? allDocsForActiveType : docsForActiveType;
+
+        return sourceDocs.filter(inv => {
             const matchesSearch = tokens.length === 0 || (() => {
                 const blob = buildDocSearchBlob(inv);
                 return tokens.every(t => blob.includes(t));
@@ -602,10 +812,27 @@ export function AccountsReceivableModal({
 
             const matchesClient = selectedClient === 'ALL' || inv.clienteId === selectedClient || inv.rif === selectedClient;
             const matchesSeller = selectedSeller === 'ALL' || inv.vendedorId === selectedSeller;
-            const matchesStatus = statusFilter === 'ALL' || inv.estado === statusFilter;
+            const matchesStatus = statusFilter === 'ALL'
+                ? inv.isCarteraActiva
+                : inv.estado === statusFilter;
 
             return matchesSearch && matchesClient && matchesSeller && matchesStatus;
         }).sort((a, b) => {
+            // Ordenamiento cronológico exacto por Fecha de Emisión o Fecha de Vencimiento
+            if (sortField === 'fechaEmision' || sortField === 'fechaVencimiento') {
+                const isoKey = sortField === 'fechaEmision' ? 'fechaEmisionIso' : 'fechaVencimientoIso';
+                const isoA = String(a[isoKey] || '');
+                const isoB = String(b[isoKey] || '');
+                if (isoA !== isoB) {
+                    return sortDirection === 'asc'
+                        ? isoA.localeCompare(isoB)
+                        : isoB.localeCompare(isoA);
+                }
+                return sortDirection === 'asc'
+                    ? String(a.factura).localeCompare(String(b.factura), 'es', { numeric: true })
+                    : String(b.factura).localeCompare(String(a.factura), 'es', { numeric: true });
+            }
+
             let valA = a[sortField];
             let valB = b[sortField];
 
@@ -613,16 +840,20 @@ export function AccountsReceivableModal({
             if (valB instanceof Date) valB = valB.getTime();
 
             if (typeof valA === 'string' && typeof valB === 'string') {
-                return sortDirection === 'asc'
-                    ? valA.localeCompare(valB, 'es', { numeric: true })
-                    : valB.localeCompare(valA, 'es', { numeric: true });
+                const cmp = valA.localeCompare(valB, 'es', { numeric: true });
+                if (cmp !== 0) return sortDirection === 'asc' ? cmp : -cmp;
+            } else {
+                const numA = Number(valA ?? 0);
+                const numB = Number(valB ?? 0);
+                if (numA < numB) return sortDirection === 'asc' ? -1 : 1;
+                if (numA > numB) return sortDirection === 'asc' ? 1 : -1;
             }
 
-            if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-            if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-            return String(b.factura).localeCompare(String(a.factura), 'es', { numeric: true });
+            return sortDirection === 'asc'
+                ? String(a.factura).localeCompare(String(b.factura), 'es', { numeric: true })
+                : String(b.factura).localeCompare(String(a.factura), 'es', { numeric: true });
         });
-    }, [docsForActiveType, searchTerm, selectedClient, selectedSeller, statusFilter, sortField, sortDirection]);
+    }, [docsForActiveType, allDocsForActiveType, searchTerm, selectedClient, selectedSeller, statusFilter, sortField, sortDirection]);
 
     // Resumen de métricas
     const summaryMetrics = useMemo(() => {
@@ -1967,7 +2198,7 @@ export function AccountsReceivableModal({
 
                     {/* BARRA DE FILTROS Y BÚSQUEDA */}
                     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <div className="search-wrapper" style={{ flex: '1 1 280px' }}>
+                        <div className="search-wrapper" style={{ flex: '1 1 280px', position: 'relative' }}>
                             <Search size={16} className="search-icon" />
                             <input
                                 type="text"
@@ -1975,8 +2206,33 @@ export function AccountsReceivableModal({
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 className="input-modern"
                                 placeholder={`Buscar por cualquier palabra clave (vendedor, ${isNotaEntregaTab ? 'nota' : 'factura'}, RIF, cliente, fecha, monto)...`}
-                                style={{ width: '100%', paddingLeft: '2.4rem', fontSize: '0.85rem' }}
+                                style={{ width: '100%', paddingLeft: '2.4rem', paddingRight: searchTerm ? '2.2rem' : '0.85rem', fontSize: '0.85rem' }}
                             />
+                            {searchTerm && (
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchTerm('')}
+                                    title="Limpiar búsqueda"
+                                    style={{
+                                        position: 'absolute',
+                                        right: '0.6rem',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        background: 'rgba(255,255,255,0.08)',
+                                        border: 'none',
+                                        borderRadius: '50%',
+                                        width: '20px',
+                                        height: '20px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: 'var(--text-muted)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    <X size={12} />
+                                </button>
+                            )}
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -1996,11 +2252,26 @@ export function AccountsReceivableModal({
                             >
                                 <option value="fechaEmision:desc">Fecha Emisión: Mayor a Menor (Más Recientes)</option>
                                 <option value="fechaEmision:asc">Fecha Emisión: Menor a Mayor (Más Antiguas)</option>
-                                <option value="fechaVencimiento:desc">Fecha Venc.: Mayor a Menor</option>
-                                <option value="fechaVencimiento:asc">Fecha Venc.: Menor a Mayor</option>
-                                <option value="diasVencidos:desc">Días Vencido: Mayor a Menor</option>
+                                <option value="fechaVencimiento:desc">Fecha Venc.: Mayor a Menor (Más Recientes)</option>
+                                <option value="fechaVencimiento:asc">Fecha Venc.: Menor a Mayor (Más Antiguas)</option>
+                                <option value="diasVencidos:desc">Días de Vencido: Mayor a Menor</option>
+                                <option value="diasVencidos:asc">Días de Vencido: Menor a Mayor</option>
+                                <option value="diasCredito:desc">Días de Crédito: Mayor a Menor</option>
+                                <option value="diasCredito:asc">Días de Crédito: Menor a Mayor</option>
+                                <option value="montoFacturaUsd:desc">Monto Factura: Mayor a Menor</option>
+                                <option value="montoFacturaUsd:asc">Monto Factura: Menor a Mayor</option>
+                                <option value="abonosUsd:desc">Abonos: Mayor a Menor</option>
+                                <option value="abonosUsd:asc">Abonos: Menor a Mayor</option>
                                 <option value="restanteUsd:desc">Saldo Restante: Mayor a Menor</option>
+                                <option value="restanteUsd:asc">Saldo Restante: Menor a Mayor</option>
                                 <option value="factura:desc">N° Documento: Mayor a Menor</option>
+                                <option value="factura:asc">N° Documento: Menor a Mayor</option>
+                                <option value="cliente:asc">Cliente: A → Z</option>
+                                <option value="cliente:desc">Cliente: Z → A</option>
+                                <option value="rif:asc">RIF: A → Z</option>
+                                <option value="rif:desc">RIF: Z → A</option>
+                                <option value="vendedorId:asc">Vendedor: A → Z</option>
+                                <option value="vendedorId:desc">Vendedor: Z → A</option>
                             </select>
 
                             {/* Filtro Vendedor */}
@@ -2011,8 +2282,10 @@ export function AccountsReceivableModal({
                                 style={{ padding: '0.55rem 0.85rem', fontSize: '0.82rem' }}
                             >
                                 <option value="ALL">Todos los Vendedores</option>
-                                {Array.from(new Set(docsForActiveType.map(d => d.vendedorId))).sort().map(vId => (
-                                    <option key={vId} value={vId}>{vId} — {sellerCatalog.get(vId) || vId}</option>
+                                {sellerFilterOptions.map(v => (
+                                    <option key={v.id} value={v.id}>
+                                        {v.id} — {v.name} ({v.count})
+                                    </option>
                                 ))}
                             </select>
 
@@ -2036,10 +2309,14 @@ export function AccountsReceivableModal({
                                         border: 'none',
                                         background: statusFilter === 'ALL' ? 'var(--bg-card-hover, rgba(255,255,255,0.15))' : 'transparent',
                                         color: statusFilter === 'ALL' ? '#ffffff' : 'var(--text-muted)',
-                                        cursor: 'pointer'
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px'
                                     }}
                                 >
-                                    Todos
+                                    <span>Todos</span>
+                                    <span style={{ opacity: 0.8, fontSize: '0.7rem' }}>({statusButtonCounts.ALL})</span>
                                 </button>
                                 <button
                                     type="button"
@@ -2052,10 +2329,14 @@ export function AccountsReceivableModal({
                                         border: 'none',
                                         background: statusFilter === 'VENCIDA' ? 'rgba(239, 68, 68, 0.22)' : 'transparent',
                                         color: statusFilter === 'VENCIDA' ? '#ef4444' : 'var(--text-muted)',
-                                        cursor: 'pointer'
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px'
                                     }}
                                 >
-                                    Vencidos
+                                    <span>Vencidos</span>
+                                    <span style={{ opacity: 0.85, fontSize: '0.7rem' }}>({statusButtonCounts.VENCIDA})</span>
                                 </button>
                                 <button
                                     type="button"
@@ -2068,10 +2349,14 @@ export function AccountsReceivableModal({
                                         border: 'none',
                                         background: statusFilter === 'POR_VENCER' ? 'rgba(16, 185, 129, 0.22)' : 'transparent',
                                         color: statusFilter === 'POR_VENCER' ? '#10b981' : 'var(--text-muted)',
-                                        cursor: 'pointer'
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px'
                                     }}
                                 >
-                                    Al Día
+                                    <span>Al Día</span>
+                                    <span style={{ opacity: 0.85, fontSize: '0.7rem' }}>({statusButtonCounts.POR_VENCER})</span>
                                 </button>
                                 <button
                                     type="button"
@@ -2084,10 +2369,14 @@ export function AccountsReceivableModal({
                                         border: 'none',
                                         background: statusFilter === 'PAGADA' ? 'rgba(2, 132, 199, 0.22)' : 'transparent',
                                         color: statusFilter === 'PAGADA' ? 'var(--brand-blue)' : 'var(--text-muted)',
-                                        cursor: 'pointer'
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px'
                                     }}
                                 >
-                                    Solventes
+                                    <span>Solventes</span>
+                                    <span style={{ opacity: 0.85, fontSize: '0.7rem' }}>({statusButtonCounts.PAGADA})</span>
                                 </button>
                             </div>
                         </div>

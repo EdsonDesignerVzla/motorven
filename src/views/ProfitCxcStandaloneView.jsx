@@ -75,13 +75,32 @@ const normalizeSearchText = (str) =>
     .toLowerCase()
     .trim();
 
-const getTodayIso = () => new Date().toISOString().split('T')[0];
+const getTodayIso = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 const parseDateSafe = (dateStr) => {
   if (!dateStr) return new Date();
+  if (dateStr instanceof Date) {
+    return isNaN(dateStr.getTime()) ? new Date() : dateStr;
+  }
   const s = String(dateStr).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    const [y, m, d] = s.split('-').map(Number);
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const y = Number(isoMatch[1]);
+    const m = Number(isoMatch[2]);
+    const d = Number(isoMatch[3]);
+    return new Date(y, m - 1, d, 12, 0, 0);
+  }
+  const dmyMatch = s.match(/^(\d{2})[/-](\d{2})[/-](\d{4})/);
+  if (dmyMatch) {
+    const d = Number(dmyMatch[1]);
+    const m = Number(dmyMatch[2]);
+    const y = Number(dmyMatch[3]);
     return new Date(y, m - 1, d, 12, 0, 0);
   }
   const parsed = new Date(s);
@@ -90,8 +109,12 @@ const parseDateSafe = (dateStr) => {
 
 const toIsoDateInput = (dateInput) => {
   if (!dateInput) return getTodayIso();
-  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dateInput)) {
-    return dateInput.slice(0, 10);
+  if (typeof dateInput === 'string') {
+    const s = dateInput.trim();
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    const dmyMatch = s.match(/^(\d{2})[/-](\d{2})[/-](\d{4})/);
+    if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
   }
   const d = dateInput instanceof Date ? dateInput : parseDateSafe(dateInput);
   if (isNaN(d.getTime())) return getTodayIso();
@@ -105,7 +128,64 @@ const formatDateShort = (dateInput) => {
   if (!dateInput) return '—';
   const d = dateInput instanceof Date ? dateInput : parseDateSafe(dateInput);
   if (isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
+const canonicalDocLookupKey = (rawKey, tipoDoc = 'FACTURA') => {
+  const clean = String(rawKey || '').trim().toUpperCase();
+  if (!clean) return '';
+  if (tipoDoc === 'NOTA_ENTREGA' || clean.startsWith('NE')) {
+    const numPart = clean.replace(/^NE-?/i, '').replace(/^0+(?=\d)/, '');
+    return `NE:${numPart}`;
+  }
+  const numPart = clean.replace(/^(FAC-|FACT-)/i, '').replace(/^0+(?=\d)/, '');
+  return `FAC:${numPart}`;
+};
+
+const resolveSellerFromCatalog = (rawId, rawName, sellerCatalog) => {
+  const idTrim = String(rawId || '').trim().toUpperCase();
+  const nameTrim = String(rawName || '').trim();
+
+  if (idTrim && idTrim !== 'OF' && sellerCatalog.has(idTrim)) {
+    return {
+      sellerId: idTrim,
+      sellerName: sellerCatalog.get(idTrim) || nameTrim || idTrim
+    };
+  }
+
+  const candidates = [nameTrim, idTrim].filter(Boolean);
+  for (const candidate of candidates) {
+    const normCandidate = normalizeSearchText(candidate);
+    if (!normCandidate || normCandidate === 'of' || normCandidate === 'oficina') continue;
+    for (const [catId, catName] of sellerCatalog.entries()) {
+      const normCatName = normalizeSearchText(catName);
+      if (
+        normCatName === normCandidate ||
+        (normCandidate.length >= 4 && normCatName.includes(normCandidate)) ||
+        (normCatName.length >= 4 && normCandidate.includes(normCatName))
+      ) {
+        return {
+          sellerId: catId,
+          sellerName: catName
+        };
+      }
+    }
+  }
+
+  if (idTrim && idTrim.length <= 5 && !idTrim.includes(' ')) {
+    return {
+      sellerId: idTrim,
+      sellerName: sellerCatalog.get(idTrim) || nameTrim || (idTrim === 'OF' ? 'Oficina' : idTrim)
+    };
+  }
+
+  return {
+    sellerId: 'OF',
+    sellerName: nameTrim || sellerCatalog.get('OF') || 'Oficina'
+  };
 };
 
 const inferDocType = (raw) => {
@@ -223,8 +303,12 @@ export default function ProfitCxcStandaloneView() {
 
   const sellerCatalog = useMemo(() => {
     const map = new Map();
-    (sellers || REAL_PROFIT_SELLERS).forEach((s) => {
-      const id = String(s.id || s.co_ven || '').trim();
+    (REAL_PROFIT_SELLERS || []).forEach((s) => {
+      const id = String(s.id || s.co_ven || '').trim().toUpperCase();
+      if (id) map.set(id, s.name || s.ven_des || id);
+    });
+    (sellers || []).forEach((s) => {
+      const id = String(s.id || s.co_ven || '').trim().toUpperCase();
       if (id) map.set(id, s.name || s.ven_des || id);
     });
     return map;
@@ -236,14 +320,18 @@ export default function ProfitCxcStandaloneView() {
     today.setHours(0, 0, 0, 0);
 
     const rawMap = new Map();
+    const canonicalKeyToRawKey = new Map();
     const delSet = new Set(sanitizeCxcDeletedDocsStorage().map((k) => String(k).trim()).filter(Boolean));
     const isDocDeleted = (docOrObj) => isCxcEntryDeleted(docOrObj, delSet);
 
     (profitInvoices || []).forEach((inv) => {
       const key = String(inv.factNum || inv.id || '').trim();
       if (!key || isDocDeleted(inv)) return;
+      const docType = inferDocType(inv);
+      const cKey = canonicalDocLookupKey(key, docType);
       const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
       rawMap.set(key, { ...inv, _source: isPosFormat ? 'POS' : 'PROFIT', _isPosSale: isPosFormat });
+      if (cKey) canonicalKeyToRawKey.set(cKey, key);
     });
 
     (sales || []).forEach((sale) => {
@@ -253,6 +341,9 @@ export default function ProfitCxcStandaloneView() {
       const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
       const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
       if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
+
+      const cKey = canonicalDocLookupKey(key, saleDocType);
+      const existingRawKey = rawMap.has(key) ? key : cKey ? canonicalKeyToRawKey.get(cKey) : null;
 
       const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
       const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
@@ -264,7 +355,7 @@ export default function ProfitCxcStandaloneView() {
       const neNetoSinIva = round2(
         rawSaleSub > 0 && rawSaleSub < rawSaleTotal
           ? rawSaleSub
-          : rawSaleIva > 0 && rawSaleTotal > rawSaleIva
+          : rawIva > 0 && rawSaleTotal > rawSaleIva
           ? rawSaleTotal - rawSaleIva
           : rawSaleSub
       );
@@ -280,7 +371,13 @@ export default function ProfitCxcStandaloneView() {
         : 0;
       const effectiveSaldo = Math.max(0, round2(effectiveTotNeto - effectiveAbonos));
 
-      if (!rawMap.has(key)) {
+      const resolvedSaleSeller = resolveSellerFromCatalog(
+        sale.vendedorId,
+        sale.vendedor || sale.vendedorNombre,
+        sellerCatalog
+      );
+
+      if (!existingRawKey) {
         rawMap.set(key, {
           id: sale.id || `DOC-${key}`,
           factNum: key,
@@ -290,8 +387,8 @@ export default function ProfitCxcStandaloneView() {
           clienteId: sale.clienteId || '',
           clienteNombre: sale.cliente || sale.clienteNombre || 'Cliente General',
           clienteRif: sale.rif || sale.clienteRif || 'N/A',
-          vendedorId: sale.vendedorId || 'OF',
-          vendedorNombre: sale.vendedor || sale.vendedorNombre || '',
+          vendedorId: resolvedSaleSeller.sellerId,
+          vendedorNombre: resolvedSaleSeller.sellerName,
           formaPago: Number(sale.diasCredito || 0) > 0 ? '03' : '01',
           diasCredito: sale.diasCredito !== undefined ? Number(sale.diasCredito) : 0,
           diasVencidoCustom: sale.diasVencidoCustom !== undefined ? sale.diasVencidoCustom : null,
@@ -307,6 +404,22 @@ export default function ProfitCxcStandaloneView() {
           observaciones: sale.observaciones || '',
           historialCobros: sale.historialCobros || [],
           _source: 'POS',
+          _isPosSale: true
+        });
+        if (cKey) canonicalKeyToRawKey.set(cKey, key);
+      } else {
+        const existing = rawMap.get(existingRawKey);
+        const resolvedMergedSeller = resolveSellerFromCatalog(
+          existing.vendedorId && existing.vendedorId !== 'OF' ? existing.vendedorId : resolvedSaleSeller.sellerId,
+          existing.vendedorNombre || resolvedSaleSeller.sellerName,
+          sellerCatalog
+        );
+        rawMap.set(existingRawKey, {
+          ...existing,
+          fechaEmision: existing.fechaEmision || sale.fechaEmision || sale.fecha,
+          vendedorId: resolvedMergedSeller.sellerId,
+          vendedorNombre: resolvedMergedSeller.sellerName,
+          _source: existing._source || 'POS',
           _isPosSale: true
         });
       }
@@ -413,8 +526,11 @@ export default function ProfitCxcStandaloneView() {
       const diffVencDays = Math.floor((today.getTime() - vencMidnight.getTime()) / (1000 * 60 * 60 * 24));
 
       const diasVencidos =
-        inv.diasVencidoCustom !== undefined && inv.diasVencidoCustom !== null && inv.diasVencidoCustom !== ''
-          ? Number(inv.diasVencidoCustom)
+        inv.diasVencidoCustom !== undefined &&
+        inv.diasVencidoCustom !== null &&
+        inv.diasVencidoCustom !== '' &&
+        Number(inv.diasVencidoCustom) > 0
+          ? Math.max(Number(inv.diasVencidoCustom), Math.max(0, diffVencDays))
           : Math.max(0, diffVencDays);
 
       const clientObj = clients.find(
@@ -423,12 +539,11 @@ export default function ProfitCxcStandaloneView() {
           (inv.clienteRif && c.rif === inv.clienteRif) ||
           (inv.clienteNombre && c.name?.toLowerCase() === inv.clienteNombre?.toLowerCase())
       );
-      const rawSellerId = String(inv.vendedorId || 'OF').trim();
-      const isFullNameInId = rawSellerId.length > 4 && rawSellerId.includes(' ');
-      const sellerId = isFullNameInId ? 'OF' : rawSellerId;
-      const sellerName =
-        inv.vendedorNombre ||
-        (isFullNameInId ? rawSellerId : sellerCatalog.get(sellerId) || sellerId || 'Oficina');
+      const { sellerId, sellerName } = resolveSellerFromCatalog(
+        inv.vendedorId,
+        inv.vendedorNombre || inv.vendedor,
+        sellerCatalog
+      );
       const tasaDoc = Number(inv.tasa || tasaBcv) || tasaBcv;
       const estado = restanteUsd <= 0.01 ? 'PAGADA' : diasVencidos > 0 ? 'VENCIDA' : 'POR_VENCER';
 
