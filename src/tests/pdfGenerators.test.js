@@ -160,6 +160,30 @@ async function runPdfTests() {
     generateAccountsPayablePDF({ payables: [], config: mockConfig, currentUser: mockUser });
   });
 
+  testGen('Cuentas por Pagar (filtrado multi-página)', () => {
+    const sampleFiltered = Array.from({ length: 24 }, (_, i) => ({
+      tipoDoc: 'NE',
+      nroDoc: String(17800 + i),
+      provNombre: 'KEYSTONE C.A.',
+      provRif: 'J-311153659',
+      fecEmis: '28/09/2026',
+      fecVenc: '13/10/2026',
+      montoNetUsd: 1500 + i * 100,
+      abonosUsd: i % 3 === 0 ? 1500 + i * 100 : 200,
+      saldoUsd: i % 3 === 0 ? 0 : 1300 + i * 100,
+      isSolvente: i % 3 === 0,
+      isVencido: i % 3 === 1,
+      diffDays: i % 3 === 1 ? 14 : -5
+    }));
+    generateAccountsPayablePDF({
+      payables: sampleFiltered,
+      suppliers: [{ provDes: 'KEYSTONE C.A.' }],
+      config: mockConfig,
+      currentUser: mockUser,
+      filterSummary: 'Proveedor: KEYSTONE C.A. • Doc.: NE • Estado: Todos los Estados'
+    });
+  });
+
   // 5. SENIAT Fiscales
   testGen('SENIAT: Libro de Ventas', () => {
     generateTaxReportPDF({

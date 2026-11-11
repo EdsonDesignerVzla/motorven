@@ -460,6 +460,38 @@ export default function AccountsPayableModal({
     });
   }, [processedPayables, searchFilter, docTypeFilter, supplierFilter, statusFilter]);
 
+  // Descripción de filtros activos en Parte B para imprimir exactamente lo mostrado en la tabla
+  const activeFiltersLabel = useMemo(() => {
+    const statusLabels = {
+      ALL: 'Todos los Estados',
+      VIGENTE: 'Solo Por Vencer (Al Día)',
+      VENCIDO: 'Todas las Vencidas',
+      SOLVENTE: 'Solo Solventes (Pagadas)',
+      VENCIDO_1_15: 'Vencidas 1 a 15 días',
+      VENCIDO_16_30: 'Vencidas 16 a 30 días',
+      VENCIDO_OVER_30: 'Vencidas más de 30 días'
+    };
+    const parts = [
+      `Proveedor: ${supplierFilter === 'ALL' ? 'Todos' : supplierFilter}`,
+      `Doc.: ${docTypeFilter === 'ALL' ? 'Todos' : docTypeFilter}`,
+      `Estado: ${statusLabels[statusFilter] || statusFilter}`
+    ];
+    if (searchFilter.trim()) {
+      parts.push(`Búsqueda: "${searchFilter.trim()}"`);
+    }
+    return parts.join(' • ');
+  }, [searchFilter, docTypeFilter, supplierFilter, statusFilter]);
+
+  const handlePrintFilteredReport = () => {
+    generateAccountsPayablePDF({
+      payables: filteredPayables,
+      suppliers,
+      config: { ...config, tasaDolar: tasaBcv },
+      currentUser,
+      filterSummary: activeFiltersLabel
+    });
+  };
+
   // Sincronización del ancho del scroll superior con la tabla
   useEffect(() => {
     const updateWidth = () => {
@@ -1034,10 +1066,10 @@ export default function AccountsPayableModal({
           {/* Botón Imprimir Reporte PDF Oficial */}
           <button
             type="button"
-            onClick={() => generateAccountsPayablePDF({ payables: filteredPayables, suppliers, config: { ...config, tasaDolar: tasaBcv }, currentUser })}
+            onClick={handlePrintFilteredReport}
             className="btn btn-print-report"
             style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.55rem 0.95rem', fontSize: '0.82rem' }}
-            title="Descargar Reporte Oficial de Cuentas por Pagar en PDF"
+            title="Descargar Reporte Oficial de Cuentas por Pagar en PDF según los filtros activos"
           >
             <Printer size={16} color="#ffffff" />
             <span>Imprimir Reporte</span>
@@ -1514,6 +1546,17 @@ export default function AccountsPayableModal({
                 Reporte de Documentos CxP — Facturas y Pasivos de Compra ({filteredPayables.length} documentos listados)
               </h3>
             </div>
+
+            <button
+              type="button"
+              onClick={handlePrintFilteredReport}
+              className="btn btn-print-report"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.45rem 0.9rem', fontSize: '0.8rem', flexShrink: 0 }}
+              title={`Imprimir en PDF los ${filteredPayables.length} documento(s) mostrados en la tabla (${activeFiltersLabel})`}
+            >
+              <Printer size={15} color="#ffffff" />
+              <span>Imprimir Reporte ({filteredPayables.length})</span>
+            </button>
           </div>
 
           {/* BARRA DE FILTROS Y PESTAÑAS RÁPIDAS */}

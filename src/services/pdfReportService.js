@@ -1103,93 +1103,173 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
 // =========================================================================
 // 4. REPORTE DE CUENTAS POR PAGAR (CxP) & PROVEEDORES (PRIORITARIO)
 // =========================================================================
-export function generateAccountsPayablePDF({ payables = [], accountsPayable = [], suppliers = [], config = {}, currentUser = null }) {
+export function generateAccountsPayablePDF({
+  payables = [],
+  accountsPayable = [],
+  suppliers = [],
+  config = {},
+  currentUser = null,
+  filterSummary = ''
+}) {
+  const dataset = payables && payables.length > 0 ? payables : (Array.isArray(payables) && filterSummary ? [] : accountsPayable);
+  const subtitleText = filterSummary
+    ? `Documentos Filtrados (${dataset.length}) • ${filterSummary}`
+    : 'Compromisos con Fabricantes de Planta, Vencimientos y Programación de Tesorería';
+
   const base = createBaseReport({
-    title: 'ESTADO DE CUENTAS POR PAGAR & PASIVOS COMERCIALES (CXP)',
-    subtitle: 'Compromisos con Fabricantes de Planta, Vencimientos y Programación de Tesorería',
+    title: 'REPORTE DE DOCUMENTOS CXP — FACTURAS Y PASIVOS DE COMPRA',
+    subtitle: subtitleText,
     moduleCode: 'CXP',
     currentUser,
     config
   });
 
-  const dataset = payables && payables.length > 0 ? payables : accountsPayable;
   const tasa = Number(config?.tasaDolar) || 827.73;
   const now = new Date();
+  now.setHours(0, 0, 0, 0);
 
-  const totalPasivosUsd = dataset.reduce((acc, p) => acc + Number(p.saldoUsd || p.montoTotalUsd || p.saldo || p.saldoPendienteUsd || 0), 0);
-  const vencidas = dataset.filter(p => p.isVencido || (p.fechaVencimiento && new Date(p.fechaVencimiento) < now));
-  const totalVencidoUsd = vencidas.reduce((acc, p) => acc + Number(p.saldoUsd || p.montoTotalUsd || p.saldo || p.saldoPendienteUsd || 0), 0);
+  const normalizeRow = (p) => {
+    const tipo = String(p.tipoDoc || p.tipo_doc || 'FACT').toUpperCase().trim();
+    const nro = String(p.nroDoc || p.nro_doc || p.factura || p.doc_num || p.id || 'S/N').trim();
+    const prov = p.provNombre || p.proveedor || p.prov_nombre || p.nombre || 'Proveedor Comercial';
+    const rif = p.provRif || p.rif || p.prov_rif || p.coProv || p.co_prov || 'J-00000000-0';
+
+    const rawSaldo = p.saldoUsd ?? p.saldo_usd ?? p.saldo ?? p.saldoPendienteUsd ?? p.montoTotalUsd ?? 0;
+    const saldoUsd = Math.max(0, Number(rawSaldo) || 0);
+    const rawMontoOrig = p.montoNetUsd ?? p.monto_net_usd ?? p.montoTotalUsd ?? saldoUsd;
+    const montoOrigUsd = Math.max(0, Number(rawMontoOrig) || 0);
+    const rawAbonos = p.abonosUsd ?? p.abonos_usd;
+    const abonosUsd = (rawAbonos !== undefined && rawAbonos !== null)
+      ? Math.max(0, Number(rawAbonos) || 0)
+      : Math.max(0, montoOrigUsd - saldoUsd);
+
+    const isSolvente = p.isSolvente !== undefined ? Boolean(p.isSolvente) : saldoUsd <= 0.01;
+    const isVencido = !isSolvente && (
+      p.isVencido !== undefined
+        ? Boolean(p.isVencido)
+        : Boolean(p.fechaVencimiento && new Date(p.fechaVencimiento) < now)
+    );
+    const diffDays = Number(p.diffDays ?? 0);
+
+    let estadoText = 'VIGENTE';
+    if (isSolvente) estadoText = 'PAGADO';
+    else if (isVencido) estadoText = diffDays > 0 ? `VENCIDO ${diffDays}d` : 'VENCIDO';
+    else if (p.diffDays !== undefined) estadoText = `VIGENTE ${Math.abs(diffDays)}d`;
+
+    const fecEmis = p.fecEmis || (p.fechaEmision ? String(p.fechaEmision).slice(0, 10) : (p.fec_emis ? String(p.fec_emis).slice(0, 10) : 'N/A'));
+    const fecVenc = p.fecVenc || (p.fechaVencimiento ? String(p.fechaVencimiento).slice(0, 10) : (p.fec_venc ? String(p.fec_venc).slice(0, 10) : 'N/A'));
+
+    return {
+      docLabel: `${tipo} #${nro}`,
+      provLabel: `${prov}\n${rif}`,
+      provNombre: prov,
+      fecEmis,
+      fecVenc,
+      montoOrigUsd,
+      abonosUsd,
+      saldoUsd,
+      isSolvente,
+      isVencido,
+      estadoText
+    };
+  };
+
+  const rows = dataset.map(normalizeRow);
+  const totalMontoOrigUsd = rows.reduce((acc, r) => acc + r.montoOrigUsd, 0);
+  const totalAbonosUsd = rows.reduce((acc, r) => acc + r.abonosUsd, 0);
+  const totalPasivosUsd = rows.reduce((acc, r) => acc + r.saldoUsd, 0);
+  const vencidas = rows.filter(r => r.isVencido);
+  const totalVencidoUsd = vencidas.reduce((acc, r) => acc + r.saldoUsd, 0);
+  const uniqueProvs = new Set(rows.map(r => r.provNombre)).size || suppliers.length;
 
   const cards = [
-    { label: 'Total Pasivos CxP', value: formatUsd(totalPasivosUsd), subtext: formatBs(totalPasivosUsd * tasa), color: COLORS.red },
-    { label: 'Facturas por Pagar', value: `${dataset.length} Documentos`, subtext: `${suppliers.length} Proveedores`, color: COLORS.navy },
-    { label: 'Pasivos Vencidos', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} Facturas Vencidas`, color: COLORS.amber },
-    { label: 'Tasa Liquidación BCV', value: formatBs(tasa), subtext: 'Referencial Oficial', color: COLORS.cyan }
+    { label: 'Saldo Pendiente CxP', value: formatUsd(totalPasivosUsd), subtext: formatBs(totalPasivosUsd * tasa), color: COLORS.red },
+    { label: 'Monto Original Docs', value: formatUsd(totalMontoOrigUsd), subtext: `${rows.length} doc(s) • ${uniqueProvs} prov.`, color: COLORS.navy },
+    { label: 'Pasivos Vencidos', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} documento(s) vencido(s)`, color: COLORS.amber },
+    { label: 'Abonos Aplicados', value: formatUsd(totalAbonosUsd), subtext: `Tasa BCV: ${formatBs(tasa)}`, color: COLORS.emerald }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
+  const filterNote = filterSummary ? ` Criterios aplicados en tabla: ${filterSummary}.` : '';
   currentY = addAnalyticalBox(
     base.doc,
     currentY,
     'PROGRAMACIÓN DE PAGOS & COMPROMISOS CON PROVEEDORES',
-    `Los pasivos operativos comerciales con fabricantes y distribuidores de materia prima ascienden a ${formatUsd(totalPasivosUsd)} (${formatBs(totalPasivosUsd * tasa)}). Se cuenta con ${dataset.length - vencidas.length} obligaciones vigentes calendarizadas para su amortización según flujo de cobranza.`,
+    `El listado refleja ${rows.length} documento(s) por un monto original de ${formatUsd(totalMontoOrigUsd)}, abonos aplicados de ${formatUsd(totalAbonosUsd)} y un saldo pendiente total de ${formatUsd(totalPasivosUsd)} (${formatBs(totalPasivosUsd * tasa)}), de los cuales ${formatUsd(totalVencidoUsd)} corresponden a ${vencidas.length} documento(s) vencido(s).${filterNote}`,
     base.tableWidth,
     base.startX
   );
 
-  const tableData = dataset.slice(0, 18).map((p) => {
-    const isVencido = p.isVencido || (p.fechaVencimiento && new Date(p.fechaVencimiento) < now);
-
-    return [
-      String(p.nroDoc || p.factura || p.doc_num || p.id || 'FAC-PROV'),
-      p.provNombre || p.proveedor || p.prov_nombre || p.nombre || 'Proveedor Comercial',
-      p.provRif || p.rif || p.prov_rif || 'J-00000000-0',
-      p.fechaEmision ? String(p.fechaEmision).slice(0, 10) : '2026-10-01',
-      p.fechaVencimiento ? String(p.fechaVencimiento).slice(0, 10) : '2026-10-30',
-      formatUsd(p.saldoUsd || p.montoTotalUsd || p.saldo || p.saldoPendienteUsd || 0),
-      isVencido ? 'VENCIDA' : 'VIGENTE'
-    ];
-  });
+  const tableData = rows.map(r => [
+    r.docLabel,
+    r.provLabel,
+    r.fecEmis,
+    r.fecVenc,
+    formatUsd(r.montoOrigUsd),
+    formatUsd(r.abonosUsd),
+    formatUsd(r.saldoUsd),
+    r.estadoText
+  ]);
 
   autoTable(base.doc, {
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['FACTURA PROV.', 'PROVEEDOR / BENEFICIARIO', 'RIF', 'EMISIÓN', 'VENCIMIENTO', 'SALDO USD', 'ESTADO']],
-    body: tableData.length > 0 ? tableData : [['SIN DEUDAS', 'No hay compromisos pendientes de pago', '-', '-', '-', '$ 0.00', 'AL DÍA']],
+    head: [['DOCUMENTO', 'PROVEEDOR / RIF', 'EMISIÓN', 'VENCIM.', 'MONTO ORIG.', 'ABONOS', 'SALDO USD', 'ESTADO']],
+    body: tableData.length > 0 ? tableData : [['SIN DOCS', 'No hay documentos para los filtros seleccionados', '-', '-', '$ 0.00', '$ 0.00', '$ 0.00', 'PAGADO']],
+    foot: [[
+      `TOTALES (${rows.length})`,
+      '',
+      '',
+      '',
+      formatUsd(totalMontoOrigUsd),
+      formatUsd(totalAbonosUsd),
+      formatUsd(totalPasivosUsd),
+      formatBs(totalPasivosUsd * tasa)
+    ]],
+    showFoot: 'lastPage',
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
       textColor: [255, 255, 255],
-      fontSize: 6.8,
+      fontSize: 6.4,
       fontStyle: 'bold',
-      cellPadding: 1.6
+      cellPadding: 1.5
+    },
+    footStyles: {
+      fillColor: [226, 232, 240],
+      textColor: COLORS.dark,
+      fontSize: 6.2,
+      fontStyle: 'bold',
+      cellPadding: 1.5
     },
     styles: {
-      fontSize: 6.2,
-      cellPadding: 1.4,
-      textColor: COLORS.dark
+      fontSize: 6.0,
+      cellPadding: 1.3,
+      textColor: COLORS.dark,
+      valign: 'middle'
     },
     alternateRowStyles: {
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { fontStyle: 'bold', halign: 'center', cellWidth: 24 },
-      1: { cellWidth: 50 },
-      2: { cellWidth: 22 },
-      3: { halign: 'center', cellWidth: 16 },
-      4: { halign: 'center', cellWidth: 16 },
-      5: { halign: 'right', fontStyle: 'bold', cellWidth: 26 },
-      6: { halign: 'center', fontStyle: 'bold', cellWidth: 25.9 }
+      0: { fontStyle: 'bold', halign: 'left', cellWidth: 23 },
+      1: { cellWidth: 49.9 },
+      2: { halign: 'center', cellWidth: 16.5 },
+      3: { halign: 'center', cellWidth: 16.5 },
+      4: { halign: 'right', cellWidth: 18 },
+      5: { halign: 'right', cellWidth: 15 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 18 },
+      7: { halign: 'center', fontStyle: 'bold', cellWidth: 23 }
     },
     didParseCell: (data) => {
-      if (data.column.index === 6 && data.section === 'body') {
+      if (data.column.index === 7 && data.section === 'body') {
         data.cell.text = ''; // Vector badge drawn in didDrawCell
       }
     },
     didDrawCell: (data) => {
-      if (data.column.index === 6 && data.section === 'body') {
+      if (data.column.index === 7 && data.section === 'body') {
         drawStatusBadge(base.doc, data.cell, data.cell.raw);
       }
     }
@@ -1197,12 +1277,12 @@ export function generateAccountsPayablePDF({ payables = [], accountsPayable = []
 
   const finalY = base.doc.lastAutoTable?.finalY || currentY;
   addGrandTotalBox(base.doc, finalY + 3.5, [
-    { label: 'TOTAL PASIVOS CXP', value: formatUsd(totalPasivosUsd), subtext: formatBs(totalPasivosUsd * tasa), color: COLORS.red },
-    { label: 'PASIVOS VIGENTES', value: formatUsd(Math.max(0, totalPasivosUsd - totalVencidoUsd)), subtext: `${dataset.length - vencidas.length} facturas al día`, color: COLORS.emerald },
-    { label: 'PASIVOS VENCIDOS', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} facturas vencidas`, color: totalVencidoUsd > 0 ? COLORS.amber : COLORS.emerald }
+    { label: 'MONTO ORIGINAL FILTRADO', value: formatUsd(totalMontoOrigUsd), subtext: `${rows.length} documento(s) listado(s)`, color: COLORS.navy },
+    { label: 'ABONOS APLICADOS', value: formatUsd(totalAbonosUsd), subtext: `${rows.filter(r => r.isSolvente).length} solvente(s) / pagado(s)`, color: COLORS.emerald },
+    { label: 'SALDO PENDIENTE CXP', value: formatUsd(totalPasivosUsd), subtext: formatBs(totalPasivosUsd * tasa), color: totalPasivosUsd > 0 ? COLORS.red : COLORS.emerald }
   ], base.tableWidth, base.startX);
 
-  finalizeAndSave(base.doc, `Reporte_Cuentas_Pagar_CxP_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  finalizeAndSave(base.doc, `Reporte_Documentos_CxP_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
 }
 
 // =========================================================================
