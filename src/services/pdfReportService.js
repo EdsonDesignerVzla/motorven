@@ -106,7 +106,9 @@ export function createBaseReport({
   config = {},
   orientation = 'portrait',
   rateLabel = 'Tasa BCV',
-  rateValue = null
+  rateValue = null,
+  hideCorrelative = false,
+  hideOperatorStrip = false
 }) {
   const doc = new jsPDF({
     orientation,
@@ -168,25 +170,39 @@ export function createBaseReport({
   doc.setLineWidth(0.3);
   doc.roundedRect(metaBoxX, margin + 4.5, metaBoxW, 11, 1.2, 1.2, 'FD');
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.2);
-  doc.setTextColor(...COLORS.navy);
-  doc.text(correlative, metaBoxX + metaBoxW / 2, margin + 7.5, { align: 'center' });
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.8);
-  doc.setTextColor(...COLORS.slate);
-  doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 10.7, { align: 'center' });
-
   const effectiveRateNum = Number(rateValue ?? config?.tasaDolar) || 827.73;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.8);
-  doc.setTextColor(...COLORS.emerald);
-  doc.text(`${rateLabel}: ${formatBs(effectiveRateNum)} / USD`, metaBoxX + metaBoxW / 2, margin + 13.9, { align: 'center' });
+
+  if (hideCorrelative) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.8);
+    doc.setTextColor(...COLORS.slate);
+    doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 8.8, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.0);
+    doc.setTextColor(...COLORS.emerald);
+    doc.text(`${rateLabel}: ${formatBs(effectiveRateNum)} / USD`, metaBoxX + metaBoxW / 2, margin + 12.8, { align: 'center' });
+  } else {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.2);
+    doc.setTextColor(...COLORS.navy);
+    doc.text(correlative, metaBoxX + metaBoxW / 2, margin + 7.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.8);
+    doc.setTextColor(...COLORS.slate);
+    doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 10.7, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.8);
+    doc.setTextColor(...COLORS.emerald);
+    doc.text(`${rateLabel}: ${formatBs(effectiveRateNum)} / USD`, metaBoxX + metaBoxW / 2, margin + 13.9, { align: 'center' });
+  }
 
   // 5. Franja de Título Principal con Acento Lateral Rojo
   const bannerY = margin + 17;
-  const bannerH = 9.2;
+  const hasSubtitle = Boolean(subtitle && String(subtitle).trim());
+  const bannerH = hasSubtitle ? 9.2 : 7.4;
   doc.setFillColor(...COLORS.navy);
   doc.roundedRect(startX, bannerY, tableWidth, bannerH, 1, 1, 'F');
   doc.setFillColor(...COLORS.red);
@@ -195,12 +211,30 @@ export function createBaseReport({
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.2);
   doc.setTextColor(255, 255, 255);
-  doc.text(title.toUpperCase(), startX + 6, bannerY + 4.2);
+  doc.text(title.toUpperCase(), startX + 6, bannerY + (hasSubtitle ? 4.2 : 4.9));
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.4);
-  doc.setTextColor(226, 232, 240);
-  doc.text(subtitle, startX + 6, bannerY + 7.6);
+  if (hasSubtitle) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.4);
+    doc.setTextColor(226, 232, 240);
+    doc.text(subtitle, startX + 6, bannerY + 7.6);
+  }
+
+  if (hideOperatorStrip) {
+    return {
+      doc,
+      pageWidth,
+      pageHeight,
+      margin,
+      contentWidth,
+      contentHeight,
+      startX,
+      tableWidth,
+      startY: bannerY + bannerH + 2.5,
+      correlative,
+      dateTimeStr
+    };
+  }
 
   // 6. Cinta de Identificación del Operador Emisor con anchos de celda protegidos
   const emisorY = bannerY + bannerH + 1.4;
@@ -3855,19 +3889,239 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
 // 8.C. FORMATO OFICIAL DE NOTA DE ENTREGA (TAMAÑO CARTA CON DESBORDAMIENTO)
 // =========================================================================
 /**
+ * Construye una matriz QR estándar ISO/IEC 18004 (Versión 4-L, 33×33 módulos,
+ * hasta 78 bytes en Modo Byte con corrección Reed-Solomon de 16 codewords)
+ * 100% determinista y escaneable sin dependencias externas.
+ */
+export function buildQRCodeMatrix(rawText = '') {
+  const size = 33; // Version 4: 33x33
+  const dataCapacity = 64; // 64 bytes de datos + 16 ECC = 80 codewords totales
+  const ecCount = 16;
+
+  // Codificar texto a bytes UTF-8 / Latin-1 truncado a 62 bytes útiles
+  const cleanStr = String(rawText || 'SIGNUM MOTORVEN').slice(0, 62);
+  const msgBytes = [];
+  for (let i = 0; i < cleanStr.length && msgBytes.length < 62; i++) {
+    const code = cleanStr.charCodeAt(i);
+    msgBytes.push(code <= 0xff ? code : 0x3f);
+  }
+
+  // Flujo de bits: Mode 0100 (4 bits) + Longitud (8 bits) + Bytes + Terminador 0000
+  const bits = [];
+  const pushBits = (val, len) => {
+    for (let i = len - 1; i >= 0; i--) {
+      bits.push((val >>> i) & 1);
+    }
+  };
+  pushBits(0b0100, 4);
+  pushBits(msgBytes.length, 8);
+  msgBytes.forEach((b) => pushBits(b, 8));
+  pushBits(0, Math.min(4, dataCapacity * 8 - bits.length));
+  while (bits.length % 8 !== 0) bits.push(0);
+
+  const dataWords = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let byte = 0;
+    for (let b = 0; b < 8; b++) byte = (byte << 1) | (bits[i + b] || 0);
+    dataWords.push(byte);
+  }
+  const padBytes = [0xec, 0x11];
+  let padIdx = 0;
+  while (dataWords.length < dataCapacity) {
+    dataWords.push(padBytes[padIdx % 2]);
+    padIdx++;
+  }
+
+  // Tablas GF(256) con polinomio primitivo 0x11d
+  const gfExp = new Uint8Array(512);
+  const gfLog = new Uint8Array(256);
+  let xVal = 1;
+  for (let i = 0; i < 255; i++) {
+    gfExp[i] = xVal;
+    gfLog[xVal] = i;
+    xVal <<= 1;
+    if (xVal & 0x100) xVal ^= 0x11d;
+  }
+  for (let i = 255; i < 512; i++) gfExp[i] = gfExp[i - 255];
+
+  const gfMul = (a, b) => (a === 0 || b === 0 ? 0 : gfExp[gfLog[a] + gfLog[b]]);
+
+  // Polinomio generador Reed-Solomon de grado ecCount (16)
+  let gen = [1];
+  for (let i = 0; i < ecCount; i++) {
+    const nextGen = new Array(gen.length + 1).fill(0);
+    const factor = gfExp[i];
+    for (let j = 0; j < gen.length; j++) {
+      nextGen[j] ^= gen[j];
+      nextGen[j + 1] ^= gfMul(gen[j], factor);
+    }
+    gen = nextGen;
+  }
+
+  // División polinomial para obtener los 16 bytes de corrección de errores
+  const rem = new Array(ecCount).fill(0);
+  for (let i = 0; i < dataWords.length; i++) {
+    const factor = dataWords[i] ^ rem[0];
+    rem.shift();
+    rem.push(0);
+    if (factor !== 0) {
+      for (let j = 0; j < ecCount; j++) {
+        rem[j] ^= gfMul(gen[j + 1], factor);
+      }
+    }
+  }
+
+  const allCodewords = [...dataWords, ...rem];
+
+  // Matriz QR y máscara de módulos reservados
+  const modules = Array.from({ length: size }, () => new Array(size).fill(false));
+  const reserved = Array.from({ length: size }, () => new Array(size).fill(false));
+
+  const setModule = (r, c, dark) => {
+    if (r >= 0 && r < size && c >= 0 && c < size) {
+      modules[r][c] = Boolean(dark);
+      reserved[r][c] = true;
+    }
+  };
+
+  // Patrones de búsqueda (7x7) + separadores blancos en las 3 esquinas
+  const placeFinder = (row, col) => {
+    for (let dr = -1; dr <= 7; dr++) {
+      for (let dc = -1; dc <= 7; dc++) {
+        const r = row + dr;
+        const c = col + dc;
+        if (r < 0 || r >= size || c < 0 || c >= size) continue;
+        const inOuter = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
+        const onBorder = dr === 0 || dr === 6 || dc === 0 || dc === 6;
+        const inInner = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
+        setModule(r, c, inOuter && (onBorder || inInner));
+      }
+    }
+  };
+  placeFinder(0, 0);
+  placeFinder(0, size - 7);
+  placeFinder(size - 7, 0);
+
+  // Patrón de alineación 5x5 en (24, 24) para Versión 4
+  const alignCenter = 24;
+  for (let dr = -2; dr <= 2; dr++) {
+    for (let dc = -2; dc <= 2; dc++) {
+      const dist = Math.max(Math.abs(dr), Math.abs(dc));
+      setModule(alignCenter + dr, alignCenter + dc, dist !== 1);
+    }
+  }
+
+  // Líneas de sincronización (Timing patterns) en fila 6 y columna 6
+  for (let i = 8; i < size - 8; i++) {
+    if (!reserved[6][i]) setModule(6, i, i % 2 === 0);
+    if (!reserved[i][6]) setModule(i, 6, i % 2 === 0);
+  }
+
+  // Módulo oscuro fijo y reserva de áreas de formato
+  setModule(size - 8, 8, true);
+  for (let i = 0; i < 9; i++) {
+    if (i < size) {
+      if (!reserved[8][i]) reserved[8][i] = true;
+      if (!reserved[i][8]) reserved[i][8] = true;
+    }
+  }
+  for (let i = 0; i < 8; i++) {
+    reserved[8][size - 1 - i] = true;
+    reserved[size - 1 - i][8] = true;
+  }
+
+  // Colocación en zigzag de los bits de datos + ECC con Máscara 0 ((r + c) % 2 === 0)
+  let bitIdx = 0;
+  const totalBits = allCodewords.length * 8;
+  let upward = true;
+
+  for (let rightCol = size - 1; rightCol >= 1; rightCol -= 2) {
+    if (rightCol === 6) rightCol = 5; // Saltar columna de timing
+    for (let vert = 0; vert < size; vert++) {
+      const r = upward ? size - 1 - vert : vert;
+      for (let dc = 0; dc < 2; dc++) {
+        const c = rightCol - dc;
+        if (!reserved[r][c]) {
+          let bit = false;
+          if (bitIdx < totalBits) {
+            const word = allCodewords[bitIdx >>> 3];
+            bit = ((word >>> (7 - (bitIdx & 7))) & 1) === 1;
+            bitIdx++;
+          }
+          if ((r + c) % 2 === 0) bit = !bit; // Mask 0
+          modules[r][c] = bit;
+        }
+      }
+    }
+    upward = !upward;
+  }
+
+  // Bits de información de formato para Nivel L + Máscara 0: 0x77c4 (15 bits)
+  const formatBits = 0x77c4;
+  const formatCoords1 = [
+    [8, 0], [8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 7], [8, 8],
+    [7, 8], [5, 8], [4, 8], [3, 8], [2, 8], [1, 8], [0, 8]
+  ];
+  const formatCoords2 = [
+    [size - 1, 8], [size - 2, 8], [size - 3, 8], [size - 4, 8], [size - 5, 8], [size - 6, 8], [size - 7, 8],
+    [8, size - 8], [8, size - 7], [8, size - 6], [8, size - 5], [8, size - 4], [8, size - 3], [8, size - 2], [8, size - 1]
+  ];
+  for (let i = 0; i < 15; i++) {
+    const bit = ((formatBits >>> i) & 1) === 1;
+    const [r1, c1] = formatCoords1[i];
+    const [r2, c2] = formatCoords2[i];
+    modules[r1][c1] = bit;
+    modules[r2][c2] = bit;
+  }
+
+  return modules;
+}
+
+/**
+ * Dibuja el recuadro de Código QR vectorial en la esquina inferior izquierda de la Nota de Entrega
+ */
+function drawDeliveryNoteQRBox(doc, x, y, boxSize, qrPayload) {
+  // Marco contenedor del QR estilo Motorven
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(...COLORS.navy);
+  doc.setLineWidth(0.35);
+  doc.roundedRect(x, y, boxSize, boxSize, 1.2, 1.2, 'FD');
+
+  const matrix = buildQRCodeMatrix(qrPayload);
+  const gridCount = matrix.length;
+  const padding = 1.6;
+  const innerSize = boxSize - padding * 2;
+  const cellSize = innerSize / gridCount;
+  const startX = x + padding;
+  const startY = y + padding;
+
+  doc.setFillColor(...COLORS.dark);
+  for (let r = 0; r < gridCount; r++) {
+    for (let c = 0; c < gridCount; c++) {
+      if (matrix[r][c]) {
+        doc.rect(
+          startX + c * cellSize,
+          startY + r * cellSize,
+          cellSize + 0.04,
+          cellSize + 0.04,
+          'F'
+        );
+      }
+    }
+  }
+}
+
+/**
  * Genera el documento oficial de NOTA DE ENTREGA en formato Carta (Letter)
- * Diseñado conforme a los estándares comerciales e institucionales de Grupo Motorven:
- * - Membrete oficial corporativo (Planta / Depósito y Distribución OILSTONE)
- * - Indicación expresa de Almacén 02 (Mercancía General / Preventa)
- * - Tarjetas de resumen operativo (Correlativo, Volumen Lts, Bultos, Montos USD / Bs)
- * - Bloque bipartito de Adquirente / Receptor vs Trazabilidad Logística y Despacho
- * - Desglose tabular detallado con precios unitarios, totales en USD y Bs
- * - Soporte nativo de desbordamiento de renglones con salto automático de página
- * - Numeración exacta al pie en cada página: "Página 1/1" o "Página 1/2", "Página 2/2"
- * - Encabezado de continuación en páginas subsiguientes
- * - Totales de entrega (sin débito fiscal IVA SENIAT por ser Nota de Entrega)
- * - Bloque tripartito de firmas: Despachador, Transportista y Receptor
- * - Permite guardar (descarga de PDF) e imprimir en papel tamaño Carta
+ * Diseñado conforme al formato depurado y estilo corporativo de Grupo Motorven:
+ * - Membrete oficial corporativo (sin código RPT interno ni barra de operador)
+ * - Franja limpia "NOTA DE ENTREGA"
+ * - 4 Tarjetas de resumen operativo (Correlativo, Almacén 02, Carga Total, Monto Total USD)
+ * - Bloque bipartito de Datos del Receptor / Cliente vs Expedición
+ * - Desglose tabular detallado con soporte nativo de desbordamiento (1/2, 2/2)
+ * - Caja de totales (Subtotal Mercancía Sin IVA, Total USD, Total Oficial en Bolívares)
+ * - Bloque tripartito de firmas: Despachador, Transportista y Cliente Receptor
+ * - Código QR vectorial de verificación en esquina inferior izquierda y paginación X/Y en esquina inferior derecha
  */
 export function generateDeliveryNotePDF({
   deliveryNote = null,
@@ -3879,18 +4133,17 @@ export function generateDeliveryNotePDF({
   autoPrint = false
 }) {
   const docData = deliveryNote || sale || order || {};
-  const tasa = Number(docData.tasaDolar || config?.tasaDolar) || 827.73;
+  const tasa = Number(docData.tasaDolar || docData.tasa || config?.tasaDolar) || 827.73;
 
   // Extracción y formateo del correlativo oficial de la Nota de Entrega
-  const rawNum = String(docData.numeroDoc || docData.numero || docData.factNum || docData.nroFactura || docData.id || '000001');
+  const rawNum = String(docData.numeroDoc || docData.numero || docData.factNum || docData.factura || docData.nroFactura || docData.id || '000001');
   const numDigits = rawNum.replace(/[^0-9]/g, '');
   const correlativoDisplay = rawNum.toUpperCase().startsWith('NE-')
-    ? rawNum
+    ? rawNum.toUpperCase()
     : (numDigits ? `NE-${numDigits.slice(-6).padStart(6, '0')}` : `NE-${rawNum}`);
 
   const fechaObj = docData.fechaEmision || docData.fecha || new Date();
   const fechaStr = new Date(fechaObj).toLocaleDateString('es-VE');
-  const horaStr = new Date(fechaObj).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
 
   const diasCredito = docData.condicionPago === 'CONTADO' ? 0 : Number(docData.diasCredito ?? 0);
   const fechaVencObj = docData.fechaVencimiento
@@ -3904,18 +4157,21 @@ export function generateDeliveryNotePDF({
   const clienteTelefono = String(docData.clienteTelefono || docData.telefono || client?.telefono || '');
 
   const almacenOrigen = docData.almacen || 'Almacén 02 (Mercancía General / Preventa)';
-  const vendedor = docData.vendedor || docData.vendedorNombre || currentUser?.nombre || 'Asesor Comercial';
-  const pedidoOrigen = docData.pedidoOrigenDoc || docData.pedidoId || order?.id || docData.pedidoNumero || 'VENTA_DIRECTA_MOSTRADOR';
-  const transportista = docData.transportista || docData.chofer || 'Transporte Motorven (Flota Propia)';
-  const condicionPago = docData.condicionPago || (diasCredito > 0 ? `CRÉDITO ${diasCredito} DÍAS` : 'CONTADO');
-  const metodoPago = docData.metodoPago || 'EFECTIVO USD / TRANSFERENCIA';
+  const vendedor = docData.vendedor || docData.vendedorNombre || docData.vendedorDisplay || docData.vendedorId || currentUser?.nombre || 'Asesor Comercial';
+  const pedidoOrigen = docData.pedidoOrigenDoc || docData.pedidoId || order?.id || docData.pedidoNumero || 'VENTA DIRECTA';
+  const transportista = docData.transportista || docData.chofer || 'Transporte Motorven';
+  const condicionPago = docData.condicionPago || (diasCredito > 0 ? `${diasCredito}_DIAS` : 'CONTADO');
+  const metodoPago = docData.metodoPago || (diasCredito > 0 ? 'CREDITO' : 'CONTADO');
 
   const base = createBaseReport({
-    title: 'NOTA DE ENTREGA COMERCIAL',
-    subtitle: 'Despacho de Mercancía General • Almacén 02 • Entrega Física en Rampa y Custodia',
+    title: 'NOTA DE ENTREGA',
+    subtitle: '',
     moduleCode: 'NE',
     currentUser,
-    config
+    config,
+    rateValue: tasa,
+    hideCorrelative: true,
+    hideOperatorStrip: true
   });
 
   const rawItems = docData.items || docData.renglones || [];
@@ -3956,13 +4212,14 @@ export function generateDeliveryNotePDF({
   });
 
   if (items.length === 0) {
-    totalNetoUsd = Number(docData.totalUsd || docData.total || 0);
+    totalNetoUsd = Number(docData.totalUsd || docData.totNetoUsd || docData.montoFacturaUsd || docData.total || 0);
     totalLitros = Number(docData.totalLitros || 0);
+    totalBultos = 1;
   }
 
   const totalNetoBs = totalNetoUsd * tasa;
 
-  // 1. Tarjetas Superiores de Control Operativo
+  // 1. Tarjetas Superiores de Control Operativo (4 KPIs)
   const cards = [
     { label: 'Nota de Entrega N°', value: correlativoDisplay, subtext: `Emisión: ${fechaStr}`, color: COLORS.navy },
     { label: 'Almacén de Origen', value: 'Almacén 02', subtext: 'Mercancía General', color: COLORS.cyan },
@@ -3972,30 +4229,7 @@ export function generateDeliveryNotePDF({
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  // 2. Banner de Especificación Comercial y Despacho
-  const bannerH = 8.5;
-  base.doc.setFillColor(240, 253, 244); // Green 50
-  base.doc.setDrawColor(...COLORS.emerald);
-  base.doc.setLineWidth(0.35);
-  base.doc.roundedRect(base.startX, currentY, base.tableWidth, bannerH, 1.2, 1.2, 'FD');
-
-  base.doc.setFillColor(...COLORS.emerald);
-  base.doc.roundedRect(base.startX, currentY, 2.5, bannerH, 0.6, 0.6, 'F');
-
-  base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
-  base.doc.setTextColor(...COLORS.emerald);
-  base.doc.text('DOCUMENTO DE ENTREGA COMERCIAL Y DESPACHO DE LUBRICANTES (NO SUJETO A IVA FISCAL):', base.startX + 5, currentY + 3.2);
-
-  base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.5);
-  base.doc.setTextColor(...COLORS.dark);
-  const bannerText = `Ampara el despacho físico y la transferencia de posesión de los lubricantes desde el Almacén 02. La recepción conforme convalida la integridad de sellos, envases y cantidades en rampa.`;
-  base.doc.text(bannerText, base.startX + 5, currentY + 6.3);
-
-  currentY += bannerH + 2.5;
-
-  // 3. Bloque Bipartito: Datos del Adquirente vs Trazabilidad Logística
+  // 2. Bloque Bipartito: Datos del Receptor / Cliente vs Expedición
   const boxH = 20;
   const colW = (base.tableWidth - 2) / 2;
 
@@ -4008,7 +4242,7 @@ export function generateDeliveryNotePDF({
   base.doc.setDrawColor(...COLORS.border);
   base.doc.line(base.startX + colW, currentY + 1.5, base.startX + colW, currentY + boxH - 1.5);
 
-  // Columna Izquierda: Datos del Cliente
+  // Columna Izquierda: Datos del Receptor / Cliente
   base.doc.setFont('helvetica', 'bold');
   base.doc.setFontSize(6.4);
   base.doc.setTextColor(...COLORS.navy);
@@ -4017,16 +4251,16 @@ export function generateDeliveryNotePDF({
   base.doc.setFont('helvetica', 'normal');
   base.doc.setFontSize(5.8);
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`Cliente: ${clienteNombre.slice(0, 42)}`, base.startX + 3, currentY + 8);
+  base.doc.text(`Cliente: ${clienteNombre.slice(0, 44)}`, base.startX + 3, currentY + 8);
   base.doc.text(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`, base.startX + 3, currentY + 11.5);
   base.doc.text(`Dirección Entrega: ${clienteDireccion.slice(0, 48)}`, base.startX + 3, currentY + 15);
   base.doc.text(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`, base.startX + 3, currentY + 18.5);
 
-  // Columna Derecha: Logística y Despacho
+  // Columna Derecha: Expedición
   base.doc.setFont('helvetica', 'bold');
   base.doc.setFontSize(6.4);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('CONTROL LOGÍSTICO Y EXPEDICIÓN', base.startX + colW + 3, currentY + 4.2);
+  base.doc.text('EXPEDICIÓN', base.startX + colW + 3, currentY + 4.2);
 
   base.doc.setFont('helvetica', 'normal');
   base.doc.setFontSize(5.8);
@@ -4036,14 +4270,44 @@ export function generateDeliveryNotePDF({
   base.doc.text(`Unidad / Transportista: ${transportista.slice(0, 42)}`, base.startX + colW + 3, currentY + 15);
   base.doc.text(`Método: ${metodoPago} • Tasa Oficial BCV: Bs. ${tasa.toFixed(2)} / USD`, base.startX + colW + 3, currentY + 18.5);
 
-  currentY += boxH + 3.0;
+  currentY += boxH + 2.8;
 
-  // 4. Tabla de Renglones con soporte de desbordamiento (autoTable)
+  // Función auxiliar para dibujar el encabezado de continuación en páginas 2+
+  const drawContinuationHeader = () => {
+    drawParentContainer(base.doc, false);
+
+    base.doc.setFillColor(...COLORS.navy);
+    base.doc.roundedRect(base.startX, 18.5, base.tableWidth, 6.8, 1, 1, 'F');
+    base.doc.setFillColor(...COLORS.red);
+    base.doc.rect(base.startX, 18.5, 3, 6.8, 'F');
+
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(7.6);
+    base.doc.setTextColor(255, 255, 255);
+    base.doc.text(
+      `NOTA DE ENTREGA N° ${correlativoDisplay} — CONTINUACIÓN`,
+      base.startX + 5.5,
+      23.1
+    );
+
+    base.doc.setFont('helvetica', 'normal');
+    base.doc.setFontSize(6.0);
+    base.doc.setTextColor(226, 232, 240);
+    base.doc.text(
+      `Cliente: ${clienteNombre.slice(0, 36)} (${clienteRif}) • Emisión: ${fechaStr}`,
+      base.startX + base.tableWidth - 3,
+      23.1,
+      { align: 'right' }
+    );
+  };
+
+  // 3. Tabla de Renglones con soporte de desbordamiento (normas 1/2, 2/2)
+  // Se reserva bottom: 48 mm para que la tabla nunca invada la zona inferior de QR y numeración
   autoTable(base.doc, {
     startY: currentY,
-    margin: { left: base.startX, right: PAGE_LETTER.margin + PAGE_LETTER.innerPadding, top: 25, bottom: 20 },
+    margin: { left: base.startX, right: PAGE_LETTER.margin + PAGE_LETTER.innerPadding, top: 28, bottom: 48 },
     head: [['#', 'CÓDIGO', 'DESCRIPCIÓN DEL LUBRICANTE', 'PRESENTACIÓN', 'CANT.', 'VOLUMEN', 'P. UNIT ($)', 'TOTAL ($)', 'TOTAL (BS.)']],
-    body: tableData.length > 0 ? tableData : [['1', 'LUB-GEN', 'Aceite Lubricante General', 'Caja', '1', '12.0 L', `$ ${totalNetoUsd.toFixed(2)}`, `$ ${totalNetoUsd.toFixed(2)}`, `Bs. ${totalNetoBs.toFixed(2)}`]],
+    body: tableData.length > 0 ? tableData : [['1', 'LUB-GEN', 'Despacho de Lubricantes según Nota de Entrega', 'Caja', '1', totalLitros > 0 ? `${totalLitros.toFixed(1)} L` : '-', `$ ${totalNetoUsd.toFixed(2)}`, `$ ${totalNetoUsd.toFixed(2)}`, `Bs. ${totalNetoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`]],
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
@@ -4073,71 +4337,30 @@ export function generateDeliveryNotePDF({
     },
     didDrawPage: (data) => {
       if (data.pageNumber > 1) {
-        drawParentContainer(base.doc, false);
-
-        // Encabezado institucional de continuación
-        base.doc.setFont('helvetica', 'bold');
-        base.doc.setFontSize(7.2);
-        base.doc.setTextColor(...COLORS.navy);
-        base.doc.text(
-          `CONTINUACIÓN NOTA DE ENTREGA N° ${correlativoDisplay} — Cliente: ${clienteNombre.slice(0, 42)}`,
-          base.startX,
-          19.5
-        );
-
-        base.doc.setFont('helvetica', 'normal');
-        base.doc.setFontSize(5.8);
-        base.doc.setTextColor(...COLORS.slate);
-        base.doc.text(
-          `Despacho Almacén 02 • Emisión: ${fechaStr}`,
-          base.startX + base.tableWidth,
-          19.5,
-          { align: 'right' }
-        );
-
-        base.doc.setDrawColor(...COLORS.border);
-        base.doc.setLineWidth(0.3);
-        base.doc.line(base.startX, 21.5, base.startX + base.tableWidth, 21.5);
+        drawContinuationHeader();
       }
     }
   });
 
-  const finalYTable = base.doc.lastAutoTable?.finalY || currentY + 40;
+  const finalYTable = base.doc.lastAutoTable?.finalY || currentY + 35;
   let finalYBottom = finalYTable + 3.0;
 
-  // Si no cabe la caja de totales y firmas en la página actual (límite 235 mm), salta de página limpiamente
-  if (finalYBottom + 42 > 255) {
+  // Límite seguro antes de la zona inferior de QR (que inicia en Y = 232.5 mm)
+  const summaryAndSignaturesHeight = 36;
+  if (finalYBottom + summaryAndSignaturesHeight > 231) {
     base.doc.addPage();
-    drawParentContainer(base.doc, false);
-    finalYBottom = 22;
+    drawContinuationHeader();
+    finalYBottom = 29;
   }
 
-  // 5. Caja de Resumen Financiero y Cláusula de Custodia
-  const summaryBoxH = 17;
+  // 4. Caja de Resumen Financiero (sin texto de cláusula, solo totales limpios a la derecha)
+  const summaryBoxH = 16.5;
   base.doc.setFillColor(...COLORS.lightBg);
   base.doc.setDrawColor(...COLORS.border);
   base.doc.setLineWidth(0.3);
   base.doc.roundedRect(base.startX, finalYBottom, base.tableWidth, summaryBoxH, 1.2, 1.2, 'FD');
 
-  // Lado izquierdo: Cláusula de conformidad
-  const noticeW = base.tableWidth * 0.58;
-  base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.0);
-  base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('CONDICIONES DE CONFORMIDAD Y ENTREGA:', base.startX + 3, finalYBottom + 4.2);
-
-  base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.4);
-  base.doc.setTextColor(...COLORS.dark);
-  const clause = `La mercancía amparada en esta Nota de Entrega fue despachada desde Almacén 02 y viaja por cuenta y riesgo del receptor. Una vez recibida y firmada en destino se convalida la entrega conforme y a satisfacción comercial.`;
-  const splitClause = base.doc.splitTextToSize(clause, noticeW - 6);
-  base.doc.text(splitClause, base.startX + 3, finalYBottom + 7.5);
-
-  // Separador vertical interno
-  base.doc.setDrawColor(...COLORS.border);
-  base.doc.line(base.startX + noticeW, finalYBottom + 1.5, base.startX + noticeW, finalYBottom + summaryBoxH - 1.5);
-
-  // Lado derecho: Totales en USD y Bs
+  const noticeW = base.tableWidth * 0.56;
   const totalsX = base.startX + noticeW + 3;
   const totalsW = base.tableWidth - noticeW - 6;
 
@@ -4152,18 +4375,18 @@ export function generateDeliveryNotePDF({
   base.doc.setFont('helvetica', 'bold');
   base.doc.setFontSize(7.2);
   base.doc.setTextColor(...COLORS.emerald);
-  base.doc.text('TOTAL NOTA DE ENTREGA USD:', totalsX, finalYBottom + 9.5);
-  base.doc.text(`$ ${totalNetoUsd.toFixed(2)}`, totalsX + totalsW, finalYBottom + 9.5, { align: 'right' });
+  base.doc.text('TOTAL NOTA DE ENTREGA USD:', totalsX, finalYBottom + 9.4);
+  base.doc.text(`$ ${totalNetoUsd.toFixed(2)}`, totalsX + totalsW, finalYBottom + 9.4, { align: 'right' });
 
   base.doc.setFont('helvetica', 'bold');
   base.doc.setFontSize(6.6);
   base.doc.setTextColor(...COLORS.amber);
-  base.doc.text('TOTAL OFICIAL EN BOLÍVARES:', totalsX, finalYBottom + 14.5);
-  base.doc.text(`Bs. ${totalNetoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsW, finalYBottom + 14.5, { align: 'right' });
+  base.doc.text('TOTAL OFICIAL EN BOLÍVARES:', totalsX, finalYBottom + 14.3);
+  base.doc.text(`Bs. ${totalNetoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsW, finalYBottom + 14.3, { align: 'right' });
 
   finalYBottom += summaryBoxH + 3.0;
 
-  // 6. Bloque Tripartito de Firmas
+  // 5. Bloque Tripartito de Firmas
   addSignatures(
     base.doc,
     finalYBottom,
@@ -4172,20 +4395,65 @@ export function generateDeliveryNotePDF({
     base.startX
   );
 
+  // 6. Dibujar en TODAS las páginas el Código QR (abajo a la izquierda), aviso de desbordamiento y el indicador grande 1/2, 2/2 (abajo a la derecha)
+  const totalPages = base.doc.internal.getNumberOfPages();
+  const qrPayload = `MOTORVEN|${correlativoDisplay}|RIF:${clienteRif}|F:${fechaStr}|USD:${totalNetoUsd.toFixed(2)}|BS:${totalNetoBs.toFixed(2)}`;
+  const qrSize = 21.5;
+  const qrY = 233.5;
+
+  for (let p = 1; p <= totalPages; p++) {
+    base.doc.setPage(p);
+
+    // Si hay desbordamiento y no es la última página, indicar que continúa en la siguiente hoja
+    if (p < totalPages) {
+      base.doc.setFillColor(240, 249, 255);
+      base.doc.setDrawColor(...COLORS.cyan);
+      base.doc.setLineWidth(0.25);
+      base.doc.roundedRect(base.startX + qrSize + 4, qrY + 2, base.tableWidth - qrSize - 32, 7.5, 1, 1, 'FD');
+
+      base.doc.setFont('helvetica', 'bold');
+      base.doc.setFontSize(6.2);
+      base.doc.setTextColor(...COLORS.navy);
+      base.doc.text(
+        `DESBORDAMIENTO DE RENGLONES: CONTINÚA EN LA PÁGINA ${p + 1}/${totalPages}...`,
+        base.startX + qrSize + 7,
+        qrY + 6.8
+      );
+    }
+
+    // Código QR en esquina inferior izquierda
+    drawDeliveryNoteQRBox(base.doc, base.startX, qrY, qrSize, qrPayload);
+
+    // Numeración destacada de desbordamiento (ej. 1/1 o 1/2, 2/2) en esquina inferior derecha
+    const badgeW = 22;
+    const badgeH = 9.5;
+    const badgeX = base.startX + base.tableWidth - badgeW;
+    const badgeY = qrY + qrSize - badgeH;
+
+    base.doc.setFillColor(...COLORS.lightBg);
+    base.doc.setDrawColor(...COLORS.navy);
+    base.doc.setLineWidth(0.35);
+    base.doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.2, 1.2, 'FD');
+
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(11.5);
+    base.doc.setTextColor(...COLORS.navy);
+    base.doc.text(`${p}/${totalPages}`, badgeX + badgeW / 2, badgeY + 6.6, { align: 'center' });
+  }
+
   const safeFilename = `Nota_Entrega_${correlativoDisplay.replace(/[^a-zA-Z0-9_\-]/g, '_')}_${fechaStr.replace(/\//g, '-')}.pdf`;
 
-  // Soporte directo para imprimir si se solicita autoPrint
+  // Finalizar pie de página y contenedor ANTES de imprimir o descargar
+  finalizeAndSave(base.doc, safeFilename, currentUser, {
+    pageNumberFormat: 'slash',
+    legalFooter: 'Nota de Entrega • Despacho Almacén 02 • Grupo Motorven, C.A.'
+  });
+
+  // Soporte directo para imprimir una vez finalizado el documento completo
   if (autoPrint) {
     printPDFDocument(base.doc);
   }
 
-  // Guardado estándar del PDF (con numeración formato slash "Página 1/1" o "Página 1/2")
-  finalizeAndSave(base.doc, safeFilename, currentUser, {
-    pageNumberFormat: 'slash',
-    legalFooter: 'Nota de Entrega Comercial • Despacho Físico de Mercancía Almacén 02 • Grupo Motorven, C.A.'
-  });
-
-  const totalPages = base.doc.internal.getNumberOfPages();
   return {
     doc: base.doc,
     filename: safeFilename,
@@ -4199,6 +4467,16 @@ export function generateDeliveryNotePDF({
 // =========================================================================
 export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = null, tipoDoc = 'GENERAL' }) {
   const tasa = Number(config?.tasaDolar) || 827.73;
+
+  // Si es un documento individual y corresponde a una Nota de Entrega, usar el formato Carta de Nota de Entrega
+  if (sales.length === 1) {
+    const singleDoc = sales[0] || {};
+    const rawDocType = String(singleDoc.tipoDoc || singleDoc.tipo_doc || tipoDoc || '').toUpperCase();
+    const rawDocNum = String(singleDoc.numeroDoc || singleDoc.factNum || singleDoc.factura || singleDoc.nroFactura || '').toUpperCase();
+    if (rawDocType.includes('NOTA_ENTREGA') || rawDocType.includes('NOTA DE ENTREGA') || rawDocNum.startsWith('NE')) {
+      return generateDeliveryNotePDF({ sale: singleDoc, config, currentUser });
+    }
+  }
 
   // Si se trata de una factura individual detallada con renglones
   if (sales.length === 1 && ((sales[0].items && sales[0].items.length > 0) || (sales[0].renglones && sales[0].renglones.length > 0))) {

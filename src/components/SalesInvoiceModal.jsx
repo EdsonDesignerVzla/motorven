@@ -17,8 +17,8 @@ import {
   Truck
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
-import { formatBs, formatUsd } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF } from '../services/pdfReportService';
+import { formatBs, formatUsd, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, buildQRCodeMatrix } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -27,28 +27,25 @@ import motorvenLogo from '../assets/logo_motorven_limpio.png';
  * - Si todos caben en 1 sola hoja (hasta 5 renglones con totales y firma), genera 1 sola página.
  * - Si rebasan la capacidad, divide en múltiples páginas mostrando la numeración "1/2", "2/2".
  */
-function splitInvoiceItemsIntoPages(items) {
+function splitInvoiceItemsIntoPages(items, maxPerFirstPage = 5) {
   const allItems = items || [];
-  if (allItems.length <= 5) {
+  if (allItems.length <= maxPerFirstPage) {
     return [allItems];
   }
 
   const pages = [];
   const totalItems = allItems.length;
-  // Con márgenes de 4.5 cm superior e inferior, la primera página lleva hasta 5 ítems si son pocos o 6 si son muchos
-  const firstPageCount = totalItems <= 8 ? Math.min(5, totalItems - 1) : 6;
+  const firstPageCount = totalItems <= maxPerFirstPage + 3 ? Math.min(maxPerFirstPage, totalItems - 1) : maxPerFirstPage + 1;
   pages.push(allItems.slice(0, firstPageCount));
 
   let currentIndex = firstPageCount;
   while (currentIndex < totalItems) {
     const remainingCount = totalItems - currentIndex;
-    // Si lo que queda cabe en la hoja final (máximo 5 ítems junto con totales y firma)
-    if (remainingCount <= 5) {
+    if (remainingCount <= maxPerFirstPage) {
       pages.push(allItems.slice(currentIndex));
       break;
     }
-    // Si quedan más de 5, llenamos una página intermedia de hasta 7 ítems
-    const take = Math.min(7, remainingCount - 1);
+    const take = Math.min(maxPerFirstPage + 2, remainingCount - 1);
     pages.push(allItems.slice(currentIndex, currentIndex + take));
     currentIndex += take;
   }
@@ -71,7 +68,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
   const isNc = sale.tipoDoc === 'NOTA_CREDITO';
   const isNd = sale.tipoDoc === 'NOTA_DEBITO';
-  const isNe = sale.tipoDoc === 'NOTA_ENTREGA';
+  const isNe =
+    sale.tipoDoc === 'NOTA_ENTREGA' ||
+    sale.tipo_doc === 'NOTA_ENTREGA' ||
+    String(sale.numeroDoc || sale.nroFactura || sale.factNum || '').toUpperCase().startsWith('NE');
   const isFacturaOrNotaEntrega = isNe || (!isNc && !isNd && sale.tipoDoc !== 'COTIZACION');
   const invoiceTotalBs = Number(sale.totalBs) || (Number(sale.totalUsd || 0) * tasaBcv);
 
@@ -103,6 +103,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   };
 
   const correlativoDisplay = String(sale.numeroDoc || sale.nroFactura || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
+  const neCorrelativoDisplay = `NE-${correlativoDisplay}`;
 
   const handlePrint = () => {
     if (viewMode === 'CARTA') {
@@ -261,6 +262,14 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   };
 
   const handlePrintReport = () => {
+    if (isNe) {
+      generateDeliveryNotePDF({
+        sale,
+        config: safeConfig,
+        currentUser
+      });
+      return;
+    }
     generateSalesPOSPDF({
       sales: [sale],
       config: safeConfig,
@@ -286,9 +295,19 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     : new Date(fechaObj.getTime() + (diasCreditoDoc * 24 * 60 * 60 * 1000));
   const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
 
-  // Paginación para formato Carta Vertical
-  const pages = splitInvoiceItemsIntoPages(sale.items);
+  // Paginación para formato Carta Vertical (Nota de Entrega admite hasta 10 renglones por hoja; Factura SENIAT hasta 5)
+  const pages = splitInvoiceItemsIntoPages(sale.items, isNe ? 10 : 5);
   const totalPages = pages.length;
+
+  const totalLitrosDoc = (sale.items || []).reduce((acc, it) => {
+    const qty = Number(it.cantidad || 1);
+    const unitL = Number(it.litrosUnitarios || it.litrosPorUnidad || resolveProductLitersPerUnit(it) || 0);
+    return acc + (it.litrosTotales ? Number(it.litrosTotales) : qty * unitL);
+  }, 0);
+  const totalBultosDoc = (sale.items || []).reduce((acc, it) => acc + Number(it.cantidad || 1), 0);
+  const qrMatrix = isNe
+    ? buildQRCodeMatrix(`MOTORVEN|${neCorrelativoDisplay}|RIF:${sale.clienteRif || ''}|F:${fechaStr}|USD:${Number(sale.totalUsd || 0).toFixed(2)}|BS:${invoiceTotalBs.toFixed(2)}`)
+    : null;
 
   const getItemsSubtotal = (itemsList) => {
     return (itemsList || []).reduce((acc, it) => acc + (it.subtotalUsd || (it.cantidad * it.precioUsd)), 0);
@@ -911,7 +930,274 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                       </div>
                     )}
 
-                    {/* Hoja Tamaño Carta Individual (Márgenes SENIAT: Sup: 4.5cm, Inf: 4.5cm, Izq: 1.5cm, Der: 1.5cm) */}
+                    {/* Hoja Tamaño Carta Individual */}
+                    {isNe ? (
+                      <div
+                        className="carta-page"
+                        style={{
+                          width: '760px',
+                          minHeight: '1000px',
+                          background: '#ffffff',
+                          color: '#0f172a',
+                          padding: '22px 24px 20px 24px',
+                          borderRadius: '6px',
+                          boxShadow: '0 12px 35px rgba(0,0,0,0.5)',
+                          fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                          fontSize: '0.78rem',
+                          lineHeight: '1.4',
+                          boxSizing: 'border-box',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          position: 'relative',
+                          border: '1px solid #cbd5e1'
+                        }}
+                      >
+                        <div>
+                          {isFirstPage ? (
+                            <>
+                              {/* Membrete Institucional MOTORVEN */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                <div>
+                                  <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#0b1e36', letterSpacing: '0.5px', lineHeight: 1.1 }}>
+                                    MOTORVEN, C.A.
+                                  </div>
+                                  <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#e11d48', marginTop: '2px' }}>
+                                    RIF: J-40829110-4 | Distribuidora Mayorista de Lubricantes e Insumos
+                                  </div>
+                                  <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '1px' }}>
+                                    Sede Central — Calle 48 con Av. Pedro León Torres, Barquisimeto, Edo. Lara
+                                  </div>
+                                </div>
+
+                                <div style={{ border: '1px solid #cbd5e1', borderRadius: '6px', background: '#f8fafc', padding: '6px 12px', textAlign: 'right', minWidth: '195px' }}>
+                                  <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>
+                                    Emisión: {fechaStr}, {horaStr}
+                                  </div>
+                                  <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 800, marginTop: '2px' }}>
+                                    Tasa BCV: Bs. {tasaBcv.toFixed(2)} / USD
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Línea divisoria tricolor */}
+                              <div style={{ display: 'flex', height: '3px', marginBottom: '8px' }}>
+                                <div style={{ flex: 2.2, background: '#0b1e36' }} />
+                                <div style={{ flex: 1, background: '#e11d48' }} />
+                              </div>
+
+                              {/* Cinta Azul Marino: NOTA DE ENTREGA */}
+                              <div style={{ background: '#0b1e36', color: '#ffffff', borderRadius: '4px', padding: '6px 12px', borderLeft: '5px solid #e11d48', fontWeight: 900, fontSize: '0.88rem', letterSpacing: '0.6px', marginBottom: '10px' }}>
+                                NOTA DE ENTREGA
+                              </div>
+
+                              {/* 4 Tarjetas KPI */}
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '10px' }}>
+                                <div style={{ border: '1px solid #cbd5e1', borderTop: '3px solid #0b1e36', borderRadius: '5px', background: '#f8fafc', padding: '6px 8px' }}>
+                                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>NOTA DE ENTREGA N°</div>
+                                  <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0f172a', marginTop: '2px' }}>{correlativoDisplay}</div>
+                                </div>
+                                <div style={{ border: '1px solid #cbd5e1', borderTop: '3px solid #0284c7', borderRadius: '5px', background: '#f8fafc', padding: '6px 8px' }}>
+                                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>ALMACÉN DE ORIGEN</div>
+                                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a', marginTop: '3px' }}>{sale.almacenOrigen || '02 - Almacén 02'}</div>
+                                </div>
+                                <div style={{ border: '1px solid #cbd5e1', borderTop: '3px solid #f59e0b', borderRadius: '5px', background: '#f8fafc', padding: '6px 8px' }}>
+                                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>CARGA TOTAL</div>
+                                  <div style={{ fontSize: '0.82rem', fontWeight: 900, color: '#0f172a', marginTop: '2px' }}>{totalBultosDoc} Unid. ({totalLitrosDoc.toFixed(1)} L)</div>
+                                </div>
+                                <div style={{ border: '1px solid #cbd5e1', borderTop: '3px solid #10b981', borderRadius: '5px', background: '#f8fafc', padding: '6px 8px' }}>
+                                  <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>MONTO TOTAL USD</div>
+                                  <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0f172a', marginTop: '2px' }}>{formatUsd(sale.totalUsd)}</div>
+                                </div>
+                              </div>
+
+                              {/* Cuadro de 2 Columnas: DATOS DEL RECEPTOR / CLIENTE y EXPEDICIÓN */}
+                              <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '12px', background: '#f8fafc', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '10px', fontSize: '0.72rem' }}>
+                                <div>
+                                  <div style={{ fontSize: '0.66rem', fontWeight: 900, color: '#0b1e36', textTransform: 'uppercase', marginBottom: '4px' }}>
+                                    DATOS DEL RECEPTOR / CLIENTE
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '115px 1fr', rowGap: '2px' }}>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Cliente:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.clienteNombre}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>RIF / C.I.:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.clienteRif}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Dirección Entrega:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.clienteDireccion || 'Calle 48 con Av. Pedro León Torres, Barquisimeto'}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Condición • Venc.:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.condicionPago || 'CONTADO'} • Vence: {fechaVencStr} ({diasCreditoDoc}d)</strong>
+                                  </div>
+                                </div>
+
+                                <div style={{ borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
+                                  <div style={{ fontSize: '0.66rem', fontWeight: 900, color: '#0b1e36', textTransform: 'uppercase', marginBottom: '4px' }}>
+                                    EXPEDICIÓN
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '125px 1fr', rowGap: '2px' }}>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Despachado de:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.almacenOrigen || '02 - Almacén 02 (Despacho General)'}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Pedido • Vendedor:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.orderId || 'VENTA DIRECTA POS'} • {sale.vendedor || 'OFICINA PRINCIPAL'}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Unidad / Transp.:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.transporte || 'Retiro Directo por Cliente en Rampa'}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Método • Tasa BCV:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.metodoPago || 'EFECTIVO USD'} • Bs. {tasaBcv.toFixed(2)}/USD</strong>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ background: '#0b1e36', color: '#ffffff', borderRadius: '4px', padding: '6px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', fontSize: '0.75rem', fontWeight: 800 }}>
+                              <span>NOTA DE ENTREGA N° {correlativoDisplay} — CONTINUACIÓN</span>
+                              <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#cbd5e1' }}>
+                                {sale.clienteNombre} ({sale.clienteRif}) | Viene de Pág. {pageNumber - 1}: ${formatUsd(prevAccumulatedUsd)}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Tabla de Renglones de Nota de Entrega */}
+                          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.72rem' }}>
+                            <thead>
+                              <tr style={{ background: '#0b1e36', color: '#ffffff', textAlign: 'left' }}>
+                                <th style={{ padding: '6px 6px', width: '28px', textAlign: 'center' }}>#</th>
+                                <th style={{ padding: '6px 6px', width: '78px' }}>CÓDIGO</th>
+                                <th style={{ padding: '6px 6px' }}>DESCRIPCIÓN DEL LUBRICANTE</th>
+                                <th style={{ padding: '6px 6px', textAlign: 'center', width: '80px' }}>PRESENT.</th>
+                                <th style={{ padding: '6px 6px', textAlign: 'center', width: '48px' }}>CANT.</th>
+                                <th style={{ padding: '6px 6px', textAlign: 'right', width: '64px' }}>VOLUMEN</th>
+                                <th style={{ padding: '6px 6px', textAlign: 'right', width: '68px' }}>P. UNIT ($)</th>
+                                <th style={{ padding: '6px 6px', textAlign: 'right', width: '75px' }}>TOTAL ($)</th>
+                                <th style={{ padding: '6px 6px', textAlign: 'right', width: '92px' }}>TOTAL (BS.)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pageItems.map((it, idx) => {
+                                const globalIdx = itemsBefore + idx + 1;
+                                const qty = Number(it.cantidad || 1);
+                                const unitUsd = Number(it.precioUsd || 0);
+                                const subUsd = Number(it.subtotalUsd || qty * unitUsd);
+                                const subBs = subUsd * tasaBcv;
+                                const litrosUnit = Number(it.litrosPorUnidad || 12);
+                                const volRow = Number(it.volumenTotal || qty * litrosUnit);
+                                return (
+                                  <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                                    <td style={{ padding: '5px 6px', textAlign: 'center', fontWeight: 700 }}>{globalIdx}</td>
+                                    <td style={{ padding: '5px 6px', fontWeight: 800, color: '#0f172a', fontSize: '0.68rem' }}>{it.codigo || it.sku || 'LUB-001'}</td>
+                                    <td style={{ padding: '5px 6px', fontWeight: 600, color: '#0f172a' }}>{it.descripcion || it.nombre}</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'center', color: '#475569', fontSize: '0.66rem' }}>{it.presentacion || 'CAJA / TAMBOR'}</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'center', fontWeight: 800 }}>{qty}</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#475569' }}>{volRow.toFixed(1)} L</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'right' }}>{formatUsd(unitUsd)}</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#0f172a' }}>{formatUsd(subUsd)}</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: '#475569' }}>{formatBs(subBs)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+
+                          {!isLastPage && (
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                background: '#eff6ff',
+                                border: '1px solid #bfdbfe',
+                                borderRadius: '6px',
+                                padding: '0.45rem 0.85rem',
+                                marginTop: '0.45rem',
+                                fontSize: '0.72rem'
+                              }}
+                            >
+                              <span style={{ color: '#1e40af', fontWeight: 800 }}>
+                                SUBTOTAL ACUMULADO HOJA {pageNumber}: ${formatUsd(currentAccumulatedUsd)} (Bs. {formatBs(currentAccumulatedBs)})
+                              </span>
+                              <span style={{ color: '#1e3a8a', fontWeight: 900 }}>
+                                CONTINÚA EN LA PÁGINA {pageNumber + 1}/{totalPages} ({pageNumber}/{totalPages}) ...
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* PARTE INFERIOR: Totales, 3 Firmas, QR Inferior Izquierdo y Desbordamiento 1/2 Inferior Derecho */}
+                        <div style={{ marginTop: 'auto', paddingTop: '0.5rem' }}>
+                          {isLastPage && (
+                            <>
+                              {/* Recuadro de Totales alineado a la derecha (sin cláusula tachada) */}
+                              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+                                <div style={{ width: '340px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '8px 12px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748b', marginBottom: '4px' }}>
+                                    <span>Subtotal Mercancía (Sin IVA):</span>
+                                    <strong style={{ color: '#0f172a' }}>{formatUsd(sale.subtotalUsd || sale.totalUsd)}</strong>
+                                  </div>
+                                  <div style={{ borderTop: '1.5px solid #cbd5e1', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '0.76rem', fontWeight: 900, color: '#0b1e36' }}>TOTAL NOTA DE ENTREGA USD:</span>
+                                    <span style={{ fontSize: '0.96rem', fontWeight: 900, color: '#10b981' }}>{formatUsd(sale.totalUsd)}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                                    <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#d97706' }}>TOTAL OFICIAL EN BOLÍVARES:</span>
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: '#d97706' }}>Bs. {formatBs(invoiceTotalBs)}</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 3 Líneas de Firmas */}
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '18px', marginBottom: '10px', textAlign: 'center' }}>
+                                <div>
+                                  <div style={{ borderBottom: '1px solid #64748b', height: '22px', marginBottom: '4px' }} />
+                                  <div style={{ fontSize: '0.65rem', fontWeight: 800, color: '#0f172a' }}>DESPACHADO POR (ALMACÉN 02)</div>
+                                </div>
+                                <div>
+                                  <div style={{ borderBottom: '1px solid #64748b', height: '22px', marginBottom: '4px' }} />
+                                  <div style={{ fontSize: '0.65rem', fontWeight: 800, color: '#0f172a' }}>TRANSPORTADO POR (CHOFER / C.I.)</div>
+                                </div>
+                                <div>
+                                  <div style={{ borderBottom: '1px solid #64748b', height: '22px', marginBottom: '4px' }} />
+                                  <div style={{ fontSize: '0.65rem', fontWeight: 800, color: '#0f172a' }}>RECIBIDO CONFORME (CLIENTE / SELLO Y FIRMA)</div>
+                                </div>
+                              </div>
+                            </>
+                          )}
+
+                          {/* Franja Inferior: QR a la izquierda + numeración 1/2 a la derecha */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderTop: '1px solid #cbd5e1', paddingTop: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              {/* Código QR Matricial SVG */}
+                              <div style={{ border: '1px solid #0b1e36', borderRadius: '4px', padding: '3px', background: '#ffffff', textAlign: 'center' }}>
+                                {qrMatrix && (
+                                  <svg width="62" height="62" viewBox={`0 0 ${qrMatrix.length} ${qrMatrix.length}`} shapeRendering="crispEdges">
+                                    {qrMatrix.map((row, rIdx) =>
+                                      row.map((cell, cIdx) =>
+                                        cell === 1 ? (
+                                          <rect key={`${rIdx}-${cIdx}`} x={cIdx} y={rIdx} width={1} height={1} fill="#0b1e36" />
+                                        ) : null
+                                      )
+                                    )}
+                                  </svg>
+                                )}
+                                <div style={{ fontSize: '0.52rem', fontWeight: 900, color: '#0b1e36', lineHeight: 1, marginTop: '1px' }}>
+                                  QR VERIF.
+                                </div>
+                              </div>
+                              <div style={{ fontSize: '0.62rem', color: '#475569', maxWidth: '410px', lineHeight: '1.3' }}>
+                                <div><strong>SIGNUM ERP • MOTORVEN, C.A.</strong> — Nota de Entrega N° <strong>{correlativoDisplay}</strong></div>
+                                <div>Monto en <strong>{formatBs(invoiceTotalBs)}</strong> referencial a la fecha de emisión (Tasa BCV: Bs. {tasaBcv.toFixed(2)}/USD).</div>
+                              </div>
+                            </div>
+
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ display: 'inline-block', border: '1.5px solid #0b1e36', borderRadius: '6px', background: '#f8fafc', padding: '4px 14px', fontSize: '1.05rem', fontWeight: 900, color: '#0b1e36', letterSpacing: '1px' }}>
+                                {pageNumber}/{totalPages}
+                              </div>
+                              <div style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 700, marginTop: '2px' }}>
+                                Página {pageNumber} de {totalPages}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
                     <div
                       className="carta-page"
                       style={{
@@ -1207,6 +1493,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                         </div>
                       </div>
                     </div>
+                    )}
                   </div>
                 );
               })}
@@ -1242,7 +1529,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 gap: '6px'
               }}
             >
-              <Plus size={16} /> Emitir Nueva Factura
+              <Plus size={16} /> {isNe ? 'Emitir Nueva Nota de Entrega' : 'Emitir Nueva Factura'}
             </button>
             <button
               type="button"
@@ -1266,9 +1553,9 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
               className="btn btn-print-report"
               onClick={handlePrint}
               style={{ fontSize: '0.85rem' }}
-              title="Generar y descargar Factura Fiscal Oficial en PDF (Formato Carta SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos)"
+              title={isNe ? 'Generar e imprimir Nota de Entrega en PDF Tamaño Carta con QR y desbordamiento 1/2' : 'Generar y descargar Factura Fiscal Oficial en PDF (Formato Carta SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos)'}
             >
-              <Printer size={16} color="#ffffff" /> Imprimir Factura
+              <Printer size={16} color="#ffffff" /> {isNe ? 'Imprimir Nota de Entrega (Carta)' : 'Imprimir Factura'}
             </button>
           </div>
         </div>

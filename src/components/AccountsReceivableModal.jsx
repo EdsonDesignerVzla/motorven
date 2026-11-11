@@ -18,7 +18,7 @@ import {
     isCxcEntryDeleted,
     sanitizeCxcDeletedDocsStorage
 } from '../services/supabaseService';
-import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { generateAccountsReceivablePDF, generateDeliveryNotePDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
@@ -1554,6 +1554,52 @@ export function AccountsReceivableModal({
         document.body.removeChild(link);
     };
 
+    const handlePrintDeliveryNotePdf = (inv) => {
+        if (!inv) return;
+        const rate = Number(inv.tasa || tasaBcv || 421.88);
+        const totalUsdVal = Number(inv.montoFacturaUsd || inv.subtotalUsd || 0);
+        const itemsList = Array.isArray(inv.items) && inv.items.length > 0
+            ? inv.items
+            : [
+                {
+                    codigo: 'NE-DESP',
+                    descripcion: inv.observaciones
+                        ? `Despacho Nota de Entrega #${inv.factura} — ${inv.observaciones}`
+                        : `Mercancía según Nota de Entrega #${inv.factura}`,
+                    presentacion: 'DESPACHO GENERAL',
+                    cantidad: 1,
+                    litrosPorUnidad: 12,
+                    precioUsd: totalUsdVal,
+                    subtotalUsd: totalUsdVal
+                }
+            ];
+        generateDeliveryNotePDF({
+            sale: {
+                id: inv.factura,
+                correlativo: inv.factura,
+                tipoDocumento: 'NOTA_ENTREGA',
+                fecha: inv.fechaEmision || inv.fechaEmisionIso,
+                fechaVencimiento: inv.fechaVencimiento || inv.fechaVencimientoIso,
+                diasCredito: inv.diasCredito || 0,
+                condicionPago: inv.diasCredito > 0 ? `CRÉDITO ${inv.diasCredito} DÍAS` : 'CONTADO',
+                metodoPago: inv.formaPago || 'CRÉDITO / DESPACHO',
+                clienteNombre: inv.cliente,
+                clienteRif: inv.rif,
+                clienteDireccion: inv.direccion !== 'N/A' ? inv.direccion : 'Sede / Domicilio del Cliente',
+                vendedor: inv.vendedorDisplay || inv.vendedorNombre || inv.vendedor,
+                almacenOrigen: '02 - Almacén 02',
+                subtotalUsd: totalUsdVal,
+                totalUsd: totalUsdVal,
+                totalBs: round2(totalUsdVal * rate),
+                tasaBcv: rate,
+                items: itemsList
+            },
+            tasaBcv: rate,
+            currentUser,
+            autoPrint: true
+        });
+    };
+
     if (isOpen === false) return null;
 
     const isNotaEntregaTab = activeDocType === 'NOTA_ENTREGA';
@@ -2868,6 +2914,25 @@ export function AccountsReceivableModal({
                                                             <Eye size={14} />
                                                         </button>
 
+                                                        {inv.tipoDoc === 'NOTA_ENTREGA' && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handlePrintDeliveryNotePdf(inv)}
+                                                                className="btn"
+                                                                style={{
+                                                                    padding: '0.35rem 0.55rem',
+                                                                    borderRadius: '7px',
+                                                                    background: 'rgba(14, 165, 233, 0.16)',
+                                                                    color: '#38bdf8',
+                                                                    border: '1px solid rgba(14, 165, 233, 0.4)',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                                title="Imprimir PDF Nota de Entrega (Tamaño Carta con QR y 1/2)"
+                                                            >
+                                                                <Printer size={14} />
+                                                            </button>
+                                                        )}
+
                                                         {/* Botón de EDITAR al lado de ELIMINAR */}
                                                         <button
                                                             type="button"
@@ -3486,7 +3551,18 @@ export function AccountsReceivableModal({
                                 </div>
                             </div>
 
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', paddingTop: '0.5rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', paddingTop: '0.5rem', flexWrap: 'wrap' }}>
+                                {selectedInvoiceDetail.tipoDoc === 'NOTA_ENTREGA' && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handlePrintDeliveryNotePdf(selectedInvoiceDetail)}
+                                        className="btn btn-print-report"
+                                        style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                                    >
+                                        <Printer size={14} color="#ffffff" />
+                                        <span>Imprimir Nota de Entrega (Carta)</span>
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     onClick={() => {

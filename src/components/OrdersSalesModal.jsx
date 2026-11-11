@@ -3215,6 +3215,35 @@ export default function OrdersSalesModal({
                               </button>
                             )}
 
+                            {isNotaEntrega && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedOrder(ord);
+                                  generateDeliveryNotePDF({
+                                    order: ord,
+                                    config,
+                                    currentUser,
+                                    client: safeClients.find(c => c.id === ord.clienteId || c.rif === ord.clienteRif),
+                                    autoPrint: true
+                                  });
+                                }}
+                                className="btn btn-print-report btn-sm"
+                                style={{
+                                  fontSize: '0.72rem',
+                                  padding: '4px 8px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)'
+                                }}
+                                title="Imprimir y descargar Nota de Entrega en PDF Tamaño Carta con QR y desbordamiento 1/2"
+                              >
+                                <Printer size={13} color="#ffffff" /> 📄 Nota Entrega (Carta)
+                              </button>
+                            )}
+
                             <button
                               type="button"
                               onClick={(e) => {
@@ -3903,9 +3932,10 @@ export default function OrdersSalesModal({
                               order: selectedOrder,
                               config,
                               currentUser,
-                              client: clientMatch
+                              client: clientMatch,
+                              autoPrint: true
                             });
-                            notify.success(`Nota de Entrega descargada en tamaño Carta`);
+                            notify.success(`Nota de Entrega generada en tamaño Carta`);
                           }}
                           className="btn btn-print-report"
                           style={{
@@ -4036,7 +4066,7 @@ export default function OrdersSalesModal({
                       onClick={() => setDeliveryDocView('FACTURA')}
                       style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px' }}
                     >
-                      <FileText size={14} /> 📄 Vista: Factura Fiscal Carta (SENIAT)
+                      <FileText size={14} /> {isOrderNotaEntrega(selectedOrder) ? '📄 Vista: Nota de Entrega Carta' : '📄 Vista: Factura Fiscal Carta (SENIAT)'}
                     </button>
                   </div>
 
@@ -4163,20 +4193,43 @@ export default function OrdersSalesModal({
                       </div>
                     </div>
                   ) : (
-                    /* VISTA FACTURA CARTA SENIAT (ADAPTADA: MÁRGENES 4.5CM, SIN CABECERA, 6 DÍGITOS) */
+                    /* VISTA FACTURA CARTA SENIAT / NOTA DE ENTREGA CARTA */
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', gap: '1rem' }}>
-                      <div className="no-print" style={{ width: '100%', maxWidth: '760px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(30, 64, 175, 0.12)', border: '1px solid #3b82f6', borderRadius: '8px', padding: '8px 14px' }}>
+                      <div className="no-print" style={{ width: '100%', maxWidth: '760px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(30, 64, 175, 0.12)', border: '1px solid #3b82f6', borderRadius: '8px', padding: '8px 14px', flexWrap: 'wrap', gap: '8px' }}>
                         <span style={{ fontSize: '0.8rem', color: '#93c5fd', fontWeight: 600 }}>
-                          📄 Formato Factura Carta SENIAT (Márgenes: Sup 4.5cm, Inf 4.5cm, Lat 1.5cm • Correlativo 6 dígitos)
+                          {isOrderNotaEntrega(selectedOrder)
+                            ? '📦 Formato Nota de Entrega Tamaño Carta (Estilo MOTORVEN con QR y desbordamiento 1/2)'
+                            : '📄 Formato Factura Carta SENIAT (Márgenes: Sup 4.5cm, Inf 4.5cm, Lat 1.5cm • Correlativo 6 dígitos)'}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenInvoiceModalForOrder(selectedOrder)}
-                          className="btn btn-primary btn-sm"
-                          style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}
-                        >
-                          <Maximize2 size={13} /> Abrir Ventana Completa
-                        </button>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {isOrderNotaEntrega(selectedOrder) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const clientMatch = safeClients.find(c => c.id === selectedOrder.clienteId || c.rif === selectedOrder.clienteRif);
+                                generateDeliveryNotePDF({
+                                  order: selectedOrder,
+                                  config,
+                                  currentUser,
+                                  client: clientMatch,
+                                  autoPrint: true
+                                });
+                              }}
+                              className="btn btn-print-report btn-sm"
+                              style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}
+                            >
+                              <Printer size={13} color="#ffffff" /> Imprimir PDF Carta
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenInvoiceModalForOrder(selectedOrder)}
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}
+                          >
+                            <Maximize2 size={13} /> Abrir Ventana Completa
+                          </button>
+                        </div>
                       </div>
 
                       <div
