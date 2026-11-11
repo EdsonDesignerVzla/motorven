@@ -1933,7 +1933,7 @@ export default function HeaderBar({
                 }}
               />
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Tip: La dirección oficial predeterminada es <code>https://api.signummotorven.com</code>. Para redes locales de alta velocidad también puedes usar la IP del servidor (ej. <code>http://192.168.0.6:54321</code> o Radmin VPN).
+                Tip: La dirección oficial predeterminada es <code>https://api.signummotorven.com</code>. Para redes locales de alta velocidad también puedes usar la IP del servidor (ej. <code>http://192.168.0.3:54321</code> o Radmin VPN).
               </div>
             </div>
 

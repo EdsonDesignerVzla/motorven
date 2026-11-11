@@ -329,19 +329,99 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           break;
 
         case 'order':
-          if (handlers.saveSupabaseOrder) {
+        case 'orders':
+          if (item.action === 'DELETE') {
+            if (handlers.deleteSupabaseOrderDirect) {
+              await handlers.deleteSupabaseOrderDirect(item.data?.id || item.data);
+            }
+          } else if (handlers.pushOrderToSupabase) {
+            await handlers.pushOrderToSupabase(item.data);
+          } else if (handlers.saveSupabaseOrder) {
             await handlers.saveSupabaseOrder(item.data);
-            syncSuccess = true;
           }
+          syncSuccess = true;
           break;
 
         case 'order_status':
-          if (handlers.updateSupabaseOrderStatus) {
+          if (handlers.updateOrderStatusDirect) {
+            await handlers.updateOrderStatusDirect(
+              item.data.orderId,
+              item.data.nuevoEstado
+            );
+          } else if (handlers.updateSupabaseOrderStatus) {
             await handlers.updateSupabaseOrderStatus(
               item.data.orderId,
               item.data.nuevoEstado,
               item.data.metadata || {}
             );
+          }
+          syncSuccess = true;
+          break;
+
+        case 'sales':
+          if (item.action === 'DELETE' && handlers.deleteSaleDirect) {
+            await handlers.deleteSaleDirect(item.data);
+            syncSuccess = true;
+          } else if (handlers.pushSaleToSupabase) {
+            await handlers.pushSaleToSupabase(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'profit_invoice':
+        case 'profit_invoices':
+          if (item.action === 'DELETE' && handlers.deleteProfitInvoiceDirect) {
+            await handlers.deleteProfitInvoiceDirect(item.data);
+            syncSuccess = true;
+          } else if (handlers.pushProfitInvoiceToSupabase) {
+            await handlers.pushProfitInvoiceToSupabase(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'profit_collection':
+        case 'profit_collections':
+          if (handlers.pushProfitCollectionToSupabase) {
+            await handlers.pushProfitCollectionToSupabase(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'profit_bank_account':
+        case 'bank_account':
+          if (item.action === 'DELETE' && handlers.deleteProfitBankAccountDirect) {
+            await handlers.deleteProfitBankAccountDirect(item.data);
+            syncSuccess = true;
+          } else if (handlers.pushProfitBankAccountToSupabase) {
+            await handlers.pushProfitBankAccountToSupabase(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'profit_cash_desk':
+        case 'cash_desk':
+          if (item.action === 'DELETE' && handlers.deleteProfitCashDeskDirect) {
+            await handlers.deleteProfitCashDeskDirect(item.data);
+            syncSuccess = true;
+          } else if (handlers.pushProfitCashDeskToSupabase) {
+            await handlers.pushProfitCashDeskToSupabase(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'profit_accounts_payable':
+          if (item.action === 'DELETE' && handlers.deleteProfitAccountsPayableDirect) {
+            await handlers.deleteProfitAccountsPayableDirect(item.data);
+            syncSuccess = true;
+          } else if (handlers.pushProfitAccountsPayableToSupabase) {
+            await handlers.pushProfitAccountsPayableToSupabase(item.data);
+            syncSuccess = true;
+          }
+          break;
+
+        case 'profit_supplier_payment':
+          if (handlers.pushProfitSupplierPaymentToSupabase) {
+            await handlers.pushProfitSupplierPaymentToSupabase(item.data);
             syncSuccess = true;
           }
           break;
@@ -368,8 +448,12 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
       }
     } catch (err) {
       console.error(`[OfflineSync] Error sincronizando elemento ${item.id} (${item.entity}):`, err);
-      item.attempts = (item.attempts || 0) + 1;
-      item.lastError = err?.message || String(err);
+      const updatedQueue = getSyncQueue().map(q =>
+        q.id === item.id
+          ? { ...q, attempts: (q.attempts || 0) + 1, lastError: err?.message || String(err) }
+          : q
+      );
+      saveSyncQueue(updatedQueue);
       failedCount++;
       
       // Si el error es de red, pausar la sincronización para no saturar

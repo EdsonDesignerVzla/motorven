@@ -675,17 +675,39 @@ function MainApp() {
           setProfitBankAccounts(allTableData);
           return;
         }
+        if (action === 'DELETE') {
+          const delKey = String(key || item?.codCta || item?.cod_cta || item?.id || '').trim();
+          if (delKey) {
+            setProfitBankAccounts(prev => prev.filter(b =>
+              String(b.codCta || b.cod_cta || b.id || '').trim() !== delKey &&
+              String(b.id || '').trim() !== delKey
+            ));
+          }
+          return;
+        }
         if (item) {
+          const resolvedCodCta = String(item.codCta || item.cod_cta || item.id || key || '').trim();
+          const resolvedHolder = item.cuentaANombreDe ?? item.cuenta_a_nombre_de ?? item.titular;
+          const resolvedSaldoBs = item.saldoBs ?? item.saldo_bs;
+          const resolvedSaldoUsd = item.saldoUsd ?? item.saldo_usd;
+          const normalizedItem = {
+            ...item,
+            ...(resolvedCodCta ? { codCta: resolvedCodCta, cod_cta: resolvedCodCta } : {}),
+            ...(item.numCta !== undefined || item.num_cta !== undefined ? { numCta: item.numCta ?? item.num_cta, num_cta: item.numCta ?? item.num_cta } : {}),
+            ...(item.bancoNombre !== undefined || item.banco_nombre !== undefined ? { bancoNombre: item.bancoNombre ?? item.banco_nombre, banco_nombre: item.bancoNombre ?? item.banco_nombre } : {}),
+            ...(resolvedHolder !== undefined ? { titular: resolvedHolder, cuentaANombreDe: resolvedHolder, cuenta_a_nombre_de: resolvedHolder } : {}),
+            ...(resolvedSaldoBs !== undefined ? { saldoBs: Number(resolvedSaldoBs || 0), saldo_bs: Number(resolvedSaldoBs || 0) } : {}),
+            ...(resolvedSaldoUsd !== undefined ? { saldoUsd: Number(resolvedSaldoUsd || 0), saldo_usd: Number(resolvedSaldoUsd || 0) } : {})
+          };
           setProfitBankAccounts(prev => {
-            const index = prev.findIndex(b => b.codCta === key || b.cod_cta === key || b.id === key);
+            const index = prev.findIndex(b => b.codCta === resolvedCodCta || b.cod_cta === resolvedCodCta || b.id === resolvedCodCta || b.id === key);
             if (index >= 0) {
               const next = [...prev];
-              next[index] = { ...next[index], ...item };
+              next[index] = { ...next[index], ...normalizedItem };
               return next;
             }
-            return [...prev, item];
+            return [...prev, normalizedItem];
           });
-
         }
       } else if (tableId === 'sellers') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
@@ -1004,15 +1026,41 @@ function MainApp() {
           setProfitCashDesks(allTableData);
           return;
         }
+        if (action === 'DELETE') {
+          const delKey = String(key || item?.id || item?.coCaja || item?.co_caja || '').trim();
+          if (delKey) {
+            setProfitCashDesks(prev => (prev || []).filter(d =>
+              String(d.id || d.coCaja || d.co_caja || '').trim() !== delKey &&
+              String(d.coCaja || d.co_caja || '').trim() !== delKey
+            ));
+          }
+          return;
+        }
         if (item) {
+          const resolvedId = String(item.id || item.coCaja || item.co_caja || key || '').trim();
+          const resolvedCod = String(item.coCaja || item.co_caja || resolvedId || '').trim();
+          const resolvedSaldoUsd = item.saldoUsd ?? item.saldo_usd;
+          const resolvedSaldoBs = item.saldoBs ?? item.saldo_bs;
+          const normalizedDesk = {
+            ...item,
+            ...(resolvedId ? { id: resolvedId } : {}),
+            ...(resolvedCod ? { coCaja: resolvedCod, co_caja: resolvedCod } : {}),
+            ...(item.descrip !== undefined || item.nombre !== undefined ? { descrip: item.descrip ?? item.nombre, nombre: item.nombre ?? item.descrip } : {}),
+            ...(resolvedSaldoUsd !== undefined ? { saldoUsd: Number(resolvedSaldoUsd || 0), saldo_usd: Number(resolvedSaldoUsd || 0) } : {}),
+            ...(resolvedSaldoBs !== undefined ? { saldoBs: Number(resolvedSaldoBs || 0), saldo_bs: Number(resolvedSaldoBs || 0) } : {})
+          };
           setProfitCashDesks(prev => {
             const list = Array.isArray(prev) ? [...prev] : [];
-            const idx = list.findIndex(d => String(d.id || d.coCaja || d.co_caja) === String(item.id || item.coCaja || item.co_caja || key));
+            const idx = list.findIndex(d => {
+              const dId = String(d.id || d.coCaja || d.co_caja || '').trim();
+              const dCod = String(d.coCaja || d.co_caja || dId || '').trim();
+              return dId === resolvedId || dCod === resolvedCod || (key && (dId === String(key) || dCod === String(key)));
+            });
             if (idx >= 0) {
-              list[idx] = { ...list[idx], ...item };
+              list[idx] = { ...list[idx], ...normalizedDesk };
               return list;
             }
-            return [...list, item];
+            return [...list, normalizedDesk];
           });
         }
       } else if (tableId === 'collections') {

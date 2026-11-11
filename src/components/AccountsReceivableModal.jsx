@@ -515,11 +515,15 @@ export function AccountsReceivableModal({
             const isPosDoc = Boolean(inv._isPosSale) || inv._source === 'POS' || /^0+\d+$/.test(factNum) || /^NE-0+\d+$/i.test(factNum);
 
             // En Notas de Entrega NO se calcula IVA ni ningún impuesto (100% Sin IVA)
-            const rawNeto = Number(inv.totNetoUsd ?? inv.totalUsd ?? inv.totBrutoUsd ?? 0);
-            const rawIva = Number(inv.ivaUsd ?? inv.impuestoUsd ?? 0);
+            const rawNetoVal = inv.totNetoUsd ?? inv.tot_neto_usd ?? inv.totalUsd ?? inv.total_usd ?? inv.totBrutoUsd ?? inv.tot_bruto_usd ?? 0;
+            const rawNeto = Number(rawNetoVal);
+            const rawIvaVal = inv.ivaUsd ?? inv.iva_usd ?? inv.impuestoUsd ?? inv.impuesto_usd ?? 0;
+            const rawIva = Number(rawIvaVal);
             const rawBrutoCandidate = Number(
                 inv.totBrutoUsd ??
+                inv.tot_bruto_usd ??
                 inv.subtotalUsd ??
+                inv.subtotal_usd ??
                 (isNotaEntrega
                     ? (rawIva > 0 && rawNeto > rawIva ? rawNeto - rawIva : rawNeto)
                     : round2(rawNeto / 1.16))
@@ -531,23 +535,27 @@ export function AccountsReceivableModal({
                         : (rawIva > 0 && rawNeto > rawIva ? rawNeto - rawIva : rawBrutoCandidate)
                 )
                 : round2(rawBrutoCandidate);
-            const ivaUsd = isNotaEntrega ? 0 : round2(inv.ivaUsd !== undefined ? Number(inv.ivaUsd) : Math.max(0, rawNeto - totBrutoUsd));
+            const hasExplicitIva = inv.ivaUsd !== undefined || inv.iva_usd !== undefined;
+            const ivaUsd = isNotaEntrega ? 0 : round2(hasExplicitIva ? Number(inv.ivaUsd ?? inv.iva_usd ?? 0) : Math.max(0, rawNeto - totBrutoUsd));
             const montoFacturaUsd = isNotaEntrega
                 ? totBrutoUsd
-                : round2(Number(inv.totNetoUsd ?? (totBrutoUsd + ivaUsd)));
+                : round2(Number(inv.totNetoUsd ?? inv.tot_neto_usd ?? (totBrutoUsd + ivaUsd)));
 
             // Cálculo de Abonos y Restante
+            const rawSaldoField = inv.saldoUsd ?? inv.saldo_usd;
+            const rawAbonosField = inv.abonosUsd ?? inv.abonos_usd;
             const hasCobroHistory = Array.isArray(inv.historialCobros) && inv.historialCobros.length > 0;
             const hasManualOverride = Boolean(localDocOverrides[factNum]) || recentlyPaidKeys.has(factNum);
             let abonosUsd = 0;
-            if (isPosDoc && !hasCobroHistory && !hasManualOverride && Number(inv.saldoUsd ?? 0) <= 0.01) {
+            if (isPosDoc && !hasCobroHistory && !hasManualOverride && Number(rawSaldoField ?? 0) <= 0.01) {
                 // Facturas emitidas desde el POS sin cobros registrados aún en CxC inician pendientes por cobrar en CxC
                 abonosUsd = 0;
-            } else if (inv.abonosUsd !== undefined && inv.abonosUsd !== null && !isNaN(Number(inv.abonosUsd))) {
-                abonosUsd = round2(Math.max(0, Number(inv.abonosUsd)));
-            } else if (inv.saldoUsd !== undefined && inv.saldoUsd !== null && !isNaN(Number(inv.saldoUsd))) {
-                const baseForAbonos = (!isNotaEntrega || Number(inv.saldoUsd) <= montoFacturaUsd) ? montoFacturaUsd : rawNeto;
-                abonosUsd = round2(Math.max(0, baseForAbonos - Number(inv.saldoUsd)));
+            } else if (rawAbonosField !== undefined && rawAbonosField !== null && !isNaN(Number(rawAbonosField))) {
+                abonosUsd = round2(Math.max(0, Number(rawAbonosField)));
+            } else if (rawSaldoField !== undefined && rawSaldoField !== null && !isNaN(Number(rawSaldoField))) {
+                const numericSaldo = Number(rawSaldoField);
+                const baseForAbonos = (!isNotaEntrega || numericSaldo <= montoFacturaUsd) ? montoFacturaUsd : rawNeto;
+                abonosUsd = round2(Math.max(0, baseForAbonos - numericSaldo));
             }
             if (abonosUsd > montoFacturaUsd) {
                 abonosUsd = montoFacturaUsd;

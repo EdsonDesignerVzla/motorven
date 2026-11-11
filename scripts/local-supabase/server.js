@@ -1102,9 +1102,8 @@ const server = http.createServer(async (req, res) => {
     const defaultPayload = {
       url: 'https://api.signummotorven.com',
       lanUrls: [
-        'http://192.168.0.6:54321',
+        'http://192.168.0.3:54321',
         'http://26.45.7.149:54321',
-        'http://192.168.0.5:54321',
         'http://26.229.220.202:54321'
       ],
       updatedAt: new Date().toISOString()

@@ -1,7 +1,7 @@
 /**
  * SCRIPT DE DESPLIEGUE OFICIAL BLINDADO - SIGNUM MOTORVEN
  * Garantiza que en cada compilación y despliegue:
- * 1. CNAME ("signummotorven.com"), .nojekyll, 404.html y backend_url.json (sincronizado con el servidor SVR-MOTORVEN 192.168.0.6)
+ * 1. CNAME ("signummotorven.com"), .nojekyll, 404.html y backend_url.json (sincronizado con el servidor central SVRINNO-HOST1 192.168.0.3)
  *    estén siempre intactos tanto en public/ como en dist/.
  * 2. Despliega automáticamente el contenido compilado de dist/ hacia el repositorio principal
  *    de producción https://github.com/EdsonDesignerVzla/motorven.git (rama main).
@@ -48,36 +48,30 @@ function fetchJsonText(urlStr, timeoutMs = 2500) {
 }
 
 async function resolveActiveBackendUrlPayload() {
-  // 1. Intentar leer directamente del servidor de la oficina SVR-MOTORVEN (192.168.0.6:54321)
-  const fromLanServer = await fetchJsonText('http://192.168.0.6:54321/backend_url.json', 2000);
+  // 1. Intentar leer directamente del servidor central de la oficina (192.168.0.3:54321)
+  const fromLanServer = await fetchJsonText('http://192.168.0.3:54321/backend_url.json', 2000);
   if (fromLanServer) {
     try {
       const parsed = JSON.parse(fromLanServer);
       if (parsed?.url && !parsed.url.includes('trycloudflare.com')) {
-        return JSON.stringify(parsed, null, 2);
+        const cleanedLan = Array.isArray(parsed.lanUrls)
+          ? parsed.lanUrls.filter(u => !u.includes('192.168.0.5') && !u.includes('192.168.0.6'))
+          : [];
+        if (!cleanedLan.includes('http://192.168.0.3:54321')) {
+          cleanedLan.unshift('http://192.168.0.3:54321');
+        }
+        return JSON.stringify({ ...parsed, lanUrls: cleanedLan }, null, 2);
       }
     } catch (_) {}
   }
 
-  // 2. Intentar leer el backend_url.json publicado en signummotorven.com
-  const fromLiveSite = await fetchJsonText(`https://signummotorven.com/backend_url.json?t=${Date.now()}`, 2500);
-  if (fromLiveSite) {
-    try {
-      const parsed = JSON.parse(fromLiveSite);
-      if (parsed?.url && !parsed.url.includes('trycloudflare.com')) {
-        return JSON.stringify(parsed, null, 2);
-      }
-    } catch (_) {}
-  }
-
-  // 3. Fallback oficial y definitivo
+  // 2. Fallback oficial y definitivo (siempre priorizando 192.168.0.3)
   return JSON.stringify(
     {
       url: OFFICIAL_BACKEND_URL,
       lanUrls: [
-        'http://192.168.0.6:54321',
+        'http://192.168.0.3:54321',
         'http://26.45.7.149:54321',
-        'http://192.168.0.5:54321',
         'http://26.229.220.202:54321'
       ],
       updatedAt: new Date().toISOString()

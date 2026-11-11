@@ -258,10 +258,10 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       } catch (_) {}
 
-      // 2. Si se abre por HTTP en la red local de la oficina (LAN), priorizar el servidor SVR-MOTORVEN directamente
+      // 2. Si se abre por HTTP en la red local de la oficina (LAN), priorizar el servidor central real (192.168.0.3)
       if (isPageLocal && pageProtocol === 'http:') {
         const localCandidates = [
-          'http://192.168.0.6:54321',
+          'http://192.168.0.3:54321',
           window.location.origin && window.location.origin !== 'null' ? `${window.location.origin}/sb` : null,
           'http://127.0.0.1:54321',
           'http://localhost:54321'
@@ -271,7 +271,7 @@ export async function discoverActiveBackendUrl(force = false) {
         }
       }
 
-      // 3. backend_url.json publicado automáticamente por el servidor central SVR-MOTORVEN (192.168.0.6)
+      // 3. backend_url.json publicado automáticamente por el servidor central (192.168.0.3)
       try {
         const basePath = window.location.pathname.endsWith('/')
           ? window.location.pathname
@@ -528,43 +528,66 @@ const markSupabaseOffline = (err, action = '') => {
 
 // --- Mappings ---
 
-const mapConfigToDb = (c) => ({
-  id: 1,
-  nombre_empresa: c.nombreEmpresa || c.nombre_empresa,
-  marca_oficial: c.marcaOficial || c.marca_oficial,
-  rif: c.rif,
-  direccion: c.direccion,
-  telefono: c.telefono,
-  email: c.email,
-  instagram: c.instagram,
-  tasa_dolar: c.tasaDolar || c.tasa_dolar,
-  tasa_keystone: c.tasaKeystone || c.tasa_keystone || 38.50,
-  moneda_principal: c.monedaPrincipal || c.moneda_principal,
-  moneda_secundaria: c.monedaSecundaria || c.moneda_secundaria,
-  almacen_actual: c.almacenActual || c.almacen_actual,
-  iva_porcentaje: c.ivaPorcentaje || c.iva_porcentaje,
-  igtf_porcentaje: c.igtfPorcentaje || c.igtf_porcentaje,
-  meta_comercial_litros: c.metaComercialLitros || c.meta_comercial_litros
-});
-
-const mapConfigFromDb = (c) => {
-  if (!c) return null;
+const mapConfigToDb = (c) => {
+  const tasaDolar = c.tasaDolar || c.tasa_dolar;
+  const tasaKeystone = c.tasaKeystone || c.tasa_keystone || 38.50;
+  const nombreEmpresa = c.nombreEmpresa || c.nombre_empresa;
+  const marcaOficial = c.marcaOficial || c.marca_oficial;
+  const monedaPrincipal = c.monedaPrincipal || c.moneda_principal;
+  const monedaSecundaria = c.monedaSecundaria || c.moneda_secundaria;
+  const almacenActual = c.almacenActual || c.almacen_actual;
+  const ivaPorcentaje = c.ivaPorcentaje ?? c.iva_porcentaje;
+  const igtfPorcentaje = c.igtfPorcentaje ?? c.igtf_porcentaje;
+  const metaComercialLitros = c.metaComercialLitros ?? c.meta_comercial_litros;
   return {
-    nombreEmpresa: c.nombre_empresa,
-    marcaOficial: c.marca_oficial,
+    id: 1,
+    nombre_empresa: nombreEmpresa,
+    nombreEmpresa,
+    marca_oficial: marcaOficial,
+    marcaOficial,
     rif: c.rif,
     direccion: c.direccion,
     telefono: c.telefono,
     email: c.email,
     instagram: c.instagram,
-    tasaDolar: Number(c.tasa_dolar),
-    tasaKeystone: Number(c.tasa_keystone || 38.50),
-    monedaPrincipal: c.moneda_principal,
-    monedaSecundaria: c.moneda_secundaria,
-    almacenActual: c.almacen_actual,
-    ivaPorcentaje: Number(c.iva_porcentaje),
-    igtfPorcentaje: Number(c.igtf_porcentaje),
-    metaComercialLitros: Number(c.meta_comercial_litros)
+    tasa_dolar: tasaDolar,
+    tasaDolar,
+    tasa_keystone: tasaKeystone,
+    tasaKeystone,
+    moneda_principal: monedaPrincipal,
+    monedaPrincipal,
+    moneda_secundaria: monedaSecundaria,
+    monedaSecundaria,
+    almacen_actual: almacenActual,
+    almacenActual,
+    iva_porcentaje: ivaPorcentaje,
+    ivaPorcentaje,
+    igtf_porcentaje: igtfPorcentaje,
+    igtfPorcentaje,
+    meta_comercial_litros: metaComercialLitros,
+    metaComercialLitros,
+    updated_at: new Date().toISOString()
+  };
+};
+
+const mapConfigFromDb = (c) => {
+  if (!c) return null;
+  return {
+    nombreEmpresa: c.nombre_empresa ?? c.nombreEmpresa,
+    marcaOficial: c.marca_oficial ?? c.marcaOficial,
+    rif: c.rif,
+    direccion: c.direccion,
+    telefono: c.telefono,
+    email: c.email,
+    instagram: c.instagram,
+    tasaDolar: Number(c.tasa_dolar ?? c.tasaDolar),
+    tasaKeystone: Number(c.tasa_keystone ?? c.tasaKeystone ?? 38.50),
+    monedaPrincipal: c.moneda_principal ?? c.monedaPrincipal,
+    monedaSecundaria: c.moneda_secundaria ?? c.monedaSecundaria,
+    almacenActual: c.almacen_actual ?? c.almacenActual,
+    ivaPorcentaje: Number(c.iva_porcentaje ?? c.ivaPorcentaje),
+    igtfPorcentaje: Number(c.igtf_porcentaje ?? c.igtfPorcentaje),
+    metaComercialLitros: Number(c.meta_comercial_litros ?? c.metaComercialLitros)
   };
 };
 
@@ -1920,9 +1943,9 @@ export const saveSupabaseProduct = async (product) => {
   } catch (err) {
     console.warn('[saveSupabaseProduct] Supabase error:', err?.message || err);
     markSupabaseOffline(err, 'saveSupabaseProduct');
-    enqueueSyncAction('product', 'UPDATE', prodToSave);
-    writeProfitProduct(prodToSave, 'SAVE').catch(() => {});
-    return prodToSave;
+    enqueueSyncAction('product', 'UPDATE', normalized);
+    writeProfitProduct(normalized, 'SAVE').catch(() => {});
+    return normalized;
   }
 };
 
@@ -2884,7 +2907,8 @@ export const saveSupabaseOrder = async (orderData) => {
     console.warn('[saveSupabaseOrder] Aviso sincronizando con Supabase:', e.message);
   });
 
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('orders', 'UPDATE', orderData);
     broadcastReconcileChange({
       tableId: 'orders',
       action: 'CREATE',
@@ -2925,6 +2949,7 @@ export const saveSupabaseOrder = async (orderData) => {
     return getSupabaseOrders();
   } catch (err) {
     markSupabaseOffline(err, 'saveSupabaseOrder');
+    enqueueSyncAction('orders', 'UPDATE', orderData);
     broadcastReconcileChange({
       tableId: 'orders',
       action: 'CREATE',
@@ -2948,7 +2973,8 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
     data: { id: orderId, status: newStatus }
   });
 
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('order_status', 'UPDATE', { orderId, nuevoEstado: newStatus });
     return true;
   }
   try {
@@ -2956,9 +2982,11 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
       supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId)
     );
     if (error) throw error;
+    isSupabaseAvailable = true;
     return true;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseOrderStatus');
+    enqueueSyncAction('order_status', 'UPDATE', { orderId, nuevoEstado: newStatus });
     return false;
   }
 };
@@ -3146,11 +3174,11 @@ export const deleteSupabaseSale = async (saleId) => {
 
     broadcastReconcileChange({ tableId: 'sales', action: 'DELETE', key: broadcastKey, item: broadcastItem });
     broadcastReconcileChange({ tableId: 'invoices', action: 'DELETE', key: broadcastKey, item: broadcastItem });
-    enqueueSyncAction('sales', 'DELETE', { id: cleanId || cleanNum });
-    enqueueSyncAction('profit_invoices', 'DELETE', { id: cleanId || cleanNum });
+    enqueueSyncAction('sales', 'DELETE', { id: cleanId || cleanNum, cleanNum, isTargetNe });
+    enqueueSyncAction('profit_invoices', 'DELETE', { id: cleanId || cleanNum, cleanNum, isTargetNe });
   };
 
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+  if (!isNetworkOnline()) {
     finalizeLocalOfflineDelete();
     return true;
   }
@@ -3174,7 +3202,7 @@ export const deleteSupabaseSale = async (saleId) => {
     if (uniqueOrSalesParts.length > 0) {
       const { data: fetchedSales } = await withTimeout(
         supabase.from('sales').select('*').or(uniqueOrSalesParts.join(',')),
-        4000
+        6000
       ).catch(() => ({ data: [] }));
       if (Array.isArray(fetchedSales) && fetchedSales.length > 0) {
         foundSales = fetchedSales.map(mapSaleFromDb).filter(Boolean);
@@ -3219,22 +3247,24 @@ export const deleteSupabaseSale = async (saleId) => {
       } else {
         orInvParts.push(`fact_num.eq.${cleanNum}`);
         orInvParts.push(`id.eq.FAC-${cleanNum}`);
+        orInvParts.push(`id.eq.fac-${cleanNum}`);
       }
     }
     const uniqueOrInvParts = Array.from(new Set(orInvParts));
     if (uniqueOrInvParts.length > 0) {
-      await withTimeout(
+      const { error: invDelErr } = await withTimeout(
         supabase.from('profit_invoices').delete().or(uniqueOrInvParts.join(',')),
-        4000
-      ).catch(() => {});
+        6000
+      );
+      if (invDelErr) throw invDelErr;
     }
 
     if (uniqueOrSalesParts.length > 0) {
       const { error } = await withTimeout(
         supabase.from('sales').delete().or(uniqueOrSalesParts.join(',')),
-        4000
+        6000
       );
-      if (error) console.warn('[deleteSupabaseSale] Aviso sales delete:', error.message);
+      if (error) throw error;
     }
 
     broadcastReconcileChange({ tableId: 'sales', action: 'DELETE', key: broadcastKey, item: broadcastItem });
@@ -4113,35 +4143,82 @@ export const pushUserLogToSupabase = async (logData) => {
 
 const CUSTOM_BANK_ACCOUNTS_STORAGE_KEY = 'signum_custom_bank_accounts_v1';
 const DELETED_BANK_ACCOUNTS_STORAGE_KEY = 'signum_deleted_bank_accounts_v1';
+const autoSyncedBankKeys = new Set();
 
-const normalizeBankAccountRecord = (r) => {
+const parseSafeIsoMs = (rawTs) => {
+  if (!rawTs) return 0;
+  const ms = Date.parse(rawTs);
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+const buildBankAccountFullRow = (r) => {
   if (!r) return null;
   const codCta = String(r.codCta || r.cod_cta || r.id?.replace(/^CTA-/i, '') || '01').trim();
   const id = String(r.id || `CTA-${codCta}`).trim();
+  const numCta = String(r.numCta || r.num_cta || r.nroCta || r.nro_cta || '').trim();
+  const bancoNombre = String(r.bancoNombre || r.banco_nombre || r.des_ban || r.desBan || '').trim();
   const cuentaANombreDe = String(
     r.cuentaANombreDe || r.cuenta_a_nombre_de || r.titular || 'GRUPO MOTORVEN, C.A.'
   ).trim() || 'GRUPO MOTORVEN, C.A.';
+
+  // Si un upsert previo solo actualizó snake_case (fecha_actualizacion > fechaActualizacion),
+  // respetar el saldo_bs nuevo (siempre que no sea el cero accidental sin saldoBs=0 del mismo segundo).
+  const tsSnake = parseSafeIsoMs(r.fecha_actualizacion);
+  const tsCamel = parseSafeIsoMs(r.fechaActualizacion);
+  const snakeIsNewer = tsSnake > 0 && (tsCamel === 0 || tsSnake > tsCamel);
+
+  const saldoBs = (
+    snakeIsNewer &&
+    r.saldo_bs !== undefined &&
+    (Number(r.saldo_bs) !== 0 || Number(r.saldoBs ?? 0) === 0)
+  )
+    ? Number(r.saldo_bs)
+    : Number(r.saldoBs ?? r.saldo_bs ?? 0);
+
+  const saldoUsd = (
+    snakeIsNewer &&
+    r.saldo_usd !== undefined &&
+    (Number(r.saldo_usd) !== 0 || Number(r.saldoUsd ?? 0) === 0)
+  )
+    ? Number(r.saldo_usd)
+    : Number(r.saldoUsd ?? r.saldo_usd ?? 0);
+
+  const fechaActualizacion = (snakeIsNewer ? r.fecha_actualizacion : (r.fechaActualizacion || r.fecha_actualizacion)) || new Date().toISOString();
+
   return {
     id,
     codCta,
     cod_cta: codCta,
-    numCta: String(r.numCta || r.num_cta || '').trim(),
-    num_cta: String(r.numCta || r.num_cta || '').trim(),
-    bancoNombre: String(r.bancoNombre || r.banco_nombre || '').trim(),
-    banco_nombre: String(r.bancoNombre || r.banco_nombre || '').trim(),
+    co_ban: String(r.co_ban || r.coBan || codCta),
+    coBan: String(r.coBan || r.co_ban || codCta),
+    numCta,
+    num_cta: numCta,
+    nroCta: numCta,
+    nro_cta: numCta,
+    bancoNombre,
+    banco_nombre: bancoNombre,
+    desBan: bancoNombre,
+    des_ban: bancoNombre,
     cuentaANombreDe,
     cuenta_a_nombre_de: cuentaANombreDe,
     titular: cuentaANombreDe,
-    saldoBs: Number(r.saldoBs ?? r.saldo_bs ?? 0),
-    saldo_bs: Number(r.saldoBs ?? r.saldo_bs ?? 0),
-    saldoUsd: Number(r.saldoUsd ?? r.saldo_usd ?? 0),
-    saldo_usd: Number(r.saldoUsd ?? r.saldo_usd ?? 0),
+    saldoBs,
+    saldo_bs: saldoBs,
+    saldoActual: saldoBs,
+    saldo_actual: saldoBs,
+    saldoConciliado: saldoBs,
+    saldo_conciliado: saldoBs,
+    saldoUsd,
+    saldo_usd: saldoUsd,
     moneda: String(r.moneda || 'BS').trim().toUpperCase(),
-    fechaActualizacion: r.fechaActualizacion || r.fecha_actualizacion || new Date().toISOString()
+    fechaActualizacion,
+    fecha_actualizacion: fechaActualizacion
   };
 };
 
-const mergeBankAccountsList = (remoteList = []) => {
+const normalizeBankAccountRecord = (r) => buildBankAccountFullRow(r);
+
+const mergeBankAccountsList = (remoteList = [], hasRemoteResponse = false) => {
   let customList = [];
   let deletedIds = new Set();
   try {
@@ -4160,17 +4237,24 @@ const mergeBankAccountsList = (remoteList = []) => {
   } catch (_) {}
 
   const byCode = new Map();
-  (REAL_PROFIT_BANK_ACCOUNTS || []).forEach(r => {
-    const norm = normalizeBankAccountRecord(r);
-    if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
-      byCode.set(norm.codCta.toUpperCase(), norm);
-    }
-  });
+  const remoteRawByCode = new Map();
+
+  if (!hasRemoteResponse || !Array.isArray(remoteList) || remoteList.length === 0) {
+    (REAL_PROFIT_BANK_ACCOUNTS || []).forEach(r => {
+      const norm = normalizeBankAccountRecord(r);
+      if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
+        byCode.set(norm.codCta.toUpperCase(), norm);
+      }
+    });
+  }
+
   (remoteList || []).forEach(r => {
     const norm = normalizeBankAccountRecord(r);
     if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
-      const existing = byCode.get(norm.codCta.toUpperCase());
-      byCode.set(norm.codCta.toUpperCase(), {
+      const codeKey = norm.codCta.toUpperCase();
+      remoteRawByCode.set(codeKey, r);
+      const existing = byCode.get(codeKey);
+      byCode.set(codeKey, {
         ...existing,
         ...norm,
         cuentaANombreDe: r.cuentaANombreDe || r.cuenta_a_nombre_de || r.titular || existing?.cuentaANombreDe || 'GRUPO MOTORVEN, C.A.',
@@ -4178,12 +4262,66 @@ const mergeBankAccountsList = (remoteList = []) => {
       });
     }
   });
+
+  const pendingBankQueueIds = new Set(
+    getSyncQueue()
+      .filter(q => q && (q.entity === 'profit_bank_account' || q.entity === 'bank_account') && q.action !== 'DELETE')
+      .map(q => String(q.data?.codCta || q.data?.cod_cta || q.data?.id || '').replace(/^CTA-/i, '').toUpperCase())
+  );
+
+  const syncedToPrune = new Set();
   customList.forEach(r => {
     const norm = normalizeBankAccountRecord(r);
-    if (norm && !deletedIds.has(norm.id.toUpperCase()) && !deletedIds.has(norm.codCta.toUpperCase())) {
-      byCode.set(norm.codCta.toUpperCase(), norm);
+    if (!norm) return;
+    const codeKey = norm.codCta.toUpperCase();
+    if (deletedIds.has(norm.id.toUpperCase()) || deletedIds.has(codeKey)) return;
+
+    const remoteNorm = byCode.get(codeKey);
+    const remoteRaw = remoteRawByCode.get(codeKey);
+    const custTs = parseSafeIsoMs(norm.fechaActualizacion);
+    const remTs = parseSafeIsoMs(remoteNorm?.fechaActualizacion);
+    const remoteMissingTitular =
+      hasRemoteResponse &&
+      remoteRaw &&
+      !remoteRaw.cuentaANombreDe &&
+      !remoteRaw.cuenta_a_nombre_de &&
+      !remoteRaw.titular &&
+      norm.cuentaANombreDe !== 'GRUPO MOTORVEN, C.A.';
+    const remoteMissingCamel =
+      hasRemoteResponse &&
+      remoteRaw &&
+      remoteRaw.fecha_actualizacion &&
+      (!remoteRaw.fechaActualizacion || parseSafeIsoMs(remoteRaw.fecha_actualizacion) > parseSafeIsoMs(remoteRaw.fechaActualizacion));
+
+    const hasPending = pendingBankQueueIds.has(codeKey);
+    const shouldKeepLocal =
+      !hasRemoteResponse ||
+      !remoteNorm ||
+      hasPending ||
+      custTs > remTs ||
+      (remoteMissingTitular && (custTs === 0 || custTs >= remTs - 10000));
+
+    if (shouldKeepLocal) {
+      byCode.set(codeKey, norm);
+      // Si el servidor ya responde y el registro local quedó huérfano por fallo de subida previa o por campos faltantes, empujarlo automáticamente
+      if (hasRemoteResponse && isNetworkOnline() && !autoSyncedBankKeys.has(codeKey) && (!remoteNorm || custTs > remTs || remoteMissingTitular || remoteMissingCamel)) {
+        autoSyncedBankKeys.add(codeKey);
+        pushProfitBankAccountToSupabase(norm).catch(() => {});
+      }
+    } else if (hasRemoteResponse && remoteNorm && remTs > custTs && !hasPending) {
+      syncedToPrune.add(codeKey);
     }
   });
+
+  if (syncedToPrune.size > 0 && typeof localStorage !== 'undefined') {
+    try {
+      const pruned = customList.filter(c => {
+        const ck = String(c?.codCta || c?.cod_cta || c?.id?.replace(/^CTA-/i, '') || '').trim().toUpperCase();
+        return !syncedToPrune.has(ck);
+      });
+      localStorage.setItem(CUSTOM_BANK_ACCOUNTS_STORAGE_KEY, JSON.stringify(pruned));
+    } catch (_) {}
+  }
 
   return Array.from(byCode.values()).sort((a, b) =>
     String(a.codCta || '').localeCompare(String(b.codCta || ''), undefined, { numeric: true })
@@ -4194,19 +4332,20 @@ export const getSupabaseProfitBankAccounts = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_bank_accounts').select('*').order('cod_cta', { ascending: true }),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return mergeBankAccountsList(data || []);
+    return mergeBankAccountsList(data || [], Array.isArray(data) && data.length > 0);
   } catch (err) {
     console.warn('[Supabase] Error cargando cuentas bancarias Profit:', err.message);
-    return mergeBankAccountsList(REAL_PROFIT_BANK_ACCOUNTS);
+    return mergeBankAccountsList(REAL_PROFIT_BANK_ACCOUNTS, false);
   }
 };
 
 const CUSTOM_CASH_DESKS_STORAGE_KEY = 'signum_custom_cash_desks_v1';
 const DELETED_CASH_DESKS_STORAGE_KEY = 'signum_deleted_cash_desks_v1';
+const autoSyncedCashDeskIds = new Set();
 
 const normalizeCashDeskRecord = (r) => {
   if (!r) return null;
@@ -4253,7 +4392,7 @@ const normalizeCashDeskRecord = (r) => {
   };
 };
 
-const mergeCashDesksWithDefaultsAndLocal = (remoteList = []) => {
+const mergeCashDesksWithDefaultsAndLocal = (remoteList = [], hasRemoteResponse = false) => {
   const byId = new Map();
   let deletedIds = new Set();
 
@@ -4267,13 +4406,15 @@ const mergeCashDesksWithDefaultsAndLocal = (remoteList = []) => {
     }
   } catch (_) {}
 
-  // 1. Sembrar las 6 cajas oficiales base (CAJA-01 a CAJA-06)
-  (REAL_PROFIT_CASH_DESKS || []).forEach(base => {
-    const norm = normalizeCashDeskRecord(base);
-    if (norm && !deletedIds.has(norm.id) && !deletedIds.has(norm.coCaja)) {
-      byId.set(norm.id, norm);
-    }
-  });
+  // 1. Sembrar las 6 cajas oficiales base únicamente si el servidor está vacío o inaccesible
+  if (!hasRemoteResponse || !Array.isArray(remoteList) || remoteList.length === 0) {
+    (REAL_PROFIT_CASH_DESKS || []).forEach(base => {
+      const norm = normalizeCashDeskRecord(base);
+      if (norm && !deletedIds.has(norm.id) && !deletedIds.has(norm.coCaja)) {
+        byId.set(norm.id, norm);
+      }
+    });
+  }
 
   // 2. Superponer registros de Supabase
   (remoteList || []).forEach(rem => {
@@ -4283,19 +4424,40 @@ const mergeCashDesksWithDefaultsAndLocal = (remoteList = []) => {
     }
   });
 
-  // 3. Superponer cajas creadas o editadas localmente
+  // 3. Superponer cajas creadas o editadas localmente solo si son más recientes que Supabase o están en cola
   try {
     if (typeof localStorage !== 'undefined') {
       const rawCustom = localStorage.getItem(CUSTOM_CASH_DESKS_STORAGE_KEY);
       if (rawCustom) {
         const parsedCustom = JSON.parse(rawCustom);
         if (Array.isArray(parsedCustom)) {
+          const pendingDeskIds = new Set(
+            getSyncQueue()
+              .filter(q => q && (q.entity === 'profit_cash_desk' || q.entity === 'cash_desk') && q.action !== 'DELETE')
+              .map(q => String(q.data?.id || q.data?.coCaja || '').toLowerCase())
+          );
+          const toPrune = new Set();
           parsedCustom.forEach(cust => {
             const norm = normalizeCashDeskRecord(cust);
-            if (norm && !deletedIds.has(norm.id) && !deletedIds.has(norm.coCaja)) {
+            if (!norm || deletedIds.has(norm.id) || deletedIds.has(norm.coCaja)) return;
+            const rem = byId.get(norm.id);
+            const custTs = parseSafeIsoMs(norm.fechaActualizacion);
+            const remTs = parseSafeIsoMs(rem?.fechaActualizacion);
+            const isPending = pendingDeskIds.has(norm.id.toLowerCase()) || pendingDeskIds.has(norm.coCaja.toLowerCase());
+            if (!hasRemoteResponse || !rem || isPending || custTs > remTs) {
               byId.set(norm.id, norm);
+              if (hasRemoteResponse && isNetworkOnline() && !autoSyncedCashDeskIds.has(norm.id) && (!rem || custTs > remTs)) {
+                autoSyncedCashDeskIds.add(norm.id);
+                pushProfitCashDeskToSupabase(norm).catch(() => {});
+              }
+            } else if (hasRemoteResponse && rem && remTs > custTs && !isPending) {
+              toPrune.add(norm.id);
             }
           });
+          if (toPrune.size > 0) {
+            const remaining = parsedCustom.filter(c => !toPrune.has(String(c?.id || c?.coCaja || '').toLowerCase()));
+            localStorage.setItem(CUSTOM_CASH_DESKS_STORAGE_KEY, JSON.stringify(remaining));
+          }
         }
       }
     }
@@ -4310,22 +4472,52 @@ export const getSupabaseProfitCashDesks = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_cash_desks').select('*').order('co_caja', { ascending: true }),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return mergeCashDesksWithDefaultsAndLocal(data || []);
+    return mergeCashDesksWithDefaultsAndLocal(data || [], Array.isArray(data) && data.length > 0);
   } catch (err) {
     console.warn('[Supabase] Error cargando cajas registradoras Profit:', err.message);
-    return mergeCashDesksWithDefaultsAndLocal(REAL_PROFIT_CASH_DESKS);
+    return mergeCashDesksWithDefaultsAndLocal(REAL_PROFIT_CASH_DESKS, false);
   }
 };
 
-export const updateSupabaseProfitCashDesk = async (cashDesk) => {
+export const pushProfitCashDeskToSupabase = async (cashDesk) => {
   const normalized = normalizeCashDeskRecord({
     ...cashDesk,
     id: cashDesk.id || String(cashDesk.coCaja || cashDesk.co_caja || 'caja-01').toLowerCase(),
-    fecha_actualizacion: new Date().toISOString()
+    fechaActualizacion: cashDesk.fechaActualizacion || cashDesk.fecha_actualizacion || new Date().toISOString()
+  });
+  const { data, error } = await withTimeout(
+    supabase.from('profit_cash_desks').upsert(normalized, { onConflict: 'id' }).select(),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return data;
+};
+
+export const deleteProfitCashDeskDirect = async (deskIdOrCode) => {
+  const target = String(deskIdOrCode?.id || deskIdOrCode || '').trim();
+  if (!target) return true;
+  const upperTarget = target.toUpperCase();
+  const { error } = await withTimeout(
+    supabase.from('profit_cash_desks').delete().or(`id.eq.${target},id.eq.${target.toLowerCase()},co_caja.eq.${upperTarget},coCaja.eq.${upperTarget}`),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const updateSupabaseProfitCashDesk = async (cashDesk) => {
+  const nowIso = new Date().toISOString();
+  const normalized = normalizeCashDeskRecord({
+    ...cashDesk,
+    id: cashDesk.id || String(cashDesk.coCaja || cashDesk.co_caja || 'caja-01').toLowerCase(),
+    fechaActualizacion: nowIso,
+    fecha_actualizacion: nowIso
   });
 
   // Persistir inmediatamente en localStorage como respaldo instantáneo
@@ -4352,21 +4544,25 @@ export const updateSupabaseProfitCashDesk = async (cashDesk) => {
     }
   } catch (_) {}
 
+  broadcastReconcileChange({
+    tableId: 'cash_desks',
+    action: 'RECONCILE',
+    key: normalized.id,
+    item: normalized
+  });
+
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_cash_desk', 'UPDATE', normalized);
+    return [normalized];
+  }
+
   try {
-    broadcastReconcileChange({
-      tableId: 'cash_desks',
-      action: 'RECONCILE',
-      key: normalized.id,
-      item: normalized
-    });
-    const { data, error } = await supabase
-      .from('profit_cash_desks')
-      .upsert(normalized, { onConflict: 'id' })
-      .select();
-    if (error) throw error;
+    const data = await pushProfitCashDeskToSupabase(normalized);
     return data;
   } catch (err) {
-    console.warn('[Supabase] Respaldo local aplicado para caja registradora:', err.message);
+    console.warn('[Supabase] Respaldo local encolado para caja registradora:', err.message);
+    markSupabaseOffline(err, 'updateSupabaseProfitCashDesk');
+    enqueueSyncAction('profit_cash_desk', 'UPDATE', normalized);
     return [normalized];
   }
 };
@@ -4398,24 +4594,61 @@ export const deleteSupabaseProfitCashDesk = async (deskIdOrCode) => {
     }
   } catch (_) {}
 
+  broadcastReconcileChange({
+    tableId: 'cash_desks',
+    action: 'DELETE',
+    key: target
+  });
+
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_cash_desk', 'DELETE', { id: target });
+    return;
+  }
+
   try {
-    await supabase.from('profit_cash_desks').delete().or(`id.eq.${target},co_caja.eq.${target}`);
+    await deleteProfitCashDeskDirect(target);
   } catch (err) {
-    console.warn('[Supabase] Baja local aplicada para caja registradora:', err.message);
+    console.warn('[Supabase] Baja local encolada para caja registradora:', err.message);
+    markSupabaseOffline(err, 'deleteSupabaseProfitCashDesk');
+    enqueueSyncAction('profit_cash_desk', 'DELETE', { id: target });
   }
 };
 
-const applyLocalCxcOverridesToInvoices = (rawList = []) => {
+const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = false) => {
   try {
-    if (typeof localStorage === 'undefined') return rawList;
+    const normalizedBase = (rawList || []).map(f => {
+      if (!f) return f;
+      const saldoUsdVal = f.saldoUsd !== undefined ? Number(f.saldoUsd) : (f.saldo_usd !== undefined ? Number(f.saldo_usd) : undefined);
+      const abonosUsdVal = f.abonosUsd !== undefined ? Number(f.abonosUsd) : (f.abonos_usd !== undefined ? Number(f.abonos_usd) : undefined);
+      const totNetoUsdVal = f.totNetoUsd ?? f.tot_neto_usd ?? f.totalNetoUsd;
+      const totBrutoUsdVal = f.totBrutoUsd ?? f.tot_bruto_usd ?? f.totalBrutoUsd;
+      const ivaUsdVal = f.ivaUsd ?? f.iva_usd;
+      return {
+        ...f,
+        ...(saldoUsdVal !== undefined ? { saldoUsd: saldoUsdVal } : {}),
+        ...(abonosUsdVal !== undefined ? { abonosUsd: abonosUsdVal } : {}),
+        ...(totNetoUsdVal !== undefined ? { totNetoUsd: Number(totNetoUsdVal) } : {}),
+        ...(totBrutoUsdVal !== undefined ? { totBrutoUsd: Number(totBrutoUsdVal) } : {}),
+        ...(ivaUsdVal !== undefined ? { ivaUsd: Number(ivaUsdVal) } : {})
+      };
+    });
+
+    if (typeof localStorage === 'undefined') return normalizedBase;
     const delSet = new Set(sanitizeCxcDeletedDocsStorage());
     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
     const customMap = rawCustom ? JSON.parse(rawCustom) : {};
 
+    const pendingInvIds = new Set(
+      getSyncQueue()
+        .filter(q => q && (q.entity === 'profit_invoice' || q.entity === 'profit_invoices') && q.action !== 'DELETE')
+        .map(q => String(q.data?.id || q.data?.factNum || q.data?.fact_num || '').trim())
+    );
+
     const matchedCustomKeys = new Set();
+    const keysToPrune = new Set();
     const result = [];
 
-    for (const inv of rawList) {
+    for (const inv of normalizedBase) {
       if (!inv) continue;
       if (isCxcEntryDeleted(inv, delSet)) {
         continue;
@@ -4428,10 +4661,28 @@ const applyLocalCxcOverridesToInvoices = (rawList = []) => {
         if (numKey) matchedCustomKeys.add(numKey);
         if (override.id) matchedCustomKeys.add(String(override.id));
         if (override.factNum) matchedCustomKeys.add(String(override.factNum));
-        result.push({ ...inv, ...override });
+
+        const ovTs = parseSafeIsoMs(override.updated_at || override.fechaSincronizacion || override.fecha_sincronizacion);
+        const remTs = parseSafeIsoMs(inv.updated_at || inv.fechaSincronizacion || inv.fecha_sincronizacion);
+        const isPending = pendingInvIds.has(idKey) || (numKey && pendingInvIds.has(numKey));
+
+        if (!hasRemoteResponse || isPending || ovTs > remTs) {
+          result.push({ ...inv, ...override });
+        } else {
+          if (idKey && customMap[idKey]) keysToPrune.add(idKey);
+          if (numKey && customMap[numKey]) keysToPrune.add(numKey);
+          result.push(inv);
+        }
       } else {
         result.push(inv);
       }
+    }
+
+    if (keysToPrune.size > 0) {
+      try {
+        keysToPrune.forEach(k => { delete customMap[k]; });
+        localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
+      } catch (_) {}
     }
 
     if (customMap && typeof customMap === 'object') {
@@ -4455,11 +4706,118 @@ const applyLocalCxcOverridesToInvoices = (rawList = []) => {
   }
 };
 
+export const pushOrderToSupabase = async (orderData) => {
+  const orderPayload = mapOrderToDb(orderData);
+  const { data: ord, error: ordErr } = await withTimeout(
+    supabase.from('orders').upsert(orderPayload).select().single(),
+    8000
+  );
+  if (ordErr) throw ordErr;
+  if (orderData.items && orderData.items.length > 0) {
+    const itemsPayload = orderData.items.map((it, idx) => ({
+      id: `${ord.id}-${it.rengNum || idx + 1}`,
+      order_id: ord.id,
+      reng_num: it.rengNum || idx + 1,
+      articulo_id: it.articuloId,
+      articulo_descripcion: it.articuloDescripcion,
+      unidad_venta: resolveProductUnit(it, 'Caja'),
+      cantidad: Number(it.cantidad || 1),
+      litros_unitarios: Number(it.litrosUnitarios || 1),
+      litros_totales: Number(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1))),
+      precio_unitario_usd: Number(it.precioUnitarioUsd ?? it.precioUsd ?? it.precio_unitario_usd ?? 0),
+      total_usd: Number(it.totalUsd ?? it.subtotalUsd ?? it.total_usd ?? ((Number(it.cantidad || 1)) * Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0)))
+    }));
+    const { error: itemsErr } = await withTimeout(
+      supabase.from('order_items').upsert(itemsPayload, { onConflict: 'id' }),
+      8000
+    );
+    if (itemsErr) throw itemsErr;
+  }
+  isSupabaseAvailable = true;
+  return ord;
+};
+
+export const updateOrderStatusDirect = async (orderId, newStatus) => {
+  const { error } = await withTimeout(
+    supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const deleteSupabaseOrderDirect = async (orderId) => {
+  const cleanId = String(orderId?.id || orderId || '').trim();
+  if (!cleanId) return true;
+  await withTimeout(
+    supabase.from('order_items').delete().or(`order_id.eq.${cleanId},order_doc.eq.${cleanId}`),
+    6000
+  ).catch(() => {});
+  const { error } = await withTimeout(
+    supabase.from('orders').delete().or(`id.eq.${cleanId},numero_doc.eq.${cleanId}`),
+    6000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const deleteSaleDirect = async (ref) => {
+  const cleanId = String(ref?.id || ref || '').trim();
+  const cleanNum = String(ref?.cleanNum || cleanId).replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+  const isTargetNe = Boolean(ref?.isTargetNe) || /^(NE-|NDE-)/i.test(cleanId);
+  const parts = [];
+  if (cleanId) parts.push(`id.eq.${cleanId}`);
+  if (cleanNum) {
+    if (isTargetNe) {
+      const neCode = `NE-${cleanNum}`;
+      parts.push(`id.eq.${neCode}`, `numero_doc.eq.${neCode}`);
+    } else {
+      parts.push(`numero_doc.eq.${cleanNum}`, `id.eq.${cleanNum}`);
+    }
+  }
+  const uniqueParts = Array.from(new Set(parts));
+  if (uniqueParts.length === 0) return true;
+  const { error } = await withTimeout(
+    supabase.from('sales').delete().or(uniqueParts.join(',')),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const deleteProfitInvoiceDirect = async (ref) => {
+  const cleanId = String(ref?.id || ref || '').trim();
+  const cleanNum = String(ref?.cleanNum || cleanId).replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+  const isTargetNe = Boolean(ref?.isTargetNe) || /^(NE-|NDE-)/i.test(cleanId);
+  const parts = [];
+  if (cleanId) parts.push(`id.eq.${cleanId}`);
+  if (cleanNum) {
+    if (isTargetNe) {
+      const neCode = `NE-${cleanNum}`;
+      parts.push(`id.eq.${neCode}`, `fact_num.eq.${neCode}`);
+    } else {
+      parts.push(`fact_num.eq.${cleanNum}`, `id.eq.FAC-${cleanNum}`, `id.eq.fac-${cleanNum}`);
+    }
+  }
+  const uniqueParts = Array.from(new Set(parts));
+  if (uniqueParts.length === 0) return true;
+  const { error } = await withTimeout(
+    supabase.from('profit_invoices').delete().or(uniqueParts.join(',')),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
 export const getSupabaseProfitCollections = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_collections').select('*').order('fec_cob', { ascending: false }).limit(5000),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -4507,6 +4865,16 @@ export const getSupabaseProfitCollections = async () => {
     } catch (_) {}
     return REAL_PROFIT_COLLECTIONS;
   }
+};
+
+export const pushProfitCollectionToSupabase = async (normalized) => {
+  const { error } = await withTimeout(
+    supabase.from('profit_collections').upsert(normalized, { onConflict: 'id' }),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return normalized;
 };
 
 export const saveSupabaseProfitCollection = async (collectionData) => {
@@ -4563,25 +4931,58 @@ export const saveSupabaseProfitCollection = async (collectionData) => {
     item: normalized
   });
 
-  if (isNetworkOnline() && isSupabaseAvailable) {
-    try {
-      await withTimeout(
-        supabase.from('profit_collections').upsert(normalized, { onConflict: 'id' }),
-        5000
-      );
-    } catch (err) {
-      console.warn('[saveSupabaseProfitCollection] Guardado local activo:', err.message);
-    }
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_collection', 'INSERT', normalized);
+    return normalized;
+  }
+
+  try {
+    await pushProfitCollectionToSupabase(normalized);
+  } catch (err) {
+    console.warn('[saveSupabaseProfitCollection] Encolado para reintento:', err.message);
+    markSupabaseOffline(err, 'saveSupabaseProfitCollection');
+    enqueueSyncAction('profit_collection', 'INSERT', normalized);
   }
 
   return normalized;
 };
 
+export const pushProfitBankAccountToSupabase = async (bankAcc) => {
+  const fullRow = buildBankAccountFullRow(bankAcc);
+  if (!fullRow) return null;
+  const { error } = await withTimeout(
+    supabase.from('profit_bank_accounts').upsert(fullRow, { onConflict: 'id' }),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return fullRow;
+};
+
+export const deleteProfitBankAccountDirect = async (ref) => {
+  const target = String(ref?.id || ref || '').trim();
+  if (!target) return true;
+  const upperTarget = target.toUpperCase();
+  const codeTarget = String(ref?.codeTarget || upperTarget.replace(/^CTA-/i, '')).trim();
+  const { error } = await withTimeout(
+    supabase
+      .from('profit_bank_accounts')
+      .delete()
+      .or(`id.eq.${target},cod_cta.eq.${codeTarget},codCta.eq.${codeTarget},id.eq.CTA-${codeTarget}`),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
 export const updateSupabaseProfitBankAccount = async (bankAcc) => {
   if (!bankAcc) return null;
-  const normalized = normalizeBankAccountRecord({
+  const nowIso = new Date().toISOString();
+  const normalized = buildBankAccountFullRow({
     ...bankAcc,
-    fechaActualizacion: new Date().toISOString()
+    fechaActualizacion: nowIso,
+    fecha_actualizacion: nowIso
   });
   if (!normalized) return null;
 
@@ -4615,32 +5016,25 @@ export const updateSupabaseProfitBankAccount = async (bankAcc) => {
     }
   } catch (_) {}
 
+  broadcastReconcileChange({
+    tableId: 'bank_accounts',
+    action: 'RECONCILE',
+    key: normalized.id,
+    item: normalized
+  });
+
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_bank_account', 'UPDATE', normalized);
+    return normalized;
+  }
+
   try {
-    broadcastReconcileChange({
-      tableId: 'bank_accounts',
-      action: 'RECONCILE',
-      key: normalized.id,
-      item: normalized
-    });
-    if (isNetworkOnline() && isSupabaseAvailable) {
-      const dbRow = {
-        id: normalized.id,
-        cod_cta: normalized.codCta,
-        num_cta: normalized.numCta,
-        banco_nombre: normalized.bancoNombre,
-        saldo_bs: normalized.saldoBs,
-        saldo_usd: normalized.saldoUsd,
-        moneda: normalized.moneda,
-        fecha_actualizacion: normalized.fechaActualizacion
-      };
-      await withTimeout(
-        supabase.from('profit_bank_accounts').upsert(dbRow, { onConflict: 'id' }),
-        4000
-      );
-    }
+    await pushProfitBankAccountToSupabase(normalized);
     return normalized;
   } catch (err) {
-    console.warn('[updateSupabaseProfitBankAccount] Aviso:', err.message);
+    console.warn('[updateSupabaseProfitBankAccount] Encolado para sincronizar:', err.message);
+    markSupabaseOffline(err, 'updateSupabaseProfitBankAccount');
+    enqueueSyncAction('profit_bank_account', 'UPDATE', normalized);
     return normalized;
   }
 };
@@ -4687,13 +5081,17 @@ export const deleteSupabaseProfitBankAccount = async (bankIdOrCode) => {
     });
   } catch (_) {}
 
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_bank_account', 'DELETE', { id: target, codeTarget });
+    return true;
+  }
+
   try {
-    await supabase
-      .from('profit_bank_accounts')
-      .delete()
-      .or(`id.eq.${target},cod_cta.eq.${codeTarget},id.eq.CTA-${codeTarget}`);
+    await deleteProfitBankAccountDirect({ id: target, codeTarget });
   } catch (err) {
-    console.warn('[Supabase] Baja local aplicada para cuenta bancaria:', err.message);
+    console.warn('[Supabase] Baja local encolada para cuenta bancaria:', err.message);
+    markSupabaseOffline(err, 'deleteSupabaseProfitBankAccount');
+    enqueueSyncAction('profit_bank_account', 'DELETE', { id: target, codeTarget });
   }
   return true;
 };
@@ -4702,7 +5100,7 @@ export const getSupabaseProfitInvoices = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_invoices').select('*').order('fec_emis', { ascending: false }).limit(5000),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -4751,11 +5149,88 @@ export const getSupabaseProfitInvoices = async () => {
       fechaSincronizacion: f.fecha_sincronizacion ?? f.fechaSincronizacion
       };
     });
-    return applyLocalCxcOverridesToInvoices(mapped);
+    return applyLocalCxcOverridesToInvoices(mapped, Array.isArray(mapped) && mapped.length > 0);
   } catch (err) {
     console.warn('[Supabase] Error cargando facturas Profit:', err.message);
-    return applyLocalCxcOverridesToInvoices(REAL_PROFIT_INVOICES);
+    return applyLocalCxcOverridesToInvoices(REAL_PROFIT_INVOICES, false);
   }
+};
+
+export const pushProfitInvoiceToSupabase = async (payload) => {
+  if (!payload) return null;
+  const id = payload.id;
+  const rawNum = String(payload.factNum ?? payload.fact_num ?? payload.numeroDoc ?? payload.id ?? '').trim();
+
+  const { error: invErr } = await withTimeout(
+    supabase.from('profit_invoices').upsert(payload, { onConflict: 'id' }),
+    8000
+  );
+  if (invErr) throw invErr;
+
+  if (rawNum) {
+    const updateRes = await withTimeout(
+      supabase.from('sales').update({
+        cliente_id: payload.clienteId,
+        cliente_nombre: payload.clienteNombre,
+        cliente_rif: payload.clienteRif,
+        tasa_dolar: payload.tasa,
+        total_usd: payload.totNetoUsd,
+        total_bs: payload.totNetoBs,
+        saldo_usd: payload.saldoUsd,
+        saldo_bs: payload.saldoBs,
+        dias_credito: payload.diasCredito,
+        fecha_emision: payload.fechaEmision,
+        fecha_vencimiento: payload.fechaVencimiento,
+        vendedor: payload.vendedorNombre,
+        estado: payload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
+      }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
+      6000
+    ).catch(() => null);
+
+    if (!updateRes?.data || updateRes.data.length === 0) {
+      const saleRow = mapSaleToDb({
+        id: payload.id,
+        numeroDoc: rawNum,
+        numeroControl: payload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+        tipoDoc: payload.tipoDoc,
+        fecha: payload.fechaEmision,
+        fechaEmision: payload.fechaEmision,
+        fechaVencimiento: payload.fechaVencimiento,
+        diasCredito: payload.diasCredito,
+        clienteId: payload.clienteId,
+        clienteNombre: payload.clienteNombre,
+        clienteRif: payload.clienteRif,
+        clienteDireccion: payload.clienteDireccion,
+        clienteTelefono: payload.clienteTelefono,
+        vendedor: payload.vendedorNombre,
+        tasaDolar: payload.tasa,
+        condicionPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
+        subtotalUsd: payload.totBrutoUsd,
+        baseExentaUsd: payload.isExento ? payload.totBrutoUsd : 0,
+        baseGeneralUsd: payload.isExento ? 0 : payload.totBrutoUsd,
+        ivaGeneralUsd: payload.ivaUsd,
+        ivaUsd: payload.ivaUsd,
+        totalUsd: payload.totNetoUsd,
+        subtotalBs: payload.totBrutoBs,
+        baseExentaBs: payload.isExento ? payload.totBrutoBs : 0,
+        baseGeneralBs: payload.isExento ? 0 : payload.totBrutoBs,
+        ivaGeneralBs: payload.ivaBs,
+        ivaBs: payload.ivaBs,
+        totalBs: payload.totNetoBs,
+        saldoUsd: payload.saldoUsd,
+        saldoBs: payload.saldoBs,
+        estado: payload.saldoUsd <= 0.01 ? 'PAGADO' : 'PENDIENTE',
+        metodoPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'TRANSFERENCIA_BS',
+        items: payload.items || []
+      });
+      await withTimeout(
+        supabase.from('sales').upsert([saleRow], { onConflict: 'id' }),
+        6000
+      ).catch(() => {});
+    }
+  }
+  isSupabaseAvailable = true;
+  return payload;
 };
 
 export const saveSupabaseProfitInvoice = async (docData) => {
@@ -4975,78 +5450,16 @@ export const saveSupabaseProfitInvoice = async (docData) => {
     });
   }
 
-  if (isNetworkOnline() && isSupabaseAvailable) {
+  if (isNetworkOnline()) {
     try {
-      await withTimeout(
-        supabase.from('profit_invoices').upsert(payload, { onConflict: 'id' }),
-        5000
-      );
-      if (rawNum) {
-        const updateRes = await withTimeout(
-          supabase.from('sales').update({
-            cliente_id: payload.clienteId,
-            cliente_nombre: payload.clienteNombre,
-            cliente_rif: payload.clienteRif,
-            tasa_dolar: payload.tasa,
-            total_usd: payload.totNetoUsd,
-            total_bs: payload.totNetoBs,
-            saldo_usd: payload.saldoUsd,
-            saldo_bs: payload.saldoBs,
-            dias_credito: payload.diasCredito,
-            fecha_emision: payload.fechaEmision,
-            fecha_vencimiento: payload.fechaVencimiento,
-            vendedor: payload.vendedorNombre,
-            estado: payload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
-          }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
-          4000
-        ).catch(() => null);
-
-        // Si la venta no existía en sales (ej. creación manual en modal de cobranzas), insertarla
-        if (!updateRes?.data || updateRes.data.length === 0) {
-          const saleRow = mapSaleToDb({
-            id: payload.id,
-            numeroDoc: rawNum,
-            numeroControl: payload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
-            tipoDoc: payload.tipoDoc,
-            fecha: payload.fechaEmision,
-            fechaEmision: payload.fechaEmision,
-            fechaVencimiento: payload.fechaVencimiento,
-            diasCredito: payload.diasCredito,
-            clienteId: payload.clienteId,
-            clienteNombre: payload.clienteNombre,
-            clienteRif: payload.clienteRif,
-            clienteDireccion: payload.clienteDireccion,
-            clienteTelefono: payload.clienteTelefono,
-            vendedor: payload.vendedorNombre,
-            tasaDolar: payload.tasa,
-            condicionPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
-            subtotalUsd: payload.totBrutoUsd,
-            baseExentaUsd: payload.isExento ? payload.totBrutoUsd : 0,
-            baseGeneralUsd: payload.isExento ? 0 : payload.totBrutoUsd,
-            ivaGeneralUsd: payload.ivaUsd,
-            ivaUsd: payload.ivaUsd,
-            totalUsd: payload.totNetoUsd,
-            subtotalBs: payload.totBrutoBs,
-            baseExentaBs: payload.isExento ? payload.totBrutoBs : 0,
-            baseGeneralBs: payload.isExento ? 0 : payload.totBrutoBs,
-            ivaGeneralBs: payload.ivaBs,
-            ivaBs: payload.ivaBs,
-            totalBs: payload.totNetoBs,
-            saldoUsd: payload.saldoUsd,
-            saldoBs: payload.saldoBs,
-            estado: payload.saldoUsd <= 0.01 ? 'PAGADO' : 'PENDIENTE',
-            metodoPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'TRANSFERENCIA_BS',
-            items: payload.items || []
-          });
-          await withTimeout(
-            supabase.from('sales').upsert([saleRow], { onConflict: 'id' }),
-            4000
-          ).catch(() => {});
-        }
-      }
+      await pushProfitInvoiceToSupabase(payload);
     } catch (err) {
-      console.warn('[saveSupabaseProfitInvoice] Guardado local activo:', err.message);
+      console.warn('[saveSupabaseProfitInvoice] Encolando para sincronización posterior:', err.message);
+      markSupabaseOffline(err);
+      enqueueSyncAction('profit_invoice', 'UPDATE', payload);
     }
+  } else {
+    enqueueSyncAction('profit_invoice', 'UPDATE', payload);
   }
 
   // Asegurar persistencia local en signum_sales_v1
@@ -5092,7 +5505,7 @@ export const getSupabaseProfitSuppliers = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_suppliers').select('*').order('prov_des', { ascending: true }),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -5111,7 +5524,7 @@ export const getSupabaseProfitSuppliers = async () => {
       inactivo: Boolean(s.inactivo)
     }));
   } catch (err) {
-    console.warn('[Supabase] Error cargando proveedores Profit:', err.message);
+    markSupabaseOffline(err, 'getSupabaseProfitSuppliers');
     return REAL_PROFIT_SUPPLIERS;
   }
 };
@@ -5120,7 +5533,7 @@ export const getSupabaseProfitPurchases = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_purchases').select('*').order('fec_emis', { ascending: false }).limit(5000),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -5192,17 +5605,39 @@ export const isCxpEntryDeleted = (docOrIds, delSet) => {
   return scopedKeys.some(k => delSet.has(k));
 };
 
-export const applyLocalCxpOverridesToPayables = (rawList = []) => {
+export const applyLocalCxpOverridesToPayables = (rawList = [], hasRemoteResponse = false) => {
   try {
-    if (typeof localStorage === 'undefined') return rawList;
+    const normalizedBase = (rawList || []).map(p => {
+      if (!p) return p;
+      const saldoUsdVal = p.saldoUsd ?? p.saldo_usd;
+      const saldoBsVal = p.saldoBs ?? p.saldo_bs;
+      const montoNetUsdVal = p.montoNetUsd ?? p.monto_net_usd;
+      const abonosUsdVal = p.abonosUsd ?? p.abonos_usd;
+      return {
+        ...p,
+        ...(saldoUsdVal !== undefined ? { saldoUsd: Number(saldoUsdVal), saldo_usd: Number(saldoUsdVal) } : {}),
+        ...(saldoBsVal !== undefined ? { saldoBs: Number(saldoBsVal), saldo_bs: Number(saldoBsVal) } : {}),
+        ...(montoNetUsdVal !== undefined ? { montoNetUsd: Number(montoNetUsdVal), monto_net_usd: Number(montoNetUsdVal) } : {}),
+        ...(abonosUsdVal !== undefined ? { abonosUsd: Number(abonosUsdVal), abonos_usd: Number(abonosUsdVal) } : {})
+      };
+    });
+
+    if (typeof localStorage === 'undefined') return normalizedBase;
     const delSet = new Set(sanitizeCxpDeletedDocsStorage());
     const rawCustom = localStorage.getItem(CXP_CUSTOM_DOCS_KEY);
     const customMap = rawCustom ? JSON.parse(rawCustom) : {};
 
+    const pendingCxpIds = new Set(
+      getSyncQueue()
+        .filter(q => q && q.entity === 'profit_accounts_payable' && q.action !== 'DELETE')
+        .map(q => String(q.data?.id || q.data?.nroDoc || q.data?.nro_doc || '').trim())
+    );
+
     const matchedCustomKeys = new Set();
+    const keysToPrune = new Set();
     const result = [];
 
-    for (const p of rawList) {
+    for (const p of normalizedBase) {
       if (!p) continue;
       if (isCxpEntryDeleted(p, delSet)) {
         continue;
@@ -5215,10 +5650,28 @@ export const applyLocalCxpOverridesToPayables = (rawList = []) => {
         if (numKey) matchedCustomKeys.add(numKey);
         if (override.id) matchedCustomKeys.add(String(override.id));
         if (override.nroDoc) matchedCustomKeys.add(String(override.nroDoc));
-        result.push({ ...p, ...override });
+
+        const ovTs = parseSafeIsoMs(override.updated_at || override.fechaSincronizacion || override.fecha_sincronizacion);
+        const remTs = parseSafeIsoMs(p.updated_at || p.fechaSincronizacion || p.fecha_sincronizacion);
+        const isPending = pendingCxpIds.has(idKey) || (numKey && pendingCxpIds.has(numKey));
+
+        if (!hasRemoteResponse || isPending || ovTs > remTs) {
+          result.push({ ...p, ...override });
+        } else {
+          if (idKey && customMap[idKey]) keysToPrune.add(idKey);
+          if (numKey && customMap[numKey]) keysToPrune.add(numKey);
+          result.push(p);
+        }
       } else {
         result.push(p);
       }
+    }
+
+    if (keysToPrune.size > 0) {
+      try {
+        keysToPrune.forEach(k => { delete customMap[k]; });
+        localStorage.setItem(CXP_CUSTOM_DOCS_KEY, JSON.stringify(customMap));
+      } catch (_) {}
     }
 
     if (customMap && typeof customMap === 'object') {
@@ -5246,7 +5699,7 @@ export const getSupabaseProfitAccountsPayable = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_accounts_payable').select('*').order('fec_emis', { ascending: false }).limit(5000),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -5268,13 +5721,25 @@ export const getSupabaseProfitAccountsPayable = async () => {
       moneda: d.moneda || 'BS',
       anulado: Boolean(d.anulado),
       historialPagos: d.historial_pagos || [],
-      fechaSincronizacion: d.fecha_sincronizacion
+      fechaSincronizacion: d.fecha_sincronizacion,
+      updated_at: d.updated_at || d.fecha_sincronizacion
     }));
-    return applyLocalCxpOverridesToPayables(mapped);
+    return applyLocalCxpOverridesToPayables(mapped, Array.isArray(mapped) && mapped.length > 0);
   } catch (err) {
-    console.warn('[Supabase] Error cargando CxP Profit:', err.message);
-    return applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE);
+    markSupabaseOffline(err, 'getSupabaseProfitAccountsPayable');
+    return applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE, false);
   }
+};
+
+export const pushProfitAccountsPayableToSupabase = async (payable) => {
+  if (!payable) return null;
+  const { error } = await withTimeout(
+    supabase.from('profit_accounts_payable').upsert(payable, { onConflict: 'id' }),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return payable;
 };
 
 export const saveSupabaseProfitAccountsPayable = async (payableData) => {
@@ -5325,7 +5790,8 @@ export const saveSupabaseProfitAccountsPayable = async (payableData) => {
     anulado: Boolean(payableData.anulado),
     historialPagos: payableData.historialPagos || payableData.historial_pagos || [],
     fechaSincronizacion: nowIso,
-    fecha_sincronizacion: nowIso
+    fecha_sincronizacion: nowIso,
+    updated_at: nowIso
   };
 
   try {
@@ -5345,18 +5811,37 @@ export const saveSupabaseProfitAccountsPayable = async (payableData) => {
     item: normalized
   });
 
-  if (isNetworkOnline() && isSupabaseAvailable) {
+  if (isNetworkOnline()) {
     try {
-      await withTimeout(
-        supabase.from('profit_accounts_payable').upsert(normalized, { onConflict: 'id' }),
-        5000
-      );
+      await pushProfitAccountsPayableToSupabase(normalized);
     } catch (err) {
-      console.warn('[saveSupabaseProfitAccountsPayable] Guardado local activo:', err.message);
+      console.warn('[saveSupabaseProfitAccountsPayable] Encolando para sincronización posterior:', err.message);
+      markSupabaseOffline(err, 'saveSupabaseProfitAccountsPayable');
+      enqueueSyncAction('profit_accounts_payable', 'UPDATE', normalized);
     }
+  } else {
+    enqueueSyncAction('profit_accounts_payable', 'UPDATE', normalized);
   }
 
   return normalized;
+};
+
+export const deleteProfitAccountsPayableDirect = async (idOrKeys) => {
+  const keyList = Array.isArray(idOrKeys)
+    ? idOrKeys
+    : (Array.isArray(idOrKeys?.keys) ? idOrKeys.keys : [idOrKeys?.id || idOrKeys].filter(Boolean));
+  const cleanKeys = [...new Set(keyList.map(k => String(k || '').trim()).filter(Boolean))];
+  if (cleanKeys.length === 0) return false;
+
+  for (const k of cleanKeys) {
+    const { error } = await withTimeout(
+      supabase.from('profit_accounts_payable').delete().eq('id', k),
+      8000
+    );
+    if (error) throw error;
+  }
+  isSupabaseAvailable = true;
+  return true;
 };
 
 export const deleteSupabaseProfitAccountsPayable = async (payableIdOrDoc) => {
@@ -5389,17 +5874,16 @@ export const deleteSupabaseProfitAccountsPayable = async (payableIdOrDoc) => {
     key: primaryKey
   });
 
-  if (isNetworkOnline() && isSupabaseAvailable) {
+  if (isNetworkOnline()) {
     try {
-      for (const k of keysToDelete) {
-        await withTimeout(
-          supabase.from('profit_accounts_payable').delete().eq('id', k),
-          5000
-        );
-      }
+      await deleteProfitAccountsPayableDirect({ id: primaryKey, keys: keysToDelete });
     } catch (err) {
-      console.warn('[deleteSupabaseProfitAccountsPayable] Aviso borrado:', err.message);
+      console.warn('[deleteSupabaseProfitAccountsPayable] Encolando borrado para sincronización posterior:', err.message);
+      markSupabaseOffline(err, 'deleteSupabaseProfitAccountsPayable');
+      enqueueSyncAction('profit_accounts_payable', 'DELETE', { id: primaryKey, keys: keysToDelete });
     }
+  } else {
+    enqueueSyncAction('profit_accounts_payable', 'DELETE', { id: primaryKey, keys: keysToDelete });
   }
   return true;
 };
@@ -5408,7 +5892,7 @@ export const getSupabaseProfitSupplierPayments = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_supplier_payments').select('*').order('fec_pago', { ascending: false }).limit(5000),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -5464,6 +5948,17 @@ export const getSupabaseProfitSupplierPayments = async () => {
   }
 };
 
+export const pushProfitSupplierPaymentToSupabase = async (payment) => {
+  if (!payment) return null;
+  const { error } = await withTimeout(
+    supabase.from('profit_supplier_payments').upsert(payment, { onConflict: 'id' }),
+    8000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return payment;
+};
+
 export const saveSupabaseProfitSupplierPayment = async (paymentData) => {
   const nowIso = new Date().toISOString();
   const pagoNum = paymentData.pagoNum || paymentData.pago_num || `PAG-${Date.now().toString().slice(-6)}`;
@@ -5497,7 +5992,8 @@ export const saveSupabaseProfitSupplierPayment = async (paymentData) => {
     documentosAfectados: paymentData.documentosAfectados || [],
     documentos_afectados: paymentData.documentosAfectados || [],
     fechaSincronizacion: nowIso,
-    fecha_sincronizacion: nowIso
+    fecha_sincronizacion: nowIso,
+    updated_at: nowIso
   };
 
   try {
@@ -5517,15 +6013,16 @@ export const saveSupabaseProfitSupplierPayment = async (paymentData) => {
     item: normalized
   });
 
-  if (isNetworkOnline() && isSupabaseAvailable) {
+  if (isNetworkOnline()) {
     try {
-      await withTimeout(
-        supabase.from('profit_supplier_payments').upsert(normalized, { onConflict: 'id' }),
-        5000
-      );
+      await pushProfitSupplierPaymentToSupabase(normalized);
     } catch (err) {
-      console.warn('[saveSupabaseProfitSupplierPayment] Guardado local activo:', err.message);
+      console.warn('[saveSupabaseProfitSupplierPayment] Encolando para sincronización posterior:', err.message);
+      markSupabaseOffline(err, 'saveSupabaseProfitSupplierPayment');
+      enqueueSyncAction('profit_supplier_payment', 'INSERT', normalized);
     }
+  } else {
+    enqueueSyncAction('profit_supplier_payment', 'INSERT', normalized);
   }
 
   return normalized;
@@ -5636,7 +6133,7 @@ export const getSupabaseProfitSellers = async () => {
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_sellers').select('*').order('ven_des', { ascending: true }),
-      4000
+      10000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -5660,8 +6157,8 @@ export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
   // Reflejo en tiempo real en Supabase
   writeProfitSeller({ coVen, co_ven: coVen, coZon, co_zon: coZon, zona }, 'SAVE').catch(() => {});
 
-  // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+  // 2. Si no hay conexión de red, encolar para sincronizar cuando se reactive
+  if (!isNetworkOnline()) {
     enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
     return { co_ven: coVen, coVen, co_zon: coZon, coZon, zona };
   }
@@ -5676,9 +6173,10 @@ export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
 
     const { data, error } = await withTimeout(
       supabase.from('profit_sellers').update(payload).eq('co_ven', coVen).select().single(),
-      4000
+      8000
     );
     if (error) throw error;
+    isSupabaseAvailable = true;
     return data;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseSellerZone');
@@ -5803,8 +6301,8 @@ export const updateSupabaseSellerTarget = async (coVen, { metaLitrosMes, comisio
   // Reflejo en tiempo real en Supabase
   writeProfitSeller({ coVen, metaLitrosMes, comisionPct }, 'SAVE').catch(() => {});
 
-  // 2. Si no hay conexión o el disco/Supabase no responde, encolar para sincronizar cuando se reactive
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+  // 2. Si no hay conexión de red, encolar para sincronizar cuando se reactive
+  if (!isNetworkOnline()) {
     enqueueSyncAction('seller_target', 'UPDATE', { coVen, metaLitrosMes, comisionPct });
     return { co_ven: coVen, meta_litros_mes: metaLitrosMes, comision_pct: comisionPct };
   }
@@ -5817,9 +6315,10 @@ export const updateSupabaseSellerTarget = async (coVen, { metaLitrosMes, comisio
 
     const { data, error } = await withTimeout(
       supabase.from('profit_sellers').update(payload).eq('co_ven', coVen).select().single(),
-      4000
+      8000
     );
     if (error) throw error;
+    isSupabaseAvailable = true;
     return data;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseSellerTarget');
@@ -5838,8 +6337,8 @@ export const updateSupabaseGlobalSellersTarget = async (activeSellerCodes = [], 
     saveStorageSeller({ coVen, metaLitrosMes: quotaPerSeller });
   });
 
-  // 2. Si no hay conexión, encolar acción global offline
-  if (!isNetworkOnline() || !isSupabaseAvailable) {
+  // 2. Si no hay conexión de red, encolar acción global offline
+  if (!isNetworkOnline()) {
     enqueueSyncAction('seller_global_target', 'UPDATE', { activeSellerCodes, totalLitrosMeta, quotaPerSeller });
     return true;
   }
@@ -5853,6 +6352,7 @@ export const updateSupabaseGlobalSellersTarget = async (activeSellerCodes = [], 
     );
 
     await Promise.all(updates);
+    isSupabaseAvailable = true;
     return true;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseGlobalSellersTarget');

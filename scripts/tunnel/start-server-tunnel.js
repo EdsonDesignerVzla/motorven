@@ -97,9 +97,8 @@ function saveLocalBackendUrlFiles() {
   const payloadObj = {
     url: OFFICIAL_BACKEND_URL,
     lanUrls: [
-      `http://192.168.0.6:${PORT}`,
+      `http://192.168.0.3:${PORT}`,
       `http://26.45.7.149:${PORT}`,
-      `http://192.168.0.5:${PORT}`,
       `http://26.229.220.202:${PORT}`
     ],
     updatedAt: new Date().toISOString()
