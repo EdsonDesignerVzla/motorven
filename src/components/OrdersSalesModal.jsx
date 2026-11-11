@@ -1832,12 +1832,12 @@ export default function OrdersSalesModal({
           style={{
             display: 'flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: '8px',
             padding: '0.6rem 1.5rem',
             background: 'var(--surface-input)',
             borderBottom: '1px solid var(--border-glass)',
-            flexShrink: 0,
-            overflowX: 'auto'
+            flexShrink: 0
           }}
         >
           <button
@@ -2004,7 +2004,8 @@ export default function OrdersSalesModal({
                 alignItems: 'center',
                 gap: '6px',
                 boxShadow: '0 2px 10px rgba(16, 185, 129, 0.35)',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
               }}
               title="Cargar Factura o Nota de Entrega editable a Cobranzas (CxC) para cuadrar facturas de noviembre"
             >
@@ -2028,7 +2029,8 @@ export default function OrdersSalesModal({
                 alignItems: 'center',
                 gap: '6px',
                 boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
               }}
               title={`Decidir manualmente a partir de cuál número de factura fiscal empezar (Próxima: #${currentNextCorrelativo})`}
             >
@@ -2052,7 +2054,8 @@ export default function OrdersSalesModal({
                 alignItems: 'center',
                 gap: '6px',
                 boxShadow: '0 2px 8px rgba(13, 148, 136, 0.35)',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
               }}
               title={`Decidir manualmente a partir de cuál número de Nota de Entrega empezar (Próxima: ${currentNextNeCorrelativo})`}
             >
