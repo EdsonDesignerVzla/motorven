@@ -1376,7 +1376,11 @@ export default function DashboardView({
         carteraClientesData,
         topClientsData: topClientesData || [],
         lubricantesAnalytics,
-        selectedMonth
+        selectedMonth,
+        ventasDelDia,
+        ventasAcumuladoMes,
+        ventasMesLabel: MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || ventasMesFilter,
+        todayLabel
       });
     } catch (err) {
       console.error('[DashboardView] Error generando PDF:', err);
@@ -3497,6 +3501,12 @@ export default function DashboardView({
         cobranzasData={cobranzasData}
         disponibilidadBancariaData={disponibilidadBancariaData}
         objetivosData={objetivosData}
+        ventasDelDia={ventasDelDia}
+        ventasAcumuladoMes={ventasAcumuladoMes}
+        ventasMesLabel={MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || ventasMesFilter}
+        todayLabel={todayLabel}
+        sellers={(sellersCompliance && sellersCompliance.length > 0) ? sellersCompliance : effectiveSellersList}
+        selectedMonth={selectedMonth}
       />
 
       {/* Modal 2: Directorio de 610+ Clientes de Supabase */}

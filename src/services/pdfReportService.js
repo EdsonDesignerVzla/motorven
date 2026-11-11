@@ -1741,6 +1741,173 @@ export function generateTaxReportPDF({
 // =========================================================================
 // 6. REPORTE DE DASHBOARD EJECUTIVO
 // =========================================================================
+
+function appendVentasDiaYMesSection(doc, startY, {
+  ventasDelDia = null,
+  ventasAcumuladoMes = null,
+  ventasMesLabel = '',
+  todayLabel = '',
+  tasa = 827.73,
+  tableWidth = 179.9,
+  startX = 18
+}) {
+  if (!ventasDelDia && !ventasAcumuladoMes) return startY;
+
+  const hoy = ventasDelDia || {};
+  const mes = ventasAcumuladoMes || {};
+  const hoyUsd = Number(hoy.usd || 0);
+  const hoyBs = Number(hoy.bs || (hoyUsd * tasa));
+  const hoyLitros = Number(hoy.litros || 0);
+  const hoyCajas = Number(hoy.cajas || 0);
+  const hoyDocs = Number(hoy.documentos || 0);
+  const hoyClientes = Number(hoy.clientes || 0);
+  const ayerUsd = Number(hoy.ayerUsd || 0);
+  const ayerLitros = Number(hoy.ayerLitros || 0);
+
+  const mesUsd = Number(mes.usd || 0);
+  const mesBs = Number(mes.bs || (mesUsd * tasa));
+  const mesLitros = Number(mes.litros || 0);
+  const mesCajas = Number(mes.cajas || 0);
+  const mesDocs = Number(mes.documentos || 0);
+  const mesPromUsd = Number(mes.promedioDiarioUsd || 0);
+  const mesMeta = Number(mes.metaLitros || 0);
+  const mesPctMeta = Number(mes.pctMeta || 0);
+  const mesShortLabel = (ventasMesLabel || 'Mes Actual').split(' ')[0].toUpperCase();
+
+  let currentY = addSummaryCards(doc, startY, [
+    {
+      label: 'Ventas Hoy (Monto)',
+      value: formatUsd(hoyUsd),
+      subtext: `${formatBs(hoyBs)} • ${hoyDocs} doc(s)`,
+      color: COLORS.emerald
+    },
+    {
+      label: 'Ventas Hoy (Lubricantes)',
+      value: `${hoyLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      subtext: `${hoyCajas.toLocaleString('es-VE')} cajas • ${hoyClientes} cli.`,
+      color: COLORS.cyan
+    },
+    {
+      label: `Acum. ${mesShortLabel} (Monto)`,
+      value: formatUsd(mesUsd),
+      subtext: `${formatBs(mesBs)} • Prom ${formatUsd(mesPromUsd)}/d`,
+      color: COLORS.navy
+    },
+    {
+      label: `Acum. ${mesShortLabel} (Lubric.)`,
+      value: `${mesLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      subtext: `${mesCajas.toLocaleString('es-VE')} cjs • ${mesPctMeta}% meta`,
+      color: mesPctMeta >= 80 ? COLORS.emerald : mesPctMeta >= 50 ? COLORS.amber : COLORS.red
+    }
+  ], tableWidth, startX);
+
+  const resumenRows = [
+    [
+      `Ventas del Día${todayLabel ? ` (${todayLabel})` : ''}`,
+      `${hoyDocs} docs (${hoyClientes} cli.)`,
+      `${hoyLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      `${hoyCajas.toLocaleString('es-VE')} cjs`,
+      formatUsd(hoyUsd),
+      formatBs(hoyBs)
+    ],
+    [
+      'Día Anterior (Comparativo)',
+      '—',
+      `${ayerLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      `${(ayerLitros / 11.35).toFixed(1)} cjs`,
+      formatUsd(ayerUsd),
+      formatBs(ayerUsd * tasa)
+    ],
+    [
+      `Acumulado ${ventasMesLabel || 'Mes Actual'} (Meta: ${mesMeta.toLocaleString('es-VE')} L • ${mesPctMeta}%)`,
+      `${mesDocs} docs`,
+      `${mesLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      `${mesCajas.toLocaleString('es-VE')} cjs`,
+      formatUsd(mesUsd),
+      formatBs(mesBs)
+    ]
+  ];
+
+  if (mes.esMesEnCurso) {
+    const proyLts = Number(mes.proyeccionLitros || 0);
+    const proyUsd = Number(mes.proyeccionUsd || 0);
+    resumenRows.push([
+      `Proyección Cierre ${ventasMesLabel || 'Mes'} (Día ${mes.diasTranscurridos}/${mes.diasDelMes})`,
+      'Ritmo diario',
+      `${proyLts.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      `${(proyLts / 11.35).toFixed(1)} cjs`,
+      formatUsd(proyUsd),
+      formatBs(proyUsd * tasa)
+    ]);
+  }
+
+  autoTable(doc, {
+    startY: currentY,
+    margin: { top: 22, left: startX, right: startX, bottom: 26 },
+    tableWidth,
+    head: [['PULSO DIARIO Y ACUMULADO MENSUAL', 'DETALLE', 'LITROS (L)', 'CAJAS', 'MONTO USD', 'MONTO BS']],
+    body: resumenRows,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.5, fontStyle: 'bold', cellPadding: 1.5 },
+    styles: { fontSize: 6.0, cellPadding: 1.3, textColor: COLORS.dark },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 66 },
+      1: { halign: 'center', cellWidth: 26 },
+      2: { halign: 'right', fontStyle: 'bold', cellWidth: 21 },
+      3: { halign: 'right', cellWidth: 16 },
+      4: { halign: 'right', fontStyle: 'bold', cellWidth: 22 },
+      5: { halign: 'right', cellWidth: 28.9 }
+    }
+  });
+
+  currentY = (doc.lastAutoTable?.finalY || currentY) + 3.0;
+
+  const detalleRows = [
+    ...(hoy.topProductos || []).map((p, idx) => [
+      'HOY',
+      p.sku || '—',
+      `${idx + 1}. ${p.desc || 'Lubricante'}`,
+      Number(p.cantidad || 0).toLocaleString('es-VE'),
+      `${Number(p.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      formatUsd(Number(p.usd || 0))
+    ]),
+    ...(mes.topProductos || []).map((p, idx) => [
+      mesShortLabel,
+      p.sku || '—',
+      `${idx + 1}. ${p.desc || 'Lubricante'}`,
+      Number(p.cantidad || 0).toLocaleString('es-VE'),
+      `${Number(p.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`,
+      formatUsd(Number(p.usd || 0))
+    ])
+  ];
+
+  if (detalleRows.length > 0) {
+    autoTable(doc, {
+      startY: currentY,
+      margin: { top: 22, left: startX, right: startX, bottom: 26 },
+      tableWidth,
+      head: [['PERÍODO', 'SKU', 'LUBRICANTES VENDIDOS (DETALLE HOY / MES)', 'UNIDADES', 'LITROS (L)', 'MONTO USD']],
+      body: detalleRows,
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.slate, textColor: [255, 255, 255], fontSize: 6.4, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.9, cellPadding: 1.2, textColor: COLORS.dark },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
+        1: { halign: 'center', cellWidth: 20 },
+        2: { cellWidth: 79.9 },
+        3: { halign: 'right', cellWidth: 18 },
+        4: { halign: 'right', fontStyle: 'bold', cellWidth: 21 },
+        5: { halign: 'right', fontStyle: 'bold', cellWidth: 23 }
+      }
+    });
+    currentY = (doc.lastAutoTable?.finalY || currentY) + 3.0;
+  }
+
+  return currentY;
+}
+
 export function generateDashboardPDF({
   kpiData = {},
   kpis = {},
@@ -1757,7 +1924,11 @@ export function generateDashboardPDF({
   topClientsData = [],
   topClientesData = [],
   lubricantesAnalytics = {},
-  selectedMonth = 'ALL'
+  selectedMonth = 'ALL',
+  ventasDelDia = null,
+  ventasAcumuladoMes = null,
+  ventasMesLabel = '',
+  todayLabel = ''
 }) {
   const kpi = (kpiData && Object.keys(kpiData).length > 0) ? kpiData : (kpis || {});
   const effectiveTopClients = (topClientsData && topClientsData.length > 0) ? topClientsData : (topClientesData || []);
@@ -1770,7 +1941,7 @@ export function generateDashboardPDF({
   if (block === 'comercial') {
     const base = createBaseReport({
       title: 'INFORME DE DIRECCIÓN COMERCIAL & LUBRICANTES',
-      subtitle: `Litros Facturados, Cuotas Comerciales y Avance de Asesores - ${periodoLabel}`,
+      subtitle: `Litros Facturados, Ventas del Día/Mes y Avance de Asesores - ${periodoLabel}`,
       moduleCode: 'VTA',
       currentUser,
       config
@@ -1790,6 +1961,16 @@ export function generateDashboardPDF({
     ];
 
     let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+    currentY = appendVentasDiaYMesSection(base.doc, currentY, {
+      ventasDelDia,
+      ventasAcumuladoMes,
+      ventasMesLabel,
+      todayLabel,
+      tasa,
+      tableWidth: base.tableWidth,
+      startX: base.startX
+    });
 
     currentY = addAnalyticalBox(
       base.doc,
@@ -1894,11 +2075,15 @@ export function generateDashboardPDF({
 
     let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
+    const pulsoFinText = (ventasDelDia || ventasAcumuladoMes)
+      ? ` En el corte diario (${todayLabel || 'Hoy'}) se facturaron ${formatUsd(Number(ventasDelDia?.usd || 0))} (${Number(ventasDelDia?.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L), y el acumulado de ${ventasMesLabel || 'mes en curso'} suma ${formatUsd(Number(ventasAcumuladoMes?.usd || 0))} (${Number(ventasAcumuladoMes?.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L).`
+      : '';
+
     currentY = addAnalyticalBox(
       base.doc,
       currentY,
       'SÍNTESIS DE GESTIÓN FINANCIERA Y DISPONIBILIDAD',
-      `El área de Finanzas y Tesorería registra una facturación acumulada de ${formatUsd(facturacionUsd)} con una cobranza total ingresada de ${formatUsd(cobradoUsd)}, consolidando un índice de efectividad de cobranza del ${efectividadPct.toFixed(1)}%. Los saldos operativos disponibles en bancos nacionales y custodia de divisas totalizan ${formatUsd(disponibilidadUsd)} (${formatBs(disponibilidadUsd * tasa)}).`,
+      `El área de Finanzas y Tesorería registra una facturación acumulada de ${formatUsd(facturacionUsd)} con una cobranza total ingresada de ${formatUsd(cobradoUsd)}, consolidando un índice de efectividad de cobranza del ${efectividadPct.toFixed(1)}%. Los saldos operativos disponibles en bancos nacionales y custodia de divisas totalizan ${formatUsd(disponibilidadUsd)} (${formatBs(disponibilidadUsd * tasa)}).${pulsoFinText}`,
       base.tableWidth,
       base.startX
     );
@@ -2166,6 +2351,16 @@ export function generateDashboardPDF({
   ];
 
   currentY = addSummaryCards(base.doc, currentY, cardsB1, base.tableWidth, base.startX);
+
+  currentY = appendVentasDiaYMesSection(base.doc, currentY, {
+    ventasDelDia,
+    ventasAcumuladoMes,
+    ventasMesLabel,
+    todayLabel,
+    tasa,
+    tableWidth: base.tableWidth,
+    startX: base.startX
+  });
 
   currentY = addAnalyticalBox(
     base.doc,

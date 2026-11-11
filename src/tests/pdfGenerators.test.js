@@ -212,6 +212,61 @@ async function runPdfTests() {
     });
   });
 
+  testGen('Dashboard Ejecutivo (Bloque 1 y ALL con Ventas del Día y Acumulado Mensual)', () => {
+    const sampleHoy = {
+      usd: 218,
+      bs: 196550.98,
+      litros: 34.05,
+      cajas: 3.0,
+      documentos: 1,
+      clientes: 1,
+      ayerUsd: 774,
+      ayerLitros: 118.6,
+      topProductos: [
+        { sku: '100403', desc: 'Lubricante Oilstone 4 tiempos API SL', cantidad: 2, litros: 22.7, usd: 152 },
+        { sku: '100102', desc: 'Lubricante Oilstone SAE 20W50 API SL', cantidad: 1, litros: 11.35, usd: 66 }
+      ]
+    };
+    const sampleMes = {
+      usd: 14105.53,
+      bs: 12717686.9,
+      litros: 1781.95,
+      cajas: 157,
+      documentos: 64,
+      promedioDiarioUsd: 1282.32,
+      metaLitros: 30000,
+      pctMeta: 5.9,
+      esMesEnCurso: true,
+      diasTranscurridos: 11,
+      diasDelMes: 30,
+      proyeccionLitros: 4859.9,
+      proyeccionUsd: 38469.6,
+      topProductos: sampleHoy.topProductos
+    };
+    generateDashboardPDF({
+      kpiData: { litrosFacturados: 154926.3, cajasFacturadas: 13649.9, preventaPendienteUsd: 0, precioPromedioLitro: 5.73, cumplimientoLitrosPct: 43.04, facturacionTotalUsd: 887874.48 },
+      sellers: [{ coVen: 'KB', venDes: 'Katherine Becerra', metaLitrosMes: 3000, litrosFinales: 3800, pctIndividual: 126.7 }],
+      config: mockConfig,
+      currentUser: mockUser,
+      block: 'comercial',
+      ventasDelDia: sampleHoy,
+      ventasAcumuladoMes: sampleMes,
+      ventasMesLabel: 'Noviembre 2026',
+      todayLabel: 'miércoles, 11 de noviembre de 2026'
+    });
+    generateDashboardPDF({
+      kpiData: { litrosFacturados: 154926.3, cajasFacturadas: 13649.9, preventaPendienteUsd: 0, precioPromedioLitro: 5.73, cumplimientoLitrosPct: 43.04, facturacionTotalUsd: 887874.48 },
+      sellers: [{ coVen: 'KB', venDes: 'Katherine Becerra', metaLitrosMes: 3000, litrosFinales: 3800, pctIndividual: 126.7 }],
+      config: mockConfig,
+      currentUser: mockUser,
+      block: 'ALL',
+      ventasDelDia: sampleHoy,
+      ventasAcumuladoMes: sampleMes,
+      ventasMesLabel: 'Noviembre 2026',
+      todayLabel: 'miércoles, 11 de noviembre de 2026'
+    });
+  });
+
   testGen('Dashboard Ejecutivo (Bloque 2 Financiero)', () => {
     generateDashboardPDF({
       kpiData: { facturacionTotalUsd: 85000, cobradoTotalUsd: 72000, porcentajeCobranza: 84.7, disponibilidadTotalUsd: 34000 },

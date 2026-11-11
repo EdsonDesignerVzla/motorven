@@ -26,7 +26,13 @@ export default function ExecutiveSummaryModal({
   carteraClientesData = [],
   cobranzasData = {},
   disponibilidadBancariaData = [],
-  objetivosData = {}
+  objetivosData = {},
+  ventasDelDia = null,
+  ventasAcumuladoMes = null,
+  ventasMesLabel = '',
+  todayLabel = '',
+  sellers = [],
+  selectedMonth = 'ALL'
 }) {
   // Código único de 10 dígitos alfanuméricos para este documento
   const [documentCode] = useState(() => generateUniqueDocCode());
@@ -96,9 +102,8 @@ export default function ExecutiveSummaryModal({
 
   const handlePrint = () => {
     generateDashboardPDF({
-      kpis: kpiData,
+      kpiData,
       sales,
-      inventory: [],
       config: {
         ...config,
         tasaDolar: tasaBcvNum,
@@ -106,7 +111,16 @@ export default function ExecutiveSummaryModal({
         tasaEuro: tasaEuroNum,
         tasaUsdt: tasaUsdtNum
       },
-      currentUser
+      currentUser,
+      sellers,
+      cobranzasData,
+      disponibilidadBancariaData,
+      carteraClientesData,
+      selectedMonth,
+      ventasDelDia,
+      ventasAcumuladoMes,
+      ventasMesLabel,
+      todayLabel
     });
   };
 
@@ -225,7 +239,7 @@ export default function ExecutiveSummaryModal({
           </button>
           <button
             className="btn btn-print-report executive-print-btn"
-            onClick={() => generateDashboardPDF({ kpiData, sales, config, currentUser })}
+            onClick={handlePrint}
             title="Descargar Reporte Ejecutivo en formato PDF"
           >
             <Printer size={18} color="#ffffff" /> Imprimir Reporte
@@ -604,6 +618,49 @@ export default function ExecutiveSummaryModal({
               </tbody>
             </table>
           </div>
+
+          {(ventasDelDia || ventasAcumuladoMes) && (
+            <div className="pdf-section-block" style={{ marginTop: '10px' }}>
+              <div className="pdf-section-title">
+                1B. VENTAS DEL DÍA Y ACUMULADO MENSUAL (MONTOS Y LUBRICANTES)
+              </div>
+              <table className="pdf-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '34%' }}>Período de Facturación</th>
+                    <th style={{ width: '16%', textAlign: 'center' }}>Documentos</th>
+                    <th style={{ width: '16%', textAlign: 'right' }}>Litros (L)</th>
+                    <th style={{ width: '12%', textAlign: 'right' }}>Cajas</th>
+                    <th style={{ width: '22%', textAlign: 'right' }}>Monto Total (USD / Bs.)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Ventas del Día{todayLabel ? ` (${todayLabel})` : ''}</strong></td>
+                    <td style={{ textAlign: 'center' }}>{ventasDelDia?.documentos || 0} docs ({ventasDelDia?.clientes || 0} cli.)</td>
+                    <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#0284c7' }}>
+                      {Number(ventasDelDia?.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{Number(ventasDelDia?.cajas || 0).toLocaleString('es-VE')}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#059669' }}>
+                      {formatUsd(Number(ventasDelDia?.usd || 0))} <span style={{ fontWeight: 400, fontSize: '0.85em', color: '#64748b' }}>({formatBs(Number(ventasDelDia?.bs || (Number(ventasDelDia?.usd || 0) * tasaBcvNum)))})</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Acumulado {ventasMesLabel || 'Mes Actual'}</strong></td>
+                    <td style={{ textAlign: 'center' }}>{ventasAcumuladoMes?.documentos || 0} docs ({ventasAcumuladoMes?.pctMeta || 0}% meta)</td>
+                    <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#002b7a' }}>
+                      {Number(ventasAcumuladoMes?.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{Number(ventasAcumuladoMes?.cajas || 0).toLocaleString('es-VE')}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#002b7a' }}>
+                      {formatUsd(Number(ventasAcumuladoMes?.usd || 0))} <span style={{ fontWeight: 400, fontSize: '0.85em', color: '#64748b' }}>({formatBs(Number(ventasAcumuladoMes?.bs || (Number(ventasAcumuladoMes?.usd || 0) * tasaBcvNum)))})</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
           </div>{/* Fin .executive-page-content Hoja 1 */}
 
           {/* PIE DE PÁGINA OFICIAL - HOJA 1/2 */}
