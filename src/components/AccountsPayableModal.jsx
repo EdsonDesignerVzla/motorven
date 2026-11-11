@@ -200,6 +200,10 @@ export default function AccountsPayableModal({
   };
 
   const tasaBcv = Number(config?.tasaDolar) || 899.27;
+  const rawKeystone = Number(config?.tasaKeystone ?? config?.tasa_keystone ?? 0);
+  const tasaKeystone = (rawKeystone > 100 || tasaBcv <= 100)
+    ? (rawKeystone || tasaBcv)
+    : round2(tasaBcv * 1.03);
 
   // Estados de filtros
   const [searchFilter, setSearchFilter] = useState('');
@@ -214,7 +218,11 @@ export default function AccountsPayableModal({
   // PARTE A: Estado del formulario para registrar pago a proveedor
   const [pagoDocKey, setPagoDocKey] = useState('');
   const [pagoDocSearch, setPagoDocSearch] = useState('');
-  const [pagoTasa, setPagoTasa] = useState(String(tasaBcv));
+  const [pagoTasa, setPagoTasa] = useState(String(tasaKeystone));
+
+  useEffect(() => {
+    setPagoTasa(String(tasaKeystone));
+  }, [tasaKeystone]);
   const [pagoFecha, setPagoFecha] = useState(getTodayIso());
   const [pagoCuentaKey, setPagoCuentaKey] = useState('');
   const [pagoMontoUsd, setPagoMontoUsd] = useState('');
@@ -336,9 +344,9 @@ export default function AccountsPayableModal({
         const provNombre = resolved.provNombre || resolved.prov_nombre || 'Proveedor General';
         const provRif = resolved.provRif || resolved.prov_rif || resolved.coProv || resolved.co_prov || 'J-00000000';
 
-        const montoNetUsd = Number(resolved.montoNetUsd ?? resolved.monto_net_usd ?? (tasaBcv > 0 ? Number(resolved.montoNetBs || resolved.monto_net_bs || 0) / tasaBcv : 0));
+        const montoNetUsd = Number(resolved.montoNetUsd ?? resolved.monto_net_usd ?? (tasaKeystone > 0 ? Number(resolved.montoNetBs || resolved.monto_net_bs || 0) / tasaKeystone : 0));
         const saldoBs = Number(resolved.saldoBs ?? resolved.saldo_bs ?? 0);
-        const rawSaldoUsd = Number(resolved.saldoUsd ?? resolved.saldo_usd ?? (tasaBcv > 0 ? saldoBs / tasaBcv : montoNetUsd));
+        const rawSaldoUsd = Number(resolved.saldoUsd ?? resolved.saldo_usd ?? (tasaKeystone > 0 ? saldoBs / tasaKeystone : montoNetUsd));
         const saldoUsd = Math.max(0, round2(rawSaldoUsd));
 
         // Abonos registrados
@@ -346,7 +354,7 @@ export default function AccountsPayableModal({
         const abonosUsd = rawAbonosVal !== undefined && rawAbonosVal !== null
           ? round2(Number(rawAbonosVal))
           : Math.max(0, round2(montoNetUsd - saldoUsd));
-        const abonosBs = round2(abonosUsd * tasaBcv);
+        const abonosBs = round2(abonosUsd * tasaKeystone);
 
         // Fechas
         const fecEmis = resolved.fechaEmision || resolved.fec_emis;
@@ -390,11 +398,11 @@ export default function AccountsPayableModal({
           fechaVencimientoIso: toIsoDateInput(fecVenc),
           diasCredito: Number(resolved.diasCredito ?? resolved.dias_credito ?? 15),
           montoNetUsd: round2(montoNetUsd),
-          montoNetBs: round2(montoNetUsd * tasaBcv),
+          montoNetBs: round2(montoNetUsd * tasaKeystone),
           abonosUsd,
           abonosBs,
           saldoUsd,
-          saldoBs: round2(saldoUsd * tasaBcv),
+          saldoBs: round2(saldoUsd * tasaKeystone),
           isSolvente,
           isVencido,
           diffDays,
@@ -402,7 +410,7 @@ export default function AccountsPayableModal({
           historialPagos: matchingPayments
         };
       });
-  }, [targetPayables, localDocOverrides, tasaBcv, supplierPayments]);
+  }, [targetPayables, localDocOverrides, tasaKeystone, supplierPayments]);
 
   // Documentos con saldo pendiente seleccionables en Parte A
   const payableDocsWithBalance = useMemo(() => {
@@ -486,7 +494,7 @@ export default function AccountsPayableModal({
     generateAccountsPayablePDF({
       payables: filteredPayables,
       suppliers,
-      config: { ...config, tasaDolar: tasaBcv },
+      config: { ...config, tasaDolar: tasaBcv, tasaKeystone },
       currentUser,
       filterSummary: activeFiltersLabel
     });
@@ -532,8 +540,8 @@ export default function AccountsPayableModal({
   }, [processedPayables]);
 
   const totalCarteraBs = useMemo(() => {
-    return round2(totalCarteraUsd * tasaBcv);
-  }, [totalCarteraUsd, tasaBcv]);
+    return round2(totalCarteraUsd * tasaKeystone);
+  }, [totalCarteraUsd, tasaKeystone]);
 
   const totalVencidoUsd = useMemo(() => {
     return processedPayables.filter(p => p.isVencido).reduce((acc, p) => acc + p.saldoUsd, 0);
@@ -553,7 +561,7 @@ export default function AccountsPayableModal({
     const doc = processedPayables.find(d => String(d.id) === String(docIdentifier) || String(d.nroDoc) === String(docIdentifier));
     if (doc) {
       setPagoDocKey(doc.id || doc.nroDoc);
-      const rate = Number(pagoTasa) > 0 ? Number(pagoTasa) : tasaBcv;
+      const rate = Number(pagoTasa) > 0 ? Number(pagoTasa) : tasaKeystone;
       const rest = round2(doc.saldoUsd);
       setPagoMontoUsd(String(rest.toFixed(2)));
       setPagoMontoBs(String(round2(rest * rate).toFixed(2)));
@@ -843,11 +851,11 @@ export default function AccountsPayableModal({
       fechaVencimiento: editingPayable.fechaVencimientoIso,
       diasCredito: Number(editingPayable.diasCredito || 0),
       montoNetUsd,
-      montoNetBs: round2(montoNetUsd * tasaBcv),
+      montoNetBs: round2(montoNetUsd * tasaKeystone),
       saldoUsd,
-      saldoBs: round2(saldoUsd * tasaBcv),
+      saldoBs: round2(saldoUsd * tasaKeystone),
       abonosUsd,
-      tasa: tasaBcv,
+      tasa: tasaKeystone,
       moneda: 'US$',
       observaciones: editingPayable.observaciones || '',
       historialPagos: editingPayable.historialPagos || []
@@ -1027,7 +1035,7 @@ export default function AccountsPayableModal({
               Cuentas por Pagar (CxP) & Proveedores Supabase
             </h2>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              Control de Pasivos y Facturas de Compra • Tasa BCV: {formatBs(tasaBcv)}
+              Control de Pasivos y Facturas de Compra • Tasa KEYSTONE: {formatBs(tasaKeystone)}
             </span>
           </div>
         </div>
@@ -2171,7 +2179,7 @@ export default function AccountsPayableModal({
                   <span style={{ fontFamily: 'var(--font-code)' }}>{formatUsd(selectedPayableDetail.saldoUsd)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                  <span>Equivalente en Bolívares (Tasa BCV):</span>
+                  <span>Equivalente en Bolívares (Tasa KEYSTONE):</span>
                   <span style={{ fontFamily: 'var(--font-code)' }}>{formatBs(selectedPayableDetail.saldoBs)}</span>
                 </div>
               </div>

@@ -104,7 +104,9 @@ export function createBaseReport({
   moduleCode = 'GEN',
   currentUser = null,
   config = {},
-  orientation = 'portrait'
+  orientation = 'portrait',
+  rateLabel = 'Tasa BCV',
+  rateValue = null
 }) {
   const doc = new jsPDF({
     orientation,
@@ -176,11 +178,11 @@ export function createBaseReport({
   doc.setTextColor(...COLORS.slate);
   doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 10.7, { align: 'center' });
 
-  const tasaBcvNum = Number(config?.tasaDolar) || 827.73;
+  const effectiveRateNum = Number(rateValue ?? config?.tasaDolar) || 827.73;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(5.8);
   doc.setTextColor(...COLORS.emerald);
-  doc.text(`Tasa BCV: ${formatBs(tasaBcvNum)} / USD`, metaBoxX + metaBoxW / 2, margin + 13.9, { align: 'center' });
+  doc.text(`${rateLabel}: ${formatBs(effectiveRateNum)} / USD`, metaBoxX + metaBoxW / 2, margin + 13.9, { align: 'center' });
 
   // 5. Franja de Título Principal con Acento Lateral Rojo
   const bannerY = margin + 17;
@@ -1116,15 +1118,22 @@ export function generateAccountsPayablePDF({
     ? `Documentos Filtrados (${dataset.length}) • ${filterSummary}`
     : 'Compromisos con Fabricantes de Planta, Vencimientos y Programación de Tesorería';
 
+  const tasaBcv = Number(config?.tasaDolar) || 827.73;
+  const rawKey = Number(config?.tasaKeystone ?? config?.tasa_keystone ?? 0);
+  const tasa = (rawKey > 100 || tasaBcv <= 100)
+    ? (rawKey || tasaBcv)
+    : Math.round(tasaBcv * 1.03 * 100) / 100;
+
   const base = createBaseReport({
     title: 'REPORTE DE DOCUMENTOS CXP — FACTURAS Y PASIVOS DE COMPRA',
     subtitle: subtitleText,
     moduleCode: 'CXP',
     currentUser,
-    config
+    config,
+    rateLabel: 'Tasa KEYSTONE',
+    rateValue: tasa
   });
 
-  const tasa = Number(config?.tasaDolar) || 827.73;
   const now = new Date();
   now.setHours(0, 0, 0, 0);
 
@@ -1186,7 +1195,7 @@ export function generateAccountsPayablePDF({
     { label: 'Saldo Pendiente CxP', value: formatUsd(totalPasivosUsd), subtext: formatBs(totalPasivosUsd * tasa), color: COLORS.red },
     { label: 'Monto Original Docs', value: formatUsd(totalMontoOrigUsd), subtext: `${rows.length} doc(s) • ${uniqueProvs} prov.`, color: COLORS.navy },
     { label: 'Pasivos Vencidos', value: formatUsd(totalVencidoUsd), subtext: `${vencidas.length} documento(s) vencido(s)`, color: COLORS.amber },
-    { label: 'Abonos Aplicados', value: formatUsd(totalAbonosUsd), subtext: `Tasa BCV: ${formatBs(tasa)}`, color: COLORS.emerald }
+    { label: 'Abonos Aplicados', value: formatUsd(totalAbonosUsd), subtext: `Tasa KEYSTONE: ${formatBs(tasa)}`, color: COLORS.emerald }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
