@@ -38,6 +38,7 @@ import {
   generateOrdersPDF,
   generateSellerOrderPDF,
   generateDeliveryNotePDF,
+  resolveDeliveryNoteLineItems,
   generateSalesPOSPDF,
   generatePurchasesPDF,
   generateCashflowPDF,
@@ -529,6 +530,42 @@ async function runPdfTests() {
     if (result.totalPages < 2) {
       throw new Error(`Se esperaban al menos 2 páginas para orden con desbordamiento de 18 renglones, pero generó ${result.totalPages}`);
     }
+  });
+
+  testGen('Nota de Entrega Profit Plus (resuelve descripción, litros reales y precios USD desde Bs)', () => {
+    const profitNeSample = {
+      factNum: '2128',
+      tipoDoc: 'NOTA_ENTREGA',
+      clienteNombre: 'Cliente Prueba Profit C.A.',
+      clienteRif: 'J-31115365-9',
+      totNetoUsd: 1427.19,
+      totNetoBs: 1121068.3,
+      rawTotalNetoBs: 1181331.26,
+      originalTotalNetoUsd: 1427.19,
+      items: [
+        { rengNum: 1, articuloId: '001312', descripcion: '', unidadVenta: 'Tambor', cantidad: 1, litrosUnitarios: 11.35, litrosTotales: 11.35, precioUnitario: 868495.6, totalNeto: 868495.6 },
+        { rengNum: 2, articuloId: '000704', descripcion: '', unidadVenta: 'Paila', cantidad: 3, litrosUnitarios: 11.35, litrosTotales: 34.05, precioUnitario: 84190.9, totalNeto: 252572.7 },
+        { rengNum: 3, articuloId: '001208', descripcion: '', unidadVenta: 'Caja', cantidad: 1, litrosUnitarios: 11.35, litrosTotales: 11.35, precioUnitario: 60262.96, totalNeto: 60262.96 }
+      ]
+    };
+    const resolved = resolveDeliveryNoteLineItems(profitNeSample, null, mockConfig.tasaDolar);
+    if (resolved.length !== 3) {
+      throw new Error(`Se esperaban 3 renglones resueltos, se obtuvieron ${resolved.length}`);
+    }
+    if (!resolved[0].descripcion.toLowerCase().includes('20w50') || resolved[0].volumenTotal !== 208) {
+      throw new Error(`Tambor 001312 mal resuelto: ${resolved[0].descripcion} / ${resolved[0].volumenTotal} L`);
+    }
+    if (!resolved[1].descripcion.toLowerCase().includes('paila') || resolved[1].volumenTotal !== 57) {
+      throw new Error(`Paila 000704 mal resuelta: ${resolved[1].descripcion} / ${resolved[1].volumenTotal} L`);
+    }
+    if (Math.abs(resolved[0].subtotalUsd - 1049.25) > 0.1 || Math.abs(resolved[2].subtotalUsd - 72.81) > 0.1) {
+      throw new Error(`Conversión USD incorrecta: Tambor=${resolved[0].subtotalUsd}, Caja=${resolved[2].subtotalUsd}`);
+    }
+    generateDeliveryNotePDF({
+      sale: profitNeSample,
+      config: mockConfig,
+      currentUser: mockUser
+    });
   });
 
   // 9. Facturación POS

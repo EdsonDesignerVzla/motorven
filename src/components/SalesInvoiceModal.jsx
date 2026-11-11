@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { formatBs, formatUsd, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, buildQRCodeMatrix } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -295,16 +295,14 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     : new Date(fechaObj.getTime() + (diasCreditoDoc * 24 * 60 * 60 * 1000));
   const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
 
+  const resolvedDocItems = resolveDeliveryNoteLineItems(sale, null, tasaBcv);
+
   // Paginación para formato Carta Vertical (Nota de Entrega admite hasta 10 renglones por hoja; Factura SENIAT hasta 5)
-  const pages = splitInvoiceItemsIntoPages(sale.items, isNe ? 10 : 5);
+  const pages = splitInvoiceItemsIntoPages(resolvedDocItems, isNe ? 10 : 5);
   const totalPages = pages.length;
 
-  const totalLitrosDoc = (sale.items || []).reduce((acc, it) => {
-    const qty = Number(it.cantidad || 1);
-    const unitL = Number(it.litrosUnitarios || it.litrosPorUnidad || resolveProductLitersPerUnit(it) || 0);
-    return acc + (it.litrosTotales ? Number(it.litrosTotales) : qty * unitL);
-  }, 0);
-  const totalBultosDoc = (sale.items || []).reduce((acc, it) => acc + Number(it.cantidad || 1), 0);
+  const totalLitrosDoc = resolvedDocItems.reduce((acc, it) => acc + Number(it.volumenTotal || 0), 0);
+  const totalBultosDoc = resolvedDocItems.reduce((acc, it) => acc + Number(it.cantidad || 1), 0);
   const qrMatrix = isNe
     ? buildQRCodeMatrix(`MOTORVEN|${neCorrelativoDisplay}|RIF:${sale.clienteRif || ''}|F:${fechaStr}|USD:${Number(sale.totalUsd || 0).toFixed(2)}|BS:${invoiceTotalBs.toFixed(2)}`)
     : null;
@@ -1111,7 +1109,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                               }}
                             >
                               <span style={{ color: '#1e40af', fontWeight: 800 }}>
-                                SUBTOTAL ACUMULADO HOJA {pageNumber}: ${formatUsd(currentAccumulatedUsd)} (Bs. {formatBs(currentAccumulatedBs)})
+                                SUBTOTAL ACUMULADO HOJA {pageNumber}: {formatUsd(currentAccumulatedUsd)} ({formatBs(currentAccumulatedBs)})
                               </span>
                               <span style={{ color: '#1e3a8a', fontWeight: 900 }}>
                                 CONTINÚA EN LA PÁGINA {pageNumber + 1}/{totalPages} ({pageNumber}/{totalPages}) ...
@@ -1137,7 +1135,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                   </div>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
                                     <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#d97706' }}>TOTAL OFICIAL EN BOLÍVARES:</span>
-                                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: '#d97706' }}>Bs. {formatBs(invoiceTotalBs)}</span>
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: '#d97706' }}>{formatBs(invoiceTotalBs)}</span>
                                   </div>
                                 </div>
                               </div>

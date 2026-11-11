@@ -11,12 +11,13 @@ import {
   AlertTriangle,
   Printer
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit } from '../services/formatService';
-import { generateSalesPOSPDF } from '../services/pdfReportService';
+import { formatUsd, formatBs } from '../services/formatService';
+import { generateSalesPOSPDF, resolveDeliveryNoteLineItems } from '../services/pdfReportService';
 
 export default function ProfitInvoiceModal({ invoice, onClose, config = {}, currentUser = null, tasaBcv = 827.73 }) {
   if (!invoice) return null;
 
+  const resolvedItems = resolveDeliveryNoteLineItems(invoice, null, tasaBcv);
   const fechaEmis = invoice.fechaEmision ? new Date(invoice.fechaEmision).toLocaleDateString('es-VE') : 'N/A';
   const fechaVenc = invoice.fechaVencimiento ? new Date(invoice.fechaVencimiento).toLocaleDateString('es-VE') : 'N/A';
 
@@ -174,19 +175,19 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
                   </tr>
                 </thead>
                 <tbody>
-                  {invoice.items && invoice.items.length > 0 ? (
-                    invoice.items.map((item, idx) => (
+                  {resolvedItems && resolvedItems.length > 0 ? (
+                    resolvedItems.map((item, idx) => (
                       <tr key={idx}>
                         <td style={{ fontFamily: 'var(--font-code)', fontSize: '0.75rem' }}>{item.rengNum || idx + 1}</td>
                         <td>
                           <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{item.descripcion}</div>
-                          <div style={{ fontSize: '0.7rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>{item.articuloId}</div>
+                          <div style={{ fontSize: '0.7rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>{item.codigo}</div>
                         </td>
-                        <td><span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{resolveProductUnit(item, 'Caja')}</span></td>
+                        <td><span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{item.presentacion}</span></td>
                         <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-tech)' }}>{item.cantidad}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{item.litrosTotales} L</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatBs(item.precioUnitario)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>{formatBs(item.totalNeto)}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{item.volumenTotal.toFixed(1)} L</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUsd(item.precioUsd)} ({formatBs(item.precioUsd * tasaBcv)})</td>
+                        <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>{formatUsd(item.subtotalUsd)} ({formatBs(item.subtotalBs)})</td>
                       </tr>
                     ))
                   ) : (

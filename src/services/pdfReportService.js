@@ -14,6 +14,7 @@ import autoTable from 'jspdf-autotable';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { getProductRetailPrice } from './pricingService.js';
+import { REAL_PRODUCTS } from '../data/supabaseRealData.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -4112,6 +4113,142 @@ function drawDeliveryNoteQRBox(doc, x, y, boxSize, qrPayload) {
 }
 
 /**
+ * Normaliza y enriquece los renglones de productos de una Nota de Entrega o Factura:
+ * - Resuelve descripción, presentación y litros por unidad contra el catálogo de productos (`products` / `REAL_PRODUCTS`)
+ * - Convierte precios y totales importados en Bolívares desde Profit Plus (`precioUnitario`, `totalNeto`, `prec_vta`, `reng_neto`) a USD
+ * - Ajusta proporcionalmente si el documento fue editado manualmente en CxC y conserva totales exactos
+ */
+export function resolveDeliveryNoteLineItems(docData = {}, products = null, fallbackRate = 827.73) {
+  const safeDoc = docData || {};
+  const tasa = Number(safeDoc.tasaDolar || safeDoc.tasaBcv || safeDoc.tasa || fallbackRate) || 827.73;
+
+  const catalog = Array.isArray(products) && products.length > 0 ? products : REAL_PRODUCTS;
+  const prodMap = new Map();
+  if (Array.isArray(catalog)) {
+    catalog.forEach((p) => {
+      if (!p) return;
+      [p.codigo, p.id, p.co_art, p.coArt, p.sku].forEach((k) => {
+        if (k !== undefined && k !== null) {
+          const clean = String(k).trim();
+          if (clean) {
+            prodMap.set(clean, p);
+            prodMap.set(clean.toUpperCase(), p);
+          }
+        }
+      });
+    });
+  }
+
+  // Tasa histórica Profit para renglones que vienen únicamente en Bs (precioUnitario / totalNeto)
+  const rawProfitBs = Number(safeDoc.rawTotalNetoBs ?? safeDoc.totalNeto ?? safeDoc.tot_neto ?? 0);
+  const origProfitUsd = Number(safeDoc.originalTotalNetoUsd ?? safeDoc.totalNetoUsd ?? 0);
+  const headerTotalUsd = Number(
+    safeDoc.totNetoUsd ??
+    safeDoc.tot_neto_usd ??
+    safeDoc.totalUsd ??
+    safeDoc.montoFacturaUsd ??
+    safeDoc.subtotalUsd ??
+    safeDoc.total ??
+    0
+  );
+  const headerTotalBs = rawProfitBs || Number(safeDoc.totNetoBs ?? safeDoc.tot_neto_bs ?? safeDoc.totalBs ?? 0);
+  let profitBsRate = tasa;
+  if (rawProfitBs > 0 && origProfitUsd > 0) {
+    profitBsRate = rawProfitBs / origProfitUsd;
+  } else if (headerTotalBs > 0 && headerTotalUsd > 0) {
+    profitBsRate = headerTotalBs / headerTotalUsd;
+  }
+
+  const rawItems = safeDoc.items || safeDoc.renglones || [];
+  const itemsArr = Array.isArray(rawItems) ? rawItems : [];
+
+  const resolved = itemsArr.map((it, idx) => {
+    const rawCode = it.codigo || it.articuloId || it.productoId || it.co_art || it.sku || '';
+    const codeClean = String(rawCode).trim();
+    const prod = prodMap.get(codeClean) || prodMap.get(codeClean.toUpperCase()) || null;
+
+    const codigo = codeClean || String(prod?.codigo || prod?.id || `LUB-${idx + 1}`);
+    const descCandidate = [
+      it.descripcion,
+      it.articuloDescripcion,
+      it.art_des,
+      it.nombre,
+      prod?.nombre,
+      prod?.descripcion
+    ].find((v) => typeof v === 'string' && v.trim() !== '');
+    const descripcion = descCandidate ? descCandidate.trim() : 'Lubricante Motorven';
+
+    const presentacion = resolveProductUnit({ ...(prod || {}), ...it, descripcion }, prod?.unidad || 'Caja');
+    const qty = Number(it.cantidad ?? it.total_art ?? it.qty ?? 1) || 1;
+
+    const prodUnitLiters = prod
+      ? resolveProductLitersPerUnit({ ...prod, unidadVenta: presentacion, descripcion })
+      : resolveProductLitersPerUnit({ ...it, descripcion });
+    const rawItemUnitLiters = Number(it.litrosPorUnidad || it.litros_por_unidad || it.litrosUnitarios || 0);
+    // Los renglones importados de Profit suelen traer 11.35 fijo aunque el producto sea Tambor (208L) o Paila (19L)
+    const unitLitros = prod && prodUnitLiters > 0 && (rawItemUnitLiters <= 0 || (rawItemUnitLiters === 11.35 && prodUnitLiters !== 11.35))
+      ? prodUnitLiters
+      : (rawItemUnitLiters > 0 ? rawItemUnitLiters : prodUnitLiters);
+
+    const rawTotalLiters = Number(it.volumenTotal || it.litrosTotales || it.litros || 0);
+    const rowLitros = prod && rawItemUnitLiters === 11.35 && prodUnitLiters !== 11.35
+      ? qty * unitLitros
+      : (rawTotalLiters > 0 ? rawTotalLiters : qty * unitLitros);
+
+    let unitPriceUsd = Number(it.precioUsd ?? it.precioUnitarioUsd ?? it.precio_unitario_usd ?? it.precio ?? 0);
+    let subtotalUsd = Number(it.subtotalUsd ?? it.totalUsd ?? it.subtotal_usd ?? it.total_usd ?? 0);
+
+    if (subtotalUsd === 0) {
+      const bsSub = Number(it.totalNeto ?? it.reng_neto ?? it.total_neto ?? it.subtotalBs ?? 0);
+      if (bsSub > 0 && profitBsRate > 0) {
+        subtotalUsd = bsSub / profitBsRate;
+      }
+    }
+    if (unitPriceUsd === 0) {
+      const bsUnit = Number(it.precioUnitario ?? it.prec_vta ?? it.precio_unitario ?? 0);
+      if (bsUnit > 0 && profitBsRate > 0) {
+        unitPriceUsd = bsUnit / profitBsRate;
+      }
+    }
+
+    if (subtotalUsd === 0 && unitPriceUsd > 0) {
+      subtotalUsd = qty * unitPriceUsd;
+    }
+    if (unitPriceUsd === 0 && subtotalUsd > 0 && qty > 0) {
+      unitPriceUsd = subtotalUsd / qty;
+    }
+
+    return {
+      ...it,
+      codigo,
+      descripcion,
+      presentacion,
+      cantidad: qty,
+      litrosPorUnidad: unitLitros,
+      volumenTotal: rowLitros,
+      precioUsd: unitPriceUsd,
+      subtotalUsd,
+      subtotalBs: subtotalUsd * tasa
+    };
+  });
+
+  // Si el documento tenía un monto oficial ajustado en CxC, alinear proporcionalmente los montos USD
+  const rawSumUsd = resolved.reduce((acc, r) => acc + r.subtotalUsd, 0);
+  if (resolved.length > 0 && headerTotalUsd > 0 && rawSumUsd > 0 && (safeDoc._customCreated || Math.abs(rawSumUsd - headerTotalUsd) <= 0.5)) {
+    const ratio = headerTotalUsd / rawSumUsd;
+    if (Math.abs(ratio - 1) > 0.0001 && (safeDoc._customCreated || Math.abs(rawSumUsd - headerTotalUsd) <= 0.5)) {
+      resolved.forEach((r) => {
+        r.subtotalUsd = Math.round((r.subtotalUsd * ratio + Number.EPSILON) * 100) / 100;
+        r.precioUsd = r.cantidad > 0 ? (r.subtotalUsd / r.cantidad) : r.subtotalUsd;
+        r.subtotalBs = r.subtotalUsd * tasa;
+      });
+    }
+  }
+
+  return resolved;
+}
+
+/**
  * Genera el documento oficial de NOTA DE ENTREGA en formato Carta (Letter)
  * Diseñado conforme al formato depurado y estilo corporativo de Grupo Motorven:
  * - Membrete oficial corporativo (sin código RPT interno ni barra de operador)
@@ -4130,10 +4267,12 @@ export function generateDeliveryNotePDF({
   config = {},
   currentUser = null,
   client = null,
+  products = null,
+  tasaBcv = null,
   autoPrint = false
 }) {
   const docData = deliveryNote || sale || order || {};
-  const tasa = Number(docData.tasaDolar || docData.tasa || config?.tasaDolar) || 827.73;
+  const tasa = Number(docData.tasaDolar || docData.tasaBcv || docData.tasa || tasaBcv || config?.tasaDolar) || 827.73;
 
   // Extracción y formateo del correlativo oficial de la Nota de Entrega
   const rawNum = String(docData.numeroDoc || docData.numero || docData.factNum || docData.factura || docData.nroFactura || docData.id || '000001');
@@ -4174,44 +4313,32 @@ export function generateDeliveryNotePDF({
     hideOperatorStrip: true
   });
 
-  const rawItems = docData.items || docData.renglones || [];
-  const items = Array.isArray(rawItems) ? rawItems : [];
+  const resolvedItems = resolveDeliveryNoteLineItems(docData, products, tasa);
 
   // Cálculos de volúmenes, bultos y totales
   let totalLitros = 0;
   let totalBultos = 0;
   let totalNetoUsd = 0;
 
-  const tableData = items.map((it, idx) => {
-    const qty = Number(it.cantidad || it.qty || 1);
-    const unitLitros = Number(it.litrosUnitarios || it.litrosPorUnidad || resolveProductLitersPerUnit(it) || 0);
-    const rowLitros = it.litrosTotales ? Number(it.litrosTotales) : (qty * unitLitros);
-    const unitPrice = Number(it.precioUsd ?? it.precioUnitarioUsd ?? it.precio ?? 0);
-    const rowSubtotalUsd = Number(it.subtotalUsd ?? it.totalUsd ?? (qty * unitPrice));
-    const rowSubtotalBs = rowSubtotalUsd * tasa;
-
-    totalLitros += rowLitros;
-    totalBultos += qty;
-    totalNetoUsd += rowSubtotalUsd;
-
-    const desc = String(it.descripcion || it.articuloDescripcion || it.art_des || 'Lubricante Motorven');
-    const presentacion = resolveProductUnit(it, 'Caja');
-    const codigo = String(it.codigo || it.articuloId || it.co_art || `LUB-${idx + 1}`);
+  const tableData = resolvedItems.map((it, idx) => {
+    totalLitros += it.volumenTotal;
+    totalBultos += it.cantidad;
+    totalNetoUsd += it.subtotalUsd;
 
     return [
       String(idx + 1),
-      codigo,
-      desc,
-      presentacion,
-      String(qty),
-      rowLitros > 0 ? `${rowLitros.toFixed(1)} L` : '-',
-      `$ ${unitPrice.toFixed(2)}`,
-      `$ ${rowSubtotalUsd.toFixed(2)}`,
-      `Bs. ${rowSubtotalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      it.codigo,
+      it.descripcion,
+      it.presentacion,
+      String(it.cantidad),
+      it.volumenTotal > 0 ? `${it.volumenTotal.toFixed(1)} L` : '-',
+      `$ ${it.precioUsd.toFixed(2)}`,
+      `$ ${it.subtotalUsd.toFixed(2)}`,
+      `Bs. ${it.subtotalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     ];
   });
 
-  if (items.length === 0) {
+  if (resolvedItems.length === 0) {
     totalNetoUsd = Number(docData.totalUsd || docData.totNetoUsd || docData.montoFacturaUsd || docData.total || 0);
     totalLitros = Number(docData.totalLitros || 0);
     totalBultos = 1;

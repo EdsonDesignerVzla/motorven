@@ -2652,6 +2652,7 @@ function MainApp() {
             <AccountsReceivableModal
               invoices={sales}
               profitInvoices={profitInvoices}
+              products={products}
               clients={clients}
               sellers={profitSellers}
               profitSellers={profitSellers}

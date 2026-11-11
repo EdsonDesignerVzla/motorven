@@ -18,7 +18,7 @@ import {
     isCxcEntryDeleted,
     sanitizeCxcDeletedDocsStorage
 } from '../services/supabaseService';
-import { generateAccountsReceivablePDF, generateDeliveryNotePDF } from '../services/pdfReportService';
+import { generateAccountsReceivablePDF, generateDeliveryNotePDF, resolveDeliveryNoteLineItems } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
@@ -193,6 +193,7 @@ export function AccountsReceivableModal({
     onClose,
     invoices = [],
     sales = [],
+    products = [],
     clients = [],
     sellers = [],
     profitSellers = [],
@@ -671,6 +672,9 @@ export function AccountsReceivableModal({
                 abonosBs: round2(abonosUsd * tasaDoc),
                 saldoPendienteBs: round2(restanteUsd * tasaDoc),
                 tasa: tasaDoc,
+                rawTotalNetoBs: inv.totalNeto ?? inv.tot_neto ?? inv.totNetoBs ?? null,
+                originalTotalNetoUsd: inv.totalNetoUsd ?? inv.originalTotalNetoUsd ?? null,
+                _customCreated: Boolean(inv._customCreated),
                 formaPago: inv.formaPago || (diasCredito === 0 ? '01' : '03'),
                 estado: restanteUsd <= 0.01 ? 'PAGADA' : (diasVencidos > 0 ? 'VENCIDA' : 'POR_VENCER'),
                 isCarteraActiva,
@@ -1558,8 +1562,17 @@ export function AccountsReceivableModal({
         if (!inv) return;
         const rate = Number(inv.tasa || tasaBcv || 421.88);
         const totalUsdVal = Number(inv.montoFacturaUsd || inv.subtotalUsd || 0);
-        const itemsList = Array.isArray(inv.items) && inv.items.length > 0
-            ? inv.items
+        const resolvedItems = resolveDeliveryNoteLineItems(
+            {
+                ...inv,
+                totNetoUsd: totalUsdVal,
+                tasaDolar: rate
+            },
+            products,
+            rate
+        );
+        const itemsList = resolvedItems.length > 0
+            ? resolvedItems
             : [
                 {
                     codigo: 'NE-DESP',
@@ -1591,9 +1604,16 @@ export function AccountsReceivableModal({
                 subtotalUsd: totalUsdVal,
                 totalUsd: totalUsdVal,
                 totalBs: round2(totalUsdVal * rate),
+                tasa: rate,
+                tasaDolar: rate,
                 tasaBcv: rate,
+                rawTotalNetoBs: inv.rawTotalNetoBs,
+                originalTotalNetoUsd: inv.originalTotalNetoUsd,
+                _customCreated: inv._customCreated,
                 items: itemsList
             },
+            config: { ...config, tasaDolar: rate },
+            products,
             tasaBcv: rate,
             currentUser,
             autoPrint: true
@@ -3442,9 +3462,10 @@ export function AccountsReceivableModal({
                         border: '1px solid var(--border-glass)',
                         borderRadius: '16px',
                         width: '100%',
-                        maxWidth: '540px',
-                        boxShadow: 'var(--shadow-industrial)',
-                        overflow: 'hidden'
+                        maxWidth: '680px',
+                        maxHeight: '90vh',
+                        overflowY: 'auto',
+                        boxShadow: 'var(--shadow-industrial)'
                     }}>
                         <div style={{
                             padding: '1.25rem 1.5rem',
@@ -3514,6 +3535,69 @@ export function AccountsReceivableModal({
                                     <span style={{ fontFamily: 'var(--font-code)', color: '#ef4444', fontWeight: 700 }}>{selectedInvoiceDetail.diasVencidos} días</span>
                                 </div>
                             </div>
+
+                            {/* Detalle de Productos / Renglones del Documento */}
+                            {(() => {
+                                const detailRate = Number(selectedInvoiceDetail.tasa || tasaBcv || 827.73);
+                                const detailItems = resolveDeliveryNoteLineItems(
+                                    {
+                                        ...selectedInvoiceDetail,
+                                        totNetoUsd: Number(selectedInvoiceDetail.montoFacturaUsd || selectedInvoiceDetail.subtotalUsd || 0),
+                                        tasaDolar: detailRate
+                                    },
+                                    products,
+                                    detailRate
+                                );
+                                if (!detailItems || detailItems.length === 0) return null;
+                                return (
+                                    <div style={{
+                                        background: 'var(--bg-surface)',
+                                        borderRadius: '12px',
+                                        border: '1px solid var(--border-glass)',
+                                        overflow: 'hidden'
+                                    }}>
+                                        <div style={{
+                                            padding: '0.6rem 0.9rem',
+                                            borderBottom: '1px solid var(--border-glass)',
+                                            fontSize: '0.76rem',
+                                            fontWeight: 800,
+                                            color: 'var(--text-primary)',
+                                            textTransform: 'uppercase',
+                                            letterSpacing: '0.4px'
+                                        }}>
+                                            Detalle de Productos Despachados ({detailItems.length})
+                                        </div>
+                                        <div style={{ overflowX: 'auto' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem' }}>
+                                                <thead>
+                                                    <tr style={{ background: 'rgba(15, 23, 42, 0.35)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                                                        <th style={{ padding: '0.45rem 0.65rem' }}>Código</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem' }}>Descripción</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>Pres.</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>Cant.</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'right' }}>Vol.</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'right' }}>P. Unit</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'right' }}>Total</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {detailItems.map((it, idx) => (
+                                                        <tr key={idx} style={{ borderTop: '1px solid var(--border-glass)' }}>
+                                                            <td style={{ padding: '0.45rem 0.65rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}>{it.codigo}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', color: 'var(--text-primary)' }}>{it.descripcion}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center', color: 'var(--text-muted)' }}>{it.presentacion}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center', fontWeight: 700 }}>{it.cantidad}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', color: 'var(--text-muted)' }}>{it.volumenTotal > 0 ? `${it.volumenTotal.toFixed(1)} L` : '-'}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUsd(it.precioUsd)}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#10b981' }}>{formatUsd(it.subtotalUsd)}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                             <div style={{
                                 background: 'var(--bg-surface)',
