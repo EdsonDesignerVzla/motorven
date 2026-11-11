@@ -30,7 +30,7 @@ import {
   Warehouse
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from '../services/formatService';
-import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber } from '../services/fiscalService';
+import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber } from '../services/fiscalService';
 import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -616,15 +616,20 @@ export default function SalesPOSView({
 
     const resolvedNextCorrelativo = (tipoDoc === 'FACTURA' || !tipoDoc)
       ? getNextInvoiceCorrelativo(sales)
-      : undefined;
+      : (tipoDoc === 'NOTA_ENTREGA' ? getNextNotaEntregaCorrelativo(sales, profitInvoices) : undefined);
     if (resolvedNextCorrelativo) {
-      commitInvoiceCorrelativo(resolvedNextCorrelativo);
+      if (tipoDoc === 'NOTA_ENTREGA') {
+        commitNotaEntregaCorrelativo(resolvedNextCorrelativo);
+      } else {
+        commitInvoiceCorrelativo(resolvedNextCorrelativo);
+      }
     }
+    const controlDigits = resolvedNextCorrelativo ? parseInt(String(resolvedNextCorrelativo).replace(/[^0-9]/g, ''), 10) : NaN;
 
     const salePayload = {
       tipoDoc,
       numeroDoc: resolvedNextCorrelativo,
-      numeroControl: resolvedNextCorrelativo ? generateFiscalControlNumber(parseInt(resolvedNextCorrelativo, 10) + 1) : undefined,
+      numeroControl: !isNaN(controlDigits) ? generateFiscalControlNumber(controlDigits + 1) : undefined,
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim() : '',
       pedidoOrigenId: activeOrderInPOS?.id || null,
       pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,

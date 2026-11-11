@@ -369,8 +369,22 @@ export const commitInvoiceCorrelativo = (correlativo) => {
  * revisando tanto sales como profit_invoices y almacenamiento local para evitar colisiones.
  */
 export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix = 'NE') => {
-  let highest = 0;
   const cleanPrefix = String(prefix || 'NE').toUpperCase().trim();
+
+  // 1. Si el usuario fijó manualmente el correlativo de Nota de Entrega
+  try {
+    if (cleanPrefix === 'NE' && typeof localStorage !== 'undefined') {
+      const forcedSeq = localStorage.getItem('sm_ne_correlativo_force');
+      if (forcedSeq !== null && forcedSeq !== '') {
+        const forcedVal = parseInt(forcedSeq, 10);
+        if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal <= 999999) {
+          return `NE-${String(forcedVal).padStart(6, '0')}`;
+        }
+      }
+    }
+  } catch (_) {}
+
+  let highest = 0;
 
   const inspectRecord = (rec) => {
     if (!rec) return;
@@ -434,11 +448,43 @@ export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix 
 export const commitNotaEntregaCorrelativo = (correlativo) => {
   try {
     const val = parseInt(String(correlativo || '').replace(/[^0-9]/g, ''), 10);
-    if (!isNaN(val) && val > 0 && typeof localStorage !== 'undefined') {
+    if (!isNaN(val) && val >= 0 && typeof localStorage !== 'undefined') {
+      const nextSeq = String(val >= 999999 ? 1 : val + 1);
       const prev = parseInt(localStorage.getItem('sm_ne_correlativo_seq') || '0', 10) || 0;
       if (val + 1 > prev) {
-        localStorage.setItem('sm_ne_correlativo_seq', String(val + 1));
+        localStorage.setItem('sm_ne_correlativo_seq', nextSeq);
       }
+      if (localStorage.getItem('sm_ne_correlativo_force') !== null) {
+        localStorage.setItem('sm_ne_correlativo_force', nextSeq);
+      }
+    }
+  } catch (_) {}
+};
+
+/**
+ * Establece o reinicia manualmente el próximo número de Nota de Entrega (NE-XXXXXX).
+ * @param {number|string} startAt
+ * @returns {string}
+ */
+export const setNotaEntregaCorrelativo = (startAt = 1) => {
+  const num = typeof startAt === 'number'
+    ? startAt
+    : parseInt(String(startAt || '').replace(/[^0-9]/g, ''), 10);
+  const safeNum = Math.max(0, Math.min(999999, isNaN(num) ? 1 : num));
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('sm_ne_correlativo_force', String(safeNum));
+      localStorage.setItem('sm_ne_correlativo_seq', String(safeNum));
+    }
+  } catch (_) {}
+  return `NE-${String(safeNum).padStart(6, '0')}`;
+};
+
+export const clearNotaEntregaCorrelativoForce = () => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('sm_ne_correlativo_force');
+      localStorage.removeItem('sm_ne_correlativo_seq');
     }
   } catch (_) {}
 };
