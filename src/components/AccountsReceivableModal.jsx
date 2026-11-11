@@ -344,14 +344,58 @@ export function AccountsReceivableModal({
         const delSet = new Set(sanitizeCxcDeletedDocsStorage().map(k => String(k).trim()).filter(Boolean));
         const isDocDeleted = (docOrObj) => isCxcEntryDeleted(docOrObj, delSet);
 
-        // 1. Cargar documentos desde profitInvoices (omitiendo eliminados)
+        // 1. Cargar documentos desde profitInvoices (omitiendo eliminados y unificando duplicados 000583 / 583)
         (profitInvoices || []).forEach(inv => {
             const key = String(inv.factNum || inv.id || '').trim();
             if (!key || isDocDeleted(inv)) return;
             const docType = inferDocType(inv);
             const cKey = canonicalDocLookupKey(key, docType);
             const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
-            rawMap.set(key, { ...inv, _source: isPosFormat ? 'POS' : 'PROFIT', _isPosSale: isPosFormat });
+            const resolvedInvSeller = resolveSellerFromCatalog(
+                inv.vendedorId || inv.co_ven,
+                inv.vendedorNombre || inv.vendedor,
+                sellerCatalog
+            );
+            const normalizedInv = {
+                ...inv,
+                vendedorId: resolvedInvSeller.sellerId,
+                vendedorNombre: resolvedInvSeller.sellerName,
+                _source: isPosFormat ? 'POS' : 'PROFIT',
+                _isPosSale: isPosFormat
+            };
+
+            const existingRawKey = cKey ? canonicalKeyToRawKey.get(cKey) : null;
+            if (existingRawKey && rawMap.has(existingRawKey)) {
+                const existing = rawMap.get(existingRawKey);
+                const existingRif = String(existing.clienteRif || existing.rif || '').replace(/[-.\s]/g, '').toUpperCase();
+                const incomingRif = String(inv.clienteRif || inv.rif || '').replace(/[-.\s]/g, '').toUpperCase();
+                const sameClient =
+                    (existingRif && incomingRif && existingRif === incomingRif) ||
+                    normalizeTextSimple(existing.clienteNombre) === normalizeTextSimple(inv.clienteNombre);
+
+                if (sameClient) {
+                    const preferredKey = /^0+\d+$/.test(existingRawKey) && !/^0+\d+$/.test(key) ? key : existingRawKey;
+                    const mergedSeller = resolveSellerFromCatalog(
+                        existing.vendedorId && existing.vendedorId !== 'OF' ? existing.vendedorId : normalizedInv.vendedorId,
+                        existing.vendedorNombre || normalizedInv.vendedorNombre,
+                        sellerCatalog
+                    );
+                    if (preferredKey !== existingRawKey) {
+                        rawMap.delete(existingRawKey);
+                    }
+                    rawMap.set(preferredKey, {
+                        ...existing,
+                        ...normalizedInv,
+                        factNum: preferredKey,
+                        vendedorId: mergedSeller.sellerId,
+                        vendedorNombre: mergedSeller.sellerName
+                    });
+                    if (cKey) canonicalKeyToRawKey.set(cKey, preferredKey);
+                    return;
+                }
+            }
+
+            rawMap.set(key, normalizedInv);
             if (cKey) canonicalKeyToRawKey.set(cKey, key);
         });
 

@@ -330,7 +330,52 @@ export default function ProfitCxcStandaloneView() {
       const docType = inferDocType(inv);
       const cKey = canonicalDocLookupKey(key, docType);
       const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
-      rawMap.set(key, { ...inv, _source: isPosFormat ? 'POS' : 'PROFIT', _isPosSale: isPosFormat });
+      const resolvedInvSeller = resolveSellerFromCatalog(
+        inv.vendedorId || inv.co_ven,
+        inv.vendedorNombre || inv.vendedor,
+        sellerCatalog
+      );
+      const normalizedInv = {
+        ...inv,
+        vendedorId: resolvedInvSeller.sellerId,
+        vendedorNombre: resolvedInvSeller.sellerName,
+        _source: isPosFormat ? 'POS' : 'PROFIT',
+        _isPosSale: isPosFormat
+      };
+
+      const existingRawKey = cKey ? canonicalKeyToRawKey.get(cKey) : null;
+      if (existingRawKey && rawMap.has(existingRawKey)) {
+        const existing = rawMap.get(existingRawKey);
+        const existingRif = String(existing.clienteRif || existing.rif || '').replace(/[-.\s]/g, '').toUpperCase();
+        const incomingRif = String(inv.clienteRif || inv.rif || '').replace(/[-.\s]/g, '').toUpperCase();
+        const sameClient =
+          (existingRif && incomingRif && existingRif === incomingRif) ||
+          normalizeSearchText(existing.clienteNombre) === normalizeSearchText(inv.clienteNombre);
+
+        if (sameClient) {
+          // Unificar duplicado ej. "583" (KB) y "000583" (OF) conservando el número limpio y el vendedor real
+          const preferredKey = /^0+\d+$/.test(existingRawKey) && !/^0+\d+$/.test(key) ? key : existingRawKey;
+          const mergedSeller = resolveSellerFromCatalog(
+            existing.vendedorId && existing.vendedorId !== 'OF' ? existing.vendedorId : normalizedInv.vendedorId,
+            existing.vendedorNombre || normalizedInv.vendedorNombre,
+            sellerCatalog
+          );
+          if (preferredKey !== existingRawKey) {
+            rawMap.delete(existingRawKey);
+          }
+          rawMap.set(preferredKey, {
+            ...existing,
+            ...normalizedInv,
+            factNum: preferredKey,
+            vendedorId: mergedSeller.sellerId,
+            vendedorNombre: mergedSeller.sellerName
+          });
+          if (cKey) canonicalKeyToRawKey.set(cKey, preferredKey);
+          return;
+        }
+      }
+
+      rawMap.set(key, normalizedInv);
       if (cKey) canonicalKeyToRawKey.set(cKey, key);
     });
 
@@ -355,7 +400,7 @@ export default function ProfitCxcStandaloneView() {
       const neNetoSinIva = round2(
         rawSaleSub > 0 && rawSaleSub < rawSaleTotal
           ? rawSaleSub
-          : rawIva > 0 && rawSaleTotal > rawSaleIva
+          : rawSaleIva > 0 && rawSaleTotal > rawSaleIva
           ? rawSaleTotal - rawSaleIva
           : rawSaleSub
       );
@@ -428,6 +473,13 @@ export default function ProfitCxcStandaloneView() {
     Object.entries(localOverrides).forEach(([key, override]) => {
       if (override?._deleted) {
         rawMap.delete(key);
+        const cleanKey = String(key).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+        for (const mapK of Array.from(rawMap.keys())) {
+          const cleanMapK = String(mapK).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+          if (cleanMapK === cleanKey || mapK === key) {
+            rawMap.delete(mapK);
+          }
+        }
         return;
       }
       const existing = rawMap.get(key) || {};
@@ -488,6 +540,7 @@ export default function ProfitCxcStandaloneView() {
       }
       if (abonosUsd > montoFacturaUsd) abonosUsd = montoFacturaUsd;
       const restanteUsd = round2(Math.max(0, montoFacturaUsd - abonosUsd));
+      const isCarteraActiva = restanteUsd > 0.01 || hasManualOverride || Boolean(inv._customCreated);
 
       const fechaEmisionDate = parseDateSafe(inv.fechaEmision || inv.fecha);
       const fechaEmisionIso = toIsoDateInput(inv.fechaEmision || inv.fecha);
@@ -525,13 +578,14 @@ export default function ProfitCxcStandaloneView() {
       vencMidnight.setHours(0, 0, 0, 0);
       const diffVencDays = Math.floor((today.getTime() - vencMidnight.getTime()) / (1000 * 60 * 60 * 24));
 
-      const diasVencidos =
+      const rawDiasVencidos =
         inv.diasVencidoCustom !== undefined &&
         inv.diasVencidoCustom !== null &&
         inv.diasVencidoCustom !== '' &&
         Number(inv.diasVencidoCustom) > 0
           ? Math.max(Number(inv.diasVencidoCustom), Math.max(0, diffVencDays))
           : Math.max(0, diffVencDays);
+      const diasVencidos = restanteUsd <= 0.01 ? 0 : rawDiasVencidos;
 
       const clientObj = clients.find(
         (c) =>
@@ -546,59 +600,7 @@ export default function ProfitCxcStandaloneView() {
       );
       const tasaDoc = Number(inv.tasa || tasaBcv) || tasaBcv;
       const estado = restanteUsd <= 0.01 ? 'PAGADA' : diasVencidos > 0 ? 'VENCIDA' : 'POR_VENCER';
-
-      const emisionShort = formatDateShort(fechaEmisionDate);
-      const vencShort = formatDateShort(fechaVencDate);
-      const mesEmisionNombre = MESES_ES[fechaEmisionDate.getMonth()] || '';
-      const mesVencNombre = MESES_ES[fechaVencDate.getMonth()] || '';
-      const estadoKeywords =
-        estado === 'VENCIDA'
-          ? 'vencida vencido mora atrasada pendiente'
-          : estado === 'POR_VENCER'
-          ? 'al dia por vencer vigente pendiente'
-          : 'pagada pagado solvente cobrada';
-      const tipoKeywords =
-        tipoDoc === 'NOTA_ENTREGA'
-          ? 'nota de entrega ne n/e sin iva'
-          : 'factura fiscal seniat iva';
       const rifClean = String(inv.clienteRif || clientObj?.rif || 'J-00000000-0');
-      const restBs = round2(restanteUsd * tasaBcv);
-
-      // Índice completo de palabras clave para búsqueda multicriterio
-      const searchIndex = normalizeSearchText(
-        [
-          sellerId,
-          sellerName,
-          factNum,
-          `#${factNum}`,
-          tipoDoc,
-          tipoKeywords,
-          rifClean,
-          rifClean.replace(/[-.\s]/g, ''),
-          inv.clienteNombre || clientObj?.name || 'Cliente General',
-          inv.clienteId || clientObj?.id || '',
-          fechaEmisionIso,
-          emisionShort,
-          mesEmisionNombre,
-          fechaVencIso,
-          vencShort,
-          mesVencNombre,
-          `${diasVencidos}`,
-          `${diasVencidos} dias`,
-          `${diasCredito}`,
-          `${diasCredito} dias`,
-          montoFacturaUsd.toFixed(2),
-          montoFacturaUsd.toFixed(2).replace('.', ','),
-          abonosUsd.toFixed(2),
-          abonosUsd.toFixed(2).replace('.', ','),
-          restanteUsd.toFixed(2),
-          restanteUsd.toFixed(2).replace('.', ','),
-          restBs.toFixed(2),
-          estado,
-          estadoKeywords,
-          inv.observaciones || ''
-        ].join(' ')
-      );
 
       processed.push({
         id: inv.id || `INV-${factNum}`,
@@ -624,31 +626,204 @@ export default function ProfitCxcStandaloneView() {
         restanteUsd,
         tasa: tasaDoc,
         estado,
+        isCarteraActiva,
         observaciones: inv.observaciones || '',
         historialCobros: Array.isArray(inv.historialCobros) ? inv.historialCobros : [],
         _customCreated: Boolean(inv._customCreated),
-        _isPosDoc: isPosDoc,
-        _searchIndex: searchIndex
+        _isPosDoc: isPosDoc
       });
     });
 
     return processed;
   }, [profitInvoices, sales, clients, sellerCatalog, tasaBcv, localOverrides]);
 
-  // Obtener valores actuales de una fila (combinando fila base + edición en curso)
+  // Obtener valores actuales de una fila (combinando fila base + edición en curso y recalculando su estado)
   const getRowEffective = useCallback(
     (row) => {
       const draft = editedRows[row.factNum];
       if (!draft) return row;
-      return { ...row, ...draft };
+      const merged = { ...row, ...draft };
+      const restante = round2(Math.max(0, Number(merged.restanteUsd ?? 0)));
+      const diasVenc = restante <= 0.01 ? 0 : Math.max(0, Number(merged.diasVencidos ?? 0));
+      const estado = restante <= 0.01 ? 'PAGADA' : diasVenc > 0 ? 'VENCIDA' : 'POR_VENCER';
+      return {
+        ...merged,
+        restanteUsd: restante,
+        diasVencidos: diasVenc,
+        estado,
+        isCarteraActiva: true
+      };
     },
     [editedRows]
   );
+
+  // Construir índice de búsqueda multicriterio dinámico para cualquier fila
+  const buildRowSearchBlob = useCallback(
+    (eff) => {
+      const emisDate = parseDateSafe(eff.fechaEmisionIso || eff.fechaEmision);
+      const vencDate = parseDateSafe(eff.fechaVencimientoIso || eff.fechaVencimiento);
+      const emisionShort = formatDateShort(emisDate);
+      const vencShort = formatDateShort(vencDate);
+      const mesEmisionNombre = !isNaN(emisDate.getTime()) ? MESES_ES[emisDate.getMonth()] || '' : '';
+      const mesVencNombre = !isNaN(vencDate.getTime()) ? MESES_ES[vencDate.getMonth()] || '' : '';
+      const estadoKeywords =
+        eff.estado === 'VENCIDA'
+          ? 'vencida vencido vencidos mora atrasada atrasado pendiente pendientes'
+          : eff.estado === 'POR_VENCER'
+          ? 'al dia por vencer vigente corriente pendiente pendientes'
+          : 'pagada pagado pagadas solvente solventes cobrada cancelada';
+      const tipoKeywords =
+        eff.tipoDoc === 'NOTA_ENTREGA'
+          ? 'nota de entrega notas ne n/e sin iva'
+          : 'factura facturas fiscal fiscales seniat iva';
+      const rifClean = String(eff.rif || '');
+      const montoUsd = Number(eff.montoFacturaUsd || 0);
+      const abonosUsd = Number(eff.abonosUsd || 0);
+      const restUsd = Number(eff.restanteUsd || 0);
+      const restBs = round2(restUsd * tasaBcv);
+
+      return normalizeSearchText(
+        [
+          eff.vendedorId,
+          eff.vendedorNombre,
+          `${eff.vendedorId} - ${eff.vendedorNombre}`,
+          eff.factura,
+          `#${eff.factura}`,
+          String(eff.factura || '').replace(/^0+/, ''),
+          eff.factNum,
+          eff.tipoDoc,
+          tipoKeywords,
+          rifClean,
+          rifClean.replace(/[-.\s]/g, ''),
+          eff.cliente,
+          eff.clienteId,
+          eff.fechaEmisionIso,
+          emisionShort,
+          emisionShort.replace(/\//g, '-'),
+          mesEmisionNombre,
+          eff.fechaVencimientoIso,
+          vencShort,
+          vencShort.replace(/\//g, '-'),
+          mesVencNombre,
+          `${eff.diasVencidos}`,
+          `${eff.diasVencidos} dias`,
+          `${eff.diasCredito}`,
+          `${eff.diasCredito} dias`,
+          montoUsd.toFixed(2),
+          montoUsd.toFixed(2).replace('.', ','),
+          String(montoUsd),
+          abonosUsd.toFixed(2),
+          abonosUsd.toFixed(2).replace('.', ','),
+          String(abonosUsd),
+          restUsd.toFixed(2),
+          restUsd.toFixed(2).replace('.', ','),
+          String(restUsd),
+          restBs.toFixed(2),
+          restBs.toFixed(2).replace('.', ','),
+          eff.estado,
+          estadoKeywords,
+          eff.observaciones || ''
+        ].join(' ')
+      );
+    },
+    [tasaBcv]
+  );
+
+  // Rango de fechas normalizado (soporta tanto Desde <= Hasta como Desde >= Hasta de mayor a menor)
+  const normalizedDateRange = useMemo(() => {
+    if (dateFrom && dateTo) {
+      return dateFrom <= dateTo
+        ? { minDate: dateFrom, maxDate: dateTo }
+        : { minDate: dateTo, maxDate: dateFrom };
+    }
+    return {
+      minDate: dateFrom || '',
+      maxDate: dateTo || ''
+    };
+  }, [dateFrom, dateTo]);
+
+  // Contadores en vivo para los selectores de Tipo Doc, Vendedor y Estado
+  const filterCounts = useMemo(() => {
+    const queryTokens = normalizeSearchText(searchTerm)
+      .split(/\s+/)
+      .map((t) => t.replace(/^(\$|bs\.?)/i, ''))
+      .filter(Boolean);
+
+    const byDocType = { ALL: 0, FACTURA: 0, NOTA_ENTREGA: 0 };
+    const byStatus = { PENDIENTES: 0, VENCIDA: 0, POR_VENCER: 0, PAGADA: 0, ALL: 0 };
+    const bySeller = new Map();
+
+    allDocuments.forEach((doc) => {
+      const eff = getRowEffective(doc);
+
+      if (normalizedDateRange.minDate && eff.fechaEmisionIso < normalizedDateRange.minDate) return;
+      if (normalizedDateRange.maxDate && eff.fechaEmisionIso > normalizedDateRange.maxDate) return;
+
+      if (queryTokens.length > 0) {
+        const blob = buildRowSearchBlob(eff);
+        if (!queryTokens.every((token) => blob.includes(token))) return;
+      }
+
+      const matchesStatus =
+        statusFilter === 'PENDIENTES'
+          ? eff.isCarteraActiva
+          : statusFilter === 'ALL'
+          ? true
+          : eff.estado === statusFilter;
+
+      const matchesDocType = docTypeFilter === 'ALL' || eff.tipoDoc === docTypeFilter;
+      const matchesSeller = sellerFilter === 'ALL' || eff.vendedorId === sellerFilter;
+
+      // Conteo por Tipo Doc (respetando estado y vendedor actual)
+      if (matchesStatus && matchesSeller) {
+        byDocType.ALL++;
+        if (eff.tipoDoc === 'NOTA_ENTREGA') byDocType.NOTA_ENTREGA++;
+        else byDocType.FACTURA++;
+      }
+
+      // Conteo por Vendedor (respetando tipoDoc y estado actual)
+      if (matchesDocType && matchesStatus) {
+        const vId = eff.vendedorId || 'OF';
+        bySeller.set(vId, (bySeller.get(vId) || 0) + 1);
+      }
+
+      // Conteo por Estado (respetando tipoDoc y vendedor actual)
+      if (matchesDocType && matchesSeller) {
+        byStatus.ALL++;
+        if (eff.isCarteraActiva) byStatus.PENDIENTES++;
+        if (eff.estado === 'VENCIDA') byStatus.VENCIDA++;
+        else if (eff.estado === 'POR_VENCER') byStatus.POR_VENCER++;
+        else if (eff.estado === 'PAGADA') byStatus.PAGADA++;
+      }
+    });
+
+    const sellerOptions = Array.from(new Set([...bySeller.keys(), ...sellerCatalog.keys()]))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'es'))
+      .map((vId) => ({
+        id: vId,
+        name: sellerCatalog.get(vId) || vId,
+        count: bySeller.get(vId) || 0
+      }));
+
+    return { byDocType, byStatus, sellerOptions };
+  }, [
+    allDocuments,
+    searchTerm,
+    normalizedDateRange,
+    statusFilter,
+    docTypeFilter,
+    sellerFilter,
+    sellerCatalog,
+    getRowEffective,
+    buildRowSearchBlob
+  ]);
 
   // Filtrado por todas las palabras claves, rango de fechas y ordenamiento (Fecha de Mayor a Menor, etc.)
   const filteredRows = useMemo(() => {
     const queryTokens = normalizeSearchText(searchTerm)
       .split(/\s+/)
+      .map((t) => t.replace(/^(\$|bs\.?)/i, ''))
       .filter(Boolean);
 
     return allDocuments
@@ -658,27 +833,21 @@ export default function ProfitCxcStandaloneView() {
         if (docTypeFilter !== 'ALL' && eff.tipoDoc !== docTypeFilter) return false;
 
         if (statusFilter === 'PENDIENTES') {
-          const hasEdit = Boolean(editedRows[doc.factNum]) || Boolean(localOverrides[doc.factNum]);
-          if (eff.restanteUsd <= 0.01 && !hasEdit && !doc._customCreated && !doc._isPosDoc) return false;
+          if (!eff.isCarteraActiva) return false;
         } else if (statusFilter !== 'ALL' && eff.estado !== statusFilter) {
           return false;
         }
 
         if (sellerFilter !== 'ALL' && eff.vendedorId !== sellerFilter) return false;
 
-        // Filtro por rango de fecha de emisión (si el usuario especifica Desde / Hasta)
-        if (dateFrom && eff.fechaEmisionIso < dateFrom) return false;
-        if (dateTo && eff.fechaEmisionIso > dateTo) return false;
+        // Filtro por rango de fecha de emisión (soporta tanto Desde <= Hasta como Mayor a Menor)
+        if (normalizedDateRange.minDate && eff.fechaEmisionIso < normalizedDateRange.minDate) return false;
+        if (normalizedDateRange.maxDate && eff.fechaEmisionIso > normalizedDateRange.maxDate) return false;
 
         // Buscador multi-palabra clave: todas las palabras escritas deben coincidir en cualquier campo del documento
         if (queryTokens.length > 0) {
-          const dynamicIndex = editedRows[doc.factNum]
-            ? normalizeSearchText(
-                `${doc._searchIndex} ${eff.vendedorId} ${eff.vendedorNombre} ${eff.factura} ${eff.rif} ${eff.cliente} ${eff.fechaEmisionIso} ${eff.fechaVencimientoIso} ${eff.montoFacturaUsd} ${eff.abonosUsd} ${eff.restanteUsd} ${eff.observaciones || ''}`
-              )
-            : doc._searchIndex;
-
-          const allMatch = queryTokens.every((token) => dynamicIndex.includes(token));
+          const blob = buildRowSearchBlob(eff);
+          const allMatch = queryTokens.every((token) => blob.includes(token));
           if (!allMatch) return false;
         }
 
@@ -688,30 +857,39 @@ export default function ProfitCxcStandaloneView() {
         const effA = getRowEffective(a);
         const effB = getRowEffective(b);
 
+        if (sortField === 'fechaEmision' || sortField === 'fechaVencimiento') {
+          const isoKey = sortField === 'fechaEmision' ? 'fechaEmisionIso' : 'fechaVencimientoIso';
+          const isoA = String(effA[isoKey] || '');
+          const isoB = String(effB[isoKey] || '');
+          if (isoA !== isoB) {
+            return sortDirection === 'asc'
+              ? isoA.localeCompare(isoB)
+              : isoB.localeCompare(isoA);
+          }
+          return sortDirection === 'asc'
+            ? String(effA.factura).localeCompare(String(effB.factura), 'es', { numeric: true })
+            : String(effB.factura).localeCompare(String(effA.factura), 'es', { numeric: true });
+        }
+
         let valA = effA[sortField];
         let valB = effB[sortField];
 
-        if (sortField === 'fechaEmision') {
-          valA = parseDateSafe(effA.fechaEmisionIso).getTime();
-          valB = parseDateSafe(effB.fechaEmisionIso).getTime();
-        } else if (sortField === 'fechaVencimiento') {
-          valA = parseDateSafe(effA.fechaVencimientoIso).getTime();
-          valB = parseDateSafe(effB.fechaVencimientoIso).getTime();
-        } else if (valA instanceof Date) {
-          valA = valA.getTime();
-          valB = valB instanceof Date ? valB.getTime() : 0;
-        }
+        if (valA instanceof Date) valA = valA.getTime();
+        if (valB instanceof Date) valB = valB.getTime();
 
         if (typeof valA === 'string' && typeof valB === 'string') {
-          return sortDirection === 'asc'
-            ? valA.localeCompare(valB, 'es', { numeric: true })
-            : valB.localeCompare(valA, 'es', { numeric: true });
+          const cmp = valA.localeCompare(valB, 'es', { numeric: true });
+          if (cmp !== 0) return sortDirection === 'asc' ? cmp : -cmp;
+        } else {
+          const numA = Number(valA ?? 0);
+          const numB = Number(valB ?? 0);
+          if (numA < numB) return sortDirection === 'asc' ? -1 : 1;
+          if (numA > numB) return sortDirection === 'asc' ? 1 : -1;
         }
 
-        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-        // Desempate por número de factura de mayor a menor
-        return String(effB.factura).localeCompare(String(effA.factura), 'es', { numeric: true });
+        return sortDirection === 'asc'
+          ? String(effA.factura).localeCompare(String(effB.factura), 'es', { numeric: true })
+          : String(effB.factura).localeCompare(String(effA.factura), 'es', { numeric: true });
       });
   }, [
     allDocuments,
@@ -719,22 +897,26 @@ export default function ProfitCxcStandaloneView() {
     statusFilter,
     sellerFilter,
     searchTerm,
-    dateFrom,
-    dateTo,
+    normalizedDateRange,
     sortField,
     sortDirection,
-    editedRows,
-    localOverrides,
-    getRowEffective
+    getRowEffective,
+    buildRowSearchBlob
   ]);
 
   // Resumen KPI
   const summaryMetrics = useMemo(() => {
-    const totalMontoFacturaUsd = round2(filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).montoFacturaUsd || 0), 0));
-    const totalAbonosUsd = round2(filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).abonosUsd || 0), 0));
-    const totalRestanteUsd = round2(filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).restanteUsd || 0), 0));
-    const countVencidas = filteredRows.filter((r) => r.estado === 'VENCIDA').length;
-    const countPorVencer = filteredRows.filter((r) => r.estado === 'POR_VENCER').length;
+    const totalMontoFacturaUsd = round2(
+      filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).montoFacturaUsd || 0), 0)
+    );
+    const totalAbonosUsd = round2(
+      filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).abonosUsd || 0), 0)
+    );
+    const totalRestanteUsd = round2(
+      filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).restanteUsd || 0), 0)
+    );
+    const countVencidas = filteredRows.filter((r) => getRowEffective(r).estado === 'VENCIDA').length;
+    const countPorVencer = filteredRows.filter((r) => getRowEffective(r).estado === 'POR_VENCER').length;
     return {
       totalMontoFacturaUsd,
       totalAbonosUsd,
@@ -1560,7 +1742,7 @@ export default function ProfitCxcStandaloneView() {
             )}
           </div>
 
-          {/* Selector directo de Orden por Fecha (Mayor a Menor / Menor a Mayor) */}
+          {/* Selector directo de Orden por Fecha (Mayor a Menor / Menor a Mayor) y Columnas */}
           <label
             style={{
               fontSize: '12px',
@@ -1578,16 +1760,28 @@ export default function ProfitCxcStandaloneView() {
             >
               <option value="fechaEmision:desc">Fecha Emisión: Mayor a Menor (Más Recientes Primero)</option>
               <option value="fechaEmision:asc">Fecha Emisión: Menor a Mayor (Más Antiguas Primero)</option>
-              <option value="fechaVencimiento:desc">Fecha Vencimiento: Mayor a Menor</option>
-              <option value="fechaVencimiento:asc">Fecha Vencimiento: Menor a Mayor</option>
+              <option value="fechaVencimiento:desc">Fecha Vencimiento: Mayor a Menor (Más Recientes)</option>
+              <option value="fechaVencimiento:asc">Fecha Vencimiento: Menor a Mayor (Más Antiguas)</option>
               <option value="diasVencidos:desc">Días de Vencido: Mayor a Menor</option>
               <option value="diasVencidos:asc">Días de Vencido: Menor a Mayor</option>
+              <option value="diasCredito:desc">Días de Crédito: Mayor a Menor</option>
+              <option value="diasCredito:asc">Días de Crédito: Menor a Mayor</option>
+              <option value="montoFacturaUsd:desc">Monto Factura USD: Mayor a Menor</option>
+              <option value="montoFacturaUsd:asc">Monto Factura USD: Menor a Mayor</option>
+              <option value="abonosUsd:desc">Abonos USD: Mayor a Menor</option>
+              <option value="abonosUsd:asc">Abonos USD: Menor a Mayor</option>
               <option value="restanteUsd:desc">Saldo Restante USD: Mayor a Menor</option>
               <option value="restanteUsd:asc">Saldo Restante USD: Menor a Mayor</option>
-              <option value="montoFacturaUsd:desc">Monto Factura USD: Mayor a Menor</option>
               <option value="factura:desc">N° Factura / Documento: Mayor a Menor</option>
               <option value="factura:asc">N° Factura / Documento: Menor a Mayor</option>
               <option value="cliente:asc">Nombre Cliente: A → Z</option>
+              <option value="cliente:desc">Nombre Cliente: Z → A</option>
+              <option value="rif:asc">RIF: A → Z</option>
+              <option value="rif:desc">RIF: Z → A</option>
+              <option value="vendedorId:asc">Vendedor: A → Z</option>
+              <option value="vendedorId:desc">Vendedor: Z → A</option>
+              <option value="tipoDoc:asc">Tipo Documento: A → Z</option>
+              <option value="tipoDoc:desc">Tipo Documento: Z → A</option>
             </select>
           </label>
         </div>
@@ -1632,10 +1826,21 @@ export default function ProfitCxcStandaloneView() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <label style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
               Tipo Doc:
-              <select value={docTypeFilter} onChange={(e) => setDocTypeFilter(e.target.value)}>
-                <option value="ALL">Todos (Facturas + Notas de Entrega)</option>
-                <option value="FACTURA">Solo Facturas Fiscales (SENIAT)</option>
-                <option value="NOTA_ENTREGA">Solo Notas de Entrega (Sin IVA)</option>
+              <select
+                value={docTypeFilter}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDocTypeFilter(val);
+                  if (typeof window !== 'undefined' && window.history?.replaceState) {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('docType', val);
+                    window.history.replaceState({}, '', url.toString());
+                  }
+                }}
+              >
+                <option value="ALL">Todos (Facturas + Notas de Entrega) ({filterCounts.byDocType.ALL})</option>
+                <option value="FACTURA">Solo Facturas Fiscales (SENIAT) ({filterCounts.byDocType.FACTURA})</option>
+                <option value="NOTA_ENTREGA">Solo Notas de Entrega (Sin IVA) ({filterCounts.byDocType.NOTA_ENTREGA})</option>
               </select>
             </label>
 
@@ -1643,26 +1848,43 @@ export default function ProfitCxcStandaloneView() {
               Vendedor:
               <select value={sellerFilter} onChange={(e) => setSellerFilter(e.target.value)}>
                 <option value="ALL">Todos los Vendedores</option>
-                {Array.from(new Set(allDocuments.map((d) => d.vendedorId)))
-                  .sort()
-                  .map((vId) => (
-                    <option key={vId} value={vId}>
-                      {vId} — {sellerCatalog.get(vId) || vId}
-                    </option>
-                  ))}
+                {filterCounts.sellerOptions.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.id} — {v.name} ({v.count})
+                  </option>
+                ))}
               </select>
             </label>
 
             <label style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
               Estado:
               <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="PENDIENTES">Pendientes por Cobrar</option>
-                <option value="VENCIDA">Solo Vencidas</option>
-                <option value="POR_VENCER">Solo Al Día (Por Vencer)</option>
-                <option value="PAGADA">Pagadas / Solventes</option>
-                <option value="ALL">Todos los Registros</option>
+                <option value="PENDIENTES">Pendientes por Cobrar ({filterCounts.byStatus.PENDIENTES})</option>
+                <option value="VENCIDA">Solo Vencidas ({filterCounts.byStatus.VENCIDA})</option>
+                <option value="POR_VENCER">Solo Al Día (Por Vencer) ({filterCounts.byStatus.POR_VENCER})</option>
+                <option value="PAGADA">Pagadas / Solventes ({filterCounts.byStatus.PAGADA})</option>
+                <option value="ALL">Todos los Registros ({filterCounts.byStatus.ALL})</option>
               </select>
             </label>
+
+            {(searchTerm || dateFrom || dateTo || sellerFilter !== 'ALL' || statusFilter !== 'PENDIENTES') && (
+              <button
+                type="button"
+                className="profit-btn"
+                onClick={() => {
+                  setSearchTerm('');
+                  setDateFrom('');
+                  setDateTo('');
+                  setSellerFilter('ALL');
+                  setStatusFilter('PENDIENTES');
+                }}
+                style={{ padding: '5px 10px', fontSize: '11.5px', color: '#b91c1c', borderColor: '#fca5a5', background: '#fef2f2' }}
+                title="Restablecer todos los filtros"
+              >
+                <X size={13} />
+                <span>Restablecer Filtros</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
