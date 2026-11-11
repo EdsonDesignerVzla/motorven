@@ -139,6 +139,9 @@ export default function CashBankModal({
   });
 
   const tasaBcv = Number(config?.tasaDolar) || 827.73;
+  const tasaKeystone = tasaBcv > 100
+    ? (config?.tasaKeystone && Number(config.tasaKeystone) > 100 ? Number(config.tasaKeystone) : Math.round(tasaBcv * 1.03 * 100) / 100)
+    : (config?.tasaKeystone ? Number(config.tasaKeystone) : 38.50);
 
   // Totales de Efectivo en Cajas
   const totalCajasUsd = useMemo(() => {
@@ -149,19 +152,22 @@ export default function CashBankModal({
     return (cashDesks || []).reduce((acc, c) => acc + Number(c.saldoBs || c.saldo_bs || 0), 0);
   }, [cashDesks]);
 
-  // Totales en Bancos
+  // Totales en Bancos (Tasa Keystone)
   const totalBancosBs = useMemo(() => {
     return (bankAccounts || []).reduce((acc, b) => acc + Number(b.saldoBs || b.saldo_bs || 0), 0);
   }, [bankAccounts]);
 
   const totalBancosUsd = useMemo(() => {
     return (bankAccounts || []).reduce((acc, b) => {
-      const usd = Number(b.saldoUsd || b.saldo_usd || 0);
-      if (usd > 0) return acc + usd;
-      const bs = Number(b.saldoBs || b.saldo_bs || 0);
-      return acc + (tasaBcv > 0 ? bs / tasaBcv : 0);
+      const bs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
+      const usd = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
+      if (bs !== 0 && tasaKeystone > 0) {
+        if (Math.abs(usd * tasaKeystone - bs) < 0.05) return acc + usd;
+        return acc + (bs / tasaKeystone);
+      }
+      return acc + usd;
     }, 0);
-  }, [bankAccounts, tasaBcv]);
+  }, [bankAccounts, tasaKeystone]);
 
   // Total Consolidado
   const totalConsolidadoUsd = totalCajasUsd + totalBancosUsd;
@@ -399,8 +405,26 @@ export default function CashBankModal({
     const code = b.codCta || b.cod_cta || '01';
     const id = b.id || `CTA-${code}`;
     const holder = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
-    const sBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
-    const sUsd = Number(b.saldoUsd ?? b.saldo_usd ?? (tasaBcv > 0 ? sBs / tasaBcv : 0));
+    const rawBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
+    const rawUsd = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
+
+    let sBs = rawBs;
+    let sUsd = rawUsd;
+    if (tasaKeystone > 0) {
+      if (Math.abs(rawUsd * tasaKeystone - rawBs) < 0.05) {
+        sBs = rawBs;
+        sUsd = rawUsd;
+      } else if (rawUsd !== 0 && Math.abs(rawUsd * tasaBcv - rawBs) < 1) {
+        sUsd = rawUsd;
+        sBs = Number((rawUsd * tasaKeystone).toFixed(2));
+      } else if (rawBs !== 0) {
+        sBs = rawBs;
+        sUsd = Number((rawBs / tasaKeystone).toFixed(2));
+      } else if (rawUsd !== 0) {
+        sUsd = rawUsd;
+        sBs = Number((rawUsd * tasaKeystone).toFixed(2));
+      }
+    }
 
     setEditingBankId(id);
     setBankForm({
@@ -437,11 +461,17 @@ export default function CashBankModal({
       return;
     }
 
-    const parsedBs = parseFloat(recordData.saldoBs) || 0;
-    const parsedUsd =
-      recordData.saldoUsd !== undefined && recordData.saldoUsd !== ''
-        ? parseFloat(recordData.saldoUsd) || 0
-        : (tasaBcv > 0 ? Number((parsedBs / tasaBcv).toFixed(2)) : 0);
+    const hasBs = recordData.saldoBs !== undefined && recordData.saldoBs !== '';
+    const hasUsd = recordData.saldoUsd !== undefined && recordData.saldoUsd !== '';
+    const rawBsVal = hasBs ? (parseFloat(recordData.saldoBs) || 0) : 0;
+    const rawUsdVal = hasUsd ? (parseFloat(recordData.saldoUsd) || 0) : 0;
+
+    const parsedBs = hasBs
+      ? rawBsVal
+      : (hasUsd && tasaKeystone > 0 ? Number((rawUsdVal * tasaKeystone).toFixed(2)) : 0);
+    const parsedUsd = hasUsd
+      ? rawUsdVal
+      : (tasaKeystone > 0 ? Number((parsedBs / tasaKeystone).toFixed(2)) : 0);
 
     try {
       setIsSubmitting(true);
@@ -601,7 +631,7 @@ export default function CashBankModal({
                 Caja Chica & Tesorería Bancaria
               </h2>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Control Bimonetario Supabase • Tasa BCV: {formatBs(tasaBcv)}
+                Control Bimonetario Supabase • Tasa BCV: {formatBs(tasaBcv)} • Tasa KEY: {formatBs(tasaKeystone)}
               </span>
             </div>
           </div>
@@ -960,11 +990,14 @@ export default function CashBankModal({
                           value={cajaForm.saldoUsd}
                           onChange={(e) => {
                             const valUsd = e.target.value;
-                            const numUsd = parseFloat(valUsd) || 0;
+                            const numUsd = parseFloat(valUsd);
+                            const calcBs = (valUsd === '' || valUsd === '-' || isNaN(numUsd))
+                              ? ''
+                              : (tasaKeystone > 0 ? (numUsd * tasaKeystone).toFixed(2) : '0.00');
                             setCajaForm(prev => ({
                               ...prev,
                               saldoUsd: valUsd,
-                              saldoBs: numUsd > 0 ? (numUsd * tasaBcv).toFixed(2) : prev.saldoBs
+                              saldoBs: calcBs
                             }));
                           }}
                           style={{ width: '100%' }}
@@ -984,11 +1017,14 @@ export default function CashBankModal({
                           value={cajaForm.saldoBs}
                           onChange={(e) => {
                             const valBs = e.target.value;
-                            const numBs = parseFloat(valBs) || 0;
+                            const numBs = parseFloat(valBs);
+                            const calcUsd = (valBs === '' || valBs === '-' || isNaN(numBs))
+                              ? ''
+                              : (tasaKeystone > 0 ? (numBs / tasaKeystone).toFixed(2) : '0.00');
                             setCajaForm(prev => ({
                               ...prev,
                               saldoBs: valBs,
-                              saldoUsd: prev.moneda === 'BS' && tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : prev.saldoUsd
+                              saldoUsd: calcUsd
                             }));
                           }}
                           style={{ width: '100%' }}
@@ -1449,12 +1485,25 @@ export default function CashBankModal({
                   marginBottom: '1.5rem',
                   boxShadow: 'var(--shadow-card)'
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                    <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <Landmark size={18} color="#0284c7" />
-                      {editingBankId
-                        ? `Editar Cuenta Bancaria (Cód: ${bankForm.codCta})`
-                        : `Crear Nueva Cuenta Bancaria (Correlativo Sugerido: ${bankForm.codCta})`}
+                      <span>
+                        {editingBankId
+                          ? `Editar Cuenta Bancaria (Cód: ${bankForm.codCta})`
+                          : `Crear Nueva Cuenta Bancaria (Correlativo Sugerido: ${bankForm.codCta})`}
+                      </span>
+                      <span style={{
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        padding: '0.2rem 0.6rem',
+                        borderRadius: '999px',
+                        background: 'rgba(2, 132, 199, 0.16)',
+                        color: '#38bdf8',
+                        border: '1px solid rgba(56, 189, 248, 0.35)'
+                      }}>
+                        Tasa KEY: {formatBs(tasaKeystone)}
+                      </span>
                     </h4>
                     <button
                       type="button"
@@ -1481,7 +1530,11 @@ export default function CashBankModal({
                           className="input-modern"
                           placeholder="Ej: 11"
                           value={bankForm.codCta}
-                          onChange={(e) => setBankForm(prev => ({ ...prev, codCta: e.target.value.toUpperCase() }))}
+                          onChange={(e) => {
+                            const val = e.target.value.toUpperCase();
+                            setBankForm(prev => ({ ...prev, codCta: val }));
+                            setInlineBankDraft(prev => (prev ? { ...prev, codCta: val } : prev));
+                          }}
                           style={{ width: '100%', fontFamily: 'var(--font-code)', fontWeight: 700 }}
                           required
                         />
@@ -1497,7 +1550,11 @@ export default function CashBankModal({
                           className="input-modern"
                           placeholder="Ej: BANCO MERCANTIL, C.A."
                           value={bankForm.bancoNombre}
-                          onChange={(e) => setBankForm(prev => ({ ...prev, bancoNombre: e.target.value.toUpperCase() }))}
+                          onChange={(e) => {
+                            const val = e.target.value.toUpperCase();
+                            setBankForm(prev => ({ ...prev, bancoNombre: val }));
+                            setInlineBankDraft(prev => (prev ? { ...prev, bancoNombre: val } : prev));
+                          }}
                           style={{ width: '100%', fontWeight: 600 }}
                           required
                         />
@@ -1525,7 +1582,11 @@ export default function CashBankModal({
                           className="input-modern"
                           placeholder="Ej: GRUPO MOTORVEN, C.A."
                           value={bankForm.cuentaANombreDe}
-                          onChange={(e) => setBankForm(prev => ({ ...prev, cuentaANombreDe: e.target.value }))}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setBankForm(prev => ({ ...prev, cuentaANombreDe: val }));
+                            setInlineBankDraft(prev => (prev ? { ...prev, cuentaANombreDe: val } : prev));
+                          }}
                           style={{ width: '100%', fontWeight: 600 }}
                           required
                         />
@@ -1546,7 +1607,11 @@ export default function CashBankModal({
                           className="input-modern"
                           placeholder="Ej: 01050000000000000000"
                           value={bankForm.numCta}
-                          onChange={(e) => setBankForm(prev => ({ ...prev, numCta: e.target.value }))}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setBankForm(prev => ({ ...prev, numCta: val }));
+                            setInlineBankDraft(prev => (prev ? { ...prev, numCta: val } : prev));
+                          }}
                           style={{ width: '100%', fontFamily: 'monospace' }}
                         />
                       </div>
@@ -1558,7 +1623,11 @@ export default function CashBankModal({
                         <select
                           className="filter-select"
                           value={bankForm.moneda}
-                          onChange={(e) => setBankForm(prev => ({ ...prev, moneda: e.target.value }))}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setBankForm(prev => ({ ...prev, moneda: val }));
+                            setInlineBankDraft(prev => (prev ? { ...prev, moneda: val } : prev));
+                          }}
                           style={{ width: '100%' }}
                         >
                           <option value="BS">BS — Bolívares</option>
@@ -1580,12 +1649,20 @@ export default function CashBankModal({
                           value={bankForm.saldoBs}
                           onChange={(e) => {
                             const valBs = e.target.value;
-                            const numBs = parseFloat(valBs) || 0;
+                            const numBs = parseFloat(valBs);
+                            const calcUsd = (valBs === '' || valBs === '-' || isNaN(numBs))
+                              ? ''
+                              : (tasaKeystone > 0 ? (numBs / tasaKeystone).toFixed(2) : '0.00');
                             setBankForm(prev => ({
                               ...prev,
                               saldoBs: valBs,
-                              saldoUsd: tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : prev.saldoUsd
+                              saldoUsd: calcUsd
                             }));
+                            setInlineBankDraft(prev => (prev ? {
+                              ...prev,
+                              saldoBs: valBs,
+                              saldoUsd: calcUsd
+                            } : prev));
                           }}
                           style={{ width: '100%' }}
                         />
@@ -1603,12 +1680,20 @@ export default function CashBankModal({
                           value={bankForm.saldoUsd}
                           onChange={(e) => {
                             const valUsd = e.target.value;
-                            const numUsd = parseFloat(valUsd) || 0;
+                            const numUsd = parseFloat(valUsd);
+                            const calcBs = (valUsd === '' || valUsd === '-' || isNaN(numUsd))
+                              ? ''
+                              : (tasaKeystone > 0 ? (numUsd * tasaKeystone).toFixed(2) : '0.00');
                             setBankForm(prev => ({
                               ...prev,
                               saldoUsd: valUsd,
-                              saldoBs: numUsd !== 0 ? (numUsd * tasaBcv).toFixed(2) : prev.saldoBs
+                              saldoBs: calcBs
                             }));
+                            setInlineBankDraft(prev => (prev ? {
+                              ...prev,
+                              saldoUsd: valUsd,
+                              saldoBs: calcBs
+                            } : prev));
                           }}
                           style={{ width: '100%' }}
                         />
@@ -1672,7 +1757,10 @@ export default function CashBankModal({
                       const rowId = b.id || `CTA-${code}`;
                       const isEditingRow = inlineBankEditId === rowId && inlineBankDraft;
                       const saldoBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
-                      const saldoUsd = Number(b.saldoUsd ?? b.saldo_usd ?? (tasaBcv > 0 ? saldoBs / tasaBcv : 0));
+                      const rawUsd = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
+                      const saldoUsd = (saldoBs !== 0 && tasaKeystone > 0)
+                        ? (Math.abs(rawUsd * tasaKeystone - saldoBs) < 0.05 ? rawUsd : Number((saldoBs / tasaKeystone).toFixed(2)))
+                        : rawUsd;
                       const isNegative = saldoBs < 0;
                       const titularNombre = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
 
@@ -1692,7 +1780,11 @@ export default function CashBankModal({
                                 type="text"
                                 className="input-modern"
                                 value={inlineBankDraft.codCta}
-                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, codCta: e.target.value.toUpperCase() }))}
+                                onChange={(e) => {
+                                  const val = e.target.value.toUpperCase();
+                                  setInlineBankDraft(prev => ({ ...prev, codCta: val }));
+                                  if (editingBankId === rowId) setBankForm(prev => ({ ...prev, codCta: val }));
+                                }}
                                 style={{ width: '58px', padding: '0.3rem 0.45rem', fontSize: '0.82rem', fontWeight: 700 }}
                               />
                             ) : (
@@ -1706,7 +1798,11 @@ export default function CashBankModal({
                                 type="text"
                                 className="input-modern"
                                 value={inlineBankDraft.bancoNombre}
-                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, bancoNombre: e.target.value.toUpperCase() }))}
+                                onChange={(e) => {
+                                  const val = e.target.value.toUpperCase();
+                                  setInlineBankDraft(prev => ({ ...prev, bancoNombre: val }));
+                                  if (editingBankId === rowId) setBankForm(prev => ({ ...prev, bancoNombre: val }));
+                                }}
                                 style={{ width: '100%', minWidth: '170px', padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600 }}
                               />
                             ) : (
@@ -1725,7 +1821,11 @@ export default function CashBankModal({
                                 list="titulares-motorven-list"
                                 className="input-modern"
                                 value={inlineBankDraft.cuentaANombreDe}
-                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, cuentaANombreDe: e.target.value }))}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setInlineBankDraft(prev => ({ ...prev, cuentaANombreDe: val }));
+                                  if (editingBankId === rowId) setBankForm(prev => ({ ...prev, cuentaANombreDe: val }));
+                                }}
                                 style={{ width: '100%', minWidth: '170px', padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600 }}
                               />
                             ) : (
@@ -1750,7 +1850,11 @@ export default function CashBankModal({
                                 type="text"
                                 className="input-modern"
                                 value={inlineBankDraft.numCta}
-                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, numCta: e.target.value }))}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setInlineBankDraft(prev => ({ ...prev, numCta: val }));
+                                  if (editingBankId === rowId) setBankForm(prev => ({ ...prev, numCta: val }));
+                                }}
                                 style={{ width: '100%', minWidth: '165px', padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
                               />
                             ) : (
@@ -1763,7 +1867,11 @@ export default function CashBankModal({
                               <select
                                 className="filter-select"
                                 value={inlineBankDraft.moneda}
-                                onChange={(e) => setInlineBankDraft(prev => ({ ...prev, moneda: e.target.value }))}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setInlineBankDraft(prev => ({ ...prev, moneda: val }));
+                                  if (editingBankId === rowId) setBankForm(prev => ({ ...prev, moneda: val }));
+                                }}
                                 style={{ padding: '0.28rem 0.45rem', fontSize: '0.8rem' }}
                               >
                                 <option value="BS">BS</option>
@@ -1798,12 +1906,22 @@ export default function CashBankModal({
                                 value={inlineBankDraft.saldoBs}
                                 onChange={(e) => {
                                   const vBs = e.target.value;
-                                  const nBs = parseFloat(vBs) || 0;
+                                  const nBs = parseFloat(vBs);
+                                  const calcUsd = (vBs === '' || vBs === '-' || isNaN(nBs))
+                                    ? ''
+                                    : (tasaKeystone > 0 ? (nBs / tasaKeystone).toFixed(2) : '0.00');
                                   setInlineBankDraft(prev => ({
                                     ...prev,
                                     saldoBs: vBs,
-                                    saldoUsd: tasaBcv > 0 ? (nBs / tasaBcv).toFixed(2) : prev.saldoUsd
+                                    saldoUsd: calcUsd
                                   }));
+                                  if (editingBankId === rowId) {
+                                    setBankForm(prev => ({
+                                      ...prev,
+                                      saldoBs: vBs,
+                                      saldoUsd: calcUsd
+                                    }));
+                                  }
                                 }}
                                 style={{ width: '125px', textAlign: 'right', padding: '0.3rem 0.45rem', fontSize: '0.82rem', fontWeight: 700 }}
                               />
@@ -1826,12 +1944,22 @@ export default function CashBankModal({
                                 value={inlineBankDraft.saldoUsd}
                                 onChange={(e) => {
                                   const vUsd = e.target.value;
-                                  const nUsd = parseFloat(vUsd) || 0;
+                                  const nUsd = parseFloat(vUsd);
+                                  const calcBs = (vUsd === '' || vUsd === '-' || isNaN(nUsd))
+                                    ? ''
+                                    : (tasaKeystone > 0 ? (nUsd * tasaKeystone).toFixed(2) : '0.00');
                                   setInlineBankDraft(prev => ({
                                     ...prev,
                                     saldoUsd: vUsd,
-                                    saldoBs: nUsd !== 0 ? (nUsd * tasaBcv).toFixed(2) : prev.saldoBs
+                                    saldoBs: calcBs
                                   }));
+                                  if (editingBankId === rowId) {
+                                    setBankForm(prev => ({
+                                      ...prev,
+                                      saldoUsd: vUsd,
+                                      saldoBs: calcBs
+                                    }));
+                                  }
                                 }}
                                 style={{ width: '110px', textAlign: 'right', padding: '0.3rem 0.45rem', fontSize: '0.82rem', fontWeight: 700 }}
                               />
