@@ -365,6 +365,85 @@ export const commitInvoiceCorrelativo = (correlativo) => {
 };
 
 /**
+ * Calcula el próximo correlativo de Nota de Entrega (NE-XXXXXX) o documento no-factura
+ * revisando tanto sales como profit_invoices y almacenamiento local para evitar colisiones.
+ */
+export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix = 'NE') => {
+  let highest = 0;
+  const cleanPrefix = String(prefix || 'NE').toUpperCase().trim();
+
+  const inspectRecord = (rec) => {
+    if (!rec) return;
+    const rawTipo = String(rec.tipoDoc || rec.tipo_doc || '').toUpperCase().trim();
+    const rawNum = String(rec.numeroDoc ?? rec.numero_doc ?? rec.factNum ?? rec.fact_num ?? rec.factura ?? rec.id ?? '').trim();
+    const rawId = String(rec.id || '').trim();
+
+    if (cleanPrefix === 'NE') {
+      const isNe =
+        rawTipo === 'NOTA_ENTREGA' ||
+        rawTipo === 'N/E' ||
+        rawTipo === 'NE' ||
+        /^(NE-|NDE-)/i.test(rawNum) ||
+        /^(NE-|NDE-)/i.test(rawId);
+      if (!isNe) return;
+    } else if (cleanPrefix === 'NC' && rawTipo !== 'NOTA_CREDITO' && !/^NC-/i.test(rawNum)) {
+      return;
+    } else if (cleanPrefix === 'ND' && rawTipo !== 'NOTA_DEBITO' && !/^ND-/i.test(rawNum)) {
+      return;
+    }
+
+    for (const candidate of [rawNum, rawId]) {
+      const digits = String(candidate || '').replace(/[^0-9]/g, '');
+      if (digits) {
+        const val = parseInt(digits, 10);
+        if (!isNaN(val) && val > 0 && val < 900000 && val > highest) {
+          highest = val;
+        }
+      }
+    }
+  };
+
+  if (Array.isArray(sales)) sales.forEach(inspectRecord);
+  if (Array.isArray(invoices)) invoices.forEach(inspectRecord);
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+      if (rawCustom) {
+        const customMap = JSON.parse(rawCustom);
+        if (customMap && typeof customMap === 'object') {
+          Object.values(customMap).forEach(inspectRecord);
+        }
+      }
+      if (cleanPrefix === 'NE') {
+        const storedNeSeq = localStorage.getItem('sm_ne_correlativo_seq');
+        if (storedNeSeq) {
+          const seqVal = parseInt(storedNeSeq, 10);
+          if (!isNaN(seqVal) && seqVal > 1 && seqVal - 1 > highest) {
+            highest = seqVal - 1;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  const nextVal = highest + 1;
+  return `${cleanPrefix}-${String(nextVal).padStart(6, '0')}`;
+};
+
+export const commitNotaEntregaCorrelativo = (correlativo) => {
+  try {
+    const val = parseInt(String(correlativo || '').replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(val) && val > 0 && typeof localStorage !== 'undefined') {
+      const prev = parseInt(localStorage.getItem('sm_ne_correlativo_seq') || '0', 10) || 0;
+      if (val + 1 > prev) {
+        localStorage.setItem('sm_ne_correlativo_seq', String(val + 1));
+      }
+    }
+  } catch (_) {}
+};
+
+/**
  * Establece o reinicia el contador de facturas oficiales desde un valor numérico definido manualmente.
  * Permite al usuario decidir a partir de cuál número de factura desea empezar a facturar (0 para "000000", 50 para "000050", etc.).
  * @param {number|string} startAt - Número desde el cual inicializar

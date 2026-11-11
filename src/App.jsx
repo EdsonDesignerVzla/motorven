@@ -397,16 +397,26 @@ function MainApp() {
       localStorage.removeItem('signum_profit_dashboard_kpis');
     } catch (_) {}
 
+    let isRefreshingApp = false;
+    let isPreReadFlush = false;
+    let pendingRefresh = false;
+
     const initApp = async () => {
+      if (isRefreshingApp) {
+        pendingRefresh = true;
+        return;
+      }
+      isRefreshingApp = true;
       try {
-        // CRÍTICO: Si hay operaciones pendientes en la cola local (cambios guardados mientras el servidor estuvo apagado),
+        // CRÍTICO: Si hay operaciones pendientes en la cola local o en signum_cxc_custom_docs_v1,
         // empujarlas al servidor central ANTES de leer las tablas para nunca sobrescribir cambios locales con datos viejos.
-        if (getPendingSyncCount() > 0) {
-          try {
-            await flushSyncQueue();
-          } catch (syncErr) {
-            console.warn('[InitApp] Cola pendiente se reintentará al reconectar servidor:', syncErr);
-          }
+        isPreReadFlush = true;
+        try {
+          await flushSyncQueue();
+        } catch (syncErr) {
+          console.warn('[InitApp] Cola pendiente se reintentará al reconectar servidor:', syncErr);
+        } finally {
+          isPreReadFlush = false;
         }
 
         // Obtener datos iniciales en paralelo sin esperas secuenciales
@@ -536,9 +546,6 @@ function MainApp() {
             console.warn('Verificación inicial BCV en segundo plano:', bcvErr);
           });
 
-          // Procesar cola de sincronización offline si quedaron operaciones pendientes
-          flushSyncQueue();
-
           // Finalizar splash de inmediato una vez cargada la información
           setLoading(false);
         }
@@ -548,15 +555,20 @@ function MainApp() {
           // En caso de incidencia de red, no bloquear la aplicación y permitir entrar
           setLoading(false);
         }
+      } finally {
+        isRefreshingApp = false;
+        if (pendingRefresh && isMounted) {
+          pendingRefresh = false;
+          initApp();
+        }
       }
     };
 
     initApp();
 
     const handleQueueFlushed = () => {
-      if (isMounted) {
-        initApp();
-      }
+      if (!isMounted || isPreReadFlush) return;
+      initApp();
     };
     window.addEventListener('signum_offline_queue_flushed', handleQueueFlushed);
     // El canal realtime detectó eventos perdidos (equipo desconectado o servidor reiniciado):

@@ -588,11 +588,23 @@ function parseRawBuffer(req) {
 
 function sendJson(req, res, statusCode, data, extraHeaders = {}) {
   const jsonStr = typeof data === 'string' ? data : JSON.stringify(data);
+  const buf = Buffer.from(jsonStr);
+
+  if (req && req.method === 'HEAD') {
+    res.writeHead(statusCode, {
+      'Content-Type': 'application/json',
+      'Content-Length': buf.length,
+      ...extraHeaders
+    });
+    res.end();
+    return;
+  }
+
   const acceptEncoding = (req.headers && req.headers['accept-encoding']) || '';
 
   if (acceptEncoding.includes('gzip') && jsonStr.length > 1024) {
     try {
-      const gzipped = zlib.gzipSync(Buffer.from(jsonStr));
+      const gzipped = zlib.gzipSync(buf);
       res.writeHead(statusCode, {
         'Content-Type': 'application/json',
         'Content-Encoding': 'gzip',
@@ -606,7 +618,6 @@ function sendJson(req, res, statusCode, data, extraHeaders = {}) {
     }
   }
 
-  const buf = Buffer.from(jsonStr);
   res.writeHead(statusCode, {
     'Content-Type': 'application/json',
     'Content-Length': buf.length,
@@ -1445,7 +1456,7 @@ const server = http.createServer(async (req, res) => {
 
     if (!database[tableName]) {
       // Si la tabla no existe en la BD local, devolver array vacío o 404
-      if (req.method === 'GET') {
+      if (req.method === 'GET' || req.method === 'HEAD') {
         sendJson(req, res, 200, [], { 'Content-Range': '0-0/0' });
         return;
       }
@@ -1454,8 +1465,8 @@ const server = http.createServer(async (req, res) => {
 
     const tableData = database[tableName];
 
-    // GET /rest/v1/:table
-    if (req.method === 'GET') {
+    // GET / HEAD /rest/v1/:table
+    if (req.method === 'GET' || req.method === 'HEAD') {
       let filtered = [...tableData];
 
       // Enriquecer relaciones embebidas de orders con order_items

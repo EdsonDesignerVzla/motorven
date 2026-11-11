@@ -49,7 +49,9 @@ import {
   generateFiscalControlNumber,
   generateVatRetentionVoucherNumber,
   getNextInvoiceCorrelativo,
-  commitInvoiceCorrelativo
+  commitInvoiceCorrelativo,
+  getNextNotaEntregaCorrelativo,
+  commitNotaEntregaCorrelativo
 } from './fiscalService.js';
 import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
@@ -1689,18 +1691,26 @@ export const seedDatabaseIfEmpty = async () => {
 function applyPendingQueueToEntities(entityName, list) {
   if (!Array.isArray(list)) return list;
   try {
-    const queue = getSyncQueue().filter(q => q && q.entity === entityName);
+    const queue = getSyncQueue().filter(q =>
+      q && (q.entity === entityName || (entityName === 'sale' && q.entity === 'sales'))
+    );
     if (queue.length === 0) return list;
     let result = [...list];
     for (const item of queue) {
       const data = item.data;
       if (!data) continue;
-      const targetId = data.id || data.codigo || data.rif;
+      const targetId = data.id || data.numeroDoc || data.codigo || data.rif;
       if (item.action === 'DELETE' && targetId) {
-        result = result.filter(r => r.id !== targetId && r.codigo !== targetId && r.rif !== targetId);
+        result = result.filter(r =>
+          r.id !== targetId &&
+          r.numeroDoc !== targetId &&
+          r.codigo !== targetId &&
+          r.rif !== targetId
+        );
       } else if (targetId) {
         const idx = result.findIndex(r =>
           (data.id && r.id === data.id) ||
+          (data.numeroDoc && r.numeroDoc === data.numeroDoc) ||
           (data.codigo && r.codigo === data.codigo) ||
           (data.rif && r.rif === data.rif)
         );
@@ -2287,7 +2297,17 @@ export const getSupabaseSales = async () => {
       return applyPendingQueueToEntities('sale', getStorageSales());
     }
     isSupabaseAvailable = true;
-    return applyPendingQueueToEntities('sale', (data || []).map(mapSaleFromDb));
+    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
+    const mapped = (data || [])
+      .map(mapSaleFromDb)
+      .filter(s => s && !isCxcEntryDeleted(s, delSet));
+    const reconciled = applyPendingQueueToEntities('sale', mapped);
+    try {
+      if (typeof localStorage !== 'undefined' && Array.isArray(data) && data.length > 0) {
+        localStorage.setItem('sm_sales_v4_fiscal', JSON.stringify(reconciled));
+      }
+    } catch (_) {}
+    return reconciled;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseSales');
     return applyPendingQueueToEntities('sale', getStorageSales());
@@ -2527,10 +2547,12 @@ export const processSupabaseSale = async (saleData) => {
   }
   try {
     const config = await getSupabaseConfig();
-    const { count, error: countErr } = await withTimeout(
-      supabase.from('sales').select('*', { count: 'exact', head: true })
+    const { data: dbSales, error: countErr } = await withTimeout(
+      supabase.from('sales').select('id,numero_doc,tipo_doc')
     );
     if (countErr) throw countErr;
+    const count = Array.isArray(dbSales) ? dbSales.length : 0;
+    const mappedSales = (dbSales || []).map(s => ({ id: s.id, numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
     const isNotaEntrega =
       String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
       String(saleData.numeroDoc || saleData.id || '').toUpperCase().startsWith('NE-') ||
@@ -2548,17 +2570,20 @@ export const processSupabaseSale = async (saleData) => {
     let resolvedNumeroDoc = saleData.numeroDoc;
     if (!resolvedNumeroDoc) {
       if (effectiveTipoDoc === 'FACTURA') {
-        const { data: dbSales } = await supabase.from('sales').select('numero_doc,tipo_doc');
-        const mappedSales = (dbSales || []).map(s => ({ numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
         resolvedNumeroDoc = getNextInvoiceCorrelativo(mappedSales);
       } else {
-        resolvedNumeroDoc = `${docPrefix}-${String((count || 0) + 1).padStart(6, '0')}`;
+        const { data: dbInvoices } = await withTimeout(
+          supabase.from('profit_invoices').select('id,fact_num,tipo_doc')
+        ).catch(() => ({ data: [] }));
+        resolvedNumeroDoc = getNextNotaEntregaCorrelativo(mappedSales, dbInvoices || [], docPrefix);
       }
     } else if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
       resolvedNumeroDoc = `NE-${resolvedNumeroDoc}`;
     }
     if (effectiveTipoDoc === 'FACTURA') {
       commitInvoiceCorrelativo(resolvedNumeroDoc);
+    } else if (effectiveTipoDoc === 'NOTA_ENTREGA') {
+      commitNotaEntregaCorrelativo(resolvedNumeroDoc);
     }
 
     const itemsConLitros = (saleData.items || []).map(item => ({
@@ -4053,7 +4078,48 @@ export const pushSupplierToSupabase = async (supplierData) => {
 };
 
 export const pushSaleToSupabase = async (saleData) => {
-  const payload = mapSaleToDb(saleData);
+  let effectiveSaleData = { ...saleData };
+  delete effectiveSaleData._createdOffline;
+
+  if (saleData?._createdOffline && effectiveSaleData.id) {
+    try {
+      const { data: existing } = await withTimeout(
+        supabase
+          .from('sales')
+          .select('id,numero_doc,tipo_doc,cliente_rif,total_usd')
+          .eq('id', effectiveSaleData.id)
+          .maybeSingle(),
+        4000
+      );
+      const isDifferentSale =
+        existing &&
+        (String(existing.cliente_rif || '').trim() !== String(effectiveSaleData.clienteRif || effectiveSaleData.cliente_rif || '').trim() ||
+          Math.abs(Number(existing.total_usd || 0) - Number(effectiveSaleData.totalUsd || effectiveSaleData.total_usd || 0)) > 0.01);
+
+      if (isDifferentSale) {
+        const [{ data: dbSales }, { data: dbInvoices }] = await Promise.all([
+          supabase.from('sales').select('id,numero_doc,tipo_doc'),
+          supabase.from('profit_invoices').select('id,fact_num,tipo_doc')
+        ]);
+        const mappedSales = (dbSales || []).map(s => ({ id: s.id, numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
+        const tipo = String(effectiveSaleData.tipoDoc || 'FACTURA').toUpperCase();
+        const prefix = tipo === 'NOTA_CREDITO' ? 'NC' : (tipo === 'NOTA_DEBITO' ? 'ND' : (tipo === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
+        const newNum = tipo === 'FACTURA'
+          ? getNextInvoiceCorrelativo(mappedSales)
+          : getNextNotaEntregaCorrelativo(mappedSales, dbInvoices || [], prefix);
+        const newId = (tipo === 'FACTURA' || String(newNum).toUpperCase().startsWith(`${prefix}-`))
+          ? newNum
+          : `${prefix}-${newNum}`;
+        effectiveSaleData = {
+          ...effectiveSaleData,
+          id: newId,
+          numeroDoc: newNum
+        };
+      }
+    } catch (_) {}
+  }
+
+  const payload = mapSaleToDb(effectiveSaleData);
   const { data, error } = await withTimeout(
     supabase.from('sales').upsert([payload]).select().single(),
     4000
@@ -4638,11 +4704,12 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
     const customMap = rawCustom ? JSON.parse(rawCustom) : {};
 
-    const pendingInvIds = new Set(
-      getSyncQueue()
-        .filter(q => q && (q.entity === 'profit_invoice' || q.entity === 'profit_invoices') && q.action !== 'DELETE')
-        .map(q => String(q.data?.id || q.data?.factNum || q.data?.fact_num || '').trim())
-    );
+    const pendingInvIds = new Set();
+    getSyncQueue()
+      .filter(q => q && (q.entity === 'profit_invoice' || q.entity === 'profit_invoices' || q.entity === 'sale' || q.entity === 'sales') && q.action !== 'DELETE')
+      .forEach(q => {
+        getScopedCxcDeleteKeys(q.data).forEach(k => pendingInvIds.add(k));
+      });
 
     const matchedCustomKeys = new Set();
     const keysToPrune = new Set();
@@ -4664,7 +4731,10 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
 
         const ovTs = parseSafeIsoMs(override.updated_at || override.fechaSincronizacion || override.fecha_sincronizacion);
         const remTs = parseSafeIsoMs(inv.updated_at || inv.fechaSincronizacion || inv.fecha_sincronizacion);
-        const isPending = pendingInvIds.has(idKey) || (numKey && pendingInvIds.has(numKey));
+        const isPending =
+          pendingInvIds.has(idKey) ||
+          (numKey && pendingInvIds.has(numKey)) ||
+          Boolean(override._pendingServerSync);
 
         if (!hasRemoteResponse || isPending || ovTs > remTs) {
           result.push({ ...inv, ...override });
@@ -4678,26 +4748,41 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
       }
     }
 
-    if (keysToPrune.size > 0) {
-      try {
-        keysToPrune.forEach(k => { delete customMap[k]; });
-        localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
-      } catch (_) {}
-    }
-
     if (customMap && typeof customMap === 'object') {
       const addedIds = new Set();
       Object.entries(customMap).forEach(([k, doc]) => {
         if (!doc) return;
         const dId = String(doc.id || k).trim();
         const dNum = String(doc.factNum ?? doc.fact_num ?? '').trim();
-        if (isCxcEntryDeleted(doc, delSet)) return;
-        if (!matchedCustomKeys.has(dId) && (!dNum || !matchedCustomKeys.has(dNum)) && !addedIds.has(dId)) {
-          addedIds.add(dId);
-          if (dNum) addedIds.add(dNum);
-          result.unshift(doc);
+        if (isCxcEntryDeleted(doc, delSet)) {
+          keysToPrune.add(k);
+          return;
+        }
+        if (!matchedCustomKeys.has(dId) && (!dNum || !matchedCustomKeys.has(dNum))) {
+          const isPending =
+            pendingInvIds.has(dId) ||
+            (dNum && pendingInvIds.has(dNum)) ||
+            Boolean(doc._pendingServerSync);
+          if (hasRemoteResponse && !isPending) {
+            keysToPrune.add(k);
+            if (dId && customMap[dId]) keysToPrune.add(dId);
+            if (dNum && customMap[dNum]) keysToPrune.add(dNum);
+            return;
+          }
+          if (!addedIds.has(dId)) {
+            addedIds.add(dId);
+            if (dNum) addedIds.add(dNum);
+            result.unshift(doc);
+          }
         }
       });
+    }
+
+    if (keysToPrune.size > 0) {
+      try {
+        keysToPrune.forEach(k => { delete customMap[k]; });
+        localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
+      } catch (_) {}
     }
 
     return result;
@@ -5158,11 +5243,12 @@ export const getSupabaseProfitInvoices = async () => {
 
 export const pushProfitInvoiceToSupabase = async (payload) => {
   if (!payload) return null;
-  const id = payload.id;
-  const rawNum = String(payload.factNum ?? payload.fact_num ?? payload.numeroDoc ?? payload.id ?? '').trim();
+  const { _pendingServerSync, _createdOffline, ...cleanPayload } = payload;
+  const id = cleanPayload.id;
+  const rawNum = String(cleanPayload.factNum ?? cleanPayload.fact_num ?? cleanPayload.numeroDoc ?? cleanPayload.id ?? '').trim();
 
   const { error: invErr } = await withTimeout(
-    supabase.from('profit_invoices').upsert(payload, { onConflict: 'id' }),
+    supabase.from('profit_invoices').upsert(cleanPayload, { onConflict: 'id' }),
     8000
   );
   if (invErr) throw invErr;
@@ -5170,58 +5256,58 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
   if (rawNum) {
     const updateRes = await withTimeout(
       supabase.from('sales').update({
-        cliente_id: payload.clienteId,
-        cliente_nombre: payload.clienteNombre,
-        cliente_rif: payload.clienteRif,
-        tasa_dolar: payload.tasa,
-        total_usd: payload.totNetoUsd,
-        total_bs: payload.totNetoBs,
-        saldo_usd: payload.saldoUsd,
-        saldo_bs: payload.saldoBs,
-        dias_credito: payload.diasCredito,
-        fecha_emision: payload.fechaEmision,
-        fecha_vencimiento: payload.fechaVencimiento,
-        vendedor: payload.vendedorNombre,
-        estado: payload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
+        cliente_id: cleanPayload.clienteId,
+        cliente_nombre: cleanPayload.clienteNombre,
+        cliente_rif: cleanPayload.clienteRif,
+        tasa_dolar: cleanPayload.tasa,
+        total_usd: cleanPayload.totNetoUsd,
+        total_bs: cleanPayload.totNetoBs,
+        saldo_usd: cleanPayload.saldoUsd,
+        saldo_bs: cleanPayload.saldoBs,
+        dias_credito: cleanPayload.diasCredito,
+        fecha_emision: cleanPayload.fechaEmision,
+        fecha_vencimiento: cleanPayload.fechaVencimiento,
+        vendedor: cleanPayload.vendedorNombre,
+        estado: cleanPayload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
       }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
       6000
     ).catch(() => null);
 
     if (!updateRes?.data || updateRes.data.length === 0) {
       const saleRow = mapSaleToDb({
-        id: payload.id,
+        id: cleanPayload.id,
         numeroDoc: rawNum,
-        numeroControl: payload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
-        tipoDoc: payload.tipoDoc,
-        fecha: payload.fechaEmision,
-        fechaEmision: payload.fechaEmision,
-        fechaVencimiento: payload.fechaVencimiento,
-        diasCredito: payload.diasCredito,
-        clienteId: payload.clienteId,
-        clienteNombre: payload.clienteNombre,
-        clienteRif: payload.clienteRif,
-        clienteDireccion: payload.clienteDireccion,
-        clienteTelefono: payload.clienteTelefono,
-        vendedor: payload.vendedorNombre,
-        tasaDolar: payload.tasa,
-        condicionPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
-        subtotalUsd: payload.totBrutoUsd,
-        baseExentaUsd: payload.isExento ? payload.totBrutoUsd : 0,
-        baseGeneralUsd: payload.isExento ? 0 : payload.totBrutoUsd,
-        ivaGeneralUsd: payload.ivaUsd,
-        ivaUsd: payload.ivaUsd,
-        totalUsd: payload.totNetoUsd,
-        subtotalBs: payload.totBrutoBs,
-        baseExentaBs: payload.isExento ? payload.totBrutoBs : 0,
-        baseGeneralBs: payload.isExento ? 0 : payload.totBrutoBs,
-        ivaGeneralBs: payload.ivaBs,
-        ivaBs: payload.ivaBs,
-        totalBs: payload.totNetoBs,
-        saldoUsd: payload.saldoUsd,
-        saldoBs: payload.saldoBs,
-        estado: payload.saldoUsd <= 0.01 ? 'PAGADO' : 'PENDIENTE',
-        metodoPago: Number(payload.diasCredito || 0) > 0 ? 'CREDITO' : 'TRANSFERENCIA_BS',
-        items: payload.items || []
+        numeroControl: cleanPayload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+        tipoDoc: cleanPayload.tipoDoc,
+        fecha: cleanPayload.fechaEmision,
+        fechaEmision: cleanPayload.fechaEmision,
+        fechaVencimiento: cleanPayload.fechaVencimiento,
+        diasCredito: cleanPayload.diasCredito,
+        clienteId: cleanPayload.clienteId,
+        clienteNombre: cleanPayload.clienteNombre,
+        clienteRif: cleanPayload.clienteRif,
+        clienteDireccion: cleanPayload.clienteDireccion,
+        clienteTelefono: cleanPayload.clienteTelefono,
+        vendedor: cleanPayload.vendedorNombre,
+        tasaDolar: cleanPayload.tasa,
+        condicionPago: Number(cleanPayload.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO',
+        subtotalUsd: cleanPayload.totBrutoUsd,
+        baseExentaUsd: cleanPayload.isExento ? cleanPayload.totBrutoUsd : 0,
+        baseGeneralUsd: cleanPayload.isExento ? 0 : cleanPayload.totBrutoUsd,
+        ivaGeneralUsd: cleanPayload.ivaUsd,
+        ivaUsd: cleanPayload.ivaUsd,
+        totalUsd: cleanPayload.totNetoUsd,
+        subtotalBs: cleanPayload.totBrutoBs,
+        baseExentaBs: cleanPayload.isExento ? cleanPayload.totBrutoBs : 0,
+        baseGeneralBs: cleanPayload.isExento ? 0 : cleanPayload.totBrutoBs,
+        ivaGeneralBs: cleanPayload.ivaBs,
+        ivaBs: cleanPayload.ivaBs,
+        totalBs: cleanPayload.totNetoBs,
+        saldoUsd: cleanPayload.saldoUsd,
+        saldoBs: cleanPayload.saldoBs,
+        estado: cleanPayload.saldoUsd <= 0.01 ? 'PAGADO' : 'PENDIENTE',
+        metodoPago: Number(cleanPayload.diasCredito || 0) > 0 ? 'CREDITO' : 'TRANSFERENCIA_BS',
+        items: cleanPayload.items || []
       });
       await withTimeout(
         supabase.from('sales').upsert([saleRow], { onConflict: 'id' }),
@@ -5229,8 +5315,32 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
       ).catch(() => {});
     }
   }
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+      if (rawCustom) {
+        const customMap = JSON.parse(rawCustom);
+        if (customMap && typeof customMap === 'object') {
+          let changed = false;
+          if (id && customMap[id]) {
+            customMap[id] = { ...customMap[id], _pendingServerSync: false };
+            changed = true;
+          }
+          if (rawNum && customMap[rawNum]) {
+            customMap[rawNum] = { ...customMap[rawNum], _pendingServerSync: false };
+            changed = true;
+          }
+          if (changed) {
+            localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
   isSupabaseAvailable = true;
-  return payload;
+  return cleanPayload;
 };
 
 export const saveSupabaseProfitInvoice = async (docData) => {
@@ -5407,8 +5517,9 @@ export const saveSupabaseProfitInvoice = async (docData) => {
     if (typeof localStorage !== 'undefined') {
       const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
       const customMap = rawCustom ? JSON.parse(rawCustom) : {};
-      customMap[id] = payload;
-      if (rawNum) customMap[rawNum] = payload;
+      const pendingPayload = { ...payload, _pendingServerSync: true };
+      customMap[id] = pendingPayload;
+      if (rawNum) customMap[rawNum] = pendingPayload;
       localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
     }
   } catch (_) {}

@@ -192,7 +192,62 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
   if (isSyncing) return { success: false, reason: 'ALREADY_SYNCING' };
   if (!isNetworkOnline()) return { success: false, reason: 'OFFLINE' };
 
-  const queue = getSyncQueue();
+  // Usar handlers inyectados o los handlers de Supabase por defecto
+  const handlers = serviceHandlers || defaultSupabaseHandlers;
+  if (handlers.resetSupabaseOnlineStatus) {
+    handlers.resetSupabaseOnlineStatus();
+  }
+
+  let queue = getSyncQueue();
+
+  // Revisar signum_cxc_custom_docs_v1 por documentos pendientes (_pendingServerSync) que hayan quedado fuera de la cola
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
+      if (rawCustom) {
+        const customMap = JSON.parse(rawCustom);
+        const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+        const delSet = new Set(rawDel ? JSON.parse(rawDel).map(String) : []);
+        if (customMap && typeof customMap === 'object') {
+          const queuedIds = new Set(
+            queue
+              .filter(q => q && (q.entity === 'profit_invoice' || q.entity === 'profit_invoices' || q.entity === 'sale' || q.entity === 'sales'))
+              .map(q => String(q.data?.id || q.data?.factNum || q.data?.fact_num || q.data?.numeroDoc || '').trim())
+              .filter(Boolean)
+          );
+          const addedCustomIds = new Set();
+          let queueModified = false;
+          Object.values(customMap).forEach(doc => {
+            if (!doc || !doc._pendingServerSync) return;
+            const dId = String(doc.id || '').trim();
+            const dNum = String(doc.factNum ?? doc.fact_num ?? '').trim();
+            if (!dId && !dNum) return;
+            if ((dId && delSet.has(dId)) || (dNum && delSet.has(dNum))) return;
+            if ((dId && queuedIds.has(dId)) || (dNum && queuedIds.has(dNum))) return;
+            const dedupKey = dId || dNum;
+            if (addedCustomIds.has(dedupKey)) return;
+            addedCustomIds.add(dedupKey);
+            if (dId) queuedIds.add(dId);
+            if (dNum) queuedIds.add(dNum);
+            queue.push({
+              id: `sync_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+              entity: 'profit_invoice',
+              action: 'UPDATE',
+              data: doc,
+              timestamp: new Date().toISOString(),
+              attempts: 0,
+              lastError: null
+            });
+            queueModified = true;
+          });
+          if (queueModified) {
+            saveSyncQueue(queue);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
   if (queue.length === 0) {
     notifySubscribers();
     return { success: true, count: 0 };
@@ -205,9 +260,6 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
   let failedCount = 0;
 
   console.log(`[OfflineSync] Procesando ${queue.length} elementos pendientes...`);
-
-  // Usar handlers inyectados o los handlers de Supabase por defecto
-  const handlers = serviceHandlers || defaultSupabaseHandlers;
 
   const currentQueue = [...queue];
 
@@ -486,9 +538,19 @@ export const initOfflineSyncListeners = () => {
 
   const handleOnline = () => {
     console.log("[OfflineSync] Conexión de red restablecida. Verificando cola...");
+    if (defaultSupabaseHandlers.resetSupabaseOnlineStatus) {
+      defaultSupabaseHandlers.resetSupabaseOnlineStatus();
+    }
     notifySubscribers();
-    setTimeout(() => {
-      flushSyncQueue();
+    setTimeout(async () => {
+      const res = await flushSyncQueue();
+      if (!res?.processedCount && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('signum_offline_queue_flushed', {
+            detail: { processedCount: 0, failedCount: 0, reconnected: true }
+          })
+        );
+      }
     }, 500);
   };
 

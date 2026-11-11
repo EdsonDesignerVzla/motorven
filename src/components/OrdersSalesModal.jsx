@@ -59,7 +59,7 @@ import {
   generateSalesPOSPDF
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
-import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
+import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
 import { saveSupabaseProfitInvoice } from '../services/supabaseService';
@@ -3546,11 +3546,13 @@ export default function OrdersSalesModal({
                             try {
                               const isOrdNotaEntrega = isOrderNotaEntrega(selectedOrder);
                               const nextInvoiceNum = isOrdNotaEntrega
-                                ? `NE-${String((sales?.length || 0) + 1).padStart(6, '0')}`
+                                ? getNextNotaEntregaCorrelativo(sales)
                                 : getNextInvoiceCorrelativo(sales);
                               if (!isOrdNotaEntrega) {
                                 commitInvoiceCorrelativo(nextInvoiceNum);
                                 setCorrelativoRefreshKey(k => k + 1);
+                              } else {
+                                commitNotaEntregaCorrelativo(nextInvoiceNum);
                               }
                               const isCredit = isOrdNotaEntrega || isCreditPaymentCondition(selectedOrder.condicionPago, billingPaymentMethod);
                               const totNeto = Number(selectedOrder.totalNetoUsd) || 0;

@@ -15,14 +15,17 @@ import {
   REAL_PRODUCTS,
   REAL_CLIENTS,
   REAL_ORDERS,
-  REAL_PROFIT_SELLERS
+  REAL_PROFIT_SELLERS,
+  REAL_PROFIT_INVOICES
 } from '../data/supabaseRealData.js';
 import {
   calculateFiscalTaxes,
   generateFiscalControlNumber,
   generateVatRetentionVoucherNumber,
   getNextInvoiceCorrelativo,
-  commitInvoiceCorrelativo
+  commitInvoiceCorrelativo,
+  getNextNotaEntregaCorrelativo,
+  commitNotaEntregaCorrelativo
 } from './fiscalService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import { getProductWarehouseStocks } from './formatService.js';
@@ -356,20 +359,20 @@ export const saveSale = (saleData, options = {}) => {
     isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago) ||
     Number(saleData.diasCredito || 0) > 0 ||
     isNotaEntrega;
-  const nextInvoiceCorrelativo = effectiveTipoDoc === 'FACTURA'
-    ? getNextInvoiceCorrelativo(sales)
-    : String(sales.length + 1).padStart(6, '0');
-
   const docPrefix = effectiveTipoDoc === 'NOTA_CREDITO' ? 'NC' : (effectiveTipoDoc === 'NOTA_DEBITO' ? 'ND' : (effectiveTipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
   let resolvedNumeroDoc = saleData.numeroDoc
     ? String(saleData.numeroDoc)
-    : (effectiveTipoDoc === 'FACTURA' ? nextInvoiceCorrelativo : `${docPrefix}-${nextInvoiceCorrelativo}`);
+    : (effectiveTipoDoc === 'FACTURA'
+        ? getNextInvoiceCorrelativo(sales)
+        : getNextNotaEntregaCorrelativo(sales, REAL_PROFIT_INVOICES, docPrefix));
   if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
     resolvedNumeroDoc = `NE-${resolvedNumeroDoc}`;
   }
 
   if (effectiveTipoDoc === 'FACTURA') {
     commitInvoiceCorrelativo(resolvedNumeroDoc);
+  } else if (effectiveTipoDoc === 'NOTA_ENTREGA') {
+    commitNotaEntregaCorrelativo(resolvedNumeroDoc);
   }
 
   const itemsConLitros = (saleData.items || []).map(item => ({
@@ -441,7 +444,8 @@ export const saveSale = (saleData, options = {}) => {
     metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
     vendedor: saleData.vendedor || 'Usuario Sistema',
     pedidoOrigenId: saleData.pedidoOrigenId || saleData.orderId || null,
-    pedidoOrigenDoc: saleData.pedidoOrigenDoc || null
+    pedidoOrigenDoc: saleData.pedidoOrigenDoc || null,
+    ...(!skipStockAdjustment ? { _createdOffline: true } : {})
   };
 
   // Ajuste de Stock Independiente por Almacén:
