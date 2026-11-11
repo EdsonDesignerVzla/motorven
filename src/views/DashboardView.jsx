@@ -613,7 +613,7 @@ export default function DashboardView({
   const [ventasMesFilter, setVentasMesFilter] = useState(() => String(new Date().getMonth() + 1).padStart(2, '0'));
   const [ventasDetalleTab, setVentasDetalleTab] = useState('hoy'); // 'hoy' | 'mes'
 
-  // Documentos de venta normalizados (Facturas/N.E. Profit + Ventas POS locales)
+  // Documentos de venta normalizados y deduplicados (Facturas/N.E. Profit + Ventas POS sin doble conteo)
   const ventasDocsNormalizados = useMemo(() => {
     const productsBySku = new Map();
     (products || []).forEach(p => {
@@ -624,34 +624,95 @@ export default function DashboardView({
       const d = (desc || '').toLowerCase();
       return d.includes('flete') || d.includes('servicio');
     };
+    const getDocDedupKey = (tipoRaw, numRaw) => {
+      const str = String(numRaw || '').trim().toUpperCase();
+      if (!str) return '';
+      const m = str.match(/(\d+)$/);
+      const num = m ? String(Number(m[1])) : str;
+      const tUpper = String(tipoRaw || '').toUpperCase();
+      const prefix = (tUpper.includes('NOTA_ENTREGA') || str.startsWith('NE-') || str.startsWith('NDE-'))
+        ? 'NE'
+        : (tUpper.includes('NOTA_CREDITO') || str.startsWith('NC-'))
+          ? 'NC'
+          : (tUpper.includes('NOTA_DEBITO') || str.startsWith('ND-'))
+            ? 'ND'
+            : 'FAC';
+      return `${prefix}|${num}`;
+    };
+    const normalizeDocItems = (rawItems = [], tasaDoc = tasaBcv, headerLitros = 0) => {
+      const mapped = (rawItems || []).map(it => {
+        const sku = String(it.articuloId || it.codigo || it.id || '').trim();
+        const prod = productsBySku.get(sku);
+        const desc = it.descripcion || it.nombre || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
+        const cantidad = Number(it.cantidad || 0);
+        const ltsUnit = Number(
+          it.litrosUnitarios ??
+          it.litrosPorUnidad ??
+          (prod ? resolveProductLitersPerUnit(prod) : 0)
+        ) || 0;
+        const litros = Number(it.litrosTotales ?? it.litros ?? (cantidad * ltsUnit)) || 0;
+        const usdDirect = Number(it.totalUsd ?? it.subtotalUsd ?? 0);
+        const usd = usdDirect > 0
+          ? usdDirect
+          : ((Number(it.totalNeto || 0) || 0) / (tasaDoc > 1 ? tasaDoc : 1)) || (Number(it.precioUsd || 0) * cantidad);
+        return {
+          sku,
+          desc,
+          cantidad,
+          litros,
+          usd,
+          esServicio: isServiceItem(desc)
+        };
+      });
+      if (mapped.length === 1 && mapped[0].sku === 'LUB-MANUAL' && mapped[0].litros === 0 && headerLitros > 0) {
+        mapped[0].litros = headerLitros;
+      }
+      return mapped;
+    };
+
+    // Índice auxiliar de sales para recuperar items si profit_invoices los tiene vacíos
+    const salesById = new Map();
+    const salesByKey = new Map();
+    (sales || []).forEach(s => {
+      if (!s || s.anulada) return;
+      if (s.id) salesById.set(String(s.id), s);
+      const dk = getDocDedupKey(s.tipoDoc || s.tipo_doc, s.numeroDoc || s.numero_doc || s.id);
+      if (dk && !salesByKey.has(dk)) salesByKey.set(dk, s);
+    });
+
+    const seenIds = new Set();
+    const seenDocKeys = new Set();
     const docs = [];
 
     (profitInvoices || []).forEach(inv => {
       if (!inv || inv.anulada) return;
+      const tipo = inv.tipoDoc || inv.tipo_doc || '';
+      if (String(tipo).toUpperCase() === 'NOTA_CREDITO') return;
       const dateKey = toDateKey(inv.fechaEmision || inv.fecEmis || inv.fec_emis || inv.fecha);
       if (!dateKey) return;
+
+      const idStr = inv.id ? String(inv.id) : '';
+      const dk = getDocDedupKey(tipo, inv.factNum || inv.fact_num || inv.originalFactNum || inv.id);
+      if (idStr) seenIds.add(idStr);
+      if (dk) seenDocKeys.add(dk);
+
       const usd = Number(inv.totNetoUsd ?? inv.tot_neto_usd ?? inv.totalNetoUsd ?? 0) || 0;
       const bsRaw = Number(inv.totNetoBs ?? inv.tot_neto_bs ?? 0) || 0;
       const tasaDoc = Number(inv.tasa) > 1 ? Number(inv.tasa) : tasaBcv;
-      const items = (inv.items || []).map(it => {
-        const sku = String(it.articuloId || it.codigo || '').trim();
-        const prod = productsBySku.get(sku);
-        const desc = it.descripcion || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
-        const litros = Number(it.litrosTotales ?? (Number(it.cantidad || 0) * Number(it.litrosUnitarios || 0))) || 0;
-        return {
-          sku,
-          desc,
-          cantidad: Number(it.cantidad || 0),
-          litros,
-          usd: (Number(it.totalNeto || 0) || 0) / (tasaDoc > 1 ? tasaDoc : 1),
-          esServicio: isServiceItem(desc)
-        };
-      });
+      const headerLitros = Number(inv.totalLitros ?? inv.total_litros ?? 0) || 0;
+
+      const matchingSale = (idStr && salesById.get(idStr)) || (dk && salesByKey.get(dk));
+      const rawItems = (Array.isArray(inv.items) && inv.items.length > 0)
+        ? inv.items
+        : (matchingSale?.items || []);
+      const items = normalizeDocItems(rawItems, tasaDoc, headerLitros);
+      const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
+
       docs.push({
         dateKey,
         usd,
         bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
-        litros: Number(inv.totalLitros ?? inv.total_litros ?? 0) || 0,
+        litros: headerLitros > 0 ? headerLitros : itemsLitros,
         cliente: inv.clienteNombre || inv.cliente_nombre || inv.cli_des || inv.clienteId || '',
         items
       });
@@ -659,30 +720,30 @@ export default function DashboardView({
 
     (sales || []).forEach(s => {
       if (!s || s.anulada) return;
-      const dateKey = toDateKey(s.fecha);
+      const tipo = s.tipoDoc || s.tipo_doc || '';
+      if (String(tipo).toUpperCase() === 'NOTA_CREDITO') return;
+
+      const idStr = s.id ? String(s.id) : '';
+      const dk = getDocDedupKey(tipo, s.numeroDoc || s.numero_doc || s.id);
+      if ((idStr && seenIds.has(idStr)) || (dk && seenDocKeys.has(dk))) return;
+      if (idStr) seenIds.add(idStr);
+      if (dk) seenDocKeys.add(dk);
+
+      const dateKey = toDateKey(s.fecha || s.fechaEmision || s.fecha_emision);
       if (!dateKey) return;
-      const usd = Number(s.totalUsd) || 0;
-      const bsRaw = Number(s.totalBs) || 0;
-      const items = (s.items || []).map(it => {
-        const sku = String(it.articuloId || it.codigo || it.id || '').trim();
-        const prod = productsBySku.get(sku);
-        const desc = it.descripcion || it.nombre || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
-        const cantidad = Number(it.cantidad || 0);
-        return {
-          sku,
-          desc,
-          cantidad,
-          litros: Number(it.litros || (cantidad * Number(it.litrosPorUnidad || 0))) || 0,
-          usd: Number(it.subtotalUsd ?? it.totalUsd ?? (Number(it.precioUsd || 0) * cantidad)) || 0,
-          esServicio: isServiceItem(desc)
-        };
-      });
+      const usd = Number(s.totalUsd ?? s.total_usd ?? 0) || 0;
+      const bsRaw = Number(s.totalBs ?? s.total_bs ?? 0) || 0;
+      const tasaDoc = Number(s.tasaDolar ?? s.tasa_dolar ?? 0) > 1 ? Number(s.tasaDolar ?? s.tasa_dolar) : tasaBcv;
+      const headerLitros = Number(s.totalLitros ?? s.total_litros ?? 0) || 0;
+      const items = normalizeDocItems(s.items || [], tasaDoc, headerLitros);
+      const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
+
       docs.push({
         dateKey,
         usd,
         bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
-        litros: items.reduce((acc, it) => acc + it.litros, 0),
-        cliente: s.clienteNombre || s.cliente || '',
+        litros: headerLitros > 0 ? headerLitros : itemsLitros,
+        cliente: s.clienteNombre || s.cliente_nombre || s.cliente || '',
         items
       });
     });
