@@ -327,26 +327,30 @@ export default function AccountsPayableModal({
         const pKey = String(p.id || p.nroDoc || p.nro_doc || '');
         const override = localDocOverrides[pKey] || {};
         const merged = { ...p, ...override };
+        const pTs = Date.parse(p.updated_at || p.fechaSincronizacion || p.fecha_sincronizacion || '') || 0;
+        const ovTs = Date.parse(override?._localSavedAt || override?.updated_at || override?.fechaSincronizacion || '') || 0;
+        const resolved = (pTs > 0 && ovTs > 0 && pTs > ovTs) ? p : merged;
 
-        const tipoDoc = (merged.tipoDoc || merged.tipo_doc || 'FACT').toUpperCase().trim();
-        const nroDoc = String(merged.nroDoc || merged.nro_doc || 'S/N').trim();
-        const provNombre = merged.provNombre || merged.prov_nombre || 'Proveedor General';
-        const provRif = merged.provRif || merged.prov_rif || merged.coProv || merged.co_prov || 'J-00000000';
+        const tipoDoc = (resolved.tipoDoc || resolved.tipo_doc || 'FACT').toUpperCase().trim();
+        const nroDoc = String(resolved.nroDoc || resolved.nro_doc || 'S/N').trim();
+        const provNombre = resolved.provNombre || resolved.prov_nombre || 'Proveedor General';
+        const provRif = resolved.provRif || resolved.prov_rif || resolved.coProv || resolved.co_prov || 'J-00000000';
 
-        const montoNetUsd = Number(merged.montoNetUsd ?? merged.monto_net_usd ?? (tasaBcv > 0 ? Number(merged.montoNetBs || merged.monto_net_bs || 0) / tasaBcv : 0));
-        const saldoBs = Number(merged.saldoBs ?? merged.saldo_bs ?? 0);
-        const rawSaldoUsd = Number(merged.saldoUsd ?? merged.saldo_usd ?? (tasaBcv > 0 ? saldoBs / tasaBcv : montoNetUsd));
+        const montoNetUsd = Number(resolved.montoNetUsd ?? resolved.monto_net_usd ?? (tasaBcv > 0 ? Number(resolved.montoNetBs || resolved.monto_net_bs || 0) / tasaBcv : 0));
+        const saldoBs = Number(resolved.saldoBs ?? resolved.saldo_bs ?? 0);
+        const rawSaldoUsd = Number(resolved.saldoUsd ?? resolved.saldo_usd ?? (tasaBcv > 0 ? saldoBs / tasaBcv : montoNetUsd));
         const saldoUsd = Math.max(0, round2(rawSaldoUsd));
 
         // Abonos registrados
-        const abonosUsd = merged.abonosUsd !== undefined
-          ? round2(Number(merged.abonosUsd))
+        const rawAbonosVal = resolved.abonosUsd ?? resolved.abonos_usd;
+        const abonosUsd = rawAbonosVal !== undefined && rawAbonosVal !== null
+          ? round2(Number(rawAbonosVal))
           : Math.max(0, round2(montoNetUsd - saldoUsd));
         const abonosBs = round2(abonosUsd * tasaBcv);
 
         // Fechas
-        const fecEmis = merged.fechaEmision || merged.fec_emis;
-        const fecVenc = merged.fechaVencimiento || merged.fec_venc || fecEmis;
+        const fecEmis = resolved.fechaEmision || resolved.fec_emis;
+        const fecVenc = resolved.fechaVencimiento || resolved.fec_venc || fecEmis;
         const dueDate = fecVenc ? parseDateSafe(fecVenc) : today;
         dueDate.setHours(0, 0, 0, 0);
 
@@ -374,8 +378,8 @@ export default function AccountsPayableModal({
         });
 
         return {
-          ...merged,
-          id: merged.id || `CXP-${tipoDoc}-${nroDoc}-${provRif}`,
+          ...resolved,
+          id: resolved.id || `CXP-${tipoDoc}-${nroDoc}-${provRif}`,
           tipoDoc,
           nroDoc,
           provNombre,
@@ -384,7 +388,7 @@ export default function AccountsPayableModal({
           fecVenc: fecVenc ? formatDateShort(fecVenc) : 'N/A',
           fechaEmisionIso: toIsoDateInput(fecEmis),
           fechaVencimientoIso: toIsoDateInput(fecVenc),
-          diasCredito: Number(merged.diasCredito ?? merged.dias_credito ?? 15),
+          diasCredito: Number(resolved.diasCredito ?? resolved.dias_credito ?? 15),
           montoNetUsd: round2(montoNetUsd),
           montoNetBs: round2(montoNetUsd * tasaBcv),
           abonosUsd,
@@ -443,7 +447,8 @@ export default function AccountsPayableModal({
         return false;
       }
 
-      // Estado
+      // Estado: las PAGADAS (Solventes) no aparecen en el listview por defecto ('ALL'), solo en 'SOLVENTE'
+      if (statusFilter === 'ALL' && p.isSolvente) return false;
       if (statusFilter === 'VIGENTE' && (p.isVencido || p.isSolvente)) return false;
       if (statusFilter === 'VENCIDO' && (!p.isVencido || p.isSolvente)) return false;
       if (statusFilter === 'SOLVENTE' && !p.isSolvente) return false;
@@ -482,7 +487,7 @@ export default function AccountsPayableModal({
       else alDia++;
     });
     return {
-      all: processedPayables.length,
+      all: vencidos + alDia,
       vencidos,
       alDia,
       solventes
@@ -637,19 +642,24 @@ export default function AccountsPayableModal({
         anulado: false
       };
 
+      const savedAtIso = new Date().toISOString();
       const updatedPayablePayload = {
         ...selectedPagoDoc,
         saldoUsd: nuevoSaldoUsd,
         saldoBs: nuevoSaldoBs,
         abonosUsd: nuevoAbonosUsd,
         tasa: tasaNum,
-        historialPagos: [pagoRecord, ...(selectedPagoDoc.historialPagos || [])]
+        historialPagos: [pagoRecord, ...(selectedPagoDoc.historialPagos || [])],
+        fechaSincronizacion: savedAtIso,
+        updated_at: savedAtIso,
+        _localSavedAt: savedAtIso
       };
 
       // 1. Actualización inmediata local
       setLocalDocOverrides(prev => ({
         ...prev,
-        [docKey]: updatedPayablePayload
+        [docKey]: updatedPayablePayload,
+        [selectedPagoDoc.nroDoc]: updatedPayablePayload
       }));
 
       // 2. Persistir en Supabase y Caja/Bancos
@@ -811,6 +821,14 @@ export default function AccountsPayableModal({
       historialPagos: editingPayable.historialPagos || []
     };
 
+    const savedAtIso = new Date().toISOString();
+    const overridePayload = {
+      ...payload,
+      fechaSincronizacion: savedAtIso,
+      updated_at: savedAtIso,
+      _localSavedAt: savedAtIso
+    };
+
     setIsSavingPayable(true);
     try {
       setLocalDocOverrides(prev => {
@@ -818,8 +836,8 @@ export default function AccountsPayableModal({
         if (editingPayable.originalNroDoc && editingPayable.originalNroDoc !== nroDoc) {
           next[editingPayable.originalNroDoc] = { _deleted: true };
         }
-        next[payload.id] = payload;
-        next[nroDoc] = payload;
+        next[payload.id] = overridePayload;
+        next[nroDoc] = overridePayload;
         return next;
       });
 
@@ -828,7 +846,16 @@ export default function AccountsPayableModal({
       }
 
       soundFX.success();
-      notify.success(`Documento CxP #${nroDoc} guardado exitosamente.`);
+      if (saldoUsd <= 0.01) {
+        if (pagoDocKey === payload.id || pagoDocKey === nroDoc) {
+          setPagoDocKey('');
+          setPagoMontoUsd('');
+          setPagoMontoBs('');
+        }
+        notify.success(`Documento CxP #${nroDoc} marcado como PAGADA y movido a Solventes.`);
+      } else {
+        notify.success(`Documento CxP #${nroDoc} guardado exitosamente.`);
+      }
       setEditingPayable(null);
     } catch (err) {
       console.error('Error guardando documento CxP:', err);

@@ -476,18 +476,19 @@ export function AccountsReceivableModal({
                     existing.vendedorNombre || resolvedSaleSeller.sellerName,
                     sellerCatalog
                 );
+                const existingIsProfit = existing._source === 'PROFIT' || existing._isPosSale === false;
                 rawMap.set(existingRawKey, {
                     ...existing,
                     fechaEmision: existing.fechaEmision || sale.fechaEmision || sale.fecha,
                     vendedorId: resolvedMergedSeller.sellerId,
                     vendedorNombre: resolvedMergedSeller.sellerName,
-                    _source: existing._source || 'POS',
-                    _isPosSale: true
+                    _source: existing._source || (existingIsProfit ? 'PROFIT' : 'POS'),
+                    _isPosSale: Boolean(existing._isPosSale)
                 });
             }
         });
 
-        // 3. Aplicar overrides locales de esta sesión
+        // 3. Aplicar overrides locales de esta sesión (respetando cambios remotos más recientes vía SSE)
         Object.entries(localDocOverrides).forEach(([key, override]) => {
             if (override?._deleted) {
                 rawMap.delete(key);
@@ -501,6 +502,11 @@ export function AccountsReceivableModal({
                 return;
             }
             const existing = rawMap.get(key) || {};
+            const existingTs = Date.parse(existing.updated_at || existing.fechaSincronizacion || existing.fecha_sincronizacion || '') || 0;
+            const localTs = Date.parse(override?._localSavedAt || override?.updated_at || override?.fechaSincronizacion || '') || 0;
+            if (existingTs > 0 && localTs > 0 && existingTs > localTs) {
+                return;
+            }
             rawMap.set(key, { ...existing, ...override });
         });
 
@@ -544,11 +550,18 @@ export function AccountsReceivableModal({
             // Cálculo de Abonos y Restante
             const rawSaldoField = inv.saldoUsd ?? inv.saldo_usd;
             const rawAbonosField = inv.abonosUsd ?? inv.abonos_usd;
+            const statusUpper = String(inv.status || inv.estado || '').toUpperCase().trim();
+            const isExplicitlySettled =
+                statusUpper === 'COBRADA' ||
+                statusUpper === 'PAGADO' ||
+                statusUpper === 'PAGADA' ||
+                Boolean(inv._customCreated) ||
+                (rawAbonosField !== undefined && rawAbonosField !== null && !isNaN(Number(rawAbonosField)) && Number(rawAbonosField) > 0.01);
             const hasCobroHistory = Array.isArray(inv.historialCobros) && inv.historialCobros.length > 0;
             const hasManualOverride = Boolean(localDocOverrides[factNum]) || recentlyPaidKeys.has(factNum);
             let abonosUsd = 0;
-            if (isPosDoc && !hasCobroHistory && !hasManualOverride && Number(rawSaldoField ?? 0) <= 0.01) {
-                // Facturas emitidas desde el POS sin cobros registrados aún en CxC inician pendientes por cobrar en CxC
+            if (isPosDoc && !isExplicitlySettled && !hasCobroHistory && !hasManualOverride && Number(rawSaldoField ?? 0) <= 0.01) {
+                // Facturas emitidas desde el POS sin cobros ni edición registrados en CxC inician pendientes por cobrar en CxC
                 abonosUsd = 0;
             } else if (rawAbonosField !== undefined && rawAbonosField !== null && !isNaN(Number(rawAbonosField))) {
                 abonosUsd = round2(Math.max(0, Number(rawAbonosField)));
@@ -562,8 +575,9 @@ export function AccountsReceivableModal({
             }
             const restanteUsd = round2(Math.max(0, montoFacturaUsd - abonosUsd));
 
-            const hasSessionTouch = hasManualOverride || Boolean(inv._customCreated) || isPosDoc;
-            const isCarteraActiva = restanteUsd > 0.01 || hasSessionTouch;
+            // Solo las facturas/NE con saldo pendiente pertenecen a la cartera activa del listview principal.
+            // Al llegar a PAGADA (restante <= $0.01) desaparecen en tiempo real del listview y pasan a "Solventes".
+            const isCarteraActiva = restanteUsd > 0.01;
 
             // Fechas de Emisión, Vencimiento, Días de Crédito y Días de Vencido
             const fechaEmisionDate = parseDateSafe(inv.fechaEmision || inv.fecha);
@@ -1118,15 +1132,25 @@ export function AccountsReceivableModal({
                 historialCobros: [cobroRecord, ...(selectedCobroDoc.historialCobros || [])]
             };
 
-            // 1. Actualizar inmediatamente la vista local (Parte B: Abonos y Restante)
-            setRecentlyPaidKeys(prev => {
-                const next = new Set(prev);
-                next.add(factKey);
-                return next;
-            });
+            const savedAtIso = new Date().toISOString();
+            const overridePayload = {
+                ...updatedInvoicePayload,
+                fechaSincronizacion: savedAtIso,
+                updated_at: savedAtIso,
+                _localSavedAt: savedAtIso
+            };
+
+            // 1. Actualizar inmediatamente la vista local (si queda en PAGADA, desaparecerá al instante del listview activo)
+            if (nuevoRestanteUsd > 0.01) {
+                setRecentlyPaidKeys(prev => {
+                    const next = new Set(prev);
+                    next.add(factKey);
+                    return next;
+                });
+            }
             setLocalDocOverrides(prev => ({
                 ...prev,
-                [factKey]: updatedInvoicePayload
+                [factKey]: overridePayload
             }));
 
             // 2. Persistir en App / Supabase / Cajas y Bancos
@@ -1152,7 +1176,9 @@ export function AccountsReceivableModal({
                 });
             }
 
-            const successMsg = `Cobro registrado en #${factKey}: Abono ${formatUsd(effectiveAbonoUsd)} (${formatBs(effectiveAbonoBs)}) → Nuevo Total Abonos: ${formatUsd(nuevoAbonosUsd)} | Restante: ${formatUsd(nuevoRestanteUsd)}`;
+            const successMsg = nuevoRestanteUsd <= 0.01
+                ? `Cobro total registrado en #${factKey} (${formatUsd(effectiveAbonoUsd)}). Estatus PAGADA — movido a Solventes.`
+                : `Cobro registrado en #${factKey}: Abono ${formatUsd(effectiveAbonoUsd)} (${formatBs(effectiveAbonoBs)}) → Nuevo Total Abonos: ${formatUsd(nuevoAbonosUsd)} | Restante: ${formatUsd(nuevoRestanteUsd)}`;
             setCobroFeedback({
                 type: 'success',
                 message: successMsg
@@ -1160,12 +1186,13 @@ export function AccountsReceivableModal({
             notify.success(successMsg);
 
             setCobroReferencia('');
-            if (nuevoRestanteUsd > 0) {
+            if (nuevoRestanteUsd > 0.01) {
                 setCobroMontoUsd(String(nuevoRestanteUsd.toFixed(2)));
                 setCobroMontoBs(String(round2(nuevoRestanteUsd * tasaNum).toFixed(2)));
             } else {
-                setCobroMontoUsd('0.00');
-                setCobroMontoBs('0.00');
+                setCobroDocKey('');
+                setCobroMontoUsd('');
+                setCobroMontoBs('');
             }
         } catch (err) {
             console.error('Error registrando cobro CxC:', err);
@@ -1374,6 +1401,14 @@ export function AccountsReceivableModal({
             _customCreated: true
         };
 
+        const savedAtIso = new Date().toISOString();
+        const overridePayload = {
+            ...payload,
+            fechaSincronizacion: savedAtIso,
+            updated_at: savedAtIso,
+            _localSavedAt: savedAtIso
+        };
+
         setIsSavingDoc(true);
         try {
             setLocalDocOverrides(prev => {
@@ -1381,13 +1416,17 @@ export function AccountsReceivableModal({
                 if (editingDoc.originalFactNum && editingDoc.originalFactNum !== factKey) {
                     next[editingDoc.originalFactNum] = { _deleted: true };
                 }
-                next[factKey] = payload;
+                next[factKey] = overridePayload;
                 return next;
             });
 
             setRecentlyPaidKeys(prev => {
                 const next = new Set(prev);
-                next.add(factKey);
+                if (restanteUsd <= 0.01) {
+                    next.delete(factKey);
+                } else {
+                    next.add(factKey);
+                }
                 return next;
             });
 
@@ -1398,7 +1437,16 @@ export function AccountsReceivableModal({
             if (editingDoc.tipoDoc !== activeDocType) {
                 setActiveDocType(editingDoc.tipoDoc);
             }
-            notify.success(`Documento #${factKey} guardado exitosamente.`);
+            if (restanteUsd <= 0.01) {
+                if (cobroDocKey === factKey) {
+                    setCobroDocKey('');
+                    setCobroMontoUsd('');
+                    setCobroMontoBs('');
+                }
+                notify.success(`Documento #${factKey} marcado como PAGADA y movido a Solventes.`);
+            } else {
+                notify.success(`Documento #${factKey} guardado exitosamente.`);
+            }
             setEditingDoc(null);
         } catch (err) {
             console.error('Error guardando documento CxC:', err);

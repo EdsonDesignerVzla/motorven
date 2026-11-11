@@ -1647,9 +1647,16 @@ const server = http.createServer(async (req, res) => {
               return codeNew && codeOld && codeNew === codeOld;
             }
             if (tableName === 'profit_invoices') {
-              const fNew = String(newRow.facturaNumero || newRow.fact_num || newRow.id || '').trim().toUpperCase();
-              const fOld = String(r.facturaNumero || r.fact_num || r.id || '').trim().toUpperCase();
+              const fNew = String(newRow.facturaNumero || newRow.factNum || newRow.fact_num || newRow.id || '').replace(/^(FAC-|FACT-|INV-|fac-|doc-)/i, '').trim().toUpperCase();
+              const fOld = String(r.facturaNumero || r.factNum || r.fact_num || r.id || '').replace(/^(FAC-|FACT-|INV-|fac-|doc-)/i, '').trim().toUpperCase();
               return fNew && fOld && fNew === fOld;
+            }
+            if (tableName === 'profit_accounts_payable') {
+              const cpNew = String(newRow.nroDoc || newRow.nro_doc || '').trim().toUpperCase();
+              const cpOld = String(r.nroDoc || r.nro_doc || '').trim().toUpperCase();
+              const tipoNew = String(newRow.tipoDoc || newRow.tipo_doc || '').trim().toUpperCase();
+              const tipoOld = String(r.tipoDoc || r.tipo_doc || '').trim().toUpperCase();
+              return cpNew && cpOld && cpNew === cpOld && (!tipoNew || !tipoOld || tipoNew === tipoOld);
             }
             if (tableName === 'profit_warehouses') {
               const getWKey = x => String(x.coAlm || x.co_alm || x.coAlma || x.co_alma || x.id || '').trim().toUpperCase().replace(/^ALM-/, '');

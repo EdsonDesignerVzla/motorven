@@ -773,9 +773,32 @@ function MainApp() {
           return;
         }
         if (item) {
+          const resolvedNum = String(item.factNum ?? item.fact_num ?? item.facturaNumero ?? '').trim();
+          const resolvedId = String(item.id ?? '').trim();
+          const resolvedTotBrutoUsd = item.totBrutoUsd ?? item.tot_bruto_usd ?? item.totalBrutoUsd;
+          const resolvedIvaUsd = item.ivaUsd ?? item.iva_usd;
+          const resolvedTotNetoUsd = item.totNetoUsd ?? item.tot_neto_usd ?? item.totalNetoUsd;
+          const resolvedAbonosUsd = item.abonosUsd ?? item.abonos_usd;
+          const resolvedSaldoUsd = item.saldoUsd ?? item.saldo_usd;
+          const resolvedSaldoBs = item.saldoBs ?? item.saldo_bs;
+          const resolvedFechaSinc = item.fechaSincronizacion ?? item.fecha_sincronizacion ?? item.updated_at;
+          const normalizedInvItem = {
+            ...item,
+            ...(resolvedNum ? { factNum: resolvedNum, fact_num: isNaN(Number(resolvedNum)) ? resolvedNum : Number(resolvedNum) } : {}),
+            ...(item.tipo_doc !== undefined || item.tipoDoc !== undefined ? { tipoDoc: item.tipoDoc ?? item.tipo_doc, tipo_doc: item.tipoDoc ?? item.tipo_doc } : {}),
+            ...(item.fec_emis !== undefined || item.fechaEmision !== undefined ? { fechaEmision: item.fechaEmision ?? item.fec_emis, fec_emis: item.fechaEmision ?? item.fec_emis } : {}),
+            ...(item.fec_venc !== undefined || item.fechaVencimiento !== undefined ? { fechaVencimiento: item.fechaVencimiento ?? item.fec_venc, fec_venc: item.fechaVencimiento ?? item.fec_venc } : {}),
+            ...(resolvedTotBrutoUsd !== undefined ? { totBrutoUsd: Number(resolvedTotBrutoUsd), tot_bruto_usd: Number(resolvedTotBrutoUsd) } : {}),
+            ...(resolvedIvaUsd !== undefined ? { ivaUsd: Number(resolvedIvaUsd), iva_usd: Number(resolvedIvaUsd) } : {}),
+            ...(resolvedTotNetoUsd !== undefined ? { totNetoUsd: Number(resolvedTotNetoUsd), tot_neto_usd: Number(resolvedTotNetoUsd) } : {}),
+            ...(resolvedAbonosUsd !== undefined ? { abonosUsd: Number(resolvedAbonosUsd), abonos_usd: Number(resolvedAbonosUsd) } : {}),
+            ...(resolvedSaldoUsd !== undefined ? { saldoUsd: Number(resolvedSaldoUsd), saldo_usd: Number(resolvedSaldoUsd) } : {}),
+            ...(resolvedSaldoBs !== undefined ? { saldoBs: Number(resolvedSaldoBs), saldo_bs: Number(resolvedSaldoBs) } : {}),
+            ...(resolvedFechaSinc ? { fechaSincronizacion: resolvedFechaSinc, updated_at: item.updated_at || resolvedFechaSinc } : {})
+          };
           setProfitInvoices(prev => {
-            const targetKey = String(key || item.id || item.factNum || item.fact_num || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-            const targetId = String(key || item.id || '').trim();
+            const targetKey = String(key || resolvedId || resolvedNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            const targetId = String(key || resolvedId).trim();
             const index = prev.findIndex(f => {
               const fNum = String(f.factNum ?? f.fact_num ?? f.facturaNumero ?? f.id ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
               const fId = String(f.id ?? '').trim();
@@ -783,10 +806,10 @@ function MainApp() {
             });
             if (index >= 0) {
               const next = [...prev];
-              next[index] = { ...next[index], ...item };
+              next[index] = { ...next[index], ...normalizedInvItem };
               return next;
             }
-            return [item, ...prev];
+            return [normalizedInvItem, ...prev];
           });
         }
       } else if (tableId === 'inventory_adjustments') {
@@ -955,6 +978,18 @@ function MainApp() {
           return;
         }
         if (item) {
+          const resolvedSaldoUsd = item.saldoUsd ?? item.saldo_usd;
+          const resolvedSaldoBs = item.saldoBs ?? item.saldo_bs;
+          const resolvedAbonosUsd = item.abonosUsd ?? item.abonos_usd;
+          const resolvedTotalUsd = item.totalUsd ?? item.total_usd ?? item.totNetoUsd ?? item.tot_neto_usd;
+          const normalizedSaleItem = {
+            ...item,
+            ...(item.numero_doc !== undefined || item.numeroDoc !== undefined ? { numeroDoc: item.numeroDoc ?? item.numero_doc, numero_doc: item.numeroDoc ?? item.numero_doc } : {}),
+            ...(resolvedTotalUsd !== undefined ? { totalUsd: Number(resolvedTotalUsd), total_usd: Number(resolvedTotalUsd) } : {}),
+            ...(resolvedSaldoUsd !== undefined ? { saldoUsd: Number(resolvedSaldoUsd), saldo_usd: Number(resolvedSaldoUsd) } : {}),
+            ...(resolvedSaldoBs !== undefined ? { saldoBs: Number(resolvedSaldoBs), saldo_bs: Number(resolvedSaldoBs) } : {}),
+            ...(resolvedAbonosUsd !== undefined ? { abonosUsd: Number(resolvedAbonosUsd), abonos_usd: Number(resolvedAbonosUsd) } : {})
+          };
           setSalesState(prev => {
             const targetKey = String(key || item.id || item.numeroDoc || item.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const targetId = String(key || item.id || '').trim();
@@ -965,10 +1000,10 @@ function MainApp() {
             });
             if (index >= 0) {
               const next = [...prev];
-              next[index] = { ...next[index], ...item };
+              next[index] = { ...next[index], ...normalizedSaleItem };
               return next;
             }
-            return [item, ...prev];
+            return [normalizedSaleItem, ...prev];
           });
         }
       } else if (tableId === 'purchases') {
@@ -1083,10 +1118,84 @@ function MainApp() {
             return [item, ...list];
           });
         }
-      } else if (tableId === 'accounts_payable' && Array.isArray(allTableData)) {
-        setProfitAccountsPayable(allTableData);
-      } else if (tableId === 'supplier_payments' && Array.isArray(allTableData)) {
-        setProfitSupplierPayments(allTableData);
+      } else if (tableId === 'accounts_payable') {
+        if (Array.isArray(allTableData)) {
+          setProfitAccountsPayable(allTableData);
+          return;
+        }
+        if (action === 'DELETE') {
+          const delKey = String(key || item?.id || item?.nroDoc || item?.nro_doc || '').trim();
+          if (delKey) {
+            setProfitAccountsPayable(prev => (prev || []).filter(p =>
+              String(p.id || '').trim() !== delKey &&
+              String(p.nroDoc ?? p.nro_doc ?? '').trim() !== delKey
+            ));
+          }
+          return;
+        }
+        if (item) {
+          const resolvedId = String(item.id || '').trim();
+          const resolvedNro = String(item.nroDoc ?? item.nro_doc ?? '').trim();
+          const resolvedMontoNetUsd = item.montoNetUsd ?? item.monto_net_usd;
+          const resolvedSaldoUsd = item.saldoUsd ?? item.saldo_usd;
+          const resolvedSaldoBs = item.saldoBs ?? item.saldo_bs;
+          const resolvedAbonosUsd = item.abonosUsd ?? item.abonos_usd;
+          const resolvedFechaSinc = item.fechaSincronizacion ?? item.fecha_sincronizacion ?? item.updated_at;
+          const normalizedCxp = {
+            ...item,
+            ...(resolvedId ? { id: resolvedId } : {}),
+            ...(resolvedNro ? { nroDoc: resolvedNro, nro_doc: resolvedNro } : {}),
+            ...(item.tipo_doc !== undefined || item.tipoDoc !== undefined ? { tipoDoc: item.tipoDoc ?? item.tipo_doc, tipo_doc: item.tipoDoc ?? item.tipo_doc } : {}),
+            ...(item.prov_nombre !== undefined || item.provNombre !== undefined ? { provNombre: item.provNombre ?? item.prov_nombre, prov_nombre: item.provNombre ?? item.prov_nombre } : {}),
+            ...(item.prov_rif !== undefined || item.provRif !== undefined ? { provRif: item.provRif ?? item.prov_rif, prov_rif: item.provRif ?? item.prov_rif } : {}),
+            ...(item.fec_emis !== undefined || item.fechaEmision !== undefined ? { fechaEmision: item.fechaEmision ?? item.fec_emis, fec_emis: item.fechaEmision ?? item.fec_emis } : {}),
+            ...(item.fec_venc !== undefined || item.fechaVencimiento !== undefined ? { fechaVencimiento: item.fechaVencimiento ?? item.fec_venc, fec_venc: item.fechaVencimiento ?? item.fec_venc } : {}),
+            ...(resolvedMontoNetUsd !== undefined ? { montoNetUsd: Number(resolvedMontoNetUsd), monto_net_usd: Number(resolvedMontoNetUsd) } : {}),
+            ...(resolvedSaldoUsd !== undefined ? { saldoUsd: Number(resolvedSaldoUsd), saldo_usd: Number(resolvedSaldoUsd) } : {}),
+            ...(resolvedSaldoBs !== undefined ? { saldoBs: Number(resolvedSaldoBs), saldo_bs: Number(resolvedSaldoBs) } : {}),
+            ...(resolvedAbonosUsd !== undefined ? { abonosUsd: Number(resolvedAbonosUsd), abonos_usd: Number(resolvedAbonosUsd) } : {}),
+            ...(resolvedFechaSinc ? { fechaSincronizacion: resolvedFechaSinc, updated_at: item.updated_at || resolvedFechaSinc } : {})
+          };
+          setProfitAccountsPayable(prev => {
+            const list = Array.isArray(prev) ? [...prev] : [];
+            const idx = list.findIndex(p =>
+              (resolvedId && String(p.id || '').trim() === resolvedId) ||
+              (key && (String(p.id || '').trim() === String(key) || String(p.nroDoc ?? p.nro_doc ?? '').trim() === String(key))) ||
+              (resolvedNro && String(p.nroDoc ?? p.nro_doc ?? '').trim() === resolvedNro)
+            );
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...normalizedCxp };
+              return list;
+            }
+            return [normalizedCxp, ...list];
+          });
+        }
+      } else if (tableId === 'supplier_payments') {
+        if (Array.isArray(allTableData)) {
+          setProfitSupplierPayments(allTableData);
+          return;
+        }
+        if (action === 'DELETE') {
+          const delKey = String(key || item?.id || item?.pagoNum || item?.pago_num || '').trim();
+          if (delKey) {
+            setProfitSupplierPayments(prev => (prev || []).filter(p =>
+              String(p.id || '').trim() !== delKey &&
+              String(p.pagoNum ?? p.pago_num ?? '').trim() !== delKey
+            ));
+          }
+          return;
+        }
+        if (item) {
+          setProfitSupplierPayments(prev => {
+            const list = Array.isArray(prev) ? [...prev] : [];
+            const idx = list.findIndex(p => String(p.id) === String(item.id || key) || String(p.pagoNum ?? p.pago_num ?? '') === String(item.pagoNum || key));
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...item };
+              return list;
+            }
+            return [item, ...list];
+          });
+        }
       } else if (tableId === 'zones' && Array.isArray(allTableData)) {
         setProfitZones(allTableData);
       } else if (tableId === 'transports' && Array.isArray(allTableData)) {
@@ -1900,9 +2009,13 @@ function MainApp() {
           totalUsd: saved.totNetoUsd,
           totalBs: saved.totNetoBs,
           saldoUsd: saved.saldoUsd,
+          saldo_usd: saved.saldoUsd,
           saldoBs: saved.saldoBs,
+          saldo_bs: saved.saldoBs,
           abonosUsd: saved.abonosUsd,
-          abonosBs: saved.abonosBs
+          abonos_usd: saved.abonosUsd,
+          abonosBs: saved.abonosBs,
+          estado: Number(saved.saldoUsd || 0) <= 0.01 ? 'PAGADO' : 'PENDIENTE'
         };
         return list;
       }
