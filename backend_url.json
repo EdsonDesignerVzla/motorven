@@ -1,10 +1,9 @@
 {
-  "url": "https://organisms-confidentiality-sept-luke.trycloudflare.com",
+  "url": "https://api.signummotorven.com",
   "lanUrls": [
-    "http://192.168.0.6:54321",
+    "http://192.168.0.3:54321",
     "http://26.45.7.149:54321",
-    "http://192.168.0.5:54321",
     "http://26.229.220.202:54321"
   ],
-  "updatedAt": "2026-11-11T16:11:01.717Z"
+  "updatedAt": "2026-11-11T11:53:28.222Z"
 }
