@@ -56,7 +56,9 @@ import {
   generateSellerOrderPDF,
   generateLetterInvoiceSeniatPDF,
   generateDeliveryNotePDF,
-  generateSalesPOSPDF
+  generateSalesPOSPDF,
+  resolveDeliveryNoteLineItems,
+  pickPreferredLineItems
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
 import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
@@ -1344,36 +1346,42 @@ export default function OrdersSalesModal({
 
   // Consolidación de todas las facturas del sistema (ventas locales, Supabase y Profit Plus)
   const allInvoices = useMemo(() => {
-    const list = [];
-    const seen = new Set();
+    const canonicalInvoiceKey = (doc) => {
+      const rawTipo = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
+      const rawId = String(doc.id || '').trim().toUpperCase();
+      const rawNum = String(doc.numeroDoc || doc.factNum || doc.fact_num || doc.nroFactura || doc.id || '').trim().toUpperCase();
+      const isNe = rawTipo === 'NOTA_ENTREGA' || rawTipo === 'N/E' || rawTipo === 'NE' || /^(NE-|NDE-)/.test(rawId) || /^(NE-|NDE-)/.test(rawNum);
+      const digits = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-)/, '').replace(/^0+(?=\d)/, '');
+      return `${isNe ? 'NE' : 'FAC'}:${digits || rawNum}`;
+    };
 
-    // 1. Facturas locales / Supabase (sales)
-    if (Array.isArray(sales)) {
-      for (const s of sales) {
-        if (!s) continue;
-        const key = String(s.numeroDoc || s.id || s.factNum || s.fact_num || '');
-        if (!key) continue;
-        if (localDeletedInvoiceKeys.has(key) || localDeletedInvoiceKeys.has(String(s.id))) continue;
-        if (!seen.has(key)) {
-          seen.add(key);
-          list.push(s);
-        }
+    const byKey = new Map();
+    const upsertDoc = (doc, sourceOrder) => {
+      if (!doc) return;
+      const rawKey = String(doc.numeroDoc || doc.factNum || doc.fact_num || doc.id || '').trim();
+      if (!rawKey) return;
+      if (localDeletedInvoiceKeys.has(rawKey) || localDeletedInvoiceKeys.has(String(doc.id))) return;
+      const cKey = canonicalInvoiceKey(doc);
+      const existing = byKey.get(cKey);
+      if (!existing) {
+        byKey.set(cKey, doc);
+        return;
       }
-    }
+      const bestItems = pickPreferredLineItems(existing.items || existing.renglones, doc.items || doc.renglones);
+      byKey.set(cKey, sourceOrder === 'PROFIT'
+        ? { ...doc, ...existing, items: bestItems }
+        : { ...existing, ...doc, items: bestItems });
+    };
 
-    // 2. Facturas de Profit Plus ERP (profitInvoices)
+    // 1. Facturas de Profit Plus ERP (profitInvoices) y luego Ventas locales/Supabase (sales) fusionando renglones reales
     if (Array.isArray(profitInvoices)) {
-      for (const p of profitInvoices) {
-        if (!p) continue;
-        const key = String(p.factNum || p.fact_num || p.numeroDoc || p.id || '');
-        if (!key) continue;
-        if (localDeletedInvoiceKeys.has(key) || localDeletedInvoiceKeys.has(String(p.id))) continue;
-        if (!seen.has(key)) {
-          seen.add(key);
-          list.push(p);
-        }
-      }
+      for (const p of profitInvoices) upsertDoc(p, 'PROFIT');
     }
+    if (Array.isArray(sales)) {
+      for (const s of sales) upsertDoc(s, 'POS');
+    }
+
+    const list = Array.from(byKey.values());
 
     // Ordenar de forma descendente por número correlativo / fecha de emisión
     return list.sort((a, b) => {
@@ -1473,31 +1481,12 @@ export default function OrdersSalesModal({
     const docTasa = Number(inv.tasaDolar) || (totalUsd > 0 && totalBsRaw > 0 ? totalBsRaw / totalUsd : 0) || tasaBcv;
     const totalBs = totalBsRaw || totalUsd * docTasa;
 
-    const rawItems = inv.items || inv.renglones || [];
-    const items = rawItems.map((it, idx) => {
-      const prod = findProductById(it.articuloId || it.codigo || it.co_art);
-      const cant = Number(it.cantidad ?? it.total_art ?? 1) || 0;
-      let precioUsd = Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
-      if (!precioUsd && Number(it.precioUnitario || it.prec_vta || 0) > 0) {
-        precioUsd = Number(it.precioUnitario || it.prec_vta) / docTasa;
-      }
-      let subtotalUsd = Number(it.subtotalUsd ?? it.totalUsd ?? 0);
-      if (!subtotalUsd && Number(it.totalNeto || it.reng_neto || 0) > 0) {
-        subtotalUsd = Number(it.totalNeto || it.reng_neto) / docTasa;
-      }
-      if (!subtotalUsd) subtotalUsd = cant * precioUsd;
-      if (!precioUsd && cant > 0) precioUsd = subtotalUsd / cant;
-      return {
-        ...it,
-        codigo: it.codigo || it.articuloId || it.co_art || prod?.codigo || `LUB-${idx + 1}`,
-        descripcion: it.descripcion || it.articuloDescripcion || it.art_des || prod?.descripcion || prod?.nombre || 'Lubricante Automotriz',
-        cantidad: cant,
-        precioUsd,
-        subtotalUsd,
-        tipoAlicuota: it.tipoAlicuota || '16%',
-        litros: it.litros ?? it.litrosTotales ?? 0
-      };
-    });
+    const resolvedLines = resolveDeliveryNoteLineItems({ ...inv, tasaDolar: docTasa }, safeProducts, docTasa);
+    const items = resolvedLines.map((it) => ({
+      ...it,
+      tipoAlicuota: it.tipoAlicuota || '16%',
+      litros: it.volumenTotal ?? it.litrosTotales ?? it.litros ?? 0
+    }));
 
     const ivaUsdRaw = Number(inv.ivaGeneralUsd ?? inv.ivaUsd ?? inv.iva_usd ?? NaN);
     const ivaUsd = Number.isFinite(ivaUsdRaw) ? ivaUsdRaw : (totalUsd - totalUsd / 1.16);
@@ -1681,7 +1670,7 @@ export default function OrdersSalesModal({
     };
     try {
       if (isNe) {
-        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser });
+        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser, products: safeProducts });
         notify.success(`Nota de Entrega #${correlativo} generada con éxito`);
       } else {
         generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
@@ -3225,6 +3214,7 @@ export default function OrdersSalesModal({
                                     order: ord,
                                     config,
                                     currentUser,
+                                    products: safeProducts,
                                     client: safeClients.find(c => c.id === ord.clienteId || c.rif === ord.clienteRif),
                                     autoPrint: true
                                   });
@@ -3932,6 +3922,7 @@ export default function OrdersSalesModal({
                               order: selectedOrder,
                               config,
                               currentUser,
+                              products: safeProducts,
                               client: clientMatch,
                               autoPrint: true
                             });
@@ -4211,6 +4202,7 @@ export default function OrdersSalesModal({
                                   order: selectedOrder,
                                   config,
                                   currentUser,
+                                  products: safeProducts,
                                   client: clientMatch,
                                   autoPrint: true
                                 });
@@ -4353,17 +4345,17 @@ export default function OrdersSalesModal({
                               </tr>
                             </thead>
                             <tbody>
-                              {(selectedOrder.items || []).map((it, idx) => {
+                              {resolveDeliveryNoteLineItems(selectedOrder, safeProducts, tasaBcv).map((it, idx) => {
                                 const cant = Number(it.cantidad || 1);
-                                const precio = Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0);
-                                const subUsd = Number(it.totalUsd ?? it.subtotalUsd ?? (cant * precio));
+                                const precio = Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
+                                const subUsd = Number(it.subtotalUsd ?? it.totalUsd ?? (cant * precio));
                                 const subBs = subUsd * tasaBcv;
                                 return (
                                   <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
                                     <td style={{ padding: '5px 8px', textAlign: 'center', fontWeight: 600 }}>{idx + 1}</td>
                                     <td style={{ padding: '5px 8px' }}>
-                                      <strong style={{ color: '#0f172a' }}>{it.articuloDescripcion || it.descripcion}</strong>
-                                      <div style={{ fontSize: '0.64rem', color: '#64748b' }}>{it.articuloId || it.codigo || 'LUB-OILSTONE'}</div>
+                                      <strong style={{ color: '#0f172a' }}>{it.descripcion}</strong>
+                                      <div style={{ fontSize: '0.64rem', color: '#64748b' }}>{it.codigo}</div>
                                     </td>
                                     <td style={{ padding: '5px 8px', textAlign: 'center', fontWeight: 700 }}>{cant}</td>
                                     <td style={{ padding: '5px 8px', textAlign: 'right' }}>{formatUsd(precio)}</td>
@@ -6232,6 +6224,7 @@ export default function OrdersSalesModal({
             sale={invoiceModalSale}
             config={config}
             currentUser={currentUser}
+            products={safeProducts}
             onClose={() => setShowInvoiceModal(false)}
             onNewSale={() => {
               setShowInvoiceModal(false);

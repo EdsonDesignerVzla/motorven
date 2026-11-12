@@ -18,7 +18,7 @@ import {
     isCxcEntryDeleted,
     sanitizeCxcDeletedDocsStorage
 } from '../services/supabaseService';
-import { generateAccountsReceivablePDF, generateDeliveryNotePDF, resolveDeliveryNoteLineItems } from '../services/pdfReportService';
+import { generateAccountsReceivablePDF, generateDeliveryNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
@@ -388,6 +388,7 @@ export function AccountsReceivableModal({
                         ...existing,
                         ...normalizedInv,
                         factNum: preferredKey,
+                        items: pickPreferredLineItems(existing.items, normalizedInv.items),
                         vendedorId: mergedSeller.sellerId,
                         vendedorNombre: mergedSeller.sellerName
                     });
@@ -480,6 +481,7 @@ export function AccountsReceivableModal({
                 const existingIsProfit = existing._source === 'PROFIT' || existing._isPosSale === false;
                 rawMap.set(existingRawKey, {
                     ...existing,
+                    items: pickPreferredLineItems(existing.items, sale.items),
                     fechaEmision: existing.fechaEmision || sale.fechaEmision || sale.fecha,
                     vendedorId: resolvedMergedSeller.sellerId,
                     vendedorNombre: resolvedMergedSeller.sellerName,
@@ -508,7 +510,11 @@ export function AccountsReceivableModal({
             if (existingTs > 0 && localTs > 0 && existingTs > localTs) {
                 return;
             }
-            rawMap.set(key, { ...existing, ...override });
+            rawMap.set(key, {
+                ...existing,
+                ...override,
+                items: pickPreferredLineItems(existing.items, override?.items)
+            });
         });
 
         const processed = [];
@@ -1270,6 +1276,7 @@ export function AccountsReceivableModal({
             restanteUsd: round2(inv.restanteUsd),
             tasa: Number(inv.tasa || tasaBcv),
             observaciones: inv.observaciones || '',
+            items: Array.isArray(inv.items) ? inv.items : [],
             historialCobros: inv.historialCobros || []
         });
     };
@@ -1401,6 +1408,7 @@ export function AccountsReceivableModal({
             saldoUsd: restanteUsd,
             tasa: Number(editingDoc.tasa || tasaBcv),
             observaciones: editingDoc.observaciones || '',
+            items: Array.isArray(editingDoc.items) ? editingDoc.items : [],
             historialCobros: editingDoc.historialCobros || [],
             _customCreated: true
         };

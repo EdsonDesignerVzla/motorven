@@ -1037,7 +1037,7 @@ const mapSaleFromDb = (s) => {
     clienteRif: s.cliente_rif ?? s.clienteRif,
     tasaDolar: effectiveTasa,
     condicionPago: s.condicion_pago ?? s.condicionPago,
-    items: s.items || [],
+    items: typeof s.items === 'string' ? (() => { try { return JSON.parse(s.items); } catch { return []; } })() : (Array.isArray(s.items) ? s.items : []),
     subtotalUsd: effectiveSubUsd,
     baseExentaUsd: Number(s.base_exenta_usd ?? s.baseExentaUsd ?? 0),
     baseGeneralUsd: isNe ? effectiveSubUsd : Number(s.base_general_usd ?? s.subtotal_usd ?? s.subtotalUsd ?? 0),
@@ -5254,22 +5254,26 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
   if (invErr) throw invErr;
 
   if (rawNum) {
+    const salesUpdatePayload = {
+      cliente_id: cleanPayload.clienteId,
+      cliente_nombre: cleanPayload.clienteNombre,
+      cliente_rif: cleanPayload.clienteRif,
+      tasa_dolar: cleanPayload.tasa,
+      total_usd: cleanPayload.totNetoUsd,
+      total_bs: cleanPayload.totNetoBs,
+      saldo_usd: cleanPayload.saldoUsd,
+      saldo_bs: cleanPayload.saldoBs,
+      dias_credito: cleanPayload.diasCredito,
+      fecha_emision: cleanPayload.fechaEmision,
+      fecha_vencimiento: cleanPayload.fechaVencimiento,
+      vendedor: cleanPayload.vendedorNombre,
+      estado: cleanPayload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
+    };
+    if (Array.isArray(cleanPayload.items) && cleanPayload.items.length > 0) {
+      salesUpdatePayload.items = cleanPayload.items;
+    }
     const updateRes = await withTimeout(
-      supabase.from('sales').update({
-        cliente_id: cleanPayload.clienteId,
-        cliente_nombre: cleanPayload.clienteNombre,
-        cliente_rif: cleanPayload.clienteRif,
-        tasa_dolar: cleanPayload.tasa,
-        total_usd: cleanPayload.totNetoUsd,
-        total_bs: cleanPayload.totNetoBs,
-        saldo_usd: cleanPayload.saldoUsd,
-        saldo_bs: cleanPayload.saldoBs,
-        dias_credito: cleanPayload.diasCredito,
-        fecha_emision: cleanPayload.fechaEmision,
-        fecha_vencimiento: cleanPayload.fechaVencimiento,
-        vendedor: cleanPayload.vendedorNombre,
-        estado: cleanPayload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
-      }).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
+      supabase.from('sales').update(salesUpdatePayload).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
       6000
     ).catch(() => null);
 

@@ -53,7 +53,7 @@ function splitInvoiceItemsIntoPages(items, maxPerFirstPage = 5) {
   return pages;
 }
 
-export default function SalesInvoiceModal({ sale, config = {}, currentUser = null, onClose, onNewSale }) {
+export default function SalesInvoiceModal({ sale, config = {}, currentUser = null, products = null, onClose, onNewSale }) {
   const [copied, setCopied] = useState(false);
   const [paperWidth, setPaperWidth] = useState('80mm'); // '80mm' | '58mm'
   const [viewMode, setViewMode] = useState('CARTA'); // 'TICKET' | 'CARTA'
@@ -64,7 +64,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
   const safeConfig = config || {};
   const tasaBcv = Number(sale.tasaDolar || safeConfig.tasaDolar) || 827.73;
-  const rawTicketText = formatSaleInvoiceTicketText(sale, safeConfig);
+  const resolvedItemsForText = resolveDeliveryNoteLineItems(sale, products, tasaBcv);
+  const rawTicketText = formatSaleInvoiceTicketText({ ...sale, items: resolvedItemsForText }, safeConfig);
 
   const isNc = sale.tipoDoc === 'NOTA_CREDITO';
   const isNd = sale.tipoDoc === 'NOTA_DEBITO';
@@ -108,7 +109,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   const handlePrint = () => {
     if (viewMode === 'CARTA') {
       if (isNe) {
-        generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, autoPrint: true });
+        generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products, autoPrint: true });
         return;
       }
       generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
@@ -266,7 +267,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
       generateDeliveryNotePDF({
         sale,
         config: safeConfig,
-        currentUser
+        currentUser,
+        products
       });
       return;
     }
@@ -295,7 +297,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     : new Date(fechaObj.getTime() + (diasCreditoDoc * 24 * 60 * 60 * 1000));
   const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
 
-  const resolvedDocItems = resolveDeliveryNoteLineItems(sale, null, tasaBcv);
+  const resolvedDocItems = resolvedItemsForText;
 
   // Paginación para formato Carta Vertical (Nota de Entrega admite hasta 10 renglones por hoja; Factura SENIAT hasta 5)
   const pages = splitInvoiceItemsIntoPages(resolvedDocItems, isNe ? 10 : 5);
@@ -655,7 +657,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 className="btn btn-secondary btn-sm"
                 onClick={() => {
                   if (isNe) {
-                    generateDeliveryNotePDF({ sale, config: safeConfig, currentUser });
+                    generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products });
                   } else {
                     generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
                   }
@@ -790,13 +792,13 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                   <span>CANT x DESCRIPCIÓN</span>
                   <span>TOTAL ($)</span>
                 </div>
-                {(sale.items || []).map((item, idx) => (
+                {resolvedDocItems.map((item, idx) => (
                   <div key={idx} style={{ margin: '4px 0' }}>
                     <div style={{ fontWeight: '600' }}>
-                      {item.cantidad} x {item.descripcion}
+                      {item.cantidad} x {item.codigo ? `[${item.codigo}] ` : ''}{item.descripcion}
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: '#4b5563' }}>
-                      <span>P.U. ${formatUsd(item.precioUsd)} ({item.tipoAlicuota || '16%'})</span>
+                      <span>P.U. ${formatUsd(item.precioUsd)} ({isNe ? '0%' : (item.tipoAlicuota || '16%')})</span>
                       <strong style={{ color: '#111827' }}>{formatUsd(item.subtotalUsd || (item.cantidad * item.precioUsd))}</strong>
                     </div>
                   </div>

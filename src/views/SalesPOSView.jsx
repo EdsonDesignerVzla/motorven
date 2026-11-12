@@ -2101,6 +2101,7 @@ export default function SalesPOSView({
           sale={lastSaleDoc}
           config={safeConfig}
           currentUser={currentUser}
+          products={products}
           onClose={() => setShowSuccessModal(false)}
           onNewSale={() => {
             setShowSuccessModal(false);

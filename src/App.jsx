@@ -1997,7 +1997,8 @@ function MainApp() {
         String(p.factNum ?? p.fact_num ?? '') === String(saved.factNum)
       );
       if (idx >= 0) {
-        list[idx] = { ...list[idx], ...saved };
+        const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
+        list[idx] = { ...list[idx], ...saved, items: mergedItems };
         return list;
       }
       return [saved, ...list];
@@ -2009,9 +2010,11 @@ function MainApp() {
         String(s.numeroDoc ?? s.factNum ?? '') === String(saved.factNum)
       );
       if (idx >= 0) {
+        const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
         list[idx] = {
           ...list[idx],
           ...saved,
+          items: mergedItems,
           numeroDoc: saved.factNum,
           fecha: saved.fechaEmision,
           fechaEmision: saved.fechaEmision,

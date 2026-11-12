@@ -37,9 +37,12 @@ import {
   generateInventoryPDF,
   generateOrdersPDF,
   generateSellerOrderPDF,
+  generateWarehouseDispatchGuidePDF,
   generateDeliveryNotePDF,
   resolveDeliveryNoteLineItems,
+  pickPreferredLineItems,
   generateSalesPOSPDF,
+  generateLetterInvoiceSeniatPDF,
   generatePurchasesPDF,
   generateCashflowPDF,
   generateAuditLedgerPDF,
@@ -48,7 +51,9 @@ import {
   generateManualPDF,
   generateNotificationsPDF,
   generateBankAccountsPDF,
-  generateProfitDatabaseTablePDF
+  generateProfitDatabaseTablePDF,
+  generateWhatsAppCollectionPDF,
+  getPageLayoutMetrics
 } from '../services/pdfReportService.js';
 
 const mockConfig = {
@@ -568,6 +573,28 @@ async function runPdfTests() {
     });
   });
 
+  testGen('pickPreferredLineItems y resolveDeliveryNoteLineItems (JSON string, códigos sin ceros iniciales y merge)', () => {
+    const preferred = pickPreferredLineItems(
+      [],
+      [{ codigo: 'LUB-MANUAL', nombre: 'Despacho Nota de Entrega (Manual/Histórico)' }],
+      [{ codigo: '100403', descripcion: 'Lubricante Oilstone 4 tiempos API SL motos (LT)', cantidad: 2, precioUsd: 76 }]
+    );
+    if (preferred.length !== 1 || preferred[0].codigo !== '100403') {
+      throw new Error(`pickPreferredLineItems debía preferir el renglón real de producto, obtuvo: ${JSON.stringify(preferred)}`);
+    }
+
+    const jsonItemsDoc = {
+      numeroDoc: 'NE-002226',
+      items: JSON.stringify([
+        { articuloId: '1208', descripcion: '', cantidad: 2, precioUsd: 70 }
+      ])
+    };
+    const resolved = resolveDeliveryNoteLineItems(jsonItemsDoc, null, mockConfig.tasaDolar);
+    if (resolved.length !== 1 || !resolved[0].descripcion.toLowerCase().includes('15w40') || !resolved[0].codigo) {
+      throw new Error(`No resolvió JSON string / código sin ceros iniciales 1208 -> 001208: ${JSON.stringify(resolved)}`);
+    }
+  });
+
   // 9. Facturación POS
   testGen('Facturación POS (factura individual detallada)', () => {
     generateSalesPOSPDF({
@@ -758,6 +785,229 @@ async function runPdfTests() {
       config: mockConfig,
       currentUser: mockUser
     });
+  });
+
+  // Helper de extracción de coordenadas Y (en mm) desde stream PDF de jsPDF
+  function extractTextYPositionsMm(doc, pageNumber, searchText) {
+    const pageStream = (doc.internal.pages[pageNumber] || []).join('\n');
+    const pageH = doc.internal.pageSize.getHeight();
+    const k = doc.internal.scaleFactor || (72 / 25.4);
+    const results = [];
+    // jsPDF escribe texto con matriz Td / Tm antes de (...) Tj
+    const lines = pageStream.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(searchText)) {
+        // Buscar la última coordenada Y en las 3 líneas anteriores o la misma línea
+        const windowStr = lines.slice(Math.max(0, i - 3), i + 1).join(' ');
+        const tdMatches = [...windowStr.matchAll(/1 0 0 1 ([\d.-]+) ([\d.-]+) Tm|([\d.-]+) ([\d.-]+) Td/g)];
+        if (tdMatches.length > 0) {
+          const last = tdMatches[tdMatches.length - 1];
+          const yPt = Number(last[2] ?? last[4]);
+          if (Number.isFinite(yPt)) {
+            results.push(pageH - (yPt / k));
+          }
+        }
+      }
+    }
+    return results;
+  }
+
+  // 40. Guía de Despacho de Almacén (1 página y desbordamiento 1/2, 2/2 con firmas ancladas)
+  testGen('Guía de Despacho Almacén (1 página con firmas ancladas sobre el pie de página)', () => {
+    const { doc } = generateWarehouseDispatchGuidePDF({
+      sale: {
+        numeroFactura: 'FAC-GD-101',
+        clienteNombre: 'Lubricantes Valencia C.A.',
+        clienteRif: 'J-40011223-4',
+        items: [
+          { codigo: 'LUB-01', descripcion: 'Aceite Mineral 20W50', cantidad: 3, pesoLitros: 34.05 },
+          { codigo: 'LUB-02', descripcion: 'Aceite Sintético 5W30', cantidad: 2, pesoLitros: 22.7 }
+        ]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const lastPage = doc.internal.getNumberOfPages();
+    const sigYs = extractTextYPositionsMm(doc, lastPage, 'Firma y Sello Oficial');
+    const { footerY } = getPageLayoutMetrics(doc);
+    if (sigYs.length !== 3) {
+      throw new Error(`Se esperaban 3 firmas oficiales, encontradas: ${sigYs.length}`);
+    }
+    for (const y of sigYs) {
+      if (y < footerY - 10 || y >= footerY) {
+        throw new Error(`Firma no anclada sobre footerY (${footerY.toFixed(1)}mm): Y=${y.toFixed(1)}mm`);
+      }
+    }
+  });
+
+  testGen('Guía de Despacho Almacén con desbordamiento (múltiples páginas 1/2, 2/2)', () => {
+    const items = Array.from({ length: 24 }, (_, idx) => ({
+      codigo: `GD-${idx + 1}`,
+      descripcion: `Lubricante Industrial Despacho Lote #${idx + 1}`,
+      cantidad: 2,
+      pesoLitros: 22.7
+    }));
+    const { doc } = generateWarehouseDispatchGuidePDF({
+      sale: { numeroFactura: 'FAC-GD-999', clienteNombre: 'Transporte Pesado Occidente', items },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const totalP = doc.internal.getNumberOfPages();
+    if (totalP < 2) {
+      throw new Error(`Se esperaba desbordamiento (>=2 págs) en Guía de Despacho, obtuvo ${totalP}`);
+    }
+    const p1Text = (doc.internal.pages[1] || []).join('\n');
+    const lastText = (doc.internal.pages[totalP] || []).join('\n');
+    if (!p1Text.includes(`1/${totalP}`) || !lastText.includes(`${totalP}/${totalP}`)) {
+      throw new Error(`Falta formato 1/${totalP} o ${totalP}/${totalP} en Guía de Despacho`);
+    }
+  });
+
+  // 41. Factura SENIAT Tamaño Carta (Cajetín de Firma anclado sobre pie y desbordamiento 1/2, 2/2)
+  testGen('Factura SENIAT Carta (Firma y Sello anclados sobre pie de página y desbordamiento 1/2, 2/2)', () => {
+    const docShort = generateLetterInvoiceSeniatPDF({
+      sale: {
+        numeroFactura: 'SEN-001',
+        clienteNombre: 'Auto Repuestos Lara',
+        clienteRif: 'J-30123456-7',
+        totalUsd: 116,
+        items: [{ codigo: '001', descripcion: 'Aceite 15W40', cantidad: 2, precioUnitUsd: 50, totalUsd: 100 }]
+      },
+      config: mockConfig
+    });
+    const shortSigY = extractTextYPositionsMm(docShort, 1, 'Firma y Sello de Recepci');
+    const bottomLimitY = 279.4 - 45; // 234.4mm
+    if (shortSigY.length === 0 || shortSigY[0] < bottomLimitY - 25 || shortSigY[0] >= bottomLimitY - 4) {
+      throw new Error(`Firma SENIAT no anclada sobre footer (${bottomLimitY - 4}mm): ${JSON.stringify(shortSigY)}`);
+    }
+
+    const longItems = Array.from({ length: 28 }, (_, idx) => ({
+      codigo: `SEN-${idx + 1}`,
+      descripcion: `Aceite Motorven SENIAT Renglón Lote #${idx + 1} Alta Viscosidad`,
+      cantidad: 1,
+      precioUnitUsd: 25,
+      totalUsd: 25
+    }));
+    const docMulti = generateLetterInvoiceSeniatPDF({
+      sale: {
+        numeroFactura: 'SEN-002',
+        clienteNombre: 'Flota Corporativa Nacional C.A.',
+        clienteRif: 'J-50000111-2',
+        totalUsd: 812,
+        items: longItems
+      },
+      config: mockConfig
+    });
+    const totalP = docMulti.internal.getNumberOfPages();
+    if (totalP < 2) {
+      throw new Error(`Se esperaba desbordamiento (>=2 págs) en Factura SENIAT, obtuvo ${totalP}`);
+    }
+    const p1Stream = (docMulti.internal.pages[1] || []).join('\n');
+    const pLastStream = (docMulti.internal.pages[totalP] || []).join('\n');
+    if (!p1Stream.includes(`1/${totalP}`) || !pLastStream.includes(`${totalP}/${totalP}`)) {
+      throw new Error(`Factura SENIAT multi-página no muestra 1/${totalP} y ${totalP}/${totalP}`);
+    }
+  });
+
+  // 42. Reporte Cobranzas WhatsApp (Firmas ancladas y desbordamiento 1/2, 2/2)
+  testGen('Gestión de Cobranzas WhatsApp (Firmas ancladas y desbordamiento 1/2, 2/2)', () => {
+    const sentMessages = Array.from({ length: 55 }, (_, i) => ({
+      id: `WA-${i + 1}`,
+      fecha: '2026-11-11T10:30:00Z',
+      clienteNombre: `Cliente Corporativo Industrial Deudor ${i + 1} C.A.`,
+      clienteRif: `J-40000${String(i).padStart(3, '0')}-1`,
+      telefono: '0414-5550000',
+      invoicesList: `#FAC-${2000 + i}, #FAC-${3000 + i}`,
+      totalSaldoUsd: 250.5,
+      maxDiasVencido: i % 3 === 0 ? 18 : 0,
+      estado: 'ENVIADO'
+    }));
+    const docWa = generateWhatsAppCollectionPDF({
+      sentMessages,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const totalP = docWa.internal.getNumberOfPages();
+    if (totalP < 2) {
+      throw new Error(`Se esperaba desbordamiento (>=2 págs) en Reporte WhatsApp, obtuvo ${totalP}`);
+    }
+    const p1Stream = (docWa.internal.pages[1] || []).join('\n');
+    const pLastStream = (docWa.internal.pages[totalP] || []).join('\n');
+    if (!p1Stream.includes(`1/${totalP}`) || !pLastStream.includes(`${totalP}/${totalP}`)) {
+      throw new Error(`Reporte WhatsApp multi-página no muestra 1/${totalP} y ${totalP}/${totalP}`);
+    }
+    const { footerY } = getPageLayoutMetrics(docWa);
+    const sigYs = extractTextYPositionsMm(docWa, totalP, 'Firma y Sello Oficial');
+    if (sigYs.length !== 2 || sigYs.some(y => y < footerY - 10 || y >= footerY)) {
+      throw new Error(`Firmas de Reporte WhatsApp fuera de anclaje (${footerY.toFixed(1)}mm): ${JSON.stringify(sigYs)}`);
+    }
+  });
+
+  // 43. Anclaje de Firmas en Landscape y Nota de Entrega sobre zona QR
+  testGen('Verificación de anclaje de firmas (Nota de Entrega sobre QR + Landscape Bank/DB)', () => {
+    // 43a: Nota de entrega con 1 solo ítem -> firmas ancladas justo sobre QR (Y ~ 212.5..231.5mm), NO en Y=120mm
+    const neRes = generateDeliveryNotePDF({
+      deliveryNote: {
+        numeroDoc: 'NE-ANC-01',
+        clienteNombre: 'Cliente Anclaje S.A.',
+        items: [{ codigo: '001', descripcion: 'Aceite Test', cantidad: 1, precioUsd: 40, totalUsd: 40 }],
+        totalUsd: 40
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const neSigYs = extractTextYPositionsMm(neRes.doc, 1, 'Firma y Sello Oficial');
+    if (neSigYs.length !== 3 || neSigYs.some(y => y < 225 || y > 232)) {
+      throw new Error(`Nota de Entrega debe anclar firmas sobre el QR (225..232mm), obtuvo: ${JSON.stringify(neSigYs)}`);
+    }
+
+    // 43b: Tabla Profit Landscape (>6 columnas) con muchas filas -> 1/2, 2/2 + firmas dentro de footerY Landscape (193.4mm)
+    const manyRows = Array.from({ length: 45 }, (_, i) => ({
+      co_art: `ART-${i}`, art_des: `Producto ${i}`, tipo: 'T', modelo: 'M', co_lin: 'L', co_subl: 'S', co_cat: 'C', costo_act: 10
+    }));
+    const dbDoc = generateProfitDatabaseTablePDF({
+      database: 'GRUMOTOR',
+      tableName: 'art',
+      columns: ['co_art', 'art_des', 'tipo', 'modelo', 'co_lin', 'co_subl', 'co_cat', 'costo_act'],
+      rows: manyRows,
+      totalRows: 45,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const totalDbP = dbDoc.internal.getNumberOfPages();
+    if (totalDbP < 2) {
+      throw new Error(`Tabla DB Landscape con 45 filas debió desbordarse a >=2 páginas, obtuvo ${totalDbP}`);
+    }
+    const { footerY: landFooterY } = getPageLayoutMetrics(dbDoc);
+    const dbSigYs = extractTextYPositionsMm(dbDoc, totalDbP, 'Firma y Sello Oficial');
+    if (dbSigYs.length !== 2 || dbSigYs.some(y => y < landFooterY - 10 || y >= landFooterY)) {
+      throw new Error(`Firmas Landscape fuera de anclaje sobre footerY (${landFooterY.toFixed(1)}mm): ${JSON.stringify(dbSigYs)}`);
+    }
+  });
+
+  // 44. Auditoría Global de Todos los PDF Generados: Cero formato "Página X de Y" y cumplimiento 1/2, 2/2
+  testGen('Auditoría Global: Todos los PDF generados cumplen norma 1/2, 2/2 (sin "Página X de Y")', () => {
+    const cwdFiles = fs.readdirSync(process.cwd()).filter(f => f.endsWith('.pdf'));
+    if (cwdFiles.length < 15) {
+      throw new Error(`Se esperaban al menos 15 PDFs generados para auditar, encontrados: ${cwdFiles.length}`);
+    }
+    const badDeFiles = [];
+    const missingSlashFiles = [];
+    for (const file of cwdFiles) {
+      const content = fs.readFileSync(file, 'latin1');
+      if (/P.{1,3}gina \d+ de \d+/i.test(content)) {
+        badDeFiles.push(file);
+      }
+      if (!/P.{1,3}gina \d+\/\d+/i.test(content)) {
+        missingSlashFiles.push(file);
+      }
+    }
+    if (badDeFiles.length > 0) {
+      throw new Error(`PDFs con paginación antigua "Página X de Y": ${badDeFiles.join(', ')}`);
+    }
+    if (missingSlashFiles.length > 0) {
+      throw new Error(`PDFs sin formato de paginación X/Y: ${missingSlashFiles.join(', ')}`);
+    }
   });
 
   console.log('\n================================================================');

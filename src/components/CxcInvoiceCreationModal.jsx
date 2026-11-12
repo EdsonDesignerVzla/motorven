@@ -430,21 +430,23 @@ export default function CxcInvoiceCreationModal({
         formaPago: finalDiasCredito > 0 ? '03' : '01',
         condicionPago: finalDiasCredito > 0 ? 'CREDITO' : 'CONTADO',
         observaciones: observaciones || 'Cuadre facturas noviembre 2026',
-        items: [
-          {
-            id: `ITEM-${cleanNum}`,
-            codigo: 'LUB-MANUAL',
-            nombre: isNotaEntrega ? 'Despacho Nota de Entrega (Manual/Histórico)' : 'Venta Factura Fiscal (Manual/Histórica)',
-            cantidad: 1,
-            unidad: 'Unid',
-            precio: subtotalNum,
-            precioUsd: subtotalNum,
-            subtotal: subtotalNum,
-            subtotalUsd: subtotalNum,
-            totalUsd: totalNum,
-            totalBs: totalBs
-          }
-        ],
+        items: (Array.isArray(initialData?.items) && initialData.items.length > 0)
+          ? initialData.items
+          : [
+              {
+                id: `ITEM-${cleanNum}`,
+                codigo: 'LUB-MANUAL',
+                nombre: isNotaEntrega ? 'Despacho Nota de Entrega (Manual/Histórico)' : 'Venta Factura Fiscal (Manual/Histórica)',
+                cantidad: 1,
+                unidad: 'Unid',
+                precio: subtotalNum,
+                precioUsd: subtotalNum,
+                subtotal: subtotalNum,
+                subtotalUsd: subtotalNum,
+                totalUsd: totalNum,
+                totalBs: totalBs
+              }
+            ],
         _customCreated: true
       };
 

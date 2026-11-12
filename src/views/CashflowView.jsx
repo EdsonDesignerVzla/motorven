@@ -2452,6 +2452,7 @@ export default function CashflowView({
           config={config}
           currentUser={currentUser}
           tasaBcv={tasaBcv}
+          products={products}
         />
       )}
 

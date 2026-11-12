@@ -97,6 +97,37 @@ function drawParentContainer(doc, isFirstPage = true) {
 }
 
 /**
+ * Retorna métricas de layout seguras según orientación activa (Portrait / Landscape)
+ * para evitar solapamientos con el pie de página y anclar firmas por sobre el footer.
+ */
+export function getPageLayoutMetrics(doc, reserveBottomMm = 0) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = PAGE_LETTER.margin;
+  const innerPadding = PAGE_LETTER.innerPadding;
+  const contentWidth = pageWidth - (margin * 2);
+  const contentHeight = pageHeight - (margin * 2);
+  const startX = margin + innerPadding;
+  const tableWidth = contentWidth - (innerPadding * 2);
+  const footerY = margin + contentHeight - 7.5;
+  const safeBottomY = footerY - 3 - Number(reserveBottomMm || 0);
+
+  return {
+    pageWidth,
+    pageHeight,
+    margin,
+    innerPadding,
+    contentWidth,
+    contentHeight,
+    startX,
+    tableWidth,
+    footerY,
+    safeBottomY,
+    continuationTopY: 22
+  };
+}
+
+/**
  * Crea la base visual del documento PDF institucional en formato Carta (Vertical u Horizontal)
  */
 export function createBaseReport({
@@ -308,10 +339,11 @@ export function addSummaryCards(doc, startY, cards = [], tableWidth = 179.9, sta
   const cardW = (tableWidth - gap * (count - 1)) / count;
   const cardH = 11.5;
 
-  // Guardia de desborde hacia el pie de página
-  if (startY + cardH > 248) {
+  // Guardia de desborde hacia el pie de página (orientación Portrait/Landscape)
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
+  if (startY + cardH > safeBottomY) {
     doc.addPage();
-    startY = 22;
+    startY = continuationTopY;
   }
 
   cards.forEach((card, idx) => {
@@ -374,10 +406,11 @@ export function addAnalyticalBox(doc, startY, title = 'ANÁLISIS EJECUTIVO & RES
   const textH = splitText.length * 2.8;
   const boxH = Math.max(9.5, textH + 5.5);
 
-  // Guardia de desborde hacia el pie de página
-  if (startY + boxH > 248) {
+  // Guardia de desborde hacia el pie de página (orientación Portrait/Landscape)
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
+  if (startY + boxH > safeBottomY) {
     doc.addPage();
-    startY = 22;
+    startY = continuationTopY;
   }
 
   doc.setFillColor(240, 249, 255); // Fondo azul suave
@@ -406,12 +439,12 @@ export function addAnalyticalBox(doc, startY, title = 'ANÁLISIS EJECUTIVO & RES
  * Añade un encabezado de sección / bloque temático (con acento corporativo rojo y azul marino)
  */
 export function addSectionHeader(doc, startY, title, subtitle = '', tableWidth = 179.9, startX = 18) {
-  if (startY > 240) {
-    doc.addPage();
-    startY = 22;
-  }
-
   const bannerH = subtitle ? 9.0 : 7.2;
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
+  if (startY + bannerH + 2.5 > safeBottomY) {
+    doc.addPage();
+    startY = continuationTopY;
+  }
   doc.setFillColor(...COLORS.navy);
   doc.roundedRect(startX, startY, tableWidth, bannerH, 1, 1, 'F');
   doc.setFillColor(...COLORS.red);
@@ -433,24 +466,44 @@ export function addSectionHeader(doc, startY, title, subtitle = '', tableWidth =
 }
 
 /**
- * Dibuja un bloque formal de firmas de responsabilidad y auditoría
+ * Dibuja un bloque formal de firmas y sellos anclado por sobre el pie de página.
+ * Si el contenido previo invade la zona reservada de firmas, abre una nueva página.
  */
-export function addSignatures(doc, startY, roles = ['Revisado por', 'Aprobado por'], tableWidth = 179.9, startX = 18) {
+export function addSignatures(
+  doc,
+  startY,
+  roles = ['Revisado por', 'Aprobado por'],
+  tableWidth = 179.9,
+  startX = 18,
+  options = {}
+) {
   const count = roles.length;
-  const sigH = 18;
+  const sigH = 19;
+  const reserveBottomMm = Number(options.reserveBottomMm || 0);
+  const gapAboveFooter = Number(options.gapAboveFooter ?? 3);
+  const anchorToFooter = options.anchorToFooter !== false;
 
-  // Si no cabe en la página actual antes del footer (límite 248mm), saltar a nueva página
-  if (startY + sigH > 248) {
+  const { footerY, continuationTopY } = getPageLayoutMetrics(doc, reserveBottomMm);
+  const anchoredY = footerY - reserveBottomMm - gapAboveFooter - sigH;
+
+  // Si el contenido previo ya supera la posición superior anclada, saltar a nueva página
+  if (startY > anchoredY) {
     doc.addPage();
-    startY = 22;
+    if (typeof options.onPageAdd === 'function') {
+      options.onPageAdd(doc);
+    }
+    startY = options.continuationTopY || continuationTopY;
   }
+
+  // Anclar siempre las firmas y sellos por sobre el pie de página (o zona inferior reservada)
+  const drawY = anchorToFooter ? anchoredY : startY;
 
   const gap = 12;
   const sigW = (tableWidth - gap * (count - 1)) / count;
 
   roles.forEach((role, idx) => {
     const x = startX + idx * (sigW + gap);
-    const lineY = startY + 11;
+    const lineY = drawY + 11;
 
     // Línea de firma
     doc.setDrawColor(...COLORS.slate);
@@ -470,7 +523,7 @@ export function addSignatures(doc, startY, roles = ['Revisado por', 'Aprobado po
     doc.text('Firma y Sello Oficial', x + sigW / 2, lineY + 6.2, { align: 'center' });
   });
 
-  return startY + sigH + 2;
+  return drawY + sigH + 2;
 }
 
 /**
@@ -592,9 +645,10 @@ export function addGrandTotalBox(doc, startY, items = [], tableWidth = 179.9, st
   if (!items || items.length === 0) return startY;
 
   const boxH = 13.5;
-  if (startY + boxH > 248) {
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
+  if (startY + boxH > safeBottomY) {
     doc.addPage();
-    startY = 22;
+    startY = continuationTopY;
   }
 
   // Fondo y borde
@@ -696,17 +750,10 @@ export function printPDFDocument(doc) {
  */
 export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUser = null, options = {}) {
   const totalPages = doc.internal.getNumberOfPages();
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = PAGE_LETTER.margin;
-  const innerPadding = PAGE_LETTER.innerPadding;
-  const contentWidth = pageWidth - (margin * 2);
-  const contentHeight = pageHeight - (margin * 2);
-  const tableWidth = contentWidth - (innerPadding * 2);
-  const startX = margin + innerPadding;
+  const { margin, tableWidth, startX, footerY } = getPageLayoutMetrics(doc);
 
   const userName = currentUser?.nombre || currentUser?.username || 'Operador Autorizado';
-  const isSlashFormat = options.pageNumberFormat === 'slash' || filename.toLowerCase().includes('nota_entrega');
+  const useDeFormat = options.pageNumberFormat === 'de';
 
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
@@ -714,10 +761,22 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
     // Si es página posterior, dibujar el marco exterior contenedor
     if (i > 1) {
       drawParentContainer(doc, false);
+
+      // Cabezal compacto de desbordamiento (1/2, 2/2) en páginas de continuación
+      if (totalPages > 1 && !options.skipOverflowHeader) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(5.8);
+        doc.setTextColor(...COLORS.navy);
+        doc.text(`CONTINUACIÓN DE REPORTE • PÁGINA ${i}/${totalPages}`, startX, margin + 4.9);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(5.6);
+        doc.setTextColor(...COLORS.slate);
+        doc.text(`Desbordamiento ${i}/${totalPages}`, startX + tableWidth, margin + 4.9, { align: 'right' });
+      }
     }
 
     // Línea divisoria de pie de página dentro del contenedor padre
-    const footerY = margin + contentHeight - 7.5;
     doc.setDrawColor(...COLORS.border);
     doc.setLineWidth(0.3);
     doc.line(startX, footerY, startX + tableWidth, footerY);
@@ -732,13 +791,16 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
       footerY + 3.8
     );
 
-    // Usuario y numeración de página a la derecha (Ej: "Página 1/1" o "Página 1/2")
+    // Usuario y numeración estándar de desbordamiento (1/1, 1/2, 2/2) a la derecha
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.0);
     doc.setTextColor(...COLORS.slate);
-    const pageLabel = isSlashFormat ? `Página ${i}/${totalPages}` : `Página ${i} de ${totalPages}`;
+    const basePageLabel = useDeFormat ? `Página ${i} de ${totalPages}` : `Página ${i}/${totalPages}`;
+    const contSuffix = (totalPages > 1 && i < totalPages && !options.skipOverflowNotice)
+      ? ` (Continúa ${i + 1}/${totalPages})`
+      : '';
     doc.text(
-      `${pageLabel} • Emitido por: ${userName}`,
+      `${basePageLabel}${contSuffix} • Emitido por: ${userName}`,
       startX + tableWidth - 1,
       footerY + 3.8,
       { align: 'right' }
@@ -2755,13 +2817,11 @@ export function generateDashboardPDF({
   }
 
   const finalY3 = base.doc.lastAutoTable?.finalY || currentY3;
-  if (finalY3 <= 232) {
-    addGrandTotalBox(base.doc, finalY3 + 3.5, [
-      { label: 'CARTERA TOTAL CXC', value: formatUsd(carteraUsd), subtext: formatBs(carteraUsd * tasa), color: COLORS.navy },
-      { label: 'ÍNDICE DE MOROSIDAD', value: `${morosidadPct.toFixed(1)}%`, subtext: 'Deuda vencida', color: morosidadPct > 20 ? COLORS.red : COLORS.emerald },
-      { label: 'TICKET PROMEDIO', value: formatUsd(ticketPromedio), subtext: `${clientesActivos} clientes activos`, color: COLORS.cyan }
-    ], base.tableWidth, base.startX);
-  }
+  addGrandTotalBox(base.doc, finalY3 + 3.5, [
+    { label: 'CARTERA TOTAL CXC', value: formatUsd(carteraUsd), subtext: formatBs(carteraUsd * tasa), color: COLORS.navy },
+    { label: 'ÍNDICE DE MOROSIDAD', value: `${morosidadPct.toFixed(1)}%`, subtext: 'Deuda vencida', color: morosidadPct > 20 ? COLORS.red : COLORS.emerald },
+    { label: 'TICKET PROMEDIO', value: formatUsd(ticketPromedio), subtext: `${clientesActivos} clientes activos`, color: COLORS.cyan }
+  ], base.tableWidth, base.startX);
 
   // -------------------------------------------------------------------------
   // PÁGINA 4: BLOQUE 4 -> OPERACIONES, INVENTARIO & CADUCIDAD FIFO
@@ -3638,15 +3698,16 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
 
   const finalYTable = base.doc.lastAutoTable?.finalY || currentY;
 
-  // 5. Caja de Resumen Final y Observaciones
-  const totalsY = finalYTable + 2.5;
-  const isOverflowing = totalsY + 36 > 250;
-  let finalYForSignatures = totalsY;
+  // 5. Caja de Resumen Final y Observaciones (respetando la zona inferior anclada de firmas)
+  const { footerY, continuationTopY } = getPageLayoutMetrics(base.doc);
+  const sigAnchoredTop = footerY - 3 - 19;
+  const hasNotes = Boolean(notes && notes !== 'Ninguna');
+  const totalsAndNotesHeight = 16 + (hasNotes ? 8 : 0);
 
-  if (isOverflowing) {
+  let finalYForSignatures = finalYTable + 2.5;
+  if (finalYForSignatures + totalsAndNotesHeight > sigAnchoredTop - 2) {
     base.doc.addPage();
-    drawParentContainer(base.doc, false);
-    finalYForSignatures = 22;
+    finalYForSignatures = continuationTopY;
   }
 
   addGrandTotalBox(base.doc, finalYForSignatures, [
@@ -3658,7 +3719,7 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
   finalYForSignatures += 16;
 
   // Observaciones si existen
-  if (notes && notes !== 'Ninguna') {
+  if (hasNotes) {
     base.doc.setFont('helvetica', 'bold');
     base.doc.setFontSize(5.8);
     base.doc.setTextColor(...COLORS.slate);
@@ -3670,7 +3731,7 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
     finalYForSignatures += 8;
   }
 
-  // 6. Sección Oficial de Tres Firmas
+  // 6. Sección Oficial de Tres Firmas (anclada por sobre el pie de página)
   addSignatures(
     base.doc,
     finalYForSignatures + 2,
@@ -3845,7 +3906,7 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
     columnStyles: {
       0: { halign: 'center', cellWidth: 8 },
       1: { fontStyle: 'bold', halign: 'center', cellWidth: 26 },
-      2: { cellWidth: 64 },
+      2: { cellWidth: 54 },
       3: { halign: 'center', cellWidth: 28 },
       4: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
       5: { halign: 'right', fontStyle: 'bold', cellWidth: 20 },
@@ -3854,12 +3915,13 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
   });
 
   const finalYTable = base.doc.lastAutoTable.finalY || currentY + 40;
+  const { footerY, continuationTopY } = getPageLayoutMetrics(base.doc);
+  const sigAnchoredTop = footerY - 3 - 19;
   let finalYSignatures = finalYTable + 3;
 
-  if (finalYSignatures + 35 > 255) {
+  if (finalYSignatures + 16 > sigAnchoredTop - 2) {
     base.doc.addPage();
-    drawParentContainer(base.doc, false);
-    finalYSignatures = 22;
+    finalYSignatures = continuationTopY;
   }
 
   // Cuadro de Resumen de Carga Física
@@ -3871,7 +3933,7 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
 
   finalYSignatures += 16;
 
-  // 5. Bloque Oficial de Firmas Tripartitas de Despacho
+  // 5. Bloque Oficial de Firmas Tripartitas de Despacho (ancladas por sobre el pie de página)
   addSignatures(
     base.doc,
     finalYSignatures + 2,
@@ -4118,6 +4180,35 @@ function drawDeliveryNoteQRBox(doc, x, y, boxSize, qrPayload) {
  * - Convierte precios y totales importados en Bolívares desde Profit Plus (`precioUnitario`, `totalNeto`, `prec_vta`, `reng_neto`) a USD
  * - Ajusta proporcionalmente si el documento fue editado manualmente en CxC y conserva totales exactos
  */
+const isPlaceholderDocItem = (it) => {
+  if (!it || typeof it !== 'object') return true;
+  const code = String(it.codigo || it.articuloId || it.articulo_id || it.co_art || '').trim().toUpperCase();
+  return !code || code === 'LUB-MANUAL' || code === 'NE-DESP' || code === 'LUB-GEN';
+};
+
+export function pickPreferredLineItems(...candidates) {
+  let best = [];
+  let bestScore = -1;
+  for (const raw of candidates) {
+    let arr = raw;
+    if (typeof raw === 'string') {
+      try {
+        arr = JSON.parse(raw);
+      } catch {
+        arr = [];
+      }
+    }
+    if (!Array.isArray(arr) || arr.length === 0) continue;
+    const realCount = arr.filter((it) => !isPlaceholderDocItem(it)).length;
+    const score = realCount > 0 ? (1000 + arr.length) : arr.length;
+    if (score > bestScore) {
+      best = arr;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export function resolveDeliveryNoteLineItems(docData = {}, products = null, fallbackRate = 827.73) {
   const safeDoc = docData || {};
   const tasa = Number(safeDoc.tasaDolar || safeDoc.tasaBcv || safeDoc.tasa || fallbackRate) || 827.73;
@@ -4133,6 +4224,10 @@ export function resolveDeliveryNoteLineItems(docData = {}, products = null, fall
           if (clean) {
             prodMap.set(clean, p);
             prodMap.set(clean.toUpperCase(), p);
+            if (/^\d+$/.test(clean)) {
+              prodMap.set(String(parseInt(clean, 10)), p);
+              prodMap.set(clean.padStart(6, '0'), p);
+            }
           }
         }
       });
@@ -4159,22 +4254,44 @@ export function resolveDeliveryNoteLineItems(docData = {}, products = null, fall
     profitBsRate = headerTotalBs / headerTotalUsd;
   }
 
-  const rawItems = safeDoc.items || safeDoc.renglones || [];
+  let rawItems = safeDoc.items ?? safeDoc.renglones ?? safeDoc.order_items ?? [];
+  if (typeof rawItems === 'string') {
+    try {
+      rawItems = JSON.parse(rawItems);
+    } catch {
+      rawItems = [];
+    }
+  }
   const itemsArr = Array.isArray(rawItems) ? rawItems : [];
 
   const resolved = itemsArr.map((it, idx) => {
-    const rawCode = it.codigo || it.articuloId || it.productoId || it.co_art || it.sku || '';
+    const rawCode = it.codigo ?? it.articuloId ?? it.articulo_id ?? it.productoId ?? it.producto_id ?? it.co_art ?? it.coArt ?? it.sku ?? it.productId ?? it.itemId ?? '';
     const codeClean = String(rawCode).trim();
-    const prod = prodMap.get(codeClean) || prodMap.get(codeClean.toUpperCase()) || null;
+    const numericNoZero = /^\d+$/.test(codeClean) ? String(parseInt(codeClean, 10)) : '';
+    const numericPadded = /^\d+$/.test(codeClean) ? codeClean.padStart(6, '0') : '';
+    const prod =
+      prodMap.get(codeClean) ||
+      prodMap.get(codeClean.toUpperCase()) ||
+      (numericNoZero ? prodMap.get(numericNoZero) : null) ||
+      (numericPadded ? prodMap.get(numericPadded) : null) ||
+      null;
 
-    const codigo = codeClean || String(prod?.codigo || prod?.id || `LUB-${idx + 1}`);
+    const codigo = codeClean || String(prod?.codigo || prod?.co_art || prod?.id || `LUB-${idx + 1}`);
     const descCandidate = [
       it.descripcion,
       it.articuloDescripcion,
+      it.articulo_descripcion,
       it.art_des,
+      it.artDes,
+      it.productoNombre,
+      it.producto_nombre,
       it.nombre,
+      it.descrip,
+      it.desc,
+      it.name,
       prod?.nombre,
-      prod?.descripcion
+      prod?.descripcion,
+      prod?.descrip
     ].find((v) => typeof v === 'string' && v.trim() !== '');
     const descripcion = descCandidate ? descCandidate.trim() : 'Lubricante Motorven';
 
@@ -4472,16 +4589,19 @@ export function generateDeliveryNotePDF({
   const finalYTable = base.doc.lastAutoTable?.finalY || currentY + 35;
   let finalYBottom = finalYTable + 3.0;
 
-  // Límite seguro antes de la zona inferior de QR (que inicia en Y = 232.5 mm)
-  const summaryAndSignaturesHeight = 36;
-  if (finalYBottom + summaryAndSignaturesHeight > 231) {
+  // Zona inferior reservada para QR (qrY = 233.5) y numeración 1/2, 2/2 por sobre el pie de página
+  const { footerY } = getPageLayoutMetrics(base.doc);
+  const qrReserveBottomMm = 23.4; // 256.9 - 233.5
+  const sigAnchoredTop = footerY - qrReserveBottomMm - 2 - 19; // 212.5mm
+  const summaryBoxH = 16.5;
+
+  if (finalYBottom + summaryBoxH > sigAnchoredTop - 2) {
     base.doc.addPage();
     drawContinuationHeader();
     finalYBottom = 29;
   }
 
   // 4. Caja de Resumen Financiero (sin texto de cláusula, solo totales limpios a la derecha)
-  const summaryBoxH = 16.5;
   base.doc.setFillColor(...COLORS.lightBg);
   base.doc.setDrawColor(...COLORS.border);
   base.doc.setLineWidth(0.3);
@@ -4513,13 +4633,19 @@ export function generateDeliveryNotePDF({
 
   finalYBottom += summaryBoxH + 3.0;
 
-  // 5. Bloque Tripartito de Firmas
+  // 5. Bloque Tripartito de Firmas (anclado justo por encima de la zona QR / Pie de página)
   addSignatures(
     base.doc,
     finalYBottom,
     ['Despachado por (Almacén 02)', 'Transportado por (Chofer / C.I.)', 'Recibido Conforme (Cliente / Sello y Firma)'],
     base.tableWidth,
-    base.startX
+    base.startX,
+    {
+      reserveBottomMm: qrReserveBottomMm,
+      gapAboveFooter: 2,
+      continuationTopY: 29,
+      onPageAdd: () => drawContinuationHeader()
+    }
   );
 
   // 6. Dibujar en TODAS las páginas el Código QR (abajo a la izquierda), aviso de desbordamiento y el indicador grande 1/2, 2/2 (abajo a la derecha)
@@ -4573,6 +4699,8 @@ export function generateDeliveryNotePDF({
   // Finalizar pie de página y contenedor ANTES de imprimir o descargar
   finalizeAndSave(base.doc, safeFilename, currentUser, {
     pageNumberFormat: 'slash',
+    skipOverflowHeader: true,
+    skipOverflowNotice: true,
     legalFooter: 'Nota de Entrega • Despacho Almacén 02 • Grupo Motorven, C.A.'
   });
 
@@ -4915,78 +5043,95 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
         doc.setTextColor(71, 85, 105);
-        doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} — Adquirente: ${sale.clienteNombre || 'Cliente'}`, startX, topMargin - 4);
+        doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${sale.clienteNombre || 'Cliente'}`, startX, topMargin - 4);
       }
     }
   });
 
-  let finalY = doc.lastAutoTable.finalY + 4;
+  const drawSeniatContinuationHeader = () => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${sale.clienteNombre || 'Cliente'}`, startX, topMargin - 4);
+  };
 
-  if (finalY + 38 > bottomLimitY) {
+  let finalY = doc.lastAutoTable.finalY + 4;
+  const seniatFooterLineY = bottomLimitY - 4;
+  const seniatBoxTopY = seniatFooterLineY - 33; // Cajetín (30mm) anclado 3mm por encima de la línea del pie de página
+
+  if (finalY > seniatBoxTopY - 2) {
     doc.addPage();
-    finalY = topMargin;
+    drawSeniatContinuationHeader();
   }
 
-  // 4. Totales y Cajetín de Firma
+  // 4. Totales y Cajetín de Firma (anclados por sobre el pie de página)
+  const boxY = seniatBoxTopY;
   const totUsd = Number(sale.totalUsd || 0);
   const baseUsd = Number(sale.baseGeneralUsd || (totUsd / 1.16));
   const ivaUsd = Number(sale.ivaGeneralUsd || sale.ivaUsd || (totUsd - baseUsd));
   const totBs = totUsd * tasa;
 
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(startX, finalY + 3, 85, 30, 2, 2);
-  doc.line(startX + 8, finalY + 19, startX + 77, finalY + 19);
+  doc.roundedRect(startX, boxY, 85, 30, 2, 2);
+  doc.line(startX + 8, boxY + 16, startX + 77, boxY + 16);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.setTextColor(15, 23, 42);
-  doc.text('Firma y Sello de Recepción', startX + 42.5, finalY + 23, { align: 'center' });
+  doc.text('Firma y Sello de Recepción', startX + 42.5, boxY + 20, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
   doc.setTextColor(100, 116, 139);
-  doc.text('C.I. / RIF del Receptor • Fecha: ____/____/________', startX + 42.5, finalY + 27, { align: 'center' });
+  doc.text('C.I. / RIF del Receptor • Fecha: ____/____/________', startX + 42.5, boxY + 24, { align: 'center' });
 
   const totalsX = startX + 95;
   const totalsWidth = 90.9;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(totalsX, finalY + 3, totalsWidth, 30, 2, 2, 'FD');
+  doc.roundedRect(totalsX, boxY, totalsWidth, 30, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(71, 85, 105);
-  doc.text('Base Imponible General (16%):', totalsX + 3, finalY + 8);
+  doc.text('Base Imponible General (16%):', totalsX + 3, boxY + 5);
   doc.setFont('helvetica', 'bold');
-  doc.text(`$ ${baseUsd.toFixed(2)} (Bs. ${(baseUsd * tasa).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, totalsX + totalsWidth - 3, finalY + 8, { align: 'right' });
+  doc.text(`$ ${baseUsd.toFixed(2)} (Bs. ${(baseUsd * tasa).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, totalsX + totalsWidth - 3, boxY + 5, { align: 'right' });
 
   doc.setFont('helvetica', 'normal');
-  doc.text('Débito Fiscal IVA (16%):', totalsX + 3, finalY + 13);
+  doc.text('Débito Fiscal IVA (16%):', totalsX + 3, boxY + 10);
   doc.setFont('helvetica', 'bold');
-  doc.text(`$ ${ivaUsd.toFixed(2)} (Bs. ${(ivaUsd * tasa).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, totalsX + totalsWidth - 3, finalY + 13, { align: 'right' });
+  doc.text(`$ ${ivaUsd.toFixed(2)} (Bs. ${(ivaUsd * tasa).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, totalsX + totalsWidth - 3, boxY + 10, { align: 'right' });
 
   doc.setDrawColor(0, 43, 122);
   doc.setLineWidth(0.4);
-  doc.line(totalsX + 3, finalY + 16, totalsX + totalsWidth - 3, finalY + 16);
+  doc.line(totalsX + 3, boxY + 13, totalsX + totalsWidth - 3, boxY + 13);
 
   doc.setFontSize(7.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('TOTAL FACTURA USD:', totalsX + 3, finalY + 22);
+  doc.text('TOTAL FACTURA USD:', totalsX + 3, boxY + 19);
   doc.setFont('courier', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(5, 150, 105);
-  doc.text(`$ ${totUsd.toFixed(2)}`, totalsX + totalsWidth - 3, finalY + 22, { align: 'right' });
+  doc.text(`$ ${totUsd.toFixed(2)}`, totalsX + totalsWidth - 3, boxY + 19, { align: 'right' });
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(217, 119, 6);
-  doc.text('TOTAL OFICIAL BS.:', totalsX + 3, finalY + 28);
+  doc.text('TOTAL OFICIAL BS.:', totalsX + 3, boxY + 25);
   doc.setFont('courier', 'bold');
   doc.setFontSize(9.5);
-  doc.text(`Bs. ${totBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsWidth - 3, finalY + 28, { align: 'right' });
+  doc.text(`Bs. ${totBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalsX + totalsWidth - 3, boxY + 25, { align: 'right' });
 
-  // 5. Paginación en todas las hojas al pie: "PÁGINA X / Y" y Leyenda Legal
+  // 5. Paginación en todas las hojas al pie: "Página X/Y" (1/2, 2/2) y Leyenda Legal
   const totalPagesCount = doc.internal.getNumberOfPages();
   for (let p = 1; p <= totalPagesCount; p++) {
     doc.setPage(p);
+
+    if (p > 1 && totalPagesCount > 1) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(0, 43, 122);
+      doc.text(`Desbordamiento ${p}/${totalPagesCount}`, startX + tableWidth, topMargin - 4, { align: 'right' });
+    }
 
     // Línea divisoria de pie de página
     doc.setDrawColor(203, 213, 225);
@@ -4998,13 +5143,14 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
       doc.setFontSize(6.2);
       doc.setTextColor(71, 85, 105);
       const disclaimer = `Monto en ${formatBs(totBs)}, referencial a la fecha de emisión. Los pagos en Bs se deberán realizar según la tasa oficial BCV a la fecha de su cancelación.`;
-      doc.text(disclaimer, startX, bottomLimitY, { maxWidth: tableWidth - 30 });
+      doc.text(disclaimer, startX, bottomLimitY, { maxWidth: tableWidth - 46 });
     }
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text(`PÁGINA ${p} / ${totalPagesCount}`, startX + tableWidth, bottomLimitY, { align: 'right' });
+    const contText = (totalPagesCount > 1 && p < totalPagesCount) ? ` • Continúa ${p + 1}/${totalPagesCount}` : '';
+    doc.text(`Página ${p}/${totalPagesCount}${contText}`, startX + tableWidth, bottomLimitY, { align: 'right' });
   }
 
   const filePrefix = isNe ? 'Nota_Entrega' : (isNc ? 'Nota_Credito' : (isNd ? 'Nota_Debito' : 'Factura'));
@@ -6031,12 +6177,19 @@ export function generateBankAccountsPDF({
     }
   ];
 
+  const { footerY: bankFooterY, continuationTopY: bankContTopY } = getPageLayoutMetrics(base.doc);
+  const bankSigAnchoredTop = bankFooterY - 3 - 19;
+  if (currentY + 13.5 > bankSigAnchoredTop - 2) {
+    base.doc.addPage();
+    currentY = bankContTopY;
+  }
+
   currentY = addGrandTotalBox(base.doc, currentY, totalItems, base.tableWidth, base.startX);
 
-  // Sección de Firmas Institucionales de Tesorería
+  // Sección de Firmas Institucionales de Tesorería (ancladas por sobre el pie de página)
   currentY = addSignatures(
     base.doc,
-    currentY,
+    currentY + 2,
     ['GERENCIA DE TESORERÍA', 'DIRECCIÓN DE FINANZAS', 'AUDITORÍA SUPABASE'],
     base.tableWidth,
     base.startX
@@ -6346,7 +6499,7 @@ export function generateWhatsAppCollectionPDF({
     }
   };
 
-  const tableData = dataset.slice(0, 40).map((m) => {
+  const tableData = dataset.map((m) => {
     const sUsd = Number(m.totalSaldoUsd || 0);
     const sBs = Number(m.totalSaldoBs || sUsd * tasa);
     const mora = Number(m.maxDiasVencido || 0);
@@ -6413,7 +6566,16 @@ export function generateWhatsAppCollectionPDF({
   });
 
   const finalY = base.doc.lastAutoTable?.finalY || currentY;
-  addGrandTotalBox(base.doc, finalY + 3.5, [
+  const { footerY: waFooterY, continuationTopY: waContTopY } = getPageLayoutMetrics(base.doc);
+  const waSigAnchoredTop = waFooterY - 3 - 19;
+  let totalsStartY = finalY + 3.5;
+
+  if (totalsStartY + 13.5 > waSigAnchoredTop - 2) {
+    base.doc.addPage();
+    totalsStartY = waContTopY;
+  }
+
+  const afterWaTotalsY = addGrandTotalBox(base.doc, totalsStartY, [
     { label: 'TOTAL MENSAJES NOTIFICADOS', value: `${totalNotificaciones} Envíos`, subtext: 'Canal WhatsApp Web / API', color: COLORS.navy },
     { label: 'SALDO TOTAL EXIGIBLE', value: formatUsd(totalSaldoUsd), subtext: formatBs(totalSaldoBs), color: COLORS.emerald },
     { label: 'CASOS EN MORA RECAUDADA', value: `${totalEnMora} Clientes`, subtext: 'Seguimiento prioritario', color: totalEnMora > 0 ? COLORS.red : COLORS.emerald }
@@ -6421,7 +6583,7 @@ export function generateWhatsAppCollectionPDF({
 
   addSignatures(
     base.doc,
-    finalY + 22,
+    afterWaTotalsY + 2,
     ['DEPARTAMENTO DE COBRANZAS', 'GERENCIA DE ADMINISTRACIÓN Y FINANZAS'],
     base.tableWidth,
     base.startX
