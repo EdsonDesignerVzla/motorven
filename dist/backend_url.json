@@ -1,9 +1,10 @@
 {
-  "url": "https://api.signummotorven.com",
+  "url": "https://approve-signed-sims-debug.trycloudflare.com",
   "lanUrls": [
-    "http://192.168.0.3:54321",
+    "http://192.168.0.6:54321",
     "http://26.45.7.149:54321",
+    "http://192.168.0.5:54321",
     "http://26.229.220.202:54321"
   ],
-  "updatedAt": "2026-11-12T00:21:26.924Z"
+  "updatedAt": "2026-11-12T02:34:22.519Z"
 }
