@@ -28,7 +28,7 @@ import {
   commitNotaEntregaCorrelativo
 } from './fiscalService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
-import { getProductWarehouseStocks } from './formatService.js';
+import { getProductWarehouseStocks, validateDocumentPositiveStock } from './formatService.js';
 
 if (typeof globalThis.localStorage === 'undefined') {
   const memoryStore = new Map();
@@ -378,6 +378,20 @@ export const saveSale = (saleData, options = {}) => {
   const sales = getSales();
   const config = getConfig();
 
+  if (!skipStockAdjustment) {
+    const stockValidation = validateDocumentPositiveStock({
+      ...saleData,
+      items: saleData.items || [],
+      products: getProducts()
+    });
+    if (!stockValidation.isValid) {
+      const err = new Error(stockValidation.message);
+      err.isValidationError = true;
+      err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+      throw err;
+    }
+  }
+
   const isNotaEntrega =
     String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
     String(saleData.numeroDoc || saleData.id || '').toUpperCase().startsWith('NE-') ||
@@ -703,7 +717,35 @@ export const getOrders = () => {
   }
 };
 
-export const saveOrder = (order) => {
+export const saveOrder = (order, options = {}) => {
+  const statusUpper = String(order?.status || '').trim().toUpperCase();
+  const isClosed = ['FACTURADO', 'ANULADO', 'CADUCADO'].includes(statusUpper);
+  if (!options?.skipStockValidation && !isClosed) {
+    const catalogProducts = getProducts();
+    if (catalogProducts.length > 0 && Array.isArray(order?.items) && order.items.length > 0) {
+      const stockCheck = validateDocumentPositiveStock({
+        items: order.items,
+        products: catalogProducts,
+        tipoDoc: order.tipoDoc || order.tipo_doc,
+        almacen: order.almacen,
+        almacenId: order.almacenId || order.almacen_id,
+        co_alma: order.co_alma,
+        modalidadVenta: order.modalidadVenta,
+        numeroDoc: order.numeroDoc || order.numero_doc,
+        id: order.id,
+        pedidoOrigenDoc: order.pedidoOrigenDoc,
+        documentoAfectado: order.documentoAfectado || order.documento_afectado
+      });
+      if (!stockCheck.isValid) {
+        const err = new Error(stockCheck.message);
+        err.isValidationError = true;
+        err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+        err.validation = stockCheck;
+        throw err;
+      }
+    }
+  }
+
   const orders = getOrders();
   const existingIndex = orders.findIndex(o => o.id === order.id);
   if (existingIndex >= 0) {

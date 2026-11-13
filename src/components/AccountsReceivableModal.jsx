@@ -4,7 +4,7 @@ import {
     DollarSign, Users, Calendar, Filter, ArrowUpDown, ChevronDown,
     ChevronUp, Printer, ShieldAlert, TrendingDown, Eye, Trash2, Edit2,
     Plus, Landmark, Wallet, Receipt, FileText, Check, RefreshCw, MessageSquare,
-    ExternalLink, Database
+    ExternalLink, Database, BookOpen
 } from 'lucide-react';
 import {
     REAL_PROFIT_CASH_DESKS,
@@ -20,6 +20,7 @@ import {
 } from '../services/supabaseService';
 import { generateAccountsReceivablePDF, generateDeliveryNotePDF, generateCollectionReceiptPDF, generateThirdPartyStatementPDF, generateCreditDebitNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
+import ConsolidatedCxcModal from './ConsolidatedCxcModal';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
@@ -217,8 +218,9 @@ export function AccountsReceivableModal({
         // Fallback silencioso
     }
 
-    // Selector superior entre Facturas Fiscales y Notas de Entrega
+    // Selector superior entre Facturas Fiscales, Notas de Entrega y Consolidado
     const [activeDocType, setActiveDocType] = useState('FACTURA'); // 'FACTURA' | 'NOTA_ENTREGA'
+    const [showConsolidatedModal, setShowConsolidatedModal] = useState(false);
 
     // Filtros del Reporte (Parte B)
     const [searchTerm, setSearchTerm] = useState('');
@@ -1818,6 +1820,37 @@ export function AccountsReceivableModal({
                                 color: activeDocType === 'NOTA_ENTREGA' ? '#ffffff' : 'var(--text-muted)'
                             }}>
                                 {docTypeCounts.notasEntrega}
+                            </span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowConsolidatedModal(true)}
+                            style={{
+                                padding: '0.5rem 1rem',
+                                borderRadius: '9px',
+                                fontSize: '0.82rem',
+                                fontWeight: 700,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                border: '1px solid rgba(16, 185, 129, 0.35)',
+                                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.16) 0%, rgba(5, 150, 105, 0.22) 100%)',
+                                color: '#34d399',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease'
+                            }}
+                            title="Ver vista unificada y reporte PDF de Facturas Fiscales + Notas de Entrega"
+                        >
+                            <BookOpen size={15} />
+                            <span>Consolidado (FAC + NE)</span>
+                            <span style={{
+                                padding: '1px 7px',
+                                borderRadius: '10px',
+                                fontSize: '0.72rem',
+                                background: 'rgba(16, 185, 129, 0.22)',
+                                color: '#ecfdf5'
+                            }}>
+                                {docTypeCounts.facturas + docTypeCounts.notasEntrega}
                             </span>
                         </button>
                     </div>
@@ -3780,6 +3813,18 @@ export function AccountsReceivableModal({
                     </div>
                 </div>
             )}
+            <ConsolidatedCxcModal
+                isOpen={showConsolidatedModal}
+                onClose={() => setShowConsolidatedModal(false)}
+                documents={allDocuments}
+                tasaBcv={tasaBcv}
+                config={config}
+                currentUser={currentUser}
+                onViewDetail={(doc) => {
+                    setShowConsolidatedModal(false);
+                    setSelectedInvoiceDetail(doc);
+                }}
+            />
         </>
     );
 }

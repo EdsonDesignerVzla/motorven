@@ -2990,6 +2990,8 @@ function MainApp() {
               profitPurchases={profitPurchases}
               profitSupplierPayments={profitSupplierPayments}
               profitBankAccounts={profitBankAccounts}
+              profitCashDesks={profitCashDesks}
+              cashDesks={profitCashDesks}
               profitAuditTrails={profitAuditTrails}
               cashMovements={cashMovements}
               usersList={usersList}

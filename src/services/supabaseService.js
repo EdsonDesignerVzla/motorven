@@ -53,7 +53,7 @@ import {
   getNextNotaEntregaCorrelativo,
   commitNotaEntregaCorrelativo
 } from './fiscalService.js';
-import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
+import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateDocumentPositiveStock } from './formatService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import {
   getConfig as getStorageConfig,
@@ -1989,6 +1989,16 @@ export const saveSupabaseProduct = async (product) => {
       item: mapped
     });
 
+    try {
+      const profitRes = await writeProfitProduct(mapped, 'SAVE');
+      if (profitRes?.comparison) {
+        console.log('[saveSupabaseProduct] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
+        mapped._comparison = profitRes.comparison;
+      }
+    } catch (e) {
+      console.warn('[saveSupabaseProduct] Aviso sincronizando con Profit:', e.message);
+    }
+
     return mapped;
   } catch (err) {
     console.warn('[saveSupabaseProduct] Supabase error:', err?.message || err);
@@ -2099,7 +2109,15 @@ export const saveSupabaseClient = async (client) => {
       key: mapped.id || mapped.rif,
       item: mapped
     });
-    writeProfitClient(mapped, 'SAVE').catch(() => {});
+    try {
+      const profitRes = await writeProfitClient(mapped, 'SAVE');
+      if (profitRes?.comparison) {
+        console.log('[saveSupabaseClient] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
+        mapped._comparison = profitRes.comparison;
+      }
+    } catch (e) {
+      console.warn('[saveSupabaseClient] Aviso escribiendo en Supabase:', e.message);
+    }
     return mapped;
   } catch (err) {
     saveStorageClient(clientToSave);
@@ -2681,6 +2699,25 @@ export const processSupabaseSale = async (saleData) => {
       saleData.almacen === '02' ||
       saleData.co_alma === '02';
     const effectiveTipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : (saleData.tipoDoc || 'FACTURA');
+    if (!saleData.skipStockAdjustment) {
+      let stockCatalog = getStorageProducts();
+      try {
+        const fetchedProds = await getSupabaseProducts();
+        if (Array.isArray(fetchedProds) && fetchedProds.length > 0) stockCatalog = fetchedProds;
+      } catch (_) {}
+      const stockCheck = validateDocumentPositiveStock({
+        ...saleData,
+        tipoDoc: effectiveTipoDoc,
+        items: saleData.items || [],
+        products: stockCatalog
+      });
+      if (!stockCheck.isValid) {
+        const err = new Error(stockCheck.message);
+        err.isValidationError = true;
+        err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+        throw err;
+      }
+    }
     const isCredit =
       isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago) ||
       Number(saleData.diasCredito || 0) > 0 ||
@@ -3056,8 +3093,36 @@ export const getSupabaseOrders = async () => {
   }
 };
 
-export const saveSupabaseOrder = async (orderData) => {
-  saveStorageOrder(orderData);
+export const saveSupabaseOrder = async (orderData, options = {}) => {
+  const status = String(orderData?.estado || '').trim().toUpperCase();
+  const isBypassStatus = ['FACTURADO', 'ANULADO', 'CADUCADO'].includes(status);
+  if (
+    !options?.skipStockValidation &&
+    !isBypassStatus &&
+    Array.isArray(orderData?.items) &&
+    orderData.items.length > 0
+  ) {
+    let stockCatalog = getStorageProducts();
+    if (isNetworkOnline()) {
+      try {
+        const fetchedProds = await getSupabaseProducts();
+        if (Array.isArray(fetchedProds) && fetchedProds.length > 0) stockCatalog = fetchedProds;
+      } catch (_) {}
+    }
+    const stockCheck = validateDocumentPositiveStock({
+      ...orderData,
+      items: orderData.items,
+      products: stockCatalog
+    });
+    if (!stockCheck.isValid) {
+      const err = new Error(stockCheck.message);
+      err.isValidationError = true;
+      err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+      throw err;
+    }
+  }
+
+  saveStorageOrder(orderData, options);
 
   // Reflejo simultáneo en tiempo real en Supabase (SQL Server: pedidos & reng_ped)
   writeProfitOrder(orderData, 'SAVE').catch(e => {

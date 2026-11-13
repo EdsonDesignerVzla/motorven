@@ -15,6 +15,7 @@ import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { getProductRetailPrice } from './pricingService.js';
 import { REAL_PRODUCTS } from '../data/supabaseRealData.js';
+import { buildTrialBalance, buildGeneralLedger, buildFinancialStatements } from './accountingService.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -5425,10 +5426,390 @@ export function generateCashflowPDF({ bankAccounts = [], cashDesks = [], cashMov
 }
 
 // =========================================================================
-// 12. REPORTE DE AUDITORÍA & LIBRO CONTABLE DIGITAL (CARTA VERTICAL)
+// 12. REPORTE DE AUDITORÍA & SUITE CONTABLE BA VEN-NIF 2 (CARTA VERTICAL)
 // =========================================================================
-export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = {}, currentUser = null, subTab = 'diario' }) {
-  const isDiario = subTab === 'diario';
+const ACCOUNTING_TABLE_BASE = {
+  theme: 'grid',
+  headStyles: {
+    fillColor: COLORS.navy,
+    textColor: [255, 255, 255],
+    fontSize: 6.6,
+    fontStyle: 'bold',
+    cellPadding: 1.6
+  },
+  styles: {
+    fontSize: 6.1,
+    cellPadding: 1.4,
+    textColor: COLORS.dark
+  },
+  alternateRowStyles: {
+    fillColor: COLORS.lightBg
+  }
+};
+
+function styleAccountingStatementCell(data) {
+  if (data.section !== 'body') return;
+  const meta = data.row?.raw?.__meta;
+  if (!meta) return;
+  if (meta === 'group') {
+    data.cell.styles.fillColor = [226, 232, 240];
+    data.cell.styles.textColor = COLORS.navy;
+    data.cell.styles.fontStyle = 'bold';
+    data.cell.styles.fontSize = 6.5;
+  } else if (meta === 'subtotal') {
+    data.cell.styles.fillColor = [241, 245, 249];
+    data.cell.styles.textColor = COLORS.dark;
+    data.cell.styles.fontStyle = 'bold';
+  } else if (meta === 'total') {
+    data.cell.styles.fillColor = COLORS.navy;
+    data.cell.styles.textColor = [255, 255, 255];
+    data.cell.styles.fontStyle = 'bold';
+    data.cell.styles.fontSize = 6.5;
+  }
+}
+
+export function generateTrialBalancePDF({ trialBalance = null, entries = [], config = {}, currentUser = null } = {}) {
+  const tb = trialBalance || buildTrialBalance(entries);
+  const accounts = tb?.accounts || [];
+  const tasa = Number(config?.tasaDolar || 827.73);
+  const base = createBaseReport({
+    title: 'BALANCE DE COMPROBACIÓN DE SUMAS Y SALDOS',
+    subtitle: 'Plan Oficial de Cuentas Pro Motorven C.A. • Verificación de Partida Doble (Debe = Haber)',
+    moduleCode: 'BC',
+    currentUser,
+    config
+  });
+
+  const cards = [
+    { label: 'Cuentas Activas', value: `${accounts.length} Cuentas`, subtext: 'Plan Pro Motorven', color: COLORS.navy },
+    { label: 'Sumas Debe / Haber', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: `Haber: ${formatUsd(tb.totalSumasHaberUsd || 0)}`, color: COLORS.cyan },
+    { label: 'Saldos Deudor / Acreedor', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: `Acreedor: ${formatUsd(tb.totalSaldosAcreedorUsd || 0)}`, color: COLORS.emerald },
+    { label: 'Estatus Equilibrio', value: tb.isBalanced ? 'CUADRADO' : 'CON DESCUADRE', subtext: tb.isBalanced ? 'Debe = Haber (VEN-NIF)' : 'Revisar diferencias', color: tb.isBalanced ? COLORS.emerald : COLORS.red }
+  ];
+
+  const startY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  const body = accounts.length > 0
+    ? accounts.map(acc => [
+        acc.codigo,
+        acc.nombre,
+        acc.grupo || '-',
+        acc.totalDebeUsd > 0 ? formatUsd(acc.totalDebeUsd) : '-',
+        acc.totalHaberUsd > 0 ? formatUsd(acc.totalHaberUsd) : '-',
+        acc.saldoDeudorUsd > 0 ? formatUsd(acc.saldoDeudorUsd) : '-',
+        acc.saldoAcreedorUsd > 0 ? formatUsd(acc.saldoAcreedorUsd) : '-'
+      ])
+    : [['-', 'Sin movimientos registrados en el período', '-', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00']];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_BASE,
+    startY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    showFoot: 'lastPage',
+    head: [['CÓDIGO', 'DENOMINACIÓN DE LA CUENTA', 'GRUPO', 'SUMAS DEBE', 'SUMAS HABER', 'SALDO DEUDOR', 'SALDO ACREEDOR']],
+    body,
+    foot: [[
+      'TOTALES',
+      `${accounts.length} cuentas imputadas (Tasa BCV: Bs. ${tasa.toFixed(2)})`,
+      tb.isBalanced ? 'CUADRADO' : 'DESCUADRE',
+      formatUsd(tb.totalSumasDebeUsd || 0),
+      formatUsd(tb.totalSumasHaberUsd || 0),
+      formatUsd(tb.totalSaldosDeudorUsd || 0),
+      formatUsd(tb.totalSaldosAcreedorUsd || 0)
+    ]],
+    footStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.4, fontStyle: 'bold', cellPadding: 1.7 },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 22 },
+      1: { cellWidth: 47.9 },
+      2: { halign: 'center', cellWidth: 20 },
+      3: { halign: 'right', cellWidth: 22.5 },
+      4: { halign: 'right', cellWidth: 22.5 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 22.5 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 22.5 }
+    }
+  });
+
+  const afterY = base.doc.lastAutoTable?.finalY || startY;
+  const totalBoxY = addGrandTotalBox(
+    base.doc,
+    afterY + 3,
+    [
+      { label: 'TOTAL SUMAS DEBE', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: formatBs((tb.totalSumasDebeUsd || 0) * tasa), color: COLORS.navy },
+      { label: 'TOTAL SUMAS HABER', value: formatUsd(tb.totalSumasHaberUsd || 0), subtext: formatBs((tb.totalSumasHaberUsd || 0) * tasa), color: COLORS.cyan },
+      { label: 'SALDO DEUDOR = ACREEDOR', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: tb.isBalanced ? 'Cuadre Exacto $0.00' : 'Verificar Cuadre', color: tb.isBalanced ? COLORS.emerald : COLORS.red }
+    ],
+    base.tableWidth,
+    base.startX
+  );
+  addSignatures(base.doc, totalBoxY + 4, ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'], base.tableWidth, base.startX);
+  finalizeAndSave(base.doc, `Balance_Comprobacion_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+export function generateGeneralLedgerPDF({ account = null, generalLedger = null, entries = [], config = {}, currentUser = null } = {}) {
+  const gl = generalLedger || buildGeneralLedger(entries);
+  const targetAcc = account || gl?.accounts?.[0] || {
+    codigo: '-',
+    nombre: 'Sin cuenta seleccionada',
+    grupo: '-',
+    naturaleza: 'DEUDORA',
+    totalDebeUsd: 0,
+    totalHaberUsd: 0,
+    saldoFinalUsd: 0,
+    movements: []
+  };
+  const movements = targetAcc.movements || [];
+  const tasa = Number(config?.tasaDolar || 827.73);
+
+  const base = createBaseReport({
+    title: 'LIBRO MAYOR GENERAL ANALÍTICO POR CUENTA',
+    subtitle: `Cuenta ${targetAcc.codigo} — ${targetAcc.nombre} • Registro Cronológico de Partida Doble`,
+    moduleCode: 'MAY',
+    currentUser,
+    config
+  });
+
+  const cards = [
+    { label: 'Cuenta Contable', value: String(targetAcc.codigo), subtext: `${targetAcc.naturaleza || 'DEUDORA'} • ${targetAcc.grupo || '-'}`, color: COLORS.navy },
+    { label: 'Total Cargos (Debe)', value: formatUsd(targetAcc.totalDebeUsd || 0), subtext: `${movements.length} movimientos`, color: COLORS.emerald },
+    { label: 'Total Abonos (Haber)', value: formatUsd(targetAcc.totalHaberUsd || 0), subtext: formatBs((targetAcc.totalHaberUsd || 0) * tasa), color: COLORS.cyan },
+    { label: 'Saldo Final Acumulado', value: formatUsd(targetAcc.saldoFinalUsd || 0), subtext: formatBs((targetAcc.saldoFinalUsd || 0) * tasa), color: (targetAcc.saldoFinalUsd || 0) >= 0 ? COLORS.navy : COLORS.red }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  currentY = addAnalyticalBox(
+    base.doc,
+    currentY,
+    'FICHA DE CUENTA CONTABLE EN MAYOR',
+    `Código Institucional: ${targetAcc.codigo} | Denominación: ${targetAcc.nombre} | Grupo: ${targetAcc.grupo || '-'} | Naturaleza: ${targetAcc.naturaleza || 'DEUDORA'} | Movimientos Cronológicos: ${movements.length}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const body = movements.length > 0
+    ? movements.map(m => [
+        m.fecha ? String(m.fecha).slice(0, 10) : '-',
+        String(m.asientoNum || '-'),
+        String(m.documentoReferencia || '-'),
+        String(m.concepto || '-'),
+        m.debeUsd > 0 ? formatUsd(m.debeUsd) : '-',
+        m.haberUsd > 0 ? formatUsd(m.haberUsd) : '-',
+        formatUsd(m.saldoAcumuladoUsd || 0)
+      ])
+    : [['-', '-', '-', 'Sin movimientos cronológicos para esta cuenta', '$ 0.00', '$ 0.00', '$ 0.00']];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_BASE,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    showFoot: 'lastPage',
+    head: [['FECHA', 'ASIENTO', 'REFERENCIA', 'CONCEPTO / GLOSA CONTABLE', 'DEBE USD', 'HABER USD', 'SALDO ACUM.']],
+    body,
+    foot: [[
+      'TOTALES',
+      `${movements.length} movs`,
+      targetAcc.codigo,
+      'Totales Acumulados de la Cuenta',
+      formatUsd(targetAcc.totalDebeUsd || 0),
+      formatUsd(targetAcc.totalHaberUsd || 0),
+      formatUsd(targetAcc.saldoFinalUsd || 0)
+    ]],
+    footStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.4, fontStyle: 'bold', cellPadding: 1.7 },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 18 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
+      2: { cellWidth: 22 },
+      3: { cellWidth: 55.9 },
+      4: { halign: 'right', cellWidth: 21 },
+      5: { halign: 'right', cellWidth: 21 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 }
+    }
+  });
+
+  const afterY = base.doc.lastAutoTable?.finalY || currentY;
+  addSignatures(base.doc, afterY + 5, ['Elaborado por (Contabilidad)', 'Revisado por (Auditoría Interna)', 'Aprobado por (Gerencia)'], base.tableWidth, base.startX);
+  const safeCode = String(targetAcc.codigo || 'General').replace(/[^a-zA-Z0-9_-]/g, '_');
+  finalizeAndSave(base.doc, `Libro_Mayor_${safeCode}_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+export function generateFinancialStatementsPDF({ financialStatements = null, trialBalance = null, entries = [], config = {}, currentUser = null } = {}) {
+  const fsData = financialStatements || buildFinancialStatements(trialBalance || buildTrialBalance(entries));
+  const er = fsData?.estadoResultados || {
+    ingresos: [],
+    costos: [],
+    egresos: [],
+    totalIngresosUsd: 0,
+    totalIngresosBs: 0,
+    totalCostosUsd: 0,
+    totalCostosBs: 0,
+    utilidadBrutaUsd: 0,
+    utilidadBrutaBs: 0,
+    totalEgresosUsd: 0,
+    totalEgresosBs: 0,
+    resultadoEjercicioUsd: 0,
+    resultadoEjercicioBs: 0,
+    cuentaResultadoCodigo: '3.02.01.001',
+    cuentaResultadoNombre: 'Superavit del Ejercicio'
+  };
+  const bg = fsData?.balanceGeneral || {
+    activo: [],
+    pasivo: [],
+    patrimonio: [],
+    totalActivoUsd: 0,
+    totalActivoBs: 0,
+    totalPasivoUsd: 0,
+    totalPasivoBs: 0,
+    resultadoEjercicioUsd: 0,
+    resultadoEjercicioBs: 0,
+    totalPatrimonioUsd: 0,
+    totalPatrimonioBs: 0,
+    totalPasivoYPatrimonioUsd: 0,
+    totalPasivoYPatrimonioBs: 0,
+    diferenciaEcuacionUsd: 0,
+    ecuacionCuadrada: true
+  };
+  const tasa = Number(config?.tasaDolar || 827.73);
+  const makeRow = (code, label, usd, bs, meta = null) => {
+    const row = [code, label, formatUsd(usd || 0), formatBs(bs ?? Number(usd || 0) * tasa)];
+    if (meta) row.__meta = meta;
+    return row;
+  };
+
+  const base = createBaseReport({
+    title: 'ESTADOS FINANCIEROS BÁSICOS (BA VEN-NIF 2)',
+    subtitle: 'Estado de Resultados Integral y Estado de Situación Financiera (Balance General)',
+    moduleCode: 'EF',
+    currentUser,
+    config
+  });
+
+  const cards = [
+    { label: 'Ingresos Netos', value: formatUsd(er.totalIngresosUsd), subtext: `Utilidad Bruta: ${formatUsd(er.utilidadBrutaUsd)}`, color: COLORS.cyan },
+    { label: 'Resultado del Ejercicio', value: formatUsd(er.resultadoEjercicioUsd), subtext: `${er.cuentaResultadoCodigo} • ${er.cuentaResultadoNombre}`, color: er.resultadoEjercicioUsd >= 0 ? COLORS.emerald : COLORS.red },
+    { label: 'Total Activo', value: formatUsd(bg.totalActivoUsd), subtext: `Pasivo + Patr.: ${formatUsd(bg.totalPasivoYPatrimonioUsd)}`, color: COLORS.navy },
+    { label: 'Ecuación Patrimonial', value: bg.ecuacionCuadrada ? 'CUADRADA' : 'DESCUADRE', subtext: `Diferencia: ${formatUsd(bg.diferenciaEcuacionUsd)}`, color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  currentY = addSectionHeader(
+    base.doc,
+    currentY,
+    '1. ESTADO DE RESULTADOS INTEGRAL (PERÍODO OPERATIVO)',
+    'Clasificación oficial según Plan de Cuentas: Grupos 4 (Ingresos), 5 (Costos) y 6 (Egresos)',
+    base.tableWidth,
+    base.startX
+  );
+
+  const erBody = [
+    makeRow('4', '4. INGRESOS OPERACIONALES Y OTROS', er.totalIngresosUsd, er.totalIngresosBs, 'group'),
+    ...(er.ingresos.length > 0 ? er.ingresos.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin ingresos registrados en el período', 0, 0)]),
+    makeRow('', 'TOTAL INGRESOS NETOS', er.totalIngresosUsd, er.totalIngresosBs, 'subtotal'),
+    makeRow('5', '5. COSTOS DE VENTAS Y SERVICIOS', er.totalCostosUsd, er.totalCostosBs, 'group'),
+    ...(er.costos.length > 0 ? er.costos.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin costos registrados en el período', 0, 0)]),
+    makeRow('', 'UTILIDAD BRUTA EN VENTAS', er.utilidadBrutaUsd, er.utilidadBrutaBs, 'subtotal'),
+    makeRow('6', '6. GASTOS OPERATIVOS / EGRESOS', er.totalEgresosUsd, er.totalEgresosBs, 'group'),
+    ...(er.egresos.length > 0 ? er.egresos.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin egresos operativos registrados en el período', 0, 0)]),
+    makeRow('', 'TOTAL GASTOS OPERATIVOS', er.totalEgresosUsd, er.totalEgresosBs, 'subtotal'),
+    makeRow(er.cuentaResultadoCodigo, `RESULTADO DEL EJERCICIO (${er.cuentaResultadoNombre.toUpperCase()})`, er.resultadoEjercicioUsd, er.resultadoEjercicioBs, 'total')
+  ];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_BASE,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CÓDIGO', 'CUENTA / CONCEPTO DEL RESULTADO', 'MONTO USD', 'MONTO BS.']],
+    body: erBody,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 26 },
+      1: { cellWidth: 89.9 },
+      2: { halign: 'right', cellWidth: 30 },
+      3: { halign: 'right', cellWidth: 34 }
+    },
+    didParseCell: styleAccountingStatementCell
+  });
+
+  currentY = (base.doc.lastAutoTable?.finalY || currentY) + 4;
+  currentY = addSectionHeader(
+    base.doc,
+    currentY,
+    '2. BALANCE GENERAL (ESTADO DE SITUACIÓN FINANCIERA)',
+    'Ecuación Patrimonial BA VEN-NIF 2: Activo = Pasivo + Patrimonio + Resultado del Ejercicio',
+    base.tableWidth,
+    base.startX
+  );
+
+  const bgBody = [
+    makeRow('1', '1. ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'group'),
+    ...(bg.activo.length > 0 ? bg.activo.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin cuentas de activo con movimiento', 0, 0)]),
+    makeRow('', 'TOTAL ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'total'),
+    makeRow('2', '2. PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'group'),
+    ...(bg.pasivo.length > 0 ? bg.pasivo.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin cuentas de pasivo con movimiento', 0, 0)]),
+    makeRow('', 'TOTAL PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'subtotal'),
+    makeRow('3', '3. PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'group'),
+    ...(bg.patrimonio || []).map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)),
+    makeRow(er.cuentaResultadoCodigo, er.cuentaResultadoNombre, bg.resultadoEjercicioUsd, bg.resultadoEjercicioBs),
+    makeRow('', 'TOTAL PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'subtotal'),
+    makeRow('', 'TOTAL PASIVO + PATRIMONIO', bg.totalPasivoYPatrimonioUsd, bg.totalPasivoYPatrimonioBs, 'total')
+  ];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_BASE,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CÓDIGO', 'CUENTA / RUBRO DE SITUACIÓN FINANCIERA', 'MONTO USD', 'MONTO BS.']],
+    body: bgBody,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 26 },
+      1: { cellWidth: 89.9 },
+      2: { halign: 'right', cellWidth: 30 },
+      3: { halign: 'right', cellWidth: 34 }
+    },
+    didParseCell: styleAccountingStatementCell
+  });
+
+  const afterBgY = base.doc.lastAutoTable?.finalY || currentY;
+  const totalBoxY = addGrandTotalBox(
+    base.doc,
+    afterBgY + 3,
+    [
+      { label: 'TOTAL ACTIVO', value: formatUsd(bg.totalActivoUsd), subtext: formatBs(bg.totalActivoBs || bg.totalActivoUsd * tasa), color: COLORS.navy },
+      { label: 'PASIVO + PATRIMONIO', value: formatUsd(bg.totalPasivoYPatrimonioUsd), subtext: formatBs(bg.totalPasivoYPatrimonioBs || bg.totalPasivoYPatrimonioUsd * tasa), color: COLORS.cyan },
+      { label: 'DIFERENCIA ECUACIÓN', value: formatUsd(bg.diferenciaEcuacionUsd), subtext: bg.ecuacionCuadrada ? 'BA VEN-NIF 2 Cuadrado' : 'Descuadre detectado', color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red }
+    ],
+    base.tableWidth,
+    base.startX
+  );
+  addSignatures(base.doc, totalBoxY + 4, ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'], base.tableWidth, base.startX);
+  finalizeAndSave(base.doc, `Estados_Financieros_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+export function generateAuditLedgerPDF({
+  entries = [],
+  auditLogs = [],
+  trialBalance = null,
+  generalLedger = null,
+  activeMayorAccount = null,
+  financialStatements = null,
+  config = {},
+  currentUser = null,
+  subTab = 'diario'
+}) {
+  if (subTab === 'balance') {
+    return generateTrialBalancePDF({ trialBalance, entries, config, currentUser });
+  }
+  if (subTab === 'mayor') {
+    return generateGeneralLedgerPDF({ account: activeMayorAccount, generalLedger, entries, config, currentUser });
+  }
+  if (subTab === 'estados') {
+    return generateFinancialStatementsPDF({ financialStatements, trialBalance, entries, config, currentUser });
+  }
+
+  const isDiario = subTab === 'diario' || subTab === 'export';
   const base = createBaseReport({
     title: isDiario ? 'LIBRO DIARIO GENERAL & ASIENTOS CONTABLES DIGITALES' : 'BITÁCORA DE AUDITORÍA DE SEGURIDAD & TRAZABILIDAD',
     subtitle: 'Registro de Partida Doble Automatizada, Eventos del Sistema y Trazabilidad de Operadores',
@@ -5444,11 +5825,11 @@ export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = 
     { label: 'Motor Trazabilidad', value: 'SHA-256', subtext: 'Inmutable', color: COLORS.amber }
   ];
 
-  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  const currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
   if (isDiario) {
     const tableData = [];
-    entries.slice(0, 18).forEach((e) => {
+    entries.forEach((e) => {
       (e.lines || []).forEach((l) => {
         tableData.push([
           String(e.asientoNum || '-'),
@@ -5495,7 +5876,7 @@ export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = 
       }
     });
   } else {
-    const tableData = auditLogs.slice(0, 20).map((l) => [
+    const tableData = auditLogs.map((l) => [
       l.fecha ? String(l.fecha).replace('T', ' ').slice(0, 16) : '2026-10-23',
       l.usuario || l.usuarioNombre || 'OPERADOR',
       l.tipo || l.accion || 'EVENTO',
@@ -5536,6 +5917,266 @@ export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = 
   }
 
   finalizeAndSave(base.doc, `Reporte_Auditoria_Contable_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 12B. REPORTE CONSOLIDADO DE CUENTAS POR COBRAR (FACTURAS + NOTAS)
+// =========================================================================
+export function generateConsolidatedCxcPDF({
+  docs = [],
+  clientRows = [],
+  totals = null,
+  visibleTotals = null,
+  tasaBcv = 1,
+  viewMode = 'DOCS',
+  filters = {},
+  config = {},
+  currentUser = null
+} = {}) {
+  const docList = Array.isArray(docs) ? docs : [];
+  const clientList = Array.isArray(clientRows) ? clientRows : [];
+  const rate = Number(tasaBcv) || Number(config?.tasaDolar) || 451.51;
+  const isClientsView = viewMode === 'CLIENTES';
+
+  const aggregateDocs = (predicate) => (predicate ? docList.filter(predicate) : docList).reduce(
+    (acc, item) => {
+      const monto = Number(item.montoFacturaUsd ?? item.totalFacturaUsd ?? 0);
+      const abonos = Number(item.abonosUsd ?? item.montoPagadoUsd ?? 0);
+      const restante = Number(item.restanteUsd ?? item.saldoPendienteUsd ?? item.saldoUsd ?? 0);
+      const isOverdue = item.estado === 'VENCIDA' || Number(item.diasVencidos ?? 0) > 0;
+      acc.count += 1;
+      acc.monto += monto;
+      acc.abonos += abonos;
+      acc.restante += restante;
+      if (isOverdue) {
+        acc.vencido += restante;
+        acc.vencidas += 1;
+      }
+      return acc;
+    },
+    { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+  );
+
+  const facTotals = totals?.fac || aggregateDocs(d => d.tipoDoc !== 'NOTA_ENTREGA');
+  const neTotals = totals?.ne || aggregateDocs(d => d.tipoDoc === 'NOTA_ENTREGA');
+  const allTotals = totals?.all || {
+    count: facTotals.count + neTotals.count,
+    monto: facTotals.monto + neTotals.monto,
+    abonos: facTotals.abonos + neTotals.abonos,
+    restante: facTotals.restante + neTotals.restante,
+    vencido: facTotals.vencido + neTotals.vencido,
+    vencidas: facTotals.vencidas + neTotals.vencidas
+  };
+
+  const visibleSummary = visibleTotals || (isClientsView
+    ? clientList.reduce(
+        (acc, c) => {
+          acc.count += Number(c.fac?.count || 0) + Number(c.ne?.count || 0);
+          acc.monto += Number(c.totalMonto || 0);
+          acc.abonos += Number(c.totalAbonos || 0);
+          acc.restante += Number(c.totalRestante || 0);
+          return acc;
+        },
+        { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+      )
+    : aggregateDocs(null));
+
+  const base = createBaseReport({
+    title: isClientsView
+      ? 'REPORTE CONSOLIDADO CXC POR CLIENTE (FACTURAS + NOTAS)'
+      : 'REPORTE CONSOLIDADO CXC — FACTURAS FISCALES + NOTAS DE ENTREGA',
+    subtitle: isClientsView
+      ? 'Cartera Consolidada Agrupada por Cliente • Facturas Fiscales SENIAT + Notas de Entrega Sumadas'
+      : 'Cartera Total Sumada de Ambos Tipos de Documento • Trazabilidad Integral de Cobros',
+    moduleCode: 'CXC-CON',
+    currentUser,
+    config,
+    orientation: 'landscape',
+    rateValue: rate
+  });
+
+  const cards = [
+    { label: 'Facturas Fiscales', value: formatUsd(facTotals.restante), subtext: `${facTotals.count} docs • Mto: ${formatUsd(facTotals.monto)}`, color: COLORS.navy },
+    { label: 'Notas de Entrega', value: formatUsd(neTotals.restante), subtext: `${neTotals.count} docs • Mto: ${formatUsd(neTotals.monto)}`, color: COLORS.amber },
+    { label: 'Total Consolidado', value: formatUsd(allTotals.restante), subtext: `${allTotals.count} docs • ${formatBs(allTotals.restante * rate)}`, color: COLORS.emerald },
+    { label: isClientsView ? 'Clientes en Tabla' : 'Docs en Tabla', value: isClientsView ? `${clientList.length} Clientes` : `${docList.length} Documentos`, subtext: `Restante visible: ${formatUsd(visibleSummary.restante)}`, color: COLORS.cyan }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  const filterParts = [
+    `Vista: ${isClientsView ? 'Por Cliente (Agrupado)' : 'Por Documento'}`,
+    `Tipo: ${filters?.typeLabel || 'Ambos (FAC + NE)'}`,
+    `Estado: ${filters?.statusLabel || 'Cartera activa'}`,
+    `Vendedor: ${filters?.sellerLabel || 'Todos los vendedores'}`
+  ];
+  if (filters?.searchTerm) {
+    filterParts.push(`Búsqueda: "${String(filters.searchTerm).trim()}"`);
+  }
+
+  currentY = addAnalyticalBox(
+    base.doc,
+    currentY,
+    'DESGLOSE CONSOLIDADO Y FILTROS APLICADOS',
+    `${filterParts.join(' | ')}\nFacturas Fiscales (${facTotals.count}): Monto ${formatUsd(facTotals.monto)}, Abonos ${formatUsd(facTotals.abonos)}, Restante ${formatUsd(facTotals.restante)} • Notas de Entrega (${neTotals.count}): Monto ${formatUsd(neTotals.monto)}, Abonos ${formatUsd(neTotals.abonos)}, Restante ${formatUsd(neTotals.restante)} • Vencido Total: ${formatUsd(allTotals.vencido)} (${allTotals.vencidas} docs).`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const fmtShortDate = (raw) => {
+    if (!raw) return '—';
+    const dt = raw instanceof Date ? raw : new Date(raw);
+    if (isNaN(dt.getTime())) return String(raw).slice(0, 10);
+    return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
+  };
+
+  if (isClientsView) {
+    const sumFacCount = clientList.reduce((acc, c) => acc + Number(c.fac?.count || 0), 0);
+    const sumFacRestante = clientList.reduce((acc, c) => acc + Number(c.fac?.restante || 0), 0);
+    const sumNeCount = clientList.reduce((acc, c) => acc + Number(c.ne?.count || 0), 0);
+    const sumNeRestante = clientList.reduce((acc, c) => acc + Number(c.ne?.restante || 0), 0);
+
+    const body = clientList.map(c => [
+      String(c.cliente || 'Cliente Comercial'),
+      String(c.rif || 'N/A'),
+      String(c.fac?.count || 0),
+      formatUsd(c.fac?.restante || 0),
+      String(c.ne?.count || 0),
+      formatUsd(c.ne?.restante || 0),
+      formatUsd(c.totalMonto || 0),
+      formatUsd(c.totalAbonos || 0),
+      formatUsd(c.totalRestante || 0),
+      formatBs(Number(c.totalRestante || 0) * rate),
+      String(Number(c.maxDias || 0))
+    ]);
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['CLIENTE', 'RIF', 'N° FAC.', 'SALDO FACTURAS', 'N° NOTAS', 'SALDO NOTAS', 'MONTO TOTAL', 'ABONOS', 'SALDO TOTAL ($)', 'SALDO TOTAL (BS.)', 'MÁX. DÍAS']],
+      body: body.length > 0 ? body : [['No hay clientes que coincidan con los filtros.', '-', '0', '$ 0.00', '0', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00', 'Bs. 0,00', '0']],
+      foot: [[
+        { content: `TOTAL (${clientList.length} clientes)`, colSpan: 2, styles: { halign: 'left' } },
+        String(sumFacCount),
+        formatUsd(sumFacRestante),
+        String(sumNeCount),
+        formatUsd(sumNeRestante),
+        formatUsd(visibleSummary.monto),
+        formatUsd(visibleSummary.abonos),
+        formatUsd(visibleSummary.restante),
+        formatBs(visibleSummary.restante * rate),
+        ''
+      ]],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
+      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { cellWidth: 48.4, fontStyle: 'bold' },
+        1: { cellWidth: 20, halign: 'center' },
+        2: { cellWidth: 11, halign: 'right', textColor: COLORS.navy, fontStyle: 'bold' },
+        3: { cellWidth: 23, halign: 'right', textColor: COLORS.navy },
+        4: { cellWidth: 11, halign: 'right', textColor: COLORS.amber, fontStyle: 'bold' },
+        5: { cellWidth: 23, halign: 'right', textColor: COLORS.amber },
+        6: { cellWidth: 23, halign: 'right' },
+        7: { cellWidth: 21, halign: 'right', textColor: COLORS.emerald },
+        8: { cellWidth: 23, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        9: { cellWidth: 28, halign: 'right', textColor: COLORS.slate },
+        10: { cellWidth: 12, halign: 'right', fontStyle: 'bold' }
+      }
+    });
+  } else {
+    const body = docList.map(d => {
+      const isNe = d.tipoDoc === 'NOTA_ENTREGA';
+      const statusLabel = d.estado === 'VENCIDA' ? 'VENCIDA' : (d.estado === 'PAGADA' ? 'SOLVENTE' : 'AL DÍA');
+      const rawDocNum = String(d.factura || d.factNum || d.nroDoc || d.id || '0000');
+      const formattedDocNum = rawDocNum.startsWith('#') ? rawDocNum : `#${rawDocNum}`;
+      return [
+        isNe ? 'NOTA ENT.' : 'FACTURA',
+        formattedDocNum,
+        String(d.cliente || d.clienteNombre || 'Cliente Comercial'),
+        String(d.rif || d.clienteRif || 'N/A'),
+        String(d.vendedorId || d.vendedor || 'OF'),
+        fmtShortDate(d.fechaEmision || d.fechaEmisionIso),
+        fmtShortDate(d.fechaVencimiento || d.fechaVencimientoIso),
+        String(Number(d.diasVencidos ?? 0)),
+        formatUsd(d.montoFacturaUsd ?? 0),
+        formatUsd(d.abonosUsd ?? 0),
+        formatUsd(d.restanteUsd ?? 0),
+        statusLabel
+      ];
+    });
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'VEND.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
+      body: body.length > 0 ? body : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
+      foot: [[
+        { content: `TOTAL (${docList.length} documentos)`, colSpan: 8, styles: { halign: 'left' } },
+        formatUsd(visibleSummary.monto),
+        formatUsd(visibleSummary.abonos),
+        formatUsd(visibleSummary.restante),
+        ''
+      ]],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
+      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 52.4 },
+        3: { cellWidth: 21, halign: 'center' },
+        4: { cellWidth: 13, halign: 'center' },
+        5: { cellWidth: 17, halign: 'center' },
+        6: { cellWidth: 17, halign: 'center' },
+        7: { cellWidth: 11, halign: 'right', fontStyle: 'bold' },
+        8: { cellWidth: 19, halign: 'right' },
+        9: { cellWidth: 19, halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold' },
+        10: { cellWidth: 19, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        11: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body') {
+          if (data.column.index === 0) {
+            const isNota = String(data.cell.raw || '').includes('NOTA');
+            data.cell.styles.textColor = isNota ? COLORS.amber : COLORS.cyan;
+          } else if (data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+            data.cell.text = '';
+          }
+        }
+      },
+      didDrawCell: (data) => {
+        if (data.section === 'body' && data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+          drawStatusBadge(base.doc, data.cell, data.cell.raw);
+        }
+      }
+    });
+  }
+
+  const afterTableY = base.doc.lastAutoTable?.finalY || currentY;
+  addGrandTotalBox(
+    base.doc,
+    afterTableY + 3.5,
+    [
+      { label: 'MONTO EN TABLA (FAC + NE)', value: formatUsd(visibleSummary.monto), subtext: `Abonos: ${formatUsd(visibleSummary.abonos)}`, color: COLORS.navy },
+      { label: 'SALDO RESTANTE EN TABLA', value: formatUsd(visibleSummary.restante), subtext: isClientsView ? `${clientList.length} clientes • ${visibleSummary.count} docs` : `${docList.length} documentos`, color: visibleSummary.restante > 0 ? COLORS.red : COLORS.emerald },
+      { label: 'EQUIVALENTE EN BOLÍVARES', value: formatBs(visibleSummary.restante * rate), subtext: `Tasa BCV: ${formatBs(rate)}`, color: COLORS.emerald }
+    ],
+    base.tableWidth,
+    base.startX
+  );
+
+  const fileSuffix = isClientsView ? 'Por_Cliente' : 'Documentos';
+  finalizeAndSave(base.doc, `Reporte_CxC_Consolidado_${fileSuffix}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================

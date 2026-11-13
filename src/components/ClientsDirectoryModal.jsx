@@ -33,6 +33,7 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { PERSON_PREFIXES, detectPersonPrefix, applyPersonPrefixToRif, validateRifOrCedula } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 
 export default function ClientsDirectoryModal({
@@ -63,7 +64,8 @@ export default function ClientsDirectoryModal({
   const [clientForm, setClientForm] = useState({
     codigo: '',
     nombre: '',
-    rif: '',
+    tipoPersona: 'J',
+    rif: 'J-',
     tipoCliente: 'Mayorista',
     direccion: '',
     telefono: '',
@@ -246,7 +248,8 @@ export default function ClientsDirectoryModal({
     setClientForm({
       codigo: `CLI-${Date.now().toString().slice(-6)}`,
       nombre: '',
-      rif: '',
+      tipoPersona: 'J',
+      rif: 'J-',
       tipoCliente: 'Mayorista',
       direccion: 'Valencia, Carabobo',
       telefono: '',
@@ -263,11 +266,13 @@ export default function ClientsDirectoryModal({
   const handleOpenEdit = (client) => {
     if (!client) return;
     setIsEditing(true);
+    const detectedPrefix = detectPersonPrefix(client);
     setClientForm({
       id: client.id || client.codigo,
       codigo: client.codigo || client.id || '',
       nombre: client.nombre || '',
-      rif: client.rif || '',
+      tipoPersona: detectedPrefix,
+      rif: client.rif || `${detectedPrefix}-`,
       tipoCliente: client.tipoCliente || 'Mayorista',
       direccion: client.direccion || '',
       telefono: client.telefono || '',
@@ -308,8 +313,9 @@ export default function ClientsDirectoryModal({
       notifyError('La razón social o nombre es obligatoria');
       return;
     }
-    if (!clientForm.rif.trim()) {
-      notifyError('El RIF es obligatorio');
+    const normalizedRif = applyPersonPrefixToRif(clientForm.rif, clientForm.tipoPersona || 'J');
+    if (!/[0-9]{5,}/.test(normalizedRif)) {
+      notifyError('El RIF o Cédula es obligatorio (mínimo 5 dígitos)');
       return;
     }
 
@@ -320,7 +326,9 @@ export default function ClientsDirectoryModal({
         id: clientForm.id || clientForm.codigo.trim(),
         codigo: clientForm.codigo.trim().toUpperCase(),
         nombre: clientForm.nombre.trim(),
-        rif: clientForm.rif.trim().toUpperCase(),
+        tipoPersona: clientForm.tipoPersona || detectPersonPrefix({ rif: normalizedRif }),
+        tipoContribuyente: clientForm.tipoPersona || detectPersonPrefix({ rif: normalizedRif }),
+        rif: normalizedRif,
         limiteCreditoUsd: Number(clientForm.limiteCreditoUsd || 0),
         diasCredito: Number(clientForm.diasCredito || 0)
       };
@@ -1253,15 +1261,54 @@ export default function ClientsDirectoryModal({
 
                   <div>
                     <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      RIF (rif) *
+                      CLASIFICACIÓN SENIAT (TIPO PERSONA) *
+                    </label>
+                    <select
+                      value={clientForm.tipoPersona || 'J'}
+                      onChange={e => {
+                        const prefix = e.target.value;
+                        setClientForm(prev => ({
+                          ...prev,
+                          tipoPersona: prefix,
+                          rif: applyPersonPrefixToRif(prev.rif, prefix)
+                        }));
+                      }}
+                      disabled={isSavingClient}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-glass, #334155)',
+                        background: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.82rem'
+                      }}
+                    >
+                      {PERSON_PREFIXES.map(p => (
+                        <option key={p.code} value={p.code}>{p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
+                      RIF / CÉDULA ({clientForm.tipoPersona || 'J'}) *
                     </label>
                     <input
                       type="text"
                       required
                       value={clientForm.rif}
-                      onChange={e => setClientForm({ ...clientForm, rif: e.target.value.toUpperCase() })}
+                      onChange={e => {
+                        const val = e.target.value.toUpperCase();
+                        const m = val.trim().match(/^([JVEGP])/);
+                        setClientForm(prev => ({
+                          ...prev,
+                          tipoPersona: m ? m[1] : prev.tipoPersona,
+                          rif: val
+                        }));
+                      }}
                       disabled={isSavingClient}
-                      placeholder="Ej: J-12345678-9"
+                      placeholder={clientForm.tipoPersona === 'V' || clientForm.tipoPersona === 'E' ? `Ej: ${clientForm.tipoPersona}-12345678 o ${clientForm.tipoPersona}-12345678-9` : `Ej: ${clientForm.tipoPersona || 'J'}-12345678-9`}
                       style={{
                         width: '100%',
                         padding: '9px 12px',
@@ -1273,6 +1320,16 @@ export default function ClientsDirectoryModal({
                         fontSize: '0.85rem'
                       }}
                     />
+                    {(() => {
+                      const normalized = applyPersonPrefixToRif(clientForm.rif, clientForm.tipoPersona || 'J');
+                      if (!/[0-9]{5,}/.test(normalized)) return null;
+                      const check = validateRifOrCedula(normalized, clientForm.tipoPersona || 'J');
+                      return (
+                        <div style={{ fontSize: '0.7rem', color: check.isValid ? '#34d399' : '#fbbf24', marginTop: '4px', fontWeight: 600 }}>
+                          {check.isValid ? '✓ ' : '⚠ '}{check.message}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 

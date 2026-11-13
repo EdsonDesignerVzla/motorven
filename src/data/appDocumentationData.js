@@ -5,25 +5,24 @@
 
 export const SYSTEM_METADATA = {
   appName: "SIGNUM MOTORVEN ERP & POS",
-  version: "5.0.0 Enterprise Multi-Device",
+  version: "5.5.0 Enterprise Multi-Device",
   company: "SIGNUM MOTORVEN, C.A. / GRUPO MOTORVEN",
-  rif: "J-30401927-4",
-  databaseSync: "Supabase (GRUMOTOR SQL Server) + Supabase PostgreSQL Realtime",
-  lastUpdated: "Octubre 2026",
-  author: "Equipo de Arquitectura y Desarrollo de Sistemas SIGNUM MOTORVEN",
+  rif: "J-50478166-0",
+  databaseSync: "Servidor Central PostgreSQL / Local DB (api.signummotorven.com) + Profit Plus GRUMOTOR",
+  lastUpdated: "Noviembre 2026",
+  author: "Equipo de Arquitectura, Finanzas y Sistemas SIGNUM MOTORVEN",
   recentMilestones: [
-    "Sincronización Bidireccional Completa (CRUD) Supabase ↔ Supabase: Crear, Guardar/Modificar y Eliminar clientes, lubricantes y pedidos en vivo.",
-    "Motor Smart Merge: Fusión inteligente de datos que preserva imágenes HD 4K, fichas de viscosidad, especificaciones de laboratorio, contraseñas encriptadas, roles y georreferenciación GPS.",
-    "Gestión Inteligente de Eliminación: Hard-delete para registros limpios y Soft-delete automático para resguardar la trazabilidad fiscal SENIAT.",
-    "Directorio Oficial de Clientes con alta, edición, desactivación y sincronización en tiempo real con Supabase.",
-    "Sincronización Anual 2026 Completa con Supabase SQL Server (GRUMOTOR): 2.493 facturas, 4.050 renglones y 155.199,9 Litros reales facturados.",
-    "Ejercicio y Período Fiscal Parametrizable con fechas de inicio y corte editables y preservación de historial de cierres anuales.",
-    "Explorador Multi-Base de Datos en vivo de las 49 tablas transaccionales de SQL Server y réplica local autónoma.",
-    "Arquitectura Standalone 100% Autónoma con soporte para despliegue web estático en GitHub Pages (carpeta dist y ZIP).",
-    "Centro de Notificaciones & Alertas en tiempo real con persistencia local e impresión oficial PDF.",
-    "Gestión, asignación y reasignación de Zonas Comerciales por Asesor de Ventas con cuotas individuales.",
-    "Jerarquía estricta de 9 Roles con blindaje ergonómico de contraseñas (.btn-password-eye) y cero solapamientos.",
-    "Batería completa y homologada de 28 Reportes Oficiales en PDF con membrete corporativo y firmas legales."
+    "Plan de Cuentas Oficial Pro Motorven C.A. integrado al 100%: catálogo jerárquico de 156 cuentas en 6 grupos (Activo, Pasivo, Patrimonio, Ingresos, Costos, Egresos) con 99 cuentas imputables.",
+    "Motor Contable Automático de Partida Doble (accountingService.js): asientos balanceados en tiempo real (Debe === Haber) para Ventas, Cobranzas, Compras SENIAT, Pagos a Proveedores y Caja Chica.",
+    "Ciclo Contable Completo en Auditoría & Contable: Libro Diario, Libro Mayor General Analítico con naturaleza deudora/acreedora, Balance de Comprobación de Sumas y Saldos y Estados Financieros Básicos BA VEN-NIF 2 (Estado de Resultados Integral y Balance General con ecuación patrimonial cuadrada).",
+    "Impresión Formal en PDF para Contabilidad & CxC Consolidado: generadores dedicados tamaño Carta con firmas oficiales para Balance de Comprobación, Mayor General por cuenta, Estados Financieros BA VEN-NIF 2 y CxC Consolidado (FAC + NE).",
+    "Cuentas por Cobrar (CxC) Unificado con Vista Consolidada (FAC + NE) y Registro de Cobros Parte A: separación Facturas Fiscales (Almacén 01) vs. Notas de Entrega (Almacén 02), actualización simultánea de documento, recibo COB-XXXXXX, Banco/Caja receptora, saldo del cliente y asiento contable.",
+    "Integración Compras ➔ Retenciones SENIAT ➔ Cuentas por Pagar (CxP): cálculo automático de IVA, Retención de IVA (comprobante 14 dígitos), Retención de ISLR y Neto a Pagar, con tramos de mora, Notas de Crédito y Parte A de pagos a proveedores.",
+    "Mapeo Inteligente de Proveedores y Tesorería: clasificación contable automática para Keyton (2.02.02.002), Kontigo (2.02.02.003) y Proveedores Comerciales (2.02.02.001), así como Cajas (1.01.01.001/.002/.004) y 10 Cuentas Bancarias (1.01.02.001-.008).",
+    "Preventa Móvil y Flujo Comercial con Reserva ATP de 72 Horas: fórmula D = max(0, Stock Físico - Comprometido 72h - En Carrito), expiración automática de reservas vencidas, carrito optimizado de envío directo a Flujo Comercial, directorio 'Mis Clientes' con alertas ≤3 días por vencer y bloqueo estricto con stock 0 en Almacén 01 / Almacén 02.",
+    "Alta y Aprobación de Clientes con Validación SENIAT Módulo 11 y Prefijo J/V/E/G/P: flujo controlado PENDIENTE ➔ APROBADO/RECHAZADO en Preventa Móvil (SOLICITUD_CLIENTE), Ventas POS, Directorio y Flujo Comercial.",
+    "Batería Homologada de Reportes Oficiales en PDF sin solapamientos ni desbordes: paginación 1/N estandarizada en Inventario, Compras (REQ-OC-REC), Devoluciones, Traslados, Ajustes, OP, Libro de Ventas y Contabilidad.",
+    "Respaldo Automático y Despliegue Blindado: script de backup completo (npm run backup) y sincronización bidireccional Supabase PostgreSQL ↔ Profit Plus GRUMOTOR."
   ]
 };
 

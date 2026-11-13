@@ -107,6 +107,62 @@ export const validateCedula = (cedula) => {
   return regex.test(clean);
 };
 
+export const PERSON_PREFIXES = ['J', 'V', 'E', 'G', 'P'];
+
+export const detectPersonPrefix = (entity) => {
+  if (!entity) return 'J';
+  const rawTipo = String(entity.tipoPersona || entity.tipo_persona || entity.tipoContribuyente || '').trim().toUpperCase();
+  if (PERSON_PREFIXES.includes(rawTipo)) return rawTipo;
+  const rifMatch = String(entity.rif || entity.codigo || entity.id || '').trim().toUpperCase().match(/^([JVEGP])/);
+  if (rifMatch) return rifMatch[1];
+  const cliType = String(entity.tipoCliente || '').trim().toUpperCase();
+  if (PERSON_PREFIXES.includes(cliType)) return cliType;
+  const name = String(entity.nombre || entity.razonSocial || '').toUpperCase();
+  if (/(ALCALD|MINISTERIO|GOBERNACI|INSTITUTO|FUNDACI|CONCEJO|ENTE )/.test(name)) return 'G';
+  if (/(C\.A|S\.A|S\.R\.L|R\.L|INVERSIONES|DISTRIBUIDORA|CORPORACI|COMERCIALIZADORA|SERVICIOS|TRANSPORTE|LUBRICANTES|REPUESTOS|AUTO)/.test(name)) return 'J';
+  return 'V';
+};
+
+export const applyPersonPrefixToRif = (rawValue, prefix) => {
+  const validPrefix = PERSON_PREFIXES.includes(String(prefix || '').toUpperCase()) ? String(prefix).toUpperCase() : 'J';
+  const clean = String(rawValue || '').trim().toUpperCase();
+  if (!clean) return `${validPrefix}-`;
+  const body = clean.replace(/^[JVEGPC][-\s]*/i, '').replace(/^-+/, '');
+  return body ? `${validPrefix}-${body}` : `${validPrefix}-`;
+};
+
+export const countPersonTypes = (entities = []) => {
+  const counts = { J: 0, V: 0, E: 0, G: 0, P: 0 };
+  (entities || []).forEach((item) => {
+    if (!item) return;
+    const prefix = detectPersonPrefix(item);
+    if (counts[prefix] !== undefined) counts[prefix] += 1;
+  });
+  return counts;
+};
+
+export const validateRifOrCedula = (rawValue, preferredPrefix) => {
+  const clean = String(rawValue || '').trim().toUpperCase();
+  if (!clean || /^[JVEGP]-?$/.test(clean)) {
+    return { isValid: false, kind: 'NONE', message: '' };
+  }
+  const rifCheck = validateRif(clean);
+  if (rifCheck.isValid) {
+    return { isValid: true, kind: 'RIF', formatted: rifCheck.formatted, message: '✓ RIF SENIAT válido' };
+  }
+  const prefix = preferredPrefix || clean.match(/^([JVEGP])/)?.[1] || 'J';
+  if ((prefix === 'V' || prefix === 'E') && validateCedula(clean)) {
+    return { isValid: true, kind: 'CEDULA', formatted: clean, message: '✓ Cédula válida (formato V/E)' };
+  }
+  return {
+    isValid: false,
+    kind: 'INVALID',
+    message: (prefix === 'V' || prefix === 'E')
+      ? 'Ingrese Cédula (Ej: V-12345678) o RIF completo con dígito verificador (Ej: V-12345678-9)'
+      : `Verifique formato RIF SENIAT (Ej: ${prefix}-12345678-9)`,
+  };
+};
+
 // ==============================================================================
 // 2. MOTOR DE CÁLCULOS TRIBUTARIOS MULTIMONEDA (IVA MULTI-ALÍCUOTA, IGTF Y RETENCIONES)
 // ==============================================================================

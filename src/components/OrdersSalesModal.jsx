@@ -39,7 +39,7 @@ import {
   ArrowUpDown,
   UserPlus
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateDocumentPositiveStock } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -1195,6 +1195,21 @@ export default function OrdersSalesModal({
     };
   }, [orderRows, safeProducts, tasaBcv]);
 
+  const orderRowsStockValidation = useMemo(() => {
+    const filled = orderRows.filter(r => r.articuloId);
+    const warehouseCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+    if (filled.length === 0) {
+      return { isValid: true, zeroStockItems: [], invalidQtyItems: [], warehouseCode, message: '' };
+    }
+    return validateDocumentPositiveStock({
+      items: filled,
+      products: safeProducts,
+      tipoDoc: modalidadVenta === 'OFICINA' ? 'NOTA_ENTREGA' : 'FACTURA',
+      almacen: warehouseCode,
+      modalidadVenta
+    });
+  }, [orderRows, safeProducts, modalidadVenta]);
+
   // Manejo de renglones de pedido
   const handleAddRow = () => {
     setOrderRows(prev => [
@@ -1209,6 +1224,21 @@ export default function OrdersSalesModal({
   };
 
   const handleRowChange = (index, field, value) => {
+    if (field === 'articuloId' && value) {
+      const prod = findProductById(value);
+      if (prod) {
+        const warehouseCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+        const stocks = getProductWarehouseStocks(prod);
+        const whStock = warehouseCode === '02' ? stocks.stock02 : stocks.stock01;
+        if (!(whStock > 0)) {
+          const msg = `No se puede cargar ${prod.codigo || prod.descripcion || value}: existencia en 0 en Almacén ${warehouseCode}.`;
+          notify?.warning?.(msg);
+          setFeedbackMsg({ type: 'error', text: msg });
+          return;
+        }
+      }
+    }
+
     setOrderRows(prev => {
       const updated = [...prev];
       const target = { ...updated[index], [field]: value };
@@ -1237,6 +1267,19 @@ export default function OrdersSalesModal({
     const validRows = orderRows.filter(r => r.articuloId && r.cantidad > 0);
     if (validRows.length === 0) {
       setFeedbackMsg({ type: 'error', text: 'Debe agregar al menos un lubricante con cantidad válida.' });
+      return;
+    }
+
+    const stockGuard = validateDocumentPositiveStock({
+      items: validRows,
+      products: safeProducts,
+      tipoDoc: modalidadVenta === 'OFICINA' ? 'NOTA_ENTREGA' : 'FACTURA',
+      almacen: modalidadVenta === 'OFICINA' ? '02' : '01',
+      modalidadVenta
+    });
+    if (!stockGuard.isValid) {
+      setFeedbackMsg({ type: 'error', text: stockGuard.message });
+      notify?.error?.(stockGuard.message);
       return;
     }
 
@@ -2897,6 +2940,19 @@ export default function OrdersSalesModal({
                               </option>
                             ))}
                           </select>
+                          {matchedProd && (() => {
+                            const whCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+                            const stocks = getProductWarehouseStocks(matchedProd);
+                            const whStock = whCode === '02' ? stocks.stock02 : stocks.stock01;
+                            if (whStock <= 0) {
+                              return (
+                                <div style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 800, marginTop: '3px' }}>
+                                  ⚠️ SKU con stock en 0 en Almacén {whCode} — no se permitirá emitir
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
 
                         <div style={{ flex: '1 1 110px', minWidth: 0 }}>
