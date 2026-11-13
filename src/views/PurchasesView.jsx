@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ShoppingBag,
   Plus,
@@ -86,6 +86,15 @@ export default function PurchasesView({
   const [fleteProrrateadoUsd, setFleteProrrateadoUsd] = useState(0);
   const [porcentajeRetIva, setPorcentajeRetIva] = useState(75);
   const [porcentajeRetIslr, setPorcentajeRetIslr] = useState(2);
+  const [condicionPago, setCondicionPago] = useState('CREDITO');
+  const [diasCredito, setDiasCredito] = useState(() => Number(suppliers[0]?.diasCredito ?? suppliers[0]?.dias_credito ?? 30));
+
+  useEffect(() => {
+    if (!selectedSupplier && Array.isArray(suppliers) && suppliers.length > 0) {
+      setSelectedSupplier(suppliers[0]);
+      setDiasCredito(Number(suppliers[0].diasCredito ?? suppliers[0].dias_credito ?? 30));
+    }
+  }, [suppliers, selectedSupplier]);
 
   const [localPurchases, setLocalPurchases] = useState(() => (purchases && purchases.length > 0 ? purchases : [
     {
@@ -133,6 +142,7 @@ export default function PurchasesView({
   const retencionIvaCalculadaUsd = ivaCalculadoUsd * (porcentajeRetIva / 100);
   const retencionIslrCalculadaUsd = (tipoAlicuota !== 'EXENTO_0' ? subtotalUsd : 0) * (porcentajeRetIslr / 100);
   const totalFacturaCalculadoUsd = subtotalUsd + ivaCalculadoUsd;
+  const netoPagarCalculadoUsd = Math.max(0, totalFacturaCalculadoUsd - retencionIvaCalculadaUsd - retencionIslrCalculadaUsd);
 
   // KPIs Generales del Módulo de Compras y Proveedores
   const kpis = useMemo(() => {
@@ -325,6 +335,8 @@ export default function PurchasesView({
       proveedorRif: selectedSupplier.rif,
       proveedorDireccion: selectedSupplier.domicilioFiscal || selectedSupplier.direccion || '',
       tasaDolar: config.tasaDolar,
+      condicionPago,
+      diasCredito: condicionPago === 'CONTADO' ? 0 : Math.max(0, parseInt(diasCredito, 10) || 0),
       producto: selectedProduct.descripcion,
       cantidad: parseInt(cantidadRecibida),
       costoUnitarioUsd: parseFloat(costoFinalConFlete.toFixed(2)),
@@ -337,6 +349,7 @@ export default function PurchasesView({
       totalUsd: parseFloat(totalFacturaCalculadoUsd.toFixed(2)),
       retencionIvaUsd: parseFloat(retencionIvaCalculadaUsd.toFixed(2)),
       retencionIslrUsd: parseFloat(retencionIslrCalculadaUsd.toFixed(2)),
+      montoNetoPagarUsd: parseFloat(netoPagarCalculadoUsd.toFixed(2)),
       numeroComprobanteRetencionIva: voucherNum,
       numeroComprobanteRetencionIslr: voucherNum,
       almacen: almacenDestino,
@@ -1243,7 +1256,13 @@ export default function PurchasesView({
                   <select
                     className="form-control"
                     value={selectedSupplier?.id || ''}
-                    onChange={(e) => setSelectedSupplier(suppliers.find(s => s.id === e.target.value))}
+                    onChange={(e) => {
+                      const sup = suppliers.find(s => s.id === e.target.value);
+                      setSelectedSupplier(sup || null);
+                      if (sup) {
+                        setDiasCredito(Number(sup.diasCredito ?? sup.dias_credito ?? 30));
+                      }
+                    }}
                   >
                     {suppliers.map(s => (
                       <option key={s.id} value={s.id}>{s.nombre} ({s.rif})</option>
@@ -1424,6 +1443,36 @@ export default function PurchasesView({
                   </div>
                 </div>
 
+                {/* Condición de Pago y Días de Crédito para CxP */}
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Condición de Pago (CxP)</label>
+                    <select
+                      className="form-control"
+                      value={condicionPago}
+                      onChange={(e) => setCondicionPago(e.target.value)}
+                    >
+                      <option value="CREDITO">Crédito (Genera Cuenta por Pagar)</option>
+                      <option value="CONTADO">Contado (Cancelada de Inmediato)</option>
+                    </select>
+                  </div>
+
+                  {condicionPago === 'CREDITO' && (
+                    <div className="form-group">
+                      <label className="form-label">Días de Crédito</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="180"
+                        className="form-control"
+                        value={diasCredito}
+                        onChange={(e) => setDiasCredito(parseInt(e.target.value, 10) || 0)}
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+
                 <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.75rem', padding: '0.75rem' }}>
                   <CheckCircle size={18} /> Cargar a Inventario & Generar Retención SENIAT
                 </button>
@@ -1476,6 +1525,16 @@ export default function PurchasesView({
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                     {formatBs(retencionIslrCalculadaUsd * config.tasaDolar)} al tipo de cambio BCV
+                  </div>
+                </div>
+
+                <div style={{ background: 'rgba(217, 119, 6, 0.08)', padding: '0.85rem', borderRadius: '12px', border: '1px solid rgba(217, 119, 6, 0.3)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--accent-amber)' }}>Neto a Pagar Proveedor (CxP tras retenciones):</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--accent-amber)' }}>
+                    {formatUsd(netoPagarCalculadoUsd)}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    {formatBs(netoPagarCalculadoUsd * config.tasaDolar)} • {condicionPago === 'CREDITO' ? `Crédito a ${diasCredito} días` : 'Contado'}
                   </div>
                 </div>
 

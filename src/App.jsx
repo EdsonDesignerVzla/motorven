@@ -134,7 +134,9 @@ import {
   saveSupabaseUser,
   deleteSupabaseOrder,
   deleteSupabaseSale,
-  checkAndExpireOverdueOrders
+  checkAndExpireOverdueOrders,
+  saveSupabaseNotification,
+  logUserActivity
 } from './services/supabaseService';
 import soundFX from './services/soundService';
 import {
@@ -149,6 +151,8 @@ import {
   getUsersList,
   logout as authLogout,
   canAccessModule,
+  canApproveClients,
+  getClientApprovalStatus,
   ROLE_PERMISSIONS,
   DEFAULT_TABS_BY_ROLE,
   normalizeRole,
@@ -160,6 +164,7 @@ import {
   triggerProfitSync
 } from './services/profitService';
 import { subscribeToRealtimeSync, broadcastReconcileChange } from './services/realtimeSyncBridge';
+import { getCanonicalDocKey } from './services/fiscalService';
 
 
 function MainApp() {
@@ -775,11 +780,14 @@ function MainApp() {
           return;
         }
         if (action === 'DELETE') {
+          const targetCanon = getCanonicalDocKey(item || key, item?.tipoDoc || item?.tipo_doc || '');
           const targetKey = String(key || item?.id || item?.factNum || item?.numeroDoc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
           const targetId = String(key || item?.id || '').trim();
           setProfitInvoices(prev => (prev || []).filter(f => {
             const fNum = String(f.factNum ?? f.fact_num ?? f.numeroDoc ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const fId = String(f.id ?? '').trim();
+            const fCanon = getCanonicalDocKey(f);
+            if (targetCanon && fCanon && fCanon === targetCanon) return false;
             return (targetKey ? fNum !== targetKey : true) && (targetId ? fId !== targetId : true);
           }));
           return;
@@ -809,12 +817,14 @@ function MainApp() {
             ...(resolvedFechaSinc ? { fechaSincronizacion: resolvedFechaSinc, updated_at: item.updated_at || resolvedFechaSinc } : {})
           };
           setProfitInvoices(prev => {
+            const targetCanon = getCanonicalDocKey(normalizedInvItem);
             const targetKey = String(key || resolvedId || resolvedNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const targetId = String(key || resolvedId).trim();
             const index = prev.findIndex(f => {
+              const fCanon = getCanonicalDocKey(f);
               const fNum = String(f.factNum ?? f.fact_num ?? f.facturaNumero ?? f.id ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
               const fId = String(f.id ?? '').trim();
-              return (targetKey && fNum === targetKey) || (targetId && fId === targetId);
+              return (targetCanon && fCanon === targetCanon) || (targetKey && fNum === targetKey) || (targetId && fId === targetId);
             });
             if (index >= 0) {
               const next = [...prev];
@@ -980,11 +990,14 @@ function MainApp() {
           return;
         }
         if (action === 'DELETE') {
+          const targetCanon = getCanonicalDocKey(item || key, item?.tipoDoc || item?.tipo_doc || '');
           const targetKey = String(key || item?.id || item?.numeroDoc || item?.factNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
           const targetId = String(key || item?.id || '').trim();
           setSalesState(prev => prev.filter(s => {
             const sNum = String(s.numeroDoc || s.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const sId = String(s.id || '').trim();
+            const sCanon = getCanonicalDocKey(s);
+            if (targetCanon && sCanon && sCanon === targetCanon) return false;
             return (targetKey ? sNum !== targetKey : true) && (targetId ? sId !== targetId : true);
           }));
           return;
@@ -1003,12 +1016,14 @@ function MainApp() {
             ...(resolvedAbonosUsd !== undefined ? { abonosUsd: Number(resolvedAbonosUsd), abonos_usd: Number(resolvedAbonosUsd) } : {})
           };
           setSalesState(prev => {
+            const targetCanon = getCanonicalDocKey(normalizedSaleItem);
             const targetKey = String(key || item.id || item.numeroDoc || item.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const targetId = String(key || item.id || '').trim();
             const index = prev.findIndex(s => {
+              const sCanon = getCanonicalDocKey(s);
               const sNum = String(s.numeroDoc || s.numero_doc || s.id || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
               const sId = String(s.id || '').trim();
-              return (targetKey && sNum === targetKey) || (targetId && sId === targetId);
+              return (targetCanon && sCanon === targetCanon) || (targetKey && sNum === targetKey) || (targetId && sId === targetId);
             });
             if (index >= 0) {
               const next = [...prev];
@@ -1733,12 +1748,33 @@ function MainApp() {
     }
   };
 
-  // Guardar / Actualizar Cliente
+  // Guardar / Actualizar Cliente (soporta flujo de aprobación desde vendedores -> Caja Principal)
   const handleSaveClient = async (clientData) => {
     try {
-      const saved = await saveSupabaseClient(clientData);
+      const userCanApprove = canApproveClients(currentUser);
+      const nowIso = new Date().toISOString();
+      const incomingStatus = getClientApprovalStatus(clientData);
+      const isPendingSubmission = !userCanApprove || incomingStatus === 'PENDIENTE';
+
+      const normalizedPayload = {
+        ...clientData,
+        estadoAprobacion: userCanApprove ? (clientData.estadoAprobacion || 'APROBADO') : 'PENDIENTE',
+        inactivo: userCanApprove
+          ? (incomingStatus === 'RECHAZADO' ? true : Boolean(clientData.inactivo))
+          : true,
+        limiteCreditoUsd: userCanApprove ? Number(clientData.limiteCreditoUsd || 0) : 0,
+        diasCredito: userCanApprove ? Number(clientData.diasCredito || 0) : 0,
+        solicitadoPor: clientData.solicitadoPor || currentUser?.nombre || currentUser?.username || 'Operador',
+        solicitadoPorUsername: clientData.solicitadoPorUsername || currentUser?.username || '',
+        fechaSolicitud: clientData.fechaSolicitud || nowIso,
+        aprobadoPor: userCanApprove ? (clientData.aprobadoPor || currentUser?.nombre || currentUser?.username || '') : '',
+        aprobadoPorUsername: userCanApprove ? (clientData.aprobadoPorUsername || currentUser?.username || '') : '',
+        fechaAprobacion: userCanApprove ? (clientData.fechaAprobacion || nowIso) : null
+      };
+
+      const saved = await saveSupabaseClient(normalizedPayload);
       setClientsState(prev => {
-        const index = prev.findIndex(c => c.id === saved.id);
+        const index = prev.findIndex(c => c.id === saved.id || (saved.codigo && c.codigo === saved.codigo));
         if (index >= 0) {
           const updated = [...prev];
           updated[index] = saved;
@@ -1747,7 +1783,33 @@ function MainApp() {
           return [saved, ...prev];
         }
       });
-      notify.success(`Cliente "${saved.nombre || saved.rif}" guardado exitosamente.`);
+
+      if (isPendingSubmission && !userCanApprove) {
+        notify.success(`Solicitud enviada: "${saved.nombre || saved.rif}" espera aprobación de Caja Principal (Vanessa).`);
+        saveSupabaseNotification({
+          tipo: 'clientes',
+          severidad: 'advertencia',
+          modulo: 'ventas',
+          titulo: `Nuevo cliente por aprobar: ${saved.nombre || saved.rif}`,
+          mensaje: `${normalizedPayload.solicitadoPor} envió el cliente ${saved.nombre} (${saved.rif}) para aprobación en Caja Principal.`,
+          destinatario_rol: 'CAJA',
+          destinatario_usuario: 'caja',
+          origen: 'PREVENTA',
+          metadata: { clientId: saved.id, rif: saved.rif }
+        }).catch(() => {});
+      } else {
+        notify.success(`Cliente "${saved.nombre || saved.rif}" guardado exitosamente.`);
+      }
+
+      logUserActivity({
+        usuarioId: currentUser?.id || 'system',
+        usuarioNombre: currentUser?.nombre || 'Operador',
+        usuarioRol: currentUser?.rol || 'SISTEMA',
+        accion: isPendingSubmission && !userCanApprove ? 'SOLICITAR_CLIENTE' : 'GUARDAR_CLIENTE',
+        modulo: 'CLIENTES',
+        detalles: `${saved.nombre} (${saved.rif}) - Estado: ${saved.estadoAprobacion || 'APROBADO'}`
+      }).catch(() => {});
+
       return saved;
     } catch (err) {
       console.error(err);
@@ -1755,24 +1817,158 @@ function MainApp() {
     }
   };
 
+  // Aprobar Cliente Pendiente (Vanessa en Caja, Rosibel en Cobranzas, Yheyson, Manuel, Edson)
+  const handleApproveClient = async (client, overrides = {}) => {
+    if (!canApproveClients(currentUser)) {
+      notify.error('No tienes permisos para aprobar nuevos clientes.');
+      return null;
+    }
+    try {
+      const nowIso = new Date().toISOString();
+      const updatedPayload = {
+        ...client,
+        ...overrides,
+        limiteCreditoUsd: Number(overrides.limiteCreditoUsd ?? client.limiteCreditoUsd ?? 0),
+        diasCredito: Number(overrides.diasCredito ?? client.diasCredito ?? 0),
+        estadoAprobacion: 'APROBADO',
+        inactivo: false,
+        aprobadoPor: currentUser?.nombre || currentUser?.username || 'Caja Principal',
+        aprobadoPorUsername: currentUser?.username || '',
+        fechaAprobacion: nowIso,
+        motivoRechazo: ''
+      };
+      const saved = await saveSupabaseClient(updatedPayload);
+      setClientsState(prev => {
+        const index = prev.findIndex(c => c.id === saved.id || (saved.codigo && c.codigo === saved.codigo));
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = saved;
+          return updated;
+        }
+        return [saved, ...prev];
+      });
+      notify.success(`Cliente "${saved.nombre || saved.rif}" aprobado y habilitado para pedidos/facturación.`);
+
+      saveSupabaseNotification({
+        tipo: 'clientes',
+        severidad: 'exito',
+        modulo: 'preventa',
+        titulo: `Cliente aprobado: ${saved.nombre || saved.rif}`,
+        mensaje: `${updatedPayload.aprobadoPor} aprobó al cliente ${saved.nombre} (${saved.rif}). Ya puede recibir pedidos.`,
+        destinatario_rol: 'VENTAS',
+        destinatario_usuario: saved.solicitadoPorUsername || 'ALL',
+        origen: 'CAJA',
+        metadata: { clientId: saved.id, rif: saved.rif }
+      }).catch(() => {});
+
+      logUserActivity({
+        usuarioId: currentUser?.id || 'system',
+        usuarioNombre: currentUser?.nombre || 'Caja Principal',
+        usuarioRol: currentUser?.rol || 'CAJA',
+        accion: 'APROBAR_CLIENTE',
+        modulo: 'CLIENTES',
+        detalles: `Aprobado cliente ${saved.nombre} (${saved.rif})`
+      }).catch(() => {});
+
+      return saved;
+    } catch (err) {
+      console.error(err);
+      notify.error('Error al aprobar el cliente');
+      return null;
+    }
+  };
+
+  // Rechazar Solicitud de Cliente
+  const handleRejectClient = async (client, motivo = '') => {
+    if (!canApproveClients(currentUser)) {
+      notify.error('No tienes permisos para rechazar solicitudes de clientes.');
+      return null;
+    }
+    try {
+      const nowIso = new Date().toISOString();
+      const updatedPayload = {
+        ...client,
+        estadoAprobacion: 'RECHAZADO',
+        inactivo: true,
+        aprobadoPor: currentUser?.nombre || currentUser?.username || 'Caja Principal',
+        aprobadoPorUsername: currentUser?.username || '',
+        fechaAprobacion: nowIso,
+        motivoRechazo: motivo || 'Solicitud rechazada por Caja Principal'
+      };
+      const saved = await saveSupabaseClient(updatedPayload);
+      setClientsState(prev => {
+        const index = prev.findIndex(c => c.id === saved.id || (saved.codigo && c.codigo === saved.codigo));
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = saved;
+          return updated;
+        }
+        return [saved, ...prev];
+      });
+      notify.warning(`Solicitud de "${saved.nombre || saved.rif}" rechazada.`);
+
+      saveSupabaseNotification({
+        tipo: 'clientes',
+        severidad: 'advertencia',
+        modulo: 'preventa',
+        titulo: `Solicitud de cliente rechazada: ${saved.nombre || saved.rif}`,
+        mensaje: `${updatedPayload.aprobadoPor} rechazó el registro de ${saved.nombre}. Motivo: ${updatedPayload.motivoRechazo}`,
+        destinatario_rol: 'VENTAS',
+        destinatario_usuario: saved.solicitadoPorUsername || 'ALL',
+        origen: 'CAJA',
+        metadata: { clientId: saved.id, rif: saved.rif }
+      }).catch(() => {});
+
+      logUserActivity({
+        usuarioId: currentUser?.id || 'system',
+        usuarioNombre: currentUser?.nombre || 'Caja Principal',
+        usuarioRol: currentUser?.rol || 'CAJA',
+        accion: 'RECHAZAR_CLIENTE',
+        modulo: 'CLIENTES',
+        detalles: `Rechazado cliente ${saved.nombre} (${saved.rif}): ${updatedPayload.motivoRechazo}`
+      }).catch(() => {});
+
+      return saved;
+    } catch (err) {
+      console.error(err);
+      notify.error('Error al rechazar la solicitud del cliente');
+      return null;
+    }
+  };
+
   // Eliminar Cliente
-  const handleDeleteClient = async (id) => {
-    const confirmed = await notify.confirm({
-      title: '¿Eliminar Cliente?',
-      message: '¿Está seguro de eliminar o desactivar este cliente de la cartera comercial y de Supabase?',
-      confirmText: 'Sí, Eliminar Cliente',
-      cancelText: 'Cancelar',
-      isDestructive: true
-    });
-    if (!confirmed) return;
+  const handleDeleteClient = async (id, options = {}) => {
+    if (!options?.skipConfirm) {
+      const confirmed = await notify.confirm({
+        title: '¿Eliminar Cliente?',
+        message: '¿Está seguro de eliminar o desactivar este cliente de la cartera comercial y de Supabase?',
+        confirmText: 'Sí, Eliminar Cliente',
+        cancelText: 'Cancelar',
+        isDestructive: true
+      });
+      if (!confirmed) return false;
+    }
 
     try {
+      const targetClient = clients.find(c => c.id === id || c.codigo === id || c.rif === id);
       await deleteSupabaseClient(id);
-      setClientsState(prev => prev.filter(c => c.id !== id && c.codigo !== id));
-      notify.success("Cliente eliminado de la cartera correctamente");
+      setClientsState(prev => prev.filter(c => c.id !== id && c.codigo !== id && c.rif !== id));
+      notify.success(`Cliente "${targetClient?.nombre || id}" eliminado de la cartera correctamente`);
+
+      logUserActivity({
+        usuarioId: currentUser?.id || 'system',
+        usuarioNombre: currentUser?.nombre || currentUser?.username || 'Operador',
+        usuarioRol: currentUser?.rol || 'OPERADOR',
+        accion: 'ELIMINAR_CLIENTE',
+        modulo: 'CLIENTES',
+        detalles: `Eliminado cliente ${targetClient?.nombre || ''} (${targetClient?.rif || id})`
+      }).catch(() => {});
+
+      return true;
     } catch (err) {
       console.error(err);
       notify.error("Error al eliminar el cliente de la base de datos");
+      return false;
     }
   };
 
@@ -1824,19 +2020,163 @@ function MainApp() {
       return newSale;
     } catch (err) {
       console.error(err);
-      notify.error("Error al procesar la venta en el servidor");
+      notify.error(err?.isValidationError ? err.message : "Error al procesar la venta en el servidor");
       throw err;
     }
   };
 
-  // Registrar Compra
+  // Registrar Compra y Generar Cuenta por Pagar (CxP)
   const handleRegisterPurchase = async (purchaseData) => {
     try {
       const created = await saveSupabasePurchase(purchaseData);
       setPurchasesState((prev) => [created, ...prev]);
       const updatedProds = await getSupabaseProducts();
       setProductsState(updatedProds);
-      notify.success("Compra registrada en sistema exitosamente");
+
+      const rawNum = String(purchaseData.numeroFacturaProv || purchaseData.numeroControl || created?.id || '').trim();
+      const tipoDocRaw = String(purchaseData.tipoDoc || 'FACTURA').toUpperCase();
+      let tipoDocCxp = 'FACT';
+      if (tipoDocRaw === 'NOTA_CREDITO') tipoDocCxp = 'N/CR';
+      else if (tipoDocRaw === 'NOTA_DEBITO') tipoDocCxp = 'N/DB';
+
+      const provRif = String(purchaseData.proveedorRif || 'J-00000000').trim().toUpperCase();
+      const provNombre = String(purchaseData.proveedorNombre || 'Proveedor General').trim();
+      const tasaDolar = Number(purchaseData.tasaDolar || config?.tasaDolar || 1);
+
+      const totalFacturaUsd = Number(purchaseData.totalUsd || 0);
+      const retIvaUsd = Number(purchaseData.retencionIvaUsd || 0);
+      const retIslrUsd = Number(purchaseData.retencionIslrUsd || 0);
+      const netoPagarUsd = purchaseData.montoNetoPagarUsd !== undefined
+        ? Number(purchaseData.montoNetoPagarUsd)
+        : Math.max(0, Number((totalFacturaUsd - retIvaUsd - retIslrUsd).toFixed(2)));
+
+      const isContado = purchaseData.condicionPago === 'CONTADO';
+      const diasCredito = isContado ? 0 : Math.max(0, Number(purchaseData.diasCredito ?? 15));
+
+      const fechaEmision = purchaseData.fecha ? purchaseData.fecha.split('T')[0] : new Date().toISOString().split('T')[0];
+      const emisionDate = new Date(fechaEmision);
+      const vencDate = new Date(emisionDate);
+      vencDate.setDate(vencDate.getDate() + diasCredito);
+      const fechaVencimiento = vencDate.toISOString().split('T')[0];
+
+      const saldoUsd = isContado ? 0 : netoPagarUsd;
+      const saldoBs = Number((saldoUsd * tasaDolar).toFixed(2));
+      const abonosUsd = isContado ? netoPagarUsd : 0;
+      const montoNetBs = Number((netoPagarUsd * tasaDolar).toFixed(2));
+
+      // 1. Integración automática a Cuentas por Pagar (CxP)
+      try {
+        const payablePayload = {
+          id: `DOC-CP-${tipoDocCxp}-${rawNum}-${provRif.replace(/[^A-Za-z0-9]/g, '')}`,
+          tipoDoc: tipoDocCxp,
+          nroDoc: rawNum,
+          coProv: provRif,
+          provNombre,
+          provRif,
+          fechaEmision,
+          fechaVencimiento,
+          diasCredito,
+          montoNetUsd: netoPagarUsd,
+          montoNetBs,
+          saldoUsd: tipoDocRaw === 'NOTA_CREDITO' && purchaseData.documentoAfectado ? 0 : saldoUsd,
+          saldoBs: tipoDocRaw === 'NOTA_CREDITO' && purchaseData.documentoAfectado ? 0 : saldoBs,
+          abonosUsd: tipoDocRaw === 'NOTA_CREDITO' && purchaseData.documentoAfectado ? netoPagarUsd : abonosUsd,
+          tasa: tasaDolar,
+          moneda: 'US$',
+          observaciones: `Compra ${tipoDocRaw} #${rawNum} - ${purchaseData.producto || ''} (${purchaseData.cantidad || 0} unid.)`,
+          historialPagos: []
+        };
+
+        await handleSaveCxpDocument(payablePayload);
+
+        // Si es Nota de Crédito y afecta una factura específica, descontar el saldo de la factura afectada
+        if (tipoDocRaw === 'NOTA_CREDITO' && purchaseData.documentoAfectado) {
+          const affNum = String(purchaseData.documentoAfectado).trim().toUpperCase();
+          setProfitAccountsPayable(prevList => {
+            const list = Array.isArray(prevList) ? [...prevList] : [];
+            const idx = list.findIndex(p =>
+              String(p.nroDoc || '').toUpperCase() === affNum ||
+              String(p.id || '').toUpperCase() === affNum
+            );
+            if (idx >= 0) {
+              const currentDoc = list[idx];
+              const nuevoSaldo = Math.max(0, Number(((currentDoc.saldoUsd || 0) - netoPagarUsd).toFixed(2)));
+              const nuevoAbonos = Number(((currentDoc.abonosUsd || 0) + netoPagarUsd).toFixed(2));
+              const updatedDoc = {
+                ...currentDoc,
+                saldoUsd: nuevoSaldo,
+                saldoBs: Number((nuevoSaldo * (currentDoc.tasa || tasaDolar)).toFixed(2)),
+                abonosUsd: nuevoAbonos,
+                observaciones: `${currentDoc.observaciones || ''} | Afectada por NC #${rawNum} (-$${netoPagarUsd})`.trim()
+              };
+              saveSupabaseProfitAccountsPayable(updatedDoc).catch(() => {});
+              list[idx] = updatedDoc;
+            }
+            return list;
+          });
+        }
+      } catch (cxpErr) {
+        console.warn('[handleRegisterPurchase] Error al registrar documento CxP:', cxpErr);
+      }
+
+      // 2. Reflejar en profitPurchases para Libro Diario, reportes y vistas analíticas
+      const nextProfitPurchase = {
+        id: `COM-${Date.now().toString().slice(-6)}`,
+        factNum: rawNum || Date.now().toString().slice(-6),
+        facturaProv: rawNum,
+        fechaEmision: purchaseData.fecha || new Date().toISOString(),
+        fechaVencimiento: vencDate.toISOString(),
+        coProv: provRif,
+        provNombre,
+        provRif,
+        totBrutoUsd: Number(purchaseData.subtotalUsd || 0),
+        totBrutoBs: Number(((purchaseData.subtotalUsd || 0) * tasaDolar).toFixed(2)),
+        ivaUsd: Number((purchaseData.ivaGeneralUsd || purchaseData.ivaReducidaUsd || 0)),
+        ivaBs: Number(((purchaseData.ivaGeneralUsd || purchaseData.ivaReducidaUsd || 0) * tasaDolar).toFixed(2)),
+        totNetoUsd: totalFacturaUsd,
+        totNetoBs: Number((totalFacturaUsd * tasaDolar).toFixed(2)),
+        saldoUsd,
+        saldoBs,
+        status: saldoUsd <= 0.01 ? 'PAGADA' : 'SALDO_PENDIENTE',
+        anulada: false,
+        formaPag: isContado ? '01' : '04',
+        co_us_in: purchaseData.receptor || currentUser?.nombre || 'PROCURA',
+        items: [{
+          rengNum: 1,
+          articuloId: purchaseData.producto || 'LUB-PROV',
+          descripcion: purchaseData.producto || 'Lubricante Proveedor',
+          unidadVenta: 'Caja',
+          cantidad: Number(purchaseData.cantidad || 0),
+          litrosUnitarios: 1,
+          litrosTotales: Number(purchaseData.cantidad || 0),
+          precioUnitario: Number(purchaseData.costoUnitarioUsd || 0),
+          totalNeto: Number(purchaseData.subtotalUsd || 0)
+        }],
+        fechaSincronizacion: new Date().toISOString()
+      };
+      setProfitPurchases(prev => [nextProfitPurchase, ...(Array.isArray(prev) ? prev : [])]);
+
+      // 3. Actualizar saldo pendiente del proveedor en cartera
+      if (provRif && netoPagarUsd > 0) {
+        setSuppliersState(prev => {
+          const list = Array.isArray(prev) ? [...prev] : [];
+          return list.map(s => {
+            if (String(s.rif || '').toUpperCase() === provRif || String(s.id) === String(purchaseData.proveedorId)) {
+              const currentDebt = Number(s.saldoPendienteUsd ?? s.saldo_pendiente_usd ?? 0);
+              const delta = tipoDocRaw === 'NOTA_CREDITO' ? -netoPagarUsd : (isContado ? 0 : netoPagarUsd);
+              const newDebt = Math.max(0, Number((currentDebt + delta).toFixed(2)));
+              return {
+                ...s,
+                saldoPendienteUsd: newDebt,
+                saldo_pendiente_usd: newDebt
+              };
+            }
+            return s;
+          });
+        });
+      }
+
+      notify.success("Compra registrada y Cuenta por Pagar (CxP) generada exitosamente");
       return created;
     } catch (err) {
       console.error("Error al registrar compra:", err);
@@ -1912,7 +2252,7 @@ function MainApp() {
       return enrichedSaved;
     } catch (err) {
       console.error('Error guardando pedido:', err);
-      notify.error('Error al guardar el pedido en la base de datos');
+      notify.error(err?.isValidationError ? err.message : 'Error al guardar el pedido en la base de datos');
       throw err;
     }
   };
@@ -2071,22 +2411,71 @@ function MainApp() {
   };
 
   // Registrar Cobro en Cuentas por Cobrar (Parte A) y actualizar Abonos y Restante (Parte B)
-  const handleRegisterCxcCollection = async ({ updatedDoc, collectionPayload, selectedAccount }) => {
-    const savedDoc = await handleSaveCxcDocument(updatedDoc);
-    if (collectionPayload) {
-      const savedCob = await saveSupabaseProfitCollection(collectionPayload);
+  const handleRegisterCxcCollection = async (payloadOrParams) => {
+    const raw = payloadOrParams || {};
+    const docToSave = raw.updatedDoc || raw.updatedInvoice || null;
+    const savedDoc = docToSave ? await handleSaveCxcDocument(docToSave) : null;
+
+    let colPayload = raw.collectionPayload;
+    if (!colPayload && (raw.montoUsd || raw.montoBs)) {
+      const cobNum = `COB-${Date.now().toString().slice(-6)}`;
+      colPayload = {
+        id: `cob-${cobNum}`,
+        cobNum,
+        fecha: raw.fecha || new Date().toISOString().split('T')[0],
+        clienteId: raw.clienteId || '',
+        clienteNombre: raw.clienteNombre || 'Cliente General',
+        clienteRif: raw.clienteRif || '',
+        vendedorId: raw.vendedorId || 'OF',
+        montoUsd: Number(raw.montoUsd || 0),
+        montoBs: Number(raw.montoBs || 0),
+        tasa: Number(raw.tasa || 1),
+        cuentaId: raw.accountId || raw.cuentaId || '',
+        cuentaNombre: raw.cuentaDestino || raw.cuentaNombre || '',
+        descrip: raw.observaciones || `Cobro Factura #${raw.factNum || ''}`,
+        formasPago: [{
+          formaPago: raw.formaPago === 'EFECTIVO' ? 'EFEC' : 'TRANS',
+          monto: Number(raw.montoBs || 0),
+          montoUsd: Number(raw.montoUsd || 0),
+          referencia: raw.referencia || '',
+          codCaja: raw.accountType === 'CAJA' ? (raw.accountId || '') : '',
+          codCta: raw.accountType === 'BANCO' ? (raw.accountId || '') : ''
+        }],
+        documentosAfectados: [{
+          numDoc: raw.factNum || '',
+          tipoDoc: raw.tipoDoc === 'NOTA_ENTREGA' ? 'N/E' : 'FACT',
+          montoCobrado: Number(raw.montoBs || 0),
+          montoCobradoUsd: Number(raw.montoUsd || 0)
+        }]
+      };
+    }
+
+    if (colPayload) {
+      const savedCob = await saveSupabaseProfitCollection(colPayload);
       if (savedCob) {
         setProfitCollections(prev => [savedCob, ...(Array.isArray(prev) ? prev : [])]);
       }
     }
-    if (selectedAccount) {
-      const montoUsd = Number(collectionPayload?.montoUsd || 0);
-      const montoBs = Number(collectionPayload?.montoBs || 0);
-      if (selectedAccount.kind === 'CAJA') {
+
+    const account = raw.selectedAccount || (raw.accountType ? {
+      kind: raw.accountType,
+      rawId: raw.accountId,
+      accountType: raw.accountType,
+      id: raw.accountId,
+      nombre: raw.cuentaDestino || ''
+    } : null);
+
+    if (account) {
+      const montoUsd = Number(colPayload?.montoUsd || raw.montoUsd || 0);
+      const montoBs = Number(colPayload?.montoBs || raw.montoBs || 0);
+      const accountKind = account.kind || account.accountType;
+      const targetId = String(account.rawId || account.id || '');
+
+      if (accountKind === 'CAJA') {
         setProfitCashDesks(prev => {
           const list = Array.isArray(prev) ? [...prev] : [];
           return list.map(d => {
-            if (String(d.id || d.coCaja) === String(selectedAccount.rawId)) {
+            if (String(d.id || d.coCaja) === targetId) {
               const updatedDesk = {
                 ...d,
                 saldoUsd: Number(((Number(d.saldoUsd || 0)) + montoUsd).toFixed(2)),
@@ -2098,11 +2487,11 @@ function MainApp() {
             return d;
           });
         });
-      } else if (selectedAccount.kind === 'BANCO') {
+      } else if (accountKind === 'BANCO') {
         setProfitBankAccounts(prev => {
           const list = Array.isArray(prev) ? [...prev] : [];
           return list.map(b => {
-            if (String(b.id || b.codCta) === String(selectedAccount.rawId)) {
+            if (String(b.id || b.codCta) === targetId) {
               const updatedBank = {
                 ...b,
                 saldoUsd: Number(((Number(b.saldoUsd || 0)) + montoUsd).toFixed(2)),
@@ -2116,6 +2505,33 @@ function MainApp() {
         });
       }
     }
+
+    const clienteId = colPayload?.clienteId || raw.clienteId || savedDoc?.clienteId;
+    const clienteRif = colPayload?.clienteRif || raw.clienteRif || savedDoc?.clienteRif;
+    const montoCobradoUsd = Number(colPayload?.montoUsd || raw.montoUsd || 0);
+
+    if (montoCobradoUsd > 0 && (clienteId || clienteRif)) {
+      setClientsState(prev => {
+        const list = Array.isArray(prev) ? [...prev] : [];
+        return list.map(c => {
+          const matches = (clienteId && (String(c.id) === String(clienteId) || String(c.codigo) === String(clienteId))) ||
+                          (clienteRif && String(c.rif) === String(clienteRif));
+          if (matches) {
+            const currentDebt = Number(c.saldoDeudorUsd || 0);
+            const nuevoSaldoDeudor = Number(Math.max(0, currentDebt - montoCobradoUsd).toFixed(2));
+            const updatedClient = {
+              ...c,
+              saldoDeudorUsd: nuevoSaldoDeudor,
+              saldo_deudor_usd: nuevoSaldoDeudor
+            };
+            saveSupabaseClient(updatedClient).catch(() => {});
+            return updatedClient;
+          }
+          return c;
+        });
+      });
+    }
+
     return savedDoc;
   };
 
@@ -2204,6 +2620,27 @@ function MainApp() {
         });
       }
     }
+
+    const provRif = String(paymentPayload?.provRif || paymentPayload?.coProv || savedDoc?.provRif || '').trim().toUpperCase();
+    const montoPagadoUsd = Number(paymentPayload?.montoUsd || 0);
+    if (provRif && montoPagadoUsd > 0) {
+      setSuppliersState(prev => {
+        const list = Array.isArray(prev) ? [...prev] : [];
+        return list.map(s => {
+          if (String(s.rif || '').toUpperCase() === provRif || String(s.rif || '').replace(/[^A-Za-z0-9]/g, '') === provRif.replace(/[^A-Za-z0-9]/g, '')) {
+            const currentDebt = Number(s.saldoPendienteUsd ?? s.saldo_pendiente_usd ?? 0);
+            const newDebt = Math.max(0, Number((currentDebt - montoPagadoUsd).toFixed(2)));
+            return {
+              ...s,
+              saldoPendienteUsd: newDebt,
+              saldo_pendiente_usd: newDebt
+            };
+          }
+          return s;
+        });
+      });
+    }
+
     return savedDoc;
   };
 
@@ -2278,6 +2715,10 @@ function MainApp() {
         onSaveOrder={handleSaveOrder}
         onProceedToPOS={handleProceedToInvoiceFromOrder}
         onProcessSale={handleProcessSale}
+        onSaveClient={handleSaveClient}
+        onDeleteClient={handleDeleteClient}
+        onApproveClient={handleApproveClient}
+        onRejectClient={handleRejectClient}
         onSyncProfit={handleSyncProfit}
         onLogout={handleLogout}
       />
@@ -2358,6 +2799,9 @@ function MainApp() {
               onSyncProfit={handleSyncProfit}
               onSaveClient={handleSaveClient}
               onDeleteClient={handleDeleteClient}
+              onApproveClient={handleApproveClient}
+              onRejectClient={handleRejectClient}
+              profitZones={profitZones}
               onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
             />
           )}
@@ -2375,6 +2819,9 @@ function MainApp() {
                 profitZones={profitZones}
                 currentUser={currentUser}
                 onSaveOrder={handleSaveOrder}
+                onSaveClient={handleSaveClient}
+                onApproveClient={handleApproveClient}
+                onRejectClient={handleRejectClient}
                 onProceedToPOS={handleProceedToInvoiceFromOrder}
                 onProcessSale={handleProcessSale}
                 onSyncProfit={handleSyncProfit}
@@ -2399,6 +2846,10 @@ function MainApp() {
               onDeleteOrder={handleDeleteOrder}
               onDeleteSale={handleDeleteSale}
               onSyncProfit={handleSyncProfit}
+              onSaveClient={handleSaveClient}
+              onDeleteClient={handleDeleteClient}
+              onApproveClient={handleApproveClient}
+              onRejectClient={handleRejectClient}
               currentUser={currentUser}
               initialTab={ordersSalesModalTab}
               initialOrder={ordersSalesModalOrder}
@@ -2435,12 +2886,17 @@ function MainApp() {
               orders={orders}
               sales={sales}
               profitSellers={profitSellers}
+              profitZones={profitZones}
               config={config}
               profitReturns={profitReturns}
               profitInvoices={profitInvoices}
               profitCollections={profitCollections}
               onSyncProfit={handleSyncProfit}
               onProcessSale={handleProcessSale}
+              onSaveClient={handleSaveClient}
+              onDeleteClient={handleDeleteClient}
+              onApproveClient={handleApproveClient}
+              onRejectClient={handleRejectClient}
               onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
               currentUser={currentUser}
               pendingOrderToBill={pendingOrderToBill}
@@ -2659,6 +3115,7 @@ function MainApp() {
               clients={clients}
               sellers={profitSellers}
               profitSellers={profitSellers}
+              profitZones={profitZones}
               bankAccounts={profitBankAccounts}
               cashDesks={profitCashDesks}
               collections={profitCollections}
@@ -2668,6 +3125,10 @@ function MainApp() {
               onDeleteSale={handleDeleteSale}
               onSaveDocument={handleSaveCxcDocument}
               onRegisterCollection={handleRegisterCxcCollection}
+              onSaveClient={handleSaveClient}
+              onDeleteClient={handleDeleteClient}
+              onApproveClient={handleApproveClient}
+              onRejectClient={handleRejectClient}
             />
           )}
 
@@ -2715,6 +3176,8 @@ function MainApp() {
               profitPurchases={profitPurchases}
               profitSupplierPayments={profitSupplierPayments}
               profitBankAccounts={profitBankAccounts}
+              profitCashDesks={profitCashDesks}
+              cashDesks={profitCashDesks}
               profitAuditTrails={profitAuditTrails}
               cashMovements={cashMovements}
               usersList={usersList}

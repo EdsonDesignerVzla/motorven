@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Printer, X, ShieldCheck, TrendingUp, BarChart3, PieChart as PieIcon, Award, RefreshCw, Landmark } from 'lucide-react';
+import { Printer, X, ShieldCheck, TrendingUp, BarChart3, PieChart as PieIcon, RefreshCw, Landmark } from 'lucide-react';
 import motorvenLogoImg from '../assets/logo_motorven_limpio.png';
 import { formatUsd, formatBs } from '../services/formatService';
 import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails } from '../services/supabaseService';
@@ -23,16 +23,23 @@ export default function ExecutiveSummaryModal({
   config,
   currentUser,
   sales = [],
+  products = [],
+  orders = [],
   carteraClientesData = [],
   cobranzasData = {},
   disponibilidadBancariaData = [],
   objetivosData = {},
+  cxpAnalytics = null,
+  topClientsData = [],
+  lubricantesAnalytics = {},
   ventasDelDia = null,
   ventasAcumuladoMes = null,
   ventasMesLabel = '',
   todayLabel = '',
   sellers = [],
-  selectedMonth = 'ALL'
+  selectedMonth = 'ALL',
+  periodoLabel = '',
+  onDownloadFullPdf = null
 }) {
   // Código único de 10 dígitos alfanuméricos para este documento
   const [documentCode] = useState(() => generateUniqueDocCode());
@@ -101,9 +108,22 @@ export default function ExecutiveSummaryModal({
   });
 
   const handlePrint = () => {
+    if (typeof onDownloadFullPdf === 'function') {
+      onDownloadFullPdf('ALL', {
+        ...config,
+        tasaDolar: tasaBcvNum,
+        tasaKeystone: tasaKeystoneNum,
+        tasaEuro: tasaEuroNum,
+        tasaUsdt: tasaUsdtNum
+      });
+      return;
+    }
+
     generateDashboardPDF({
       kpiData,
       sales,
+      products,
+      orders,
       config: {
         ...config,
         tasaDolar: tasaBcvNum,
@@ -116,6 +136,10 @@ export default function ExecutiveSummaryModal({
       cobranzasData,
       disponibilidadBancariaData,
       carteraClientesData,
+      topClientsData,
+      lubricantesAnalytics,
+      objetivosData,
+      cxpAnalytics,
       selectedMonth,
       ventasDelDia,
       ventasAcumuladoMes,
@@ -151,8 +175,15 @@ export default function ExecutiveSummaryModal({
 
   const cobAcum = Number(cobranzasData?.acumulada || 0);
   const cobBs = Number(cobranzasData?.enBs || 0);
+  const cobDivisasUsd = Number(cobranzasData?.efectivoZelle || 0);
+  const cobBsUsd = Number(cobranzasData?.enBsUsd ?? (tasaBcvNum > 0 ? cobBs / tasaBcvNum : 0));
   const totalCobranzasUsd = cobAcum;
   const totalCobranzasBs = cobBs > 0 ? cobBs : (totalCobranzasUsd * tasaBcvNum);
+  const pctCobDivisas = totalCobranzasUsd > 0 ? parseFloat(((cobDivisasUsd / totalCobranzasUsd) * 100).toFixed(1)) : 0;
+  const pctCobBs = totalCobranzasUsd > 0 ? parseFloat(((cobBsUsd / totalCobranzasUsd) * 100).toFixed(1)) : 0;
+  const pctProyectadoMeta = kpiData?.metaComercial > 0
+    ? ((Number(kpiData.totalProyectado || 0) / Number(kpiData.metaComercial)) * 100).toFixed(2)
+    : '0.00';
 
   const cobranzas = [
     {
@@ -183,30 +214,60 @@ export default function ExecutiveSummaryModal({
       }))
     : [{ banco: 'Disponibilidad Bancaria General', tipo: 'Tesorería', montoUsd: 0, pct: 0 }];
 
-  const abonosProv = Number(objetivosData?.abonosProveedores || 0);
-  const saldoPendProv = Number(objetivosData?.saldoPendiente || 0);
+  const baseConfigRate = Number(config?.tasaDolar || config?.tasaBcv || liveBcvRate) || liveBcvRate;
+  const hasRateDiff = Math.abs(liveBcvRate - baseConfigRate) > 0.05;
+  const activePeriodText = periodoLabel || (selectedMonth === 'ALL' ? 'Cierre Anual Acumulado' : `Mes ${selectedMonth}`);
+
+  const abonosProv = Number(
+    selectedMonth === 'ALL'
+      ? (objetivosData?.abonosProveedores || 0)
+      : (objetivosData?.abonosPeriodo ?? objetivosData?.abonosProveedores ?? 0)
+  );
+  const saldoPendProv = Number(cxpAnalytics?.totalSaldoUsd ?? objetivosData?.saldoPendiente ?? 0);
+  const cxpVencidoProv = Number(cxpAnalytics?.totalVencidoUsd || 0);
+  const cxpVigenteProv = Math.max(0, saldoPendProv - cxpVencidoProv);
   const totalObligacionesUsd = abonosProv + saldoPendProv;
   const totalObligacionesBs = totalObligacionesUsd * tasaBcvNum;
 
   const obligaciones = [
     {
-      rubro: 'Abonos a Proveedores Realizados (Mes Actual)',
+      rubro: `Abonos a Proveedores Realizados (${selectedMonth === 'ALL' ? 'Acumulado Ejercicio' : activePeriodText})`,
       montoUsd: abonosProv,
       montoBs: abonosProv * tasaBcvNum,
       estado: `${totalObligacionesUsd > 0 ? Math.round((abonosProv / totalObligacionesUsd) * 100) : 0}% - Liquidado y Conciliado`,
       color: '#10b981'
     },
-    {
-      rubro: 'Saldo Pendiente por Pagar a Proveedores',
-      montoUsd: saldoPendProv,
-      montoBs: saldoPendProv * tasaBcvNum,
-      estado: `${totalObligacionesUsd > 0 ? Math.round((saldoPendProv / totalObligacionesUsd) * 100) : 0}% - Programado según Cronograma`,
-      color: '#ef4444'
-    }
+    ...(cxpAnalytics
+      ? [
+          {
+            rubro: `Saldo CxP Vigente / Por Vencer (Próx. 15d: ${formatUsd(cxpAnalytics.porVencer15Usd || 0)})`,
+            montoUsd: cxpVigenteProv,
+            montoBs: cxpVigenteProv * tasaBcvNum,
+            estado: `${saldoPendProv > 0 ? Math.round((cxpVigenteProv / saldoPendProv) * 100) : 0}% - Vigente en Cronograma`,
+            color: '#0284c7'
+          },
+          {
+            rubro: `Saldo CxP Vencido en Mora (${cxpAnalytics.vencidosDocsCount || 0} docs)`,
+            montoUsd: cxpVencidoProv,
+            montoBs: cxpVencidoProv * tasaBcvNum,
+            estado: `${cxpAnalytics.morosidadPct || 0}% - Atención Prioritaria`,
+            color: '#ef4444'
+          }
+        ]
+      : [
+          {
+            rubro: 'Saldo Pendiente por Pagar a Proveedores',
+            montoUsd: saldoPendProv,
+            montoBs: saldoPendProv * tasaBcvNum,
+            estado: `${totalObligacionesUsd > 0 ? Math.round((saldoPendProv / totalObligacionesUsd) * 100) : 0}% - Programado según Cronograma`,
+            color: '#ef4444'
+          }
+        ])
   ];
 
-  // Parámetros calculados para Gráfico de Barras SVG (Escala máx 22.000 L)
-  const maxLitrosEscala = 22000;
+  // Parámetros calculados para Gráfico de Barras SVG (escala dinámica acorde a la meta/proyección)
+  const metaLitrosModal = Number(kpiData?.metaComercial || 20000);
+  const maxLitrosEscala = Math.max(metaLitrosModal, Number(kpiData?.totalProyectado || 0), 1000) * 1.1;
   const chartHeight = 85;
   const calcBarHeight = (litros) => Math.min(Math.round((litros / maxLitrosEscala) * chartHeight), chartHeight);
 
@@ -264,7 +325,7 @@ export default function ExecutiveSummaryModal({
                 <h1 className="pdf-company-name">{config?.nombreEmpresa || 'GRUPO MOTORVEN, C.A.'}</h1>
                 <div className="pdf-rif-code">RIF: {config?.rif || 'J-31115365-9'}</div>
                 <div className="pdf-report-title">INFORME EJECUTIVO DE GESTIÓN Y RENDIMIENTO COMERCIAL</div>
-                <div className="pdf-report-subtitle">SISTEMA INTEGRAL DE CONTROL EJECUTIVO Y OPERATIVO &bull; SIGNUM MOTORVEN</div>
+                <div className="pdf-report-subtitle">SISTEMA INTEGRAL DE CONTROL EJECUTIVO Y OPERATIVO &bull; PERÍODO: {activePeriodText.toUpperCase()}</div>
               </div>
               <div className="pdf-security-stamp">
                 <div className="pdf-stamp-badge">DOCUMENTO OFICIAL</div>
@@ -353,7 +414,7 @@ export default function ExecutiveSummaryModal({
             </div>
             
             <div className="pdf-rates-snapshot-disclaimer">
-              Registro auditado y certificado por SIGNUM MOTORVEN. Todas las conversiones a moneda nacional (Bs.) en los balances han sido calculadas con la tasa oficial BCV de <strong>Bs. {formatBs(liveBcvRate).replace('Bs. ', '')}</strong> capturada en tiempo real al generar este documento.
+              Registro auditado y certificado por SIGNUM MOTORVEN. Todas las conversiones a moneda nacional (Bs.) en los balances han sido calculadas con la tasa oficial BCV de <strong>Bs. {formatBs(liveBcvRate).replace('Bs. ', '')}</strong> capturada en tiempo real al generar este documento{hasRateDiff ? ` (tasa base en tablero: Bs. ${formatBs(baseConfigRate).replace('Bs. ', '')})` : ''}.
             </div>
           </div>
 
@@ -373,12 +434,12 @@ export default function ExecutiveSummaryModal({
               <div className="pdf-summary-kpi">
                 <span className="pdf-summary-kpi-label">Cartera CxC Vigente</span>
                 <span className="pdf-summary-kpi-value">{formatUsd(carteraClientes[0].montoUsd)}</span>
-                <span className="pdf-summary-kpi-sub" style={{ color: '#059669', fontWeight: 700 }}>75.22% Al Día / Saludable</span>
+                <span className="pdf-summary-kpi-sub" style={{ color: '#059669', fontWeight: 700 }}>{carteraClientes[0].pct}% Al Día / Saludable</span>
               </div>
               <div className="pdf-summary-kpi">
                 <span className="pdf-summary-kpi-label">Recaudación Cobrada</span>
                 <span className="pdf-summary-kpi-value">{formatUsd(totalCobranzasUsd)}</span>
-                <span className="pdf-summary-kpi-sub">81.8% Bancos &bull; 18.2% Bs./Zelle</span>
+                <span className="pdf-summary-kpi-sub">{pctCobDivisas}% Divisas &bull; {pctCobBs}% Bs./Bancos</span>
               </div>
               <div className="pdf-summary-kpi">
                 <span className="pdf-summary-kpi-label">Disponibilidad Caja/Bancos</span>
@@ -388,7 +449,7 @@ export default function ExecutiveSummaryModal({
             </div>
 
             <div className="pdf-summary-note">
-              <strong>Síntesis Operativa:</strong> En el presente ciclo fiscal, <strong>Grupo Motorven, C.A.</strong> registra una facturación acumulada de <strong>{kpiData.litrosFacturados.toLocaleString('es-VE', { maximumFractionDigits: 2 })} Litros</strong> de lubricantes ({kpiData.cumplimientoMetaPct}% del objetivo mensual). Sumando <strong>{kpiData.pendienteFacturar.toLocaleString('es-VE')} L</strong> en pedidos en tránsito, la proyección total se ubica en <strong>{kpiData.totalProyectado.toLocaleString('es-VE', { maximumFractionDigits: 2 })} L (59.26%)</strong>. La tesorería cuenta con <strong>{formatUsd(totalBancosUsd)}</strong> de liquidez inmediata conciliada. La cartera crediticia de <strong>{formatUsd(totalCarteraUsd)}</strong> presenta un <strong>75.22%</strong> en estado saludable y un <strong>24.78%</strong> bajo protocolo de cobro activo.
+              <strong>Síntesis Operativa:</strong> En el presente ciclo fiscal, <strong>Grupo Motorven, C.A.</strong> registra una facturación acumulada de <strong>{kpiData.litrosFacturados.toLocaleString('es-VE', { maximumFractionDigits: 2 })} Litros</strong> de lubricantes ({kpiData.cumplimientoMetaPct}% del objetivo del período). Sumando <strong>{kpiData.pendienteFacturar.toLocaleString('es-VE')} L</strong> en pedidos en tránsito, la proyección total se ubica en <strong>{kpiData.totalProyectado.toLocaleString('es-VE', { maximumFractionDigits: 2 })} L ({pctProyectadoMeta}%)</strong>. La tesorería cuenta con <strong>{formatUsd(totalBancosUsd)}</strong> de liquidez inmediata conciliada. La cartera crediticia de <strong>{formatUsd(totalCarteraUsd)}</strong> presenta un <strong>{carteraClientes[0].pct}%</strong> en estado saludable y un <strong>{carteraClientes[1].pct}%</strong> bajo protocolo de cobro activo.
             </div>
           </div>
 
@@ -405,8 +466,8 @@ export default function ExecutiveSummaryModal({
                 <svg viewBox="0 0 280 120" className="pdf-chart-svg">
                   {/* Línea base y línea meta discontinua */}
                   <line x1="25" y1="98" x2="275" y2="98" stroke="#cbd5e1" strokeWidth="1" />
-                  <line x1="25" y1="25" x2="275" y2="25" stroke="#e60012" strokeWidth="1" strokeDasharray="3 3" />
-                  <text x="275" y="22" fill="#e60012" fontSize="7" fontWeight="bold" textAnchor="end">Meta: 20.000 L</text>
+                  <line x1="25" y1={98 - calcBarHeight(metaLitrosModal)} x2="275" y2={98 - calcBarHeight(metaLitrosModal)} stroke="#e60012" strokeWidth="1" strokeDasharray="3 3" />
+                  <text x="275" y={Math.max(10, 95 - calcBarHeight(metaLitrosModal))} fill="#e60012" fontSize="7" fontWeight="bold" textAnchor="end">Meta: {metaLitrosModal.toLocaleString('es-VE')} L</text>
                   
                   {/* Barra 1: Facturado */}
                   <rect
@@ -490,9 +551,9 @@ export default function ExecutiveSummaryModal({
                     fontWeight="bold"
                     textAnchor="middle"
                   >
-                    20.000 L
+                    {metaLitrosModal.toLocaleString('es-VE', { maximumFractionDigits: 0 })} L
                   </text>
-                  <text x="231" y="110" fill="#475569" fontSize="7" fontWeight="700" textAnchor="middle">Meta Mes</text>
+                  <text x="231" y="110" fill="#475569" fontSize="7" fontWeight="700" textAnchor="middle">{selectedMonth === 'ALL' ? 'Meta Anual' : 'Meta Mes'}</text>
                 </svg>
               </div>
             </div>
@@ -508,7 +569,7 @@ export default function ExecutiveSummaryModal({
                 <div style={{ position: 'relative', width: '90px', height: '90px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
                     <circle cx="50" cy="50" r="34" fill="none" stroke="#e2e8f0" strokeWidth="15" />
-                    {/* Segmento Al Día (75.22%) */}
+                    {/* Segmento Al Día */}
                     <circle
                       cx="50"
                       cy="50"
@@ -519,7 +580,7 @@ export default function ExecutiveSummaryModal({
                       strokeDasharray={`${cxcAlDiaDash} ${donutCircumference}`}
                       strokeDashoffset="0"
                     />
-                    {/* Segmento Vencidas (24.78%) */}
+                    {/* Segmento Vencidas */}
                     <circle
                       cx="50"
                       cy="50"
@@ -532,7 +593,7 @@ export default function ExecutiveSummaryModal({
                     />
                   </svg>
                   <div style={{ position: 'absolute', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 900, color: '#e60012', lineHeight: 1 }}>24.8%</div>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 900, color: '#e60012', lineHeight: 1 }}>{carteraClientes[1].pct.toFixed(1)}%</div>
                     <div style={{ fontSize: '0.55rem', fontWeight: 700, color: '#64748b' }}>Moroso</div>
                   </div>
                 </div>
@@ -540,12 +601,12 @@ export default function ExecutiveSummaryModal({
                 {/* Leyenda Detallada con Valores Financieros */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                   <div style={{ borderLeft: '3px solid #002b7a', paddingLeft: '6px' }}>
-                    <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 600 }}>CxC Al Día (75.22%)</div>
+                    <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 600 }}>CxC Al Día ({carteraClientes[0].pct}%)</div>
                     <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#002b7a' }}>{formatUsd(carteraClientes[0].montoUsd)}</div>
                     <div style={{ fontSize: '0.58rem', color: '#059669', fontWeight: 700 }}>🟢 Crédito Sano / Vigente</div>
                   </div>
                   <div style={{ borderLeft: '3px solid #e60012', paddingLeft: '6px' }}>
-                    <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 600 }}>CxC Vencidas (24.78%)</div>
+                    <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 600 }}>CxC Vencidas ({carteraClientes[1].pct}%)</div>
                     <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#e60012' }}>{formatUsd(carteraClientes[1].montoUsd)}</div>
                     <div style={{ fontSize: '0.58rem', color: '#dc2626', fontWeight: 700 }}>🔴 En Gestión Extrajudicial</div>
                   </div>
@@ -605,7 +666,7 @@ export default function ExecutiveSummaryModal({
                   </td>
                 </tr>
                 <tr>
-                  <td><strong>META COMERCIAL ASIGNADA DEL MES</strong></td>
+                  <td><strong>{selectedMonth === 'ALL' ? 'META COMERCIAL ANUAL ASIGNADA' : 'META COMERCIAL ASIGNADA DEL MES'}</strong></td>
                   <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
                     {kpiData.metaComercial.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
                   </td>
@@ -725,7 +786,7 @@ export default function ExecutiveSummaryModal({
                     <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{c.pct.toFixed(2)}%</td>
                     <td style={{ textAlign: 'center' }}>
                       <span className={idx === 0 ? 'pdf-tag-green' : 'pdf-tag-red'}>
-                        {idx === 0 ? 'Al Día (75.22%)' : 'Moroso (24.78%)'}
+                        {idx === 0 ? `Al Día (${c.pct}%)` : `Moroso (${c.pct}%)`}
                       </span>
                     </td>
                   </tr>
@@ -839,14 +900,14 @@ export default function ExecutiveSummaryModal({
                     <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{formatUsd(ob.montoUsd)}</td>
                     <td style={{ textAlign: 'right' }}>{formatBs(ob.montoBs)}</td>
                     <td style={{ textAlign: 'center' }}>
-                      <span className={idx === 0 ? 'pdf-tag-green' : 'pdf-tag-yellow'}>
+                      <span className={idx === 0 ? 'pdf-tag-green' : ob.color === '#ef4444' ? 'pdf-tag-red' : 'pdf-tag-yellow'}>
                         {ob.estado.split(' - ')[0]}
                       </span>
                     </td>
                   </tr>
                 ))}
                 <tr className="pdf-row-total">
-                  <td><strong>TOTAL OBLIGACIONES EVALUADAS</strong></td>
+                  <td><strong>TOTAL OBLIGACIONES EVALUADAS (ABONOS + SALDO CXP)</strong></td>
                   <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{formatUsd(totalObligacionesUsd)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{formatBs(totalObligacionesBs)}</td>
                   <td style={{ textAlign: 'center' }}>
@@ -864,7 +925,7 @@ export default function ExecutiveSummaryModal({
               <strong>DICTAMEN EJECUTIVO Y ANÁLISIS DE GESTIÓN COMERCIAL</strong>
             </div>
             <p className="pdf-obs-text">
-              El presente informe sintetiza el estado global de operaciones de Grupo Motorven, C.A. con registro cambiario en vivo capturado al momento de la impresión. La meta comercial registra un cumplimiento de <strong>{kpiData.cumplimientoMetaPct}%</strong> sobre el objetivo de 20.000 Litros. La cartera de cuentas por cobrar mantiene un 75.22% de créditos vigentes y un 24.78% en morosidad activa sujeto a gestión directa de cobranza. La liquidez inmediata consolidada en tesorería alcanza <strong>{formatUsd(totalBancosUsd)}</strong> (equivalente a <strong>{formatBs(totalBancosBs)}</strong> a tasa oficial BCV en vivo de Bs. {formatBs(tasaBcvNum).replace('Bs. ', '')}).
+              El presente informe sintetiza el estado global de operaciones de Grupo Motorven, C.A. para el período <strong>{activePeriodText}</strong> con registro cambiario en vivo capturado al momento de la impresión. La meta comercial registra un cumplimiento de <strong>{kpiData.cumplimientoMetaPct}%</strong> sobre el objetivo de <strong>{metaLitrosModal.toLocaleString('es-VE', { maximumFractionDigits: 0 })} Litros</strong>. La cartera de cuentas por cobrar mantiene un <strong>{carteraClientes[0].pct}%</strong> de créditos vigentes y un <strong>{carteraClientes[1].pct}%</strong> en morosidad activa sujeto a gestión directa de cobranza. En Cuentas por Pagar (CxP), se registra un saldo pendiente de <strong>{formatUsd(saldoPendProv)}</strong>{cxpAnalytics ? ` (${cxpAnalytics.morosidadPct}% vencido)` : ''}. La liquidez inmediata consolidada en tesorería alcanza <strong>{formatUsd(totalBancosUsd)}</strong> (equivalente a <strong>{formatBs(totalBancosBs)}</strong> a tasa oficial BCV en vivo de Bs. {formatBs(tasaBcvNum).replace('Bs. ', '')}).
             </p>
           </div>
 

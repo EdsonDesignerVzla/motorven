@@ -32,6 +32,157 @@ import { soundFX } from '../services/soundService';
 // Helpers de fechas y redondeo
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
+const isFiscalInvoiceType = (tipo) => String(tipo || '').toUpperCase().trim() === 'FACT';
+
+const getDocTypeLabel = (tipo) => {
+  const t = String(tipo || '').toUpperCase().trim();
+  if (t === 'FACT' || t === 'FACTURA') return 'Factura Fiscal';
+  if (t === 'NE' || t === 'NOTA_ENTREGA') return 'Nota de Entrega';
+  if (t === 'ADEL') return 'Adelanto';
+  if (t === 'N/CR' || t === 'NC') return 'Nota de Crédito';
+  if (t === 'N/DB' || t === 'ND') return 'Nota de Débito';
+  if (t === 'OC') return 'Orden de Compra';
+  return t || 'Documento';
+};
+
+// Sincroniza montos en USD <-> Bs, Base Imponible, IVA 16% (si FACT) y Saldos sin duplicar lógica
+const syncPayableAmounts = (next, changedField, rawValue, fallbackRate) => {
+  const parsedRate = Number(next.tasaCambio || 0);
+  const rate = parsedRate > 0 ? parsedRate : Math.max(0.0001, Number(fallbackRate || 1));
+  const isFact = isFiscalInvoiceType(next.tipoDoc);
+  const appliesIva = isFact && !next.exentoIva;
+
+  const setFromTotalUsd = (totalU, keepRawField = null) => {
+    const tU = Math.max(0, Number(totalU || 0));
+    const tB = round2(tU * rate);
+    if (keepRawField !== 'montoNetUsd') next.montoNetUsd = tU.toFixed(2);
+    if (keepRawField !== 'montoNetBs') next.montoNetBs = tB.toFixed(2);
+    if (appliesIva) {
+      const bU = round2(tU / 1.16);
+      const iU = round2(tU - bU);
+      next.baseImponibleUsd = bU.toFixed(2);
+      next.ivaUsd = iU.toFixed(2);
+      next.baseImponibleBs = round2(bU * rate).toFixed(2);
+      next.ivaBs = round2(iU * rate).toFixed(2);
+    } else {
+      next.baseImponibleUsd = tU.toFixed(2);
+      next.baseImponibleBs = tB.toFixed(2);
+      next.ivaUsd = '0.00';
+      next.ivaBs = '0.00';
+    }
+  };
+
+  const setFromTotalBs = (totalB, keepRawField = null) => {
+    const tB = Math.max(0, Number(totalB || 0));
+    const tU = round2(tB / rate);
+    if (keepRawField !== 'montoNetBs') next.montoNetBs = tB.toFixed(2);
+    if (keepRawField !== 'montoNetUsd') next.montoNetUsd = tU.toFixed(2);
+    if (appliesIva) {
+      const bB = round2(tB / 1.16);
+      const iB = round2(tB - bB);
+      next.baseImponibleBs = bB.toFixed(2);
+      next.ivaBs = iB.toFixed(2);
+      next.baseImponibleUsd = round2(bB / rate).toFixed(2);
+      next.ivaUsd = round2(iB / rate).toFixed(2);
+    } else {
+      next.baseImponibleBs = tB.toFixed(2);
+      next.baseImponibleUsd = tU.toFixed(2);
+      next.ivaBs = '0.00';
+      next.ivaUsd = '0.00';
+    }
+  };
+
+  if (changedField === 'tipoDoc' || changedField === 'exentoIva') {
+    if (!isFact) next.exentoIva = false;
+    if (next.monedaIngreso === 'BS') {
+      setFromTotalBs(next.montoNetBs);
+    } else {
+      setFromTotalUsd(next.montoNetUsd);
+    }
+  } else if (changedField === 'tasaCambio') {
+    if (Number(rawValue || 0) > 0) {
+      if (next.monedaIngreso === 'BS') {
+        const bB = Math.max(0, Number(next.baseImponibleBs || 0));
+        const iB = appliesIva ? Math.max(0, Number(next.ivaBs || 0)) : 0;
+        const tB = Math.max(0, Number(next.montoNetBs || 0));
+        const aB = Math.max(0, Number(next.abonosBs || 0));
+        next.baseImponibleUsd = round2(bB / rate).toFixed(2);
+        next.ivaUsd = round2(iB / rate).toFixed(2);
+        next.montoNetUsd = round2(tB / rate).toFixed(2);
+        next.abonosUsd = round2(aB / rate).toFixed(2);
+      } else {
+        const bU = Math.max(0, Number(next.baseImponibleUsd || 0));
+        const iU = appliesIva ? Math.max(0, Number(next.ivaUsd || 0)) : 0;
+        const tU = Math.max(0, Number(next.montoNetUsd || 0));
+        const aU = Math.max(0, Number(next.abonosUsd || 0));
+        next.baseImponibleBs = round2(bU * rate).toFixed(2);
+        next.ivaBs = round2(iU * rate).toFixed(2);
+        next.montoNetBs = round2(tU * rate).toFixed(2);
+        next.abonosBs = round2(aU * rate).toFixed(2);
+      }
+    }
+  } else if (changedField === 'baseImponibleUsd') {
+    next.monedaIngreso = 'US$';
+    const bU = Math.max(0, Number(rawValue || 0));
+    const iU = appliesIva ? round2(bU * 0.16) : 0;
+    const tU = round2(bU + iU);
+    next.baseImponibleBs = round2(bU * rate).toFixed(2);
+    next.ivaUsd = iU.toFixed(2);
+    next.ivaBs = round2(iU * rate).toFixed(2);
+    next.montoNetUsd = tU.toFixed(2);
+    next.montoNetBs = round2(tU * rate).toFixed(2);
+  } else if (changedField === 'baseImponibleBs') {
+    next.monedaIngreso = 'BS';
+    const bB = Math.max(0, Number(rawValue || 0));
+    const iB = appliesIva ? round2(bB * 0.16) : 0;
+    const tB = round2(bB + iB);
+    next.baseImponibleUsd = round2(bB / rate).toFixed(2);
+    next.ivaBs = iB.toFixed(2);
+    next.ivaUsd = round2(iB / rate).toFixed(2);
+    next.montoNetBs = tB.toFixed(2);
+    next.montoNetUsd = round2(tB / rate).toFixed(2);
+  } else if (changedField === 'ivaUsd') {
+    next.monedaIngreso = 'US$';
+    const bU = Math.max(0, Number(next.baseImponibleUsd || 0));
+    const iU = Math.max(0, Number(rawValue || 0));
+    const tU = round2(bU + iU);
+    next.ivaBs = round2(iU * rate).toFixed(2);
+    next.montoNetUsd = tU.toFixed(2);
+    next.montoNetBs = round2(tU * rate).toFixed(2);
+  } else if (changedField === 'ivaBs') {
+    next.monedaIngreso = 'BS';
+    const bB = Math.max(0, Number(next.baseImponibleBs || 0));
+    const iB = Math.max(0, Number(rawValue || 0));
+    const tB = round2(bB + iB);
+    next.ivaUsd = round2(iB / rate).toFixed(2);
+    next.montoNetBs = tB.toFixed(2);
+    next.montoNetUsd = round2(tB / rate).toFixed(2);
+  } else if (changedField === 'montoNetUsd') {
+    next.monedaIngreso = 'US$';
+    setFromTotalUsd(rawValue, 'montoNetUsd');
+  } else if (changedField === 'montoNetBs') {
+    next.monedaIngreso = 'BS';
+    setFromTotalBs(rawValue, 'montoNetBs');
+  } else if (changedField === 'abonosUsd') {
+    next.monedaIngreso = 'US$';
+    const aU = Math.max(0, Number(rawValue || 0));
+    next.abonosBs = round2(aU * rate).toFixed(2);
+  } else if (changedField === 'abonosBs') {
+    next.monedaIngreso = 'BS';
+    const aB = Math.max(0, Number(rawValue || 0));
+    next.abonosUsd = round2(aB / rate).toFixed(2);
+  }
+
+  const finalTotalUsd = Math.max(0, Number(next.montoNetUsd || 0));
+  const finalAbonosUsd = Math.max(0, Number(next.abonosUsd || 0));
+  const finalTotalBs = Math.max(0, Number(next.montoNetBs || 0));
+  const finalAbonosBs = Math.max(0, Number(next.abonosBs || 0));
+
+  next.saldoUsd = round2(Math.max(0, finalTotalUsd - finalAbonosUsd)).toFixed(2);
+  next.saldoBs = round2(Math.max(0, finalTotalBs - finalAbonosBs)).toFixed(2);
+  return next;
+};
+
 const getTodayIso = () => {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -385,10 +536,17 @@ export default function AccountsPayableModal({
           return matchProv || matchDoc;
         });
 
+        const docTasa = Number(resolved.tasa || 0) > 10 ? Number(resolved.tasa) : tasaKeystone;
+        const resolvedNetBs = Number(resolved.montoNetBs || resolved.monto_net_bs || 0);
+        const displayNetBs = resolvedNetBs > 0 && String(resolved.moneda || '').toUpperCase().includes('BS')
+          ? round2(resolvedNetBs)
+          : round2(montoNetUsd * docTasa);
+
         return {
           ...resolved,
           id: resolved.id || `CXP-${tipoDoc}-${nroDoc}-${provRif}`,
           tipoDoc,
+          tipoDocLabel: getDocTypeLabel(tipoDoc),
           nroDoc,
           provNombre,
           provRif,
@@ -397,12 +555,15 @@ export default function AccountsPayableModal({
           fechaEmisionIso: toIsoDateInput(fecEmis),
           fechaVencimientoIso: toIsoDateInput(fecVenc),
           diasCredito: Number(resolved.diasCredito ?? resolved.dias_credito ?? 15),
+          tasa: docTasa,
           montoNetUsd: round2(montoNetUsd),
-          montoNetBs: round2(montoNetUsd * tasaKeystone),
+          montoNetBs: displayNetBs,
           abonosUsd,
-          abonosBs,
+          abonosBs: round2(abonosUsd * docTasa),
           saldoUsd,
-          saldoBs: round2(saldoUsd * tasaKeystone),
+          saldoBs: round2(saldoUsd * docTasa),
+          baseImponibleUsd: resolved.baseImponibleUsd !== undefined ? round2(resolved.baseImponibleUsd) : (isFiscalInvoiceType(tipoDoc) ? round2(montoNetUsd / 1.16) : round2(montoNetUsd)),
+          ivaUsd: resolved.ivaUsd !== undefined ? round2(resolved.ivaUsd) : (isFiscalInvoiceType(tipoDoc) ? round2(montoNetUsd - round2(montoNetUsd / 1.16)) : 0),
           isSolvente,
           isVencido,
           diffDays,
@@ -745,6 +906,7 @@ export default function AccountsPayableModal({
     const todayIso = getTodayIso();
     const vencDate = new Date();
     vencDate.setDate(vencDate.getDate() + 15);
+    const defaultRate = round2(tasaBcv || tasaKeystone);
 
     setEditingPayable({
       id: null,
@@ -756,28 +918,74 @@ export default function AccountsPayableModal({
       fechaEmisionIso: todayIso,
       fechaVencimientoIso: toIsoDateInput(vencDate),
       diasCredito: 15,
-      montoNetUsd: 0,
-      abonosUsd: 0,
-      saldoUsd: 0,
+      monedaIngreso: 'US$',
+      tasaCambio: String(defaultRate),
+      exentoIva: false,
+      baseImponibleUsd: '0.00',
+      baseImponibleBs: '0.00',
+      ivaUsd: '0.00',
+      ivaBs: '0.00',
+      montoNetUsd: '0.00',
+      montoNetBs: '0.00',
+      abonosUsd: '0.00',
+      abonosBs: '0.00',
+      saldoUsd: '0.00',
+      saldoBs: '0.00',
       observaciones: ''
     });
   };
 
   const handleOpenEditPayableModal = (p) => {
     setIsCreatingPayable(false);
+    const tipo = String(p.tipoDoc || 'FACT').toUpperCase().trim();
+    const isFact = isFiscalInvoiceType(tipo);
+    const docRate = Number(p.tasa || 0) > 10 ? round2(p.tasa) : round2(isFact ? tasaBcv : tasaKeystone);
+    const monedaIngreso = String(p.moneda || '').toUpperCase().includes('BS') ? 'BS' : 'US$';
+    const totalUsd = round2(p.montoNetUsd || 0);
+    const totalBs = Number(p.montoNetBs || 0) > 0 && monedaIngreso === 'BS'
+      ? round2(p.montoNetBs)
+      : round2(totalUsd * docRate);
+    const exentoIva = isFact && (Boolean(p.exentoIva) || (p.ivaUsd !== undefined && Number(p.ivaUsd) === 0 && totalUsd > 0));
+    const baseUsd = isFact && !exentoIva
+      ? (p.baseImponibleUsd !== undefined ? round2(p.baseImponibleUsd) : round2(totalUsd / 1.16))
+      : totalUsd;
+    const ivaUsd = isFact && !exentoIva
+      ? (p.ivaUsd !== undefined ? round2(p.ivaUsd) : round2(totalUsd - baseUsd))
+      : 0;
+    const baseBs = isFact && !exentoIva
+      ? (p.baseImponibleBs !== undefined && monedaIngreso === 'BS' ? round2(p.baseImponibleBs) : round2(baseUsd * docRate))
+      : totalBs;
+    const ivaBs = isFact && !exentoIva
+      ? (p.ivaBs !== undefined && monedaIngreso === 'BS' ? round2(p.ivaBs) : round2(totalBs - baseBs))
+      : 0;
+    const abonosUsd = round2(p.abonosUsd || 0);
+    const abonosBs = round2(abonosUsd * docRate);
+    const saldoUsd = round2(Math.max(0, totalUsd - abonosUsd));
+    const saldoBs = round2(Math.max(0, totalBs - abonosBs));
+
     setEditingPayable({
       id: p.id,
       originalNroDoc: p.nroDoc,
-      tipoDoc: p.tipoDoc || 'FACT',
+      tipoDoc: tipo,
       nroDoc: p.nroDoc,
       provNombre: p.provNombre,
       provRif: p.provRif,
       fechaEmisionIso: p.fechaEmisionIso || getTodayIso(),
       fechaVencimientoIso: p.fechaVencimientoIso || getTodayIso(),
       diasCredito: Number(p.diasCredito || 15),
-      montoNetUsd: round2(p.montoNetUsd),
-      abonosUsd: round2(p.abonosUsd || 0),
-      saldoUsd: round2(p.saldoUsd),
+      monedaIngreso,
+      tasaCambio: String(docRate),
+      exentoIva,
+      baseImponibleUsd: baseUsd.toFixed(2),
+      baseImponibleBs: baseBs.toFixed(2),
+      ivaUsd: ivaUsd.toFixed(2),
+      ivaBs: ivaBs.toFixed(2),
+      montoNetUsd: totalUsd.toFixed(2),
+      montoNetBs: totalBs.toFixed(2),
+      abonosUsd: abonosUsd.toFixed(2),
+      abonosBs: abonosBs.toFixed(2),
+      saldoUsd: saldoUsd.toFixed(2),
+      saldoBs: saldoBs.toFixed(2),
       observaciones: p.observaciones || p.descrip || '',
       historialPagos: p.historialPagos || []
     });
@@ -786,10 +994,9 @@ export default function AccountsPayableModal({
   const handleEditFieldChange = (field, value) => {
     setEditingPayable(prev => {
       if (!prev) return prev;
-      const next = { ...prev, [field]: value };
+      let next = { ...prev, [field]: value };
 
       if (field === 'provNombre') {
-        // Autocompletar RIF si coincide con catálogo de proveedores
         const match = suppliers.find(s => (s.nombre || s.razonSocial || '').toLowerCase() === String(value).toLowerCase());
         if (match && match.rif) {
           next.provRif = match.rif;
@@ -811,10 +1018,15 @@ export default function AccountsPayableModal({
         next.diasCredito = Math.max(0, diffCredit);
       }
 
-      if (field === 'montoNetUsd' || field === 'abonosUsd') {
-        const total = Math.max(0, Number(next.montoNetUsd || 0));
-        const abonos = Math.max(0, Number(next.abonosUsd || 0));
-        next.saldoUsd = round2(Math.max(0, total - abonos));
+      const numericOrTaxFields = [
+        'tipoDoc', 'exentoIva', 'tasaCambio',
+        'baseImponibleUsd', 'baseImponibleBs',
+        'ivaUsd', 'ivaBs',
+        'montoNetUsd', 'montoNetBs',
+        'abonosUsd', 'abonosBs'
+      ];
+      if (numericOrTaxFields.includes(field)) {
+        next = syncPayableAmounts(next, field, value, tasaBcv || tasaKeystone);
       }
 
       return next;
@@ -835,9 +1047,19 @@ export default function AccountsPayableModal({
       return;
     }
 
-    const montoNetUsd = round2(Number(editingPayable.montoNetUsd || 0));
+    const docTasa = Math.max(0.0001, round2(Number(editingPayable.tasaCambio || tasaBcv || tasaKeystone)));
+    const isFact = isFiscalInvoiceType(editingPayable.tipoDoc);
+    const montoNetUsd = round2(Math.max(0, Number(editingPayable.montoNetUsd || 0)));
+    const montoNetBs = editingPayable.monedaIngreso === 'BS' && Number(editingPayable.montoNetBs || 0) > 0
+      ? round2(Number(editingPayable.montoNetBs))
+      : round2(montoNetUsd * docTasa);
     const abonosUsd = round2(Math.min(montoNetUsd, Math.max(0, Number(editingPayable.abonosUsd || 0))));
     const saldoUsd = round2(Math.max(0, montoNetUsd - abonosUsd));
+    const saldoBs = round2(saldoUsd * docTasa);
+    const baseImponibleUsd = isFact ? round2(Number(editingPayable.baseImponibleUsd || 0)) : montoNetUsd;
+    const baseImponibleBs = isFact ? round2(Number(editingPayable.baseImponibleBs || baseImponibleUsd * docTasa)) : montoNetBs;
+    const ivaUsd = isFact && !editingPayable.exentoIva ? round2(Number(editingPayable.ivaUsd || 0)) : 0;
+    const ivaBs = isFact && !editingPayable.exentoIva ? round2(Number(editingPayable.ivaBs || ivaUsd * docTasa)) : 0;
     const provRif = String(editingPayable.provRif || 'J-00000000').trim().toUpperCase();
 
     const payload = {
@@ -850,13 +1072,18 @@ export default function AccountsPayableModal({
       fechaEmision: editingPayable.fechaEmisionIso,
       fechaVencimiento: editingPayable.fechaVencimientoIso,
       diasCredito: Number(editingPayable.diasCredito || 0),
+      baseImponibleUsd,
+      baseImponibleBs,
+      ivaUsd,
+      ivaBs,
+      exentoIva: Boolean(editingPayable.exentoIva),
       montoNetUsd,
-      montoNetBs: round2(montoNetUsd * tasaKeystone),
+      montoNetBs,
       saldoUsd,
-      saldoBs: round2(saldoUsd * tasaKeystone),
+      saldoBs,
       abonosUsd,
-      tasa: tasaKeystone,
-      moneda: 'US$',
+      tasa: docTasa,
+      moneda: editingPayable.monedaIngreso === 'BS' ? 'BS' : 'US$',
       observaciones: editingPayable.observaciones || '',
       historialPagos: editingPayable.historialPagos || []
     };
@@ -1848,21 +2075,25 @@ export default function AccountsPayableModal({
                       >
                         {/* 1. Documento */}
                         <td style={{ padding: '0.85rem 0.9rem' }}>
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '0.15rem 0.45rem',
-                            borderRadius: '4px',
-                            background: 'rgba(0,43,122,0.1)',
-                            color: 'var(--brand-blue)',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                            marginRight: '0.4rem'
-                          }}>
-                            {p.tipoDoc}
-                          </span>
-                          <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>
-                            #{p.nroDoc}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: '4px',
+                              background: isFiscalInvoiceType(p.tipoDoc) ? 'rgba(0,43,122,0.14)' : (p.tipoDoc === 'NE' ? 'rgba(245, 158, 11, 0.16)' : 'rgba(100,116,139,0.15)'),
+                              color: isFiscalInvoiceType(p.tipoDoc) ? 'var(--brand-blue)' : (p.tipoDoc === 'NE' ? '#d97706' : 'var(--text-secondary)'),
+                              fontSize: '0.73rem',
+                              fontWeight: 700
+                            }}>
+                              {p.tipoDoc}
+                            </span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>
+                              #{p.nroDoc}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: isFiscalInvoiceType(p.tipoDoc) ? 'var(--brand-blue)' : 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>
+                            {p.tipoDocLabel || getDocTypeLabel(p.tipoDoc)}
+                          </div>
                         </td>
 
                         {/* 2. Proveedor / RIF */}
@@ -2097,9 +2328,21 @@ export default function AccountsPayableModal({
               background: 'var(--bg-card-header)'
             }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                  Detalle de Documento CxP: {selectedPayableDetail.tipoDoc} #{selectedPayableDetail.nroDoc}
-                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                    Detalle CxP: {selectedPayableDetail.tipoDoc} #{selectedPayableDetail.nroDoc}
+                  </h3>
+                  <span style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: '999px',
+                    background: isFiscalInvoiceType(selectedPayableDetail.tipoDoc) ? 'rgba(2, 132, 199, 0.16)' : 'rgba(245, 158, 11, 0.16)',
+                    color: isFiscalInvoiceType(selectedPayableDetail.tipoDoc) ? '#38bdf8' : '#fbbf24'
+                  }}>
+                    {selectedPayableDetail.tipoDocLabel || getDocTypeLabel(selectedPayableDetail.tipoDoc)}
+                  </span>
+                </div>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                   Proveedor: {selectedPayableDetail.provNombre} • RIF: {selectedPayableDetail.provRif}
                 </span>
@@ -2166,9 +2409,27 @@ export default function AccountsPayableModal({
                 gap: '0.5rem',
                 fontSize: '0.85rem'
               }}>
+                {isFiscalInvoiceType(selectedPayableDetail.tipoDoc) && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                      <span>Base Imponible / Subtotal:</span>
+                      <span style={{ fontFamily: 'var(--font-code)' }}>
+                        {formatUsd(selectedPayableDetail.baseImponibleUsd)} ({formatBs(round2(selectedPayableDetail.baseImponibleUsd * (selectedPayableDetail.tasa || tasaKeystone)))})
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#38bdf8', fontSize: '0.8rem', fontWeight: 600 }}>
+                      <span>IVA Fiscal (16%):</span>
+                      <span style={{ fontFamily: 'var(--font-code)' }}>
+                        {formatUsd(selectedPayableDetail.ivaUsd)} ({formatBs(round2(selectedPayableDetail.ivaUsd * (selectedPayableDetail.tasa || tasaKeystone)))})
+                      </span>
+                    </div>
+                  </>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
                   <span>Monto Total Obligación:</span>
-                  <span style={{ fontFamily: 'var(--font-code)' }}>{formatUsd(selectedPayableDetail.montoNetUsd)}</span>
+                  <span style={{ fontFamily: 'var(--font-code)', fontWeight: 600 }}>
+                    {formatUsd(selectedPayableDetail.montoNetUsd)} ({formatBs(selectedPayableDetail.montoNetBs)})
+                  </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981', fontWeight: 700 }}>
                   <span>Pagos / Abonos Realizados:</span>
@@ -2179,7 +2440,7 @@ export default function AccountsPayableModal({
                   <span style={{ fontFamily: 'var(--font-code)' }}>{formatUsd(selectedPayableDetail.saldoUsd)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                  <span>Equivalente en Bolívares (Tasa KEYSTONE):</span>
+                  <span>Equivalente en Bolívares (Tasa {formatBs(selectedPayableDetail.tasa || tasaKeystone)}):</span>
                   <span style={{ fontFamily: 'var(--font-code)' }}>{formatBs(selectedPayableDetail.saldoBs)}</span>
                 </div>
               </div>
@@ -2293,8 +2554,8 @@ export default function AccountsPayableModal({
             border: '1px solid var(--border-glass)',
             borderRadius: '16px',
             width: '100%',
-            maxWidth: '600px',
-            maxHeight: '90vh',
+            maxWidth: '720px',
+            maxHeight: '92vh',
             overflowY: 'auto',
             boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)'
           }}>
@@ -2302,15 +2563,26 @@ export default function AccountsPayableModal({
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              padding: '1.25rem 1.5rem',
+              padding: '1.15rem 1.5rem',
               borderBottom: '1px solid var(--border-glass)',
               background: 'var(--bg-card-header)'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                 <Edit2 size={18} color="#fbbf24" />
-                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                  {isCreatingPayable ? 'Nueva Cuenta por Pagar / Factura de Compra' : `Editar Documento CxP: #${editingPayable.nroDoc}`}
+                <h3 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                  {isCreatingPayable ? 'Nueva Cuenta por Pagar / Documento de Compra' : `Editar Documento CxP: #${editingPayable.nroDoc}`}
                 </h3>
+                <span style={{
+                  fontSize: '0.7rem',
+                  fontWeight: 800,
+                  padding: '2px 9px',
+                  borderRadius: '999px',
+                  background: isFiscalInvoiceType(editingPayable.tipoDoc) ? 'rgba(2, 132, 199, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                  color: isFiscalInvoiceType(editingPayable.tipoDoc) ? '#38bdf8' : '#fbbf24',
+                  border: isFiscalInvoiceType(editingPayable.tipoDoc) ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(251, 191, 36, 0.4)'
+                }}>
+                  {isFiscalInvoiceType(editingPayable.tipoDoc) ? 'FACTURA FISCAL • CON IVA' : `${getDocTypeLabel(editingPayable.tipoDoc).toUpperCase()} • SIN IVA`}
+                </span>
               </div>
               <button
                 type="button"
@@ -2321,22 +2593,58 @@ export default function AccountsPayableModal({
               </button>
             </div>
 
-            <form onSubmit={handleSaveEditedPayable} style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                {/* Tipo de Documento */}
+            <form onSubmit={handleSaveEditedPayable} style={{ padding: '1.35rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.95rem' }}>
+              {/* Selector Claro: Factura Fiscal vs Nota de Entrega + Otros + N° Doc */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 0.85fr', gap: '1rem', alignItems: 'start' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                    Tipo de Documento *
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                    Tipo de Documento * (Factura Fiscal o Nota de Entrega)
                   </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleEditFieldChange('tipoDoc', 'FACT')}
+                      style={{
+                        padding: '0.5rem 0.65rem',
+                        borderRadius: '9px',
+                        border: isFiscalInvoiceType(editingPayable.tipoDoc) ? '1.5px solid #38bdf8' : '1px solid var(--border-glass)',
+                        background: isFiscalInvoiceType(editingPayable.tipoDoc) ? 'rgba(2, 132, 199, 0.18)' : 'var(--bg-surface)',
+                        color: isFiscalInvoiceType(editingPayable.tipoDoc) ? '#38bdf8' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <div style={{ fontSize: '0.8rem', fontWeight: 800 }}>Factura Fiscal (FACT)</div>
+                      <div style={{ fontSize: '0.67rem', opacity: 0.85 }}>SENIAT • Desglosa IVA 16%</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEditFieldChange('tipoDoc', 'NE')}
+                      style={{
+                        padding: '0.5rem 0.65rem',
+                        borderRadius: '9px',
+                        border: editingPayable.tipoDoc === 'NE' ? '1.5px solid #fbbf24' : '1px solid var(--border-glass)',
+                        background: editingPayable.tipoDoc === 'NE' ? 'rgba(245, 158, 11, 0.18)' : 'var(--bg-surface)',
+                        color: editingPayable.tipoDoc === 'NE' ? '#fbbf24' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <div style={{ fontSize: '0.8rem', fontWeight: 800 }}>Nota de Entrega (NE)</div>
+                      <div style={{ fontSize: '0.67rem', opacity: 0.85 }}>Control interno • Sin IVA</div>
+                    </button>
+                  </div>
                   <select
                     className="select-modern"
                     value={editingPayable.tipoDoc}
                     onChange={(e) => handleEditFieldChange('tipoDoc', e.target.value)}
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem' }}
+                    style={{ width: '100%', padding: '0.45rem 0.7rem', fontSize: '0.78rem' }}
                   >
-                    <option value="FACT">FACTURA FISCAL (FACT)</option>
-                    <option value="NE">NOTA DE ENTREGA (NE)</option>
-                    <option value="ADEL">ADELANTO (ADEL)</option>
+                    <option value="FACT">FACTURA FISCAL (FACT) — Con IVA</option>
+                    <option value="NE">NOTA DE ENTREGA (NE) — Sin IVA</option>
+                    <option value="ADEL">ADELANTO / ANTICIPO (ADEL)</option>
                     <option value="N/DB">NOTA DE DÉBITO (N/DB)</option>
                     <option value="OC">ORDEN DE COMPRA (OC)</option>
                   </select>
@@ -2344,7 +2652,7 @@ export default function AccountsPayableModal({
 
                 {/* Número de Documento */}
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
                     N° de Documento *
                   </label>
                   <input
@@ -2352,10 +2660,13 @@ export default function AccountsPayableModal({
                     required
                     value={editingPayable.nroDoc}
                     onChange={(e) => handleEditFieldChange('nroDoc', e.target.value)}
-                    placeholder="Ej. 58"
+                    placeholder="Ej. 516"
                     className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
+                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
                   />
+                  <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                    Documento activo: <strong style={{ color: 'var(--text-primary)' }}>{getDocTypeLabel(editingPayable.tipoDoc)}</strong>
+                  </div>
                 </div>
               </div>
 
@@ -2443,51 +2754,251 @@ export default function AccountsPayableModal({
                 </div>
               </div>
 
-              {/* Montos */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                    Monto Original (USD) *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    required
-                    value={editingPayable.montoNetUsd}
-                    onChange={(e) => handleEditFieldChange('montoNetUsd', e.target.value)}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
-                  />
+              {/* Tasa de Cambio y Conversión Bidireccional USD <-> Bs */}
+              <div style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '12px',
+                padding: '0.95rem 1rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.85rem'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                      Montos en Divisas ($ USD) y Bolívares (Bs.)
+                    </span>
+                    <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                      Escriba en cualquiera de las dos monedas para calcular automáticamente su equivalente.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#34d399' }}>Tasa Bs/USD:</span>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      required
+                      value={editingPayable.tasaCambio}
+                      onChange={(e) => handleEditFieldChange('tasaCambio', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '105px', padding: '0.32rem 0.5rem', fontSize: '0.8rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: '#34d399' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleEditFieldChange('tasaCambio', String(round2(tasaBcv)))}
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.68rem', fontWeight: 700, borderRadius: '6px', cursor: 'pointer', border: '1px solid rgba(56, 189, 248, 0.35)', background: 'rgba(2, 132, 199, 0.12)', color: '#38bdf8' }}
+                    >
+                      BCV ({formatBs(tasaBcv)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEditFieldChange('tasaCambio', String(round2(tasaKeystone)))}
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.68rem', fontWeight: 700, borderRadius: '6px', cursor: 'pointer', border: '1px solid rgba(251, 191, 36, 0.35)', background: 'rgba(245, 158, 11, 0.12)', color: '#fbbf24' }}
+                    >
+                      KEY ({formatBs(tasaKeystone)})
+                    </button>
+                  </div>
                 </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', marginBottom: '0.35rem' }}>
-                    Total Pagado / Abonos (USD)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={editingPayable.abonosUsd}
-                    onChange={(e) => handleEditFieldChange('abonosUsd', e.target.value)}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: '#10b981' }}
-                  />
+                {/* Desglose Fiscal de IVA solo si es Factura Fiscal (FACT) */}
+                {isFiscalInvoiceType(editingPayable.tipoDoc) ? (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0.65rem', borderRadius: '8px', background: 'rgba(2, 132, 199, 0.1)', border: '1px solid rgba(56, 189, 248, 0.25)' }}>
+                      <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#38bdf8' }}>
+                        Factura Fiscal SENIAT — {editingPayable.exentoIva ? 'Exenta de IVA (0%)' : 'IVA 16% Desglosado'}
+                      </span>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', color: 'var(--text-secondary)', cursor: 'pointer', fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(editingPayable.exentoIva)}
+                          onChange={(e) => handleEditFieldChange('exentoIva', e.target.checked)}
+                        />
+                        <span>Factura Exenta (0% IVA)</span>
+                      </label>
+                    </div>
+
+                    {/* Base Imponible */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.28rem' }}>
+                          Base Imponible / Subtotal ($ USD)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={editingPayable.baseImponibleUsd}
+                          onChange={(e) => handleEditFieldChange('baseImponibleUsd', e.target.value)}
+                          className="input-modern"
+                          style={{ width: '100%', padding: '0.52rem 0.7rem', fontSize: '0.84rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.28rem' }}>
+                          Base Imponible / Subtotal (Bs.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={editingPayable.baseImponibleBs}
+                          onChange={(e) => handleEditFieldChange('baseImponibleBs', e.target.value)}
+                          className="input-modern"
+                          style={{ width: '100%', padding: '0.52rem 0.7rem', fontSize: '0.84rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Monto del IVA (16%) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: editingPayable.exentoIva ? '#10b981' : '#38bdf8', marginBottom: '0.28rem' }}>
+                          Monto IVA 16% ($ USD)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          disabled={Boolean(editingPayable.exentoIva)}
+                          value={editingPayable.ivaUsd}
+                          onChange={(e) => handleEditFieldChange('ivaUsd', e.target.value)}
+                          className="input-modern"
+                          style={{ width: '100%', padding: '0.52rem 0.7rem', fontSize: '0.84rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: editingPayable.exentoIva ? '#10b981' : '#38bdf8' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: editingPayable.exentoIva ? '#10b981' : '#38bdf8', marginBottom: '0.28rem' }}>
+                          Monto IVA 16% (Bs.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          disabled={Boolean(editingPayable.exentoIva)}
+                          value={editingPayable.ivaBs}
+                          onChange={(e) => handleEditFieldChange('ivaBs', e.target.value)}
+                          className="input-modern"
+                          style={{ width: '100%', padding: '0.52rem 0.7rem', fontSize: '0.84rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: editingPayable.exentoIva ? '#10b981' : '#38bdf8' }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: '0.45rem 0.7rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(251, 191, 36, 0.28)', fontSize: '0.74rem', fontWeight: 700, color: '#fbbf24' }}>
+                    {getDocTypeLabel(editingPayable.tipoDoc)} — Documento Exento de IVA (No genera Crédito Fiscal)
+                  </div>
+                )}
+
+                {/* Total Factura / Monto Original en USD y Bs */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#fbbf24', marginBottom: '0.28rem' }}>
+                      {isFiscalInvoiceType(editingPayable.tipoDoc) ? 'Total Factura con IVA ($ USD) *' : 'Monto Original ($ USD) *'}
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      required
+                      value={editingPayable.montoNetUsd}
+                      onChange={(e) => handleEditFieldChange('montoNetUsd', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.7rem', fontSize: '0.88rem', fontWeight: 800, fontFamily: 'var(--font-code)', color: '#fbbf24', borderColor: 'rgba(251, 191, 36, 0.45)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#fbbf24', marginBottom: '0.28rem' }}>
+                      {isFiscalInvoiceType(editingPayable.tipoDoc) ? 'Total Factura con IVA (Bs.) *' : 'Monto Original (Bs.) *'}
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      required
+                      value={editingPayable.montoNetBs}
+                      onChange={(e) => handleEditFieldChange('montoNetBs', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.7rem', fontSize: '0.88rem', fontWeight: 800, fontFamily: 'var(--font-code)', color: '#fbbf24', borderColor: 'rgba(251, 191, 36, 0.45)' }}
+                    />
+                  </div>
                 </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#ef4444', marginBottom: '0.35rem' }}>
-                    Saldo Pendiente (USD)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    readOnly
-                    value={editingPayable.saldoUsd}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem', fontWeight: 800, fontFamily: 'var(--font-code)', color: '#ef4444', background: 'var(--bg-surface)' }}
-                  />
+                {/* Abonos y Saldo Pendiente en Ambas Monedas */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#10b981', marginBottom: '0.28rem' }}>
+                      Pagado / Abonos ($ USD)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editingPayable.abonosUsd}
+                      onChange={(e) => handleEditFieldChange('abonosUsd', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.7rem', fontSize: '0.83rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: '#10b981' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#10b981', marginBottom: '0.28rem' }}>
+                      Pagado / Abonos (Bs.)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editingPayable.abonosBs}
+                      onChange={(e) => handleEditFieldChange('abonosBs', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.7rem', fontSize: '0.83rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: '#10b981' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#ef4444', marginBottom: '0.28rem' }}>
+                      Saldo Pendiente (USD / Bs)
+                    </label>
+                    <div style={{
+                      padding: '0.45rem 0.65rem',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      background: 'rgba(239, 68, 68, 0.08)',
+                      fontFamily: 'var(--font-code)',
+                      lineHeight: 1.25
+                    }}>
+                      <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#ef4444' }}>
+                        {formatUsd(Number(editingPayable.saldoUsd || 0))}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        {formatBs(Number(editingPayable.saldoBs || 0))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Banda de equivalencia multimoneda */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: '8px',
+                  background: 'rgba(15, 23, 42, 0.45)',
+                  border: '1px solid var(--border-glass)',
+                  fontSize: '0.72rem'
+                }}>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    Moneda de ingreso: <strong style={{ color: editingPayable.monedaIngreso === 'BS' ? '#38bdf8' : '#34d399' }}>
+                      {editingPayable.monedaIngreso === 'BS' ? 'Bolívares (Bs.)' : 'Divisas ($ USD)'}
+                    </strong>
+                  </span>
+                  <span style={{ fontFamily: 'var(--font-code)', color: 'var(--text-secondary)', fontWeight: 700 }}>
+                    Equivalente Total: {formatUsd(Number(editingPayable.montoNetUsd || 0))} ⇄ {formatBs(Number(editingPayable.montoNetBs || 0))}
+                    {isFiscalInvoiceType(editingPayable.tipoDoc) && ` • IVA: ${formatUsd(Number(editingPayable.ivaUsd || 0))} / ${formatBs(Number(editingPayable.ivaBs || 0))}`}
+                  </span>
                 </div>
               </div>
 

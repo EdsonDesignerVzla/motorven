@@ -25,10 +25,11 @@ import {
   getNextInvoiceCorrelativo,
   commitInvoiceCorrelativo,
   getNextNotaEntregaCorrelativo,
-  commitNotaEntregaCorrelativo
+  commitNotaEntregaCorrelativo,
+  getCanonicalDocKey
 } from './fiscalService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
-import { getProductWarehouseStocks } from './formatService.js';
+import { getProductWarehouseStocks, validateWarehouseStockForDocument } from './formatService.js';
 
 if (typeof globalThis.localStorage === 'undefined') {
   const memoryStore = new Map();
@@ -258,13 +259,30 @@ export const getClients = () => {
 
 export const saveClient = (client) => {
   const clients = getClients();
-  const existingIndex = clients.findIndex(c => c.id === client.id);
+  const existingIndex = clients.findIndex(
+    c => (client.id && c.id === client.id) || (client.codigo && c.codigo === client.codigo)
+  );
   if (existingIndex >= 0) {
-    clients[existingIndex] = client;
+    clients[existingIndex] = { ...clients[existingIndex], ...client };
   } else {
-    client.id = `CLI-${String(clients.length + 1).padStart(3, '0')}`;
-    clients.push(client);
+    const newClient = {
+      ...client,
+      id: client.id || client.codigo || `CLI-${String(clients.length + 1).padStart(3, '0')}`
+    };
+    clients.push(newClient);
   }
+  localStorage.setItem(KEYS.CLIENTS, JSON.stringify(clients));
+  return clients;
+};
+
+export const deleteClient = (id) => {
+  const target = String(id || '').trim().toUpperCase();
+  if (!target) return getClients();
+  const clients = getClients().filter(c =>
+    String(c.id || '').trim().toUpperCase() !== target &&
+    String(c.codigo || '').trim().toUpperCase() !== target &&
+    String(c.rif || '').trim().toUpperCase() !== target
+  );
   localStorage.setItem(KEYS.CLIENTS, JSON.stringify(clients));
   return clients;
 };
@@ -346,6 +364,20 @@ export const saveSale = (saleData, options = {}) => {
   const { skipStockAdjustment = false } = options || {};
   const sales = getSales();
   const config = getConfig();
+
+  if (!skipStockAdjustment) {
+    const stockCheck = validateWarehouseStockForDocument({
+      ...saleData,
+      items: saleData.items || [],
+      products: getProducts()
+    });
+    if (!stockCheck.isValid) {
+      const err = new Error(stockCheck.message);
+      err.isValidationError = true;
+      err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+      throw err;
+    }
+  }
 
   const isNotaEntrega =
     String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
@@ -489,7 +521,18 @@ export const saveSale = (saleData, options = {}) => {
     }
   }
 
-  sales.unshift(newSale);
+  const newSaleCanonKey = getCanonicalDocKey(newSale);
+  const existingIdx = sales.findIndex(s =>
+    s && (
+      (newSale.id && s.id === newSale.id) ||
+      (newSaleCanonKey && getCanonicalDocKey(s) === newSaleCanonKey)
+    )
+  );
+  if (existingIdx >= 0) {
+    sales[existingIdx] = { ...sales[existingIdx], ...newSale };
+  } else {
+    sales.unshift(newSale);
+  }
   localStorage.setItem(KEYS.SALES, JSON.stringify(sales));
   return newSale;
 };
@@ -672,7 +715,35 @@ export const getOrders = () => {
   }
 };
 
-export const saveOrder = (order) => {
+export const saveOrder = (order, options = {}) => {
+  const normalizedStatus = String(order?.status || '').trim().toUpperCase();
+  const skipStatusCheck = ['FACTURADO', 'ANULADO', 'CADUCADO'].includes(normalizedStatus);
+  if (!options?.skipStockValidation && !skipStatusCheck) {
+    const products = getProducts();
+    if (products.length > 0 && Array.isArray(order?.items) && order.items.length > 0) {
+      const stockCheck = validateWarehouseStockForDocument({
+        items: order.items,
+        products,
+        tipoDoc: order.tipoDoc || order.tipo_doc,
+        almacen: order.almacen,
+        almacenId: order.almacenId || order.almacen_id,
+        co_alma: order.co_alma,
+        modalidadVenta: order.modalidadVenta,
+        numeroDoc: order.numeroDoc || order.numero_doc,
+        id: order.id,
+        pedidoOrigenDoc: order.pedidoOrigenDoc,
+        documentoAfectado: order.documentoAfectado || order.documento_afectado
+      });
+      if (!stockCheck.isValid) {
+        const err = new Error(stockCheck.message);
+        err.isValidationError = true;
+        err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+        err.validation = stockCheck;
+        throw err;
+      }
+    }
+  }
+
   const orders = getOrders();
   const existingIndex = orders.findIndex(o => o.id === order.id);
   if (existingIndex >= 0) {

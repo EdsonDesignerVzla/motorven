@@ -32,6 +32,75 @@ process.on('unhandledRejection', (reason) => {
 // Mantener activo el event loop indefinidamente
 setInterval(() => {}, 60000);
 
+const canonicalServerDocKey = (row, isProfitInvoice = false) => {
+  if (!row || typeof row !== 'object') return '';
+  const tipo = String(row.tipoDoc || row.tipo_doc || '').trim().toUpperCase();
+  const candidates = [row.facturaNumero, row.factNum, row.fact_num, row.numero_doc, row.numeroDoc, row.id];
+  let raw = '';
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && String(c).trim() !== '') {
+      raw = String(c).trim().toUpperCase();
+      break;
+    }
+  }
+  if (!raw) return '';
+  let prefix = 'FAC';
+  if (tipo === 'NOTA_ENTREGA' || raw.startsWith('NE-') || /^NE\s*\d/.test(raw)) prefix = 'NE';
+  else if (tipo === 'NOTA_CREDITO' || raw.startsWith('NC-')) prefix = 'NC';
+  else if (tipo === 'NOTA_DEBITO' || raw.startsWith('ND-')) prefix = 'ND';
+  else if (!isProfitInvoice && tipo && tipo !== 'FACTURA') prefix = tipo;
+  const cleaned = raw
+    .replace(/^(FAC-|FACT-|FAC\s+|INV-|NE-|NE\s+|NC-|ND-|doc-)/i, '')
+    .trim()
+    .replace(/^0+(?=\d)/, '');
+  return cleaned ? `${prefix}:${cleaned}` : '';
+};
+
+const pickBestServerDoc = (a, b) => {
+  const aItems = Array.isArray(a.items) ? a.items.length : 0;
+  const bItems = Array.isArray(b.items) ? b.items.length : 0;
+  const aCustom = Boolean(a._customCreated);
+  const bCustom = Boolean(b._customCreated);
+  const aTs = Date.parse(a.updated_at || a.fecha_sincronizacion || a.fechaSincronizacion || a.created_at || 0) || 0;
+  const bTs = Date.parse(b.updated_at || b.fecha_sincronizacion || b.fechaSincronizacion || b.created_at || 0) || 0;
+
+  let winner = b;
+  let loser = a;
+  if (aTs !== bTs) {
+    winner = aTs > bTs ? a : b;
+    loser = winner === a ? b : a;
+  } else if (aCustom !== bCustom) {
+    winner = aCustom ? a : b;
+    loser = winner === a ? b : a;
+  } else if (aItems !== bItems) {
+    winner = aItems > bItems ? a : b;
+    loser = winner === a ? b : a;
+  }
+
+  const wItems = Array.isArray(winner.items) ? winner.items : [];
+  const lItems = Array.isArray(loser.items) ? loser.items : [];
+  const bestItems = wItems.length >= lItems.length ? wItems : lItems;
+
+  const pickPadded = (valA, valB) => {
+    const sA = valA !== undefined && valA !== null ? String(valA).trim() : '';
+    const sB = valB !== undefined && valB !== null ? String(valB).trim() : '';
+    if (!sA) return sB;
+    if (!sB) return sA;
+    if (/^\d+$/.test(sA.replace(/^NE-/i, '')) && /^\d+$/.test(sB.replace(/^NE-/i, ''))) {
+      return sA.length >= sB.length ? sA : sB;
+    }
+    return sA;
+  };
+
+  return {
+    ...loser,
+    ...winner,
+    factNum: pickPadded(winner.factNum, loser.factNum),
+    numero_doc: pickPadded(winner.numero_doc, loser.numero_doc),
+    items: bestItems
+  };
+};
+
 let database = {};
 
 async function initDatabase() {
@@ -62,7 +131,10 @@ async function initDatabase() {
   if (loadedFromDisk) {
     try {
       if (Array.isArray(database.profit_invoices)) {
+        const seenInv = new Map();
+        const dedupedInv = [];
         database.profit_invoices.forEach(f => {
+          if (!f) return;
           const litros = Number(f.totalLitros ?? f.total_litros ?? 0);
           const cajas = Number(f.totalCajas ?? f.total_cajas ?? 0);
           f.total_litros = litros;
@@ -81,7 +153,39 @@ async function initDatabase() {
           const venId = f.vendedor_id || f.vendedorId || f.co_ven || '';
           f.vendedor_id = venId;
           f.vendedorId = venId;
+
+          const key = canonicalServerDocKey(f, true);
+          if (key && seenInv.has(key)) {
+            const idx = seenInv.get(key);
+            dedupedInv[idx] = pickBestServerDoc(dedupedInv[idx], f);
+          } else {
+            if (key) seenInv.set(key, dedupedInv.length);
+            dedupedInv.push(f);
+          }
         });
+        if (dedupedInv.length !== database.profit_invoices.length) {
+          console.log(`[Supabase Local] Deduplicadas ${database.profit_invoices.length - dedupedInv.length} facturas en profit_invoices.`);
+        }
+        database.profit_invoices = dedupedInv;
+      }
+      if (Array.isArray(database.sales)) {
+        const seenSales = new Map();
+        const dedupedSales = [];
+        database.sales.forEach(s => {
+          if (!s) return;
+          const key = canonicalServerDocKey(s, false);
+          if (key && seenSales.has(key)) {
+            const idx = seenSales.get(key);
+            dedupedSales[idx] = pickBestServerDoc(dedupedSales[idx], s);
+          } else {
+            if (key) seenSales.set(key, dedupedSales.length);
+            dedupedSales.push(s);
+          }
+        });
+        if (dedupedSales.length !== database.sales.length) {
+          console.log(`[Supabase Local] Deduplicadas ${database.sales.length - dedupedSales.length} ventas en sales.`);
+        }
+        database.sales = dedupedSales;
       }
       if (Array.isArray(database.profit_zones)) {
         const seenZones = new Map();
@@ -1658,9 +1762,14 @@ const server = http.createServer(async (req, res) => {
               return codeNew && codeOld && codeNew === codeOld;
             }
             if (tableName === 'profit_invoices') {
-              const fNew = String(newRow.facturaNumero || newRow.factNum || newRow.fact_num || newRow.id || '').replace(/^(FAC-|FACT-|INV-|fac-|doc-)/i, '').trim().toUpperCase();
-              const fOld = String(r.facturaNumero || r.factNum || r.fact_num || r.id || '').replace(/^(FAC-|FACT-|INV-|fac-|doc-)/i, '').trim().toUpperCase();
-              return fNew && fOld && fNew === fOld;
+              const kNew = canonicalServerDocKey(newRow, true);
+              const kOld = canonicalServerDocKey(r, true);
+              return Boolean(kNew && kOld && kNew === kOld);
+            }
+            if (tableName === 'sales') {
+              const kNew = canonicalServerDocKey(newRow, false);
+              const kOld = canonicalServerDocKey(r, false);
+              return Boolean(kNew && kOld && kNew === kOld);
             }
             if (tableName === 'profit_accounts_payable') {
               const cpNew = String(newRow.nroDoc || newRow.nro_doc || '').trim().toUpperCase();
@@ -1896,6 +2005,9 @@ const server = http.createServer(async (req, res) => {
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = matchFilter(row.codigo, operator, target) || matchFilter(row.sku, operator, target);
               }
+              if (!doesMatch && tableName === 'clients' && (key === 'id' || key === 'codigo')) {
+                doesMatch = matchFilter(row.id, operator, target) || matchFilter(row.codigo, operator, target) || matchFilter(row.co_cli, operator, target);
+              }
               if (!doesMatch && (tableName === 'sales' || tableName === 'orders') && (key === 'id' || key === 'numero_doc' || key === 'numeroDoc')) {
                 doesMatch = matchFilter(row.id, operator, target) || matchFilter(row.numero_doc, operator, target) || matchFilter(row.numeroDoc, operator, target);
               }
@@ -1907,6 +2019,9 @@ const server = http.createServer(async (req, res) => {
               let doesMatch = String(row[key]) === String(value);
               if (!doesMatch && tableName === 'products' && key === 'id') {
                 doesMatch = String(row.codigo) === String(value) || String(row.sku) === String(value);
+              }
+              if (!doesMatch && tableName === 'clients' && (key === 'id' || key === 'codigo')) {
+                doesMatch = String(row.id || '') === String(value) || String(row.codigo || '') === String(value) || String(row.co_cli || '') === String(value);
               }
               if (!doesMatch && tableName === 'users' && key === 'id') {
                 doesMatch = String(row.username || '').toLowerCase() === String(value).toLowerCase();

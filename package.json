@@ -9,7 +9,7 @@
     "deploy": "npm run build && node scripts/deploy.js",
     "backup": "node scripts/backup.js",
     "lint": "oxlint src scripts",
-    "test": "node src/tests/fiscalEngine.test.js && node src/tests/adminSistemaRole.test.js && node src/tests/usersPersistence.test.js && node src/tests/pdfGenerators.test.js && node src/tests/salesProcessFlow.test.js",
+    "test": "node src/tests/fiscalEngine.test.js && node src/tests/adminSistemaRole.test.js && node src/tests/clientApprovalWorkflow.test.js && node src/tests/usersPersistence.test.js && node src/tests/pdfGenerators.test.js && node src/tests/salesProcessFlow.test.js && node src/tests/purchasesCxpIntegration.test.js && node src/tests/planDeCuentasAccounting.test.js",
     "cron:expire-orders": "node scripts/expireOverdueOrdersCron.js",
     "sync:db": "node --max-old-space-size=8192 scripts/buildRealDataDump.js",
     "supabase:local": "node scripts/local-supabase/server.js",
@@ -25,6 +25,7 @@
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.9",
     "lucide-react": "^1.25.0",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "recharts": "^3.10.0"

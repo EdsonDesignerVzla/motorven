@@ -62,6 +62,9 @@ export default function CashflowView({
   config = {},
   onAddCashMovement,
   onSaveClient,
+  onDeleteClient,
+  onApproveClient,
+  onRejectClient,
   currentUser,
   initialTab = 'SPLIT',
   onOpenCashBankModal,
@@ -2425,6 +2428,11 @@ export default function CashflowView({
         onClose={() => setShowClientsModal(false)}
         clients={clients}
         tasaBcv={tasaBcv}
+        currentUser={currentUser}
+        onSaveClient={onSaveClient}
+        onDeleteClient={onDeleteClient}
+        onApproveClient={onApproveClient}
+        onRejectClient={onRejectClient}
         onSelectClientForPayment={(c) => {
           setSelectedClientForCobro(c);
           setCobroMontoUsd(c.saldoDeudorUsd || '');

@@ -11,10 +11,13 @@
 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import qrcode from 'qrcode-generator';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { getProductRetailPrice } from './pricingService.js';
-import { REAL_PRODUCTS } from '../data/supabaseRealData.js';
+import { REAL_PRODUCTS, REAL_CLIENTS, REAL_PROFIT_BANK_ACCOUNTS } from '../data/supabaseRealData.js';
+import { computeTrialBalance, computeGeneralLedger, computeFinancialStatements } from './accountingService.js';
+import { SYSTEM_METADATA, MODULES_DOCUMENTATION, WORKFLOWS_STEP_BY_STEP } from '../data/appDocumentationData.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -547,7 +550,10 @@ export function drawStatusBadge(doc, cell, statusText) {
     text.includes('CONFORME') ||
     text.includes('CUADRADO') ||
     text.includes('ACTIVO') ||
-    text.includes('EXCELENTE')
+    text.includes('EXCELENTE') ||
+    text.includes('AL DÍA') ||
+    text.includes('AL DIA') ||
+    text.includes('SOLVENTE')
   ) {
     bg = [209, 250, 229];      // Esmeralda suave
     border = [16, 185, 129];
@@ -582,6 +588,7 @@ export function drawStatusBadge(doc, cell, statusText) {
     text.includes('GRAVE') ||
     text.includes('FALTANTE') ||
     text.includes('VENCIDO') ||
+    text.includes('VENCIDA') ||
     text.includes('RIESGO') ||
     text.includes('AGOTADO') ||
     text.includes('ANULADO') ||
@@ -699,13 +706,17 @@ export function addGrandTotalBox(doc, startY, items = [], tableWidth = 179.9, st
 }
 
 /**
- * Imprime un documento jsPDF en el navegador creando un iframe invisible
+ * Imprime un documento jsPDF directamente en el navegador (equivalente a Ctrl + P)
+ * sin guardar/descargar el archivo en el equipo del usuario.
  */
 export function printPDFDocument(doc) {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     return { success: false, message: 'Entorno no gráfico' };
   }
   try {
+    if (typeof doc?.autoPrint === 'function') {
+      doc.autoPrint();
+    }
     const blob = doc.output('blob');
     const blobUrl = URL.createObjectURL(blob);
     const existingFrame = document.getElementById('motorven-pdf-print-frame');
@@ -714,30 +725,43 @@ export function printPDFDocument(doc) {
     const iframe = document.createElement('iframe');
     iframe.id = 'motorven-pdf-print-frame';
     iframe.style.position = 'fixed';
-    iframe.style.top = '-9999px';
-    iframe.style.left = '-9999px';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '100px';
+    iframe.style.height = '100px';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
     iframe.style.border = '0';
+    iframe.style.zIndex = '-1';
     iframe.src = blobUrl;
     document.body.appendChild(iframe);
 
-    iframe.onload = () => {
+    let printed = false;
+    const triggerIframePrint = () => {
+      if (printed) return;
+      printed = true;
       setTimeout(() => {
         try {
           iframe.contentWindow.focus();
           iframe.contentWindow.print();
         } catch (printErr) {
-          console.warn('[PDF Service] Error en print del iframe, abriendo pestaña:', printErr);
-          window.open(blobUrl, '_blank');
+          console.warn('[PDF Service] Error en print del iframe, abriendo vista de impresión:', printErr);
+          const win = window.open(blobUrl, '_blank');
+          if (win) {
+            win.onload = () => {
+              try { win.focus(); win.print(); } catch (_) {}
+            };
+          }
         } finally {
           setTimeout(() => {
-            iframe.remove();
-            URL.revokeObjectURL(blobUrl);
+            try { iframe.remove(); } catch (_) {}
+            try { URL.revokeObjectURL(blobUrl); } catch (_) {}
           }, 60000);
         }
-      }, 300);
+      }, 400);
     };
+
+    iframe.onload = triggerIframePrint;
     return { success: true, url: blobUrl };
   } catch (err) {
     console.error('[PDF Service] Error en printPDFDocument:', err);
@@ -805,6 +829,11 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
       footerY + 3.8,
       { align: 'right' }
     );
+  }
+
+  // Si se solicitó solo impresión (Ctrl + P en navegador), omitir descarga en disco
+  if (options.skipSave) {
+    return;
   }
 
   // Sanitizar nombre de archivo para evitar bloqueos del sistema de archivos / navegador
@@ -957,6 +986,7 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
     );
 
     finalizeAndSave(base.doc, `Reporte_Fuerza_Ventas_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+    return base.doc;
   }
 
 // =========================================================================
@@ -995,7 +1025,7 @@ export function generateProfitabilityPDF({ products = [], sales = [], config = {
     base.startX
   );
 
-  const tableData = products.slice(0, 18).map((p) => {
+  const tableData = products.map((p) => {
     const costo = Number(p.costoUsd || 0);
     const precio = Number(p.precioUsd || p.precioA || 0);
     const ganancia = precio - costo;
@@ -1065,6 +1095,7 @@ export function generateProfitabilityPDF({ products = [], sales = [], config = {
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Rentabilidad_BI_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -1129,7 +1160,7 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
     return String(d).slice(0, 10);
   };
 
-  const tableData = dataset.slice(0, 28).map((r) => {
+  const tableData = dataset.map((r) => {
     const isVencida = r.estado === 'VENCIDA' || r.isVencida || (r.fechaVencimiento && new Date(r.fechaVencimiento) < now) || Number(r.diasVencidos ?? r.diasMora ?? 0) > 0;
     const diasVencido = Number(r.diasVencidos ?? r.diasMora ?? (isVencida && r.fechaVencimiento ? Math.max(0, Math.round((now - new Date(r.fechaVencimiento)) / 86400000)) : 0));
     const diasCredito = Number(r.diasCredito ?? 15);
@@ -1141,7 +1172,7 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
       String(r.vendedorId || r.vendedor || 'OF'),
       String(r.factura || r.factNum || r.nroDoc || r.id || '0000'),
       String(r.rif || r.clienteRif || 'N/A'),
-      String(r.cliente || r.clienteNombre || r.nombre || 'Cliente Comercial').slice(0, 28),
+      String(r.cliente || r.clienteNombre || r.nombre || 'Cliente Comercial'),
       formatPdfDate(r.fechaEmisionIso || r.fechaEmision || r.fechaRegistro),
       formatPdfDate(r.fechaVencimientoIso || r.fechaVencimiento),
       `${diasVencido}`,
@@ -1156,7 +1187,7 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['VENDEDOR', 'FACTURA', 'RIF', 'NOMBRE CLIENTE', 'FECHA EMISIÓN', 'FECHA VENC.', 'DÍAS VENC.', 'DÍAS CRÉD.', 'MONTO FACTURA', 'ABONOS', 'RESTANTE']],
+    head: [['VENDEDOR', isNotaEntrega ? 'N° NOTA' : 'FACTURA', 'RIF', 'NOMBRE CLIENTE', 'FECHA EMISIÓN', 'FECHA VENC.', 'DÍAS VENC.', 'DÍAS CRÉD.', isNotaEntrega ? 'MONTO NOTA' : 'MONTO FACTURA', 'ABONOS', 'RESTANTE']],
     body: tableData.length > 0 ? tableData : [['-', 'SIN DOCS', '-', 'No hay documentos pendientes en cartera', '-', '-', '0', '0', '$ 0.00', '$ 0.00', '$ 0.00']],
     theme: 'grid',
     headStyles: {
@@ -1191,12 +1222,290 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
 
   const finalY = base.doc.lastAutoTable?.finalY || currentY;
   addGrandTotalBox(base.doc, finalY + 3.5, [
-    { label: 'MONTO FACTURAS', value: formatUsd(totalMontoFacturaUsd), subtext: formatBs(totalMontoFacturaUsd * tasa), color: COLORS.navy },
+    { label: isNotaEntrega ? 'MONTO NOTAS' : 'MONTO FACTURAS', value: formatUsd(totalMontoFacturaUsd), subtext: formatBs(totalMontoFacturaUsd * tasa), color: COLORS.navy },
     { label: 'TOTAL ABONOS', value: formatUsd(totalAbonosUsd), subtext: formatBs(totalAbonosUsd * tasa), color: COLORS.emerald },
     { label: 'TOTAL RESTANTE', value: formatUsd(totalCarteraUsd), subtext: `${dataset.length} documentos`, color: totalCarteraUsd > 0 ? COLORS.red : COLORS.emerald }
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Documentos_CxC_${docTypeArg}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 3B. REPORTE CONSOLIDADO CxC (FACTURAS FISCALES + NOTAS DE ENTREGA)
+// =========================================================================
+export function generateConsolidatedCxcPDF({
+  docs = [],
+  clientRows = [],
+  totals = null,
+  visibleTotals = null,
+  tasaBcv = 1,
+  viewMode = 'DOCS',
+  filters = {},
+  config = {},
+  currentUser = null
+} = {}) {
+  const safeDocs = Array.isArray(docs) ? docs : [];
+  const safeClientRows = Array.isArray(clientRows) ? clientRows : [];
+  const tasa = Number(tasaBcv) || Number(config?.tasaDolar) || 451.51;
+  const isClientView = viewMode === 'CLIENTES';
+
+  const deriveDocBucketTotals = (filterFn) => {
+    const subset = filterFn ? safeDocs.filter(filterFn) : safeDocs;
+    return subset.reduce(
+      (acc, d) => {
+        const m = Number(d.montoFacturaUsd ?? d.totalFacturaUsd ?? 0);
+        const a = Number(d.abonosUsd ?? d.montoPagadoUsd ?? 0);
+        const r = Number(d.restanteUsd ?? d.saldoPendienteUsd ?? d.saldoUsd ?? 0);
+        const isVenc = d.estado === 'VENCIDA' || Number(d.diasVencidos ?? 0) > 0;
+        acc.count += 1;
+        acc.monto += m;
+        acc.abonos += a;
+        acc.restante += r;
+        if (isVenc) {
+          acc.vencido += r;
+          acc.vencidas += 1;
+        }
+        return acc;
+      },
+      { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+    );
+  };
+
+  const facStats = totals?.fac || deriveDocBucketTotals((d) => d.tipoDoc !== 'NOTA_ENTREGA');
+  const neStats = totals?.ne || deriveDocBucketTotals((d) => d.tipoDoc === 'NOTA_ENTREGA');
+  const allStats = totals?.all || {
+    count: facStats.count + neStats.count,
+    monto: facStats.monto + neStats.monto,
+    abonos: facStats.abonos + neStats.abonos,
+    restante: facStats.restante + neStats.restante,
+    vencido: facStats.vencido + neStats.vencido,
+    vencidas: facStats.vencidas + neStats.vencidas
+  };
+
+  const visStats = visibleTotals || (isClientView
+    ? safeClientRows.reduce(
+        (acc, r) => {
+          acc.count += Number(r.fac?.count || 0) + Number(r.ne?.count || 0);
+          acc.monto += Number(r.totalMonto || 0);
+          acc.abonos += Number(r.totalAbonos || 0);
+          acc.restante += Number(r.totalRestante || 0);
+          return acc;
+        },
+        { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+      )
+    : deriveDocBucketTotals(null));
+
+  const base = createBaseReport({
+    title: isClientView
+      ? 'REPORTE CONSOLIDADO CXC POR CLIENTE (FACTURAS + NOTAS)'
+      : 'REPORTE CONSOLIDADO CXC — FACTURAS FISCALES + NOTAS DE ENTREGA',
+    subtitle: isClientView
+      ? 'Cartera Consolidada Agrupada por Cliente • Facturas Fiscales SENIAT + Notas de Entrega Sumadas'
+      : 'Cartera Total Sumada de Ambos Tipos de Documento • Trazabilidad Integral de Cobros',
+    moduleCode: 'CXC-CON',
+    currentUser,
+    config,
+    orientation: 'landscape',
+    rateValue: tasa
+  });
+
+  const cards = [
+    {
+      label: 'Facturas Fiscales',
+      value: formatUsd(facStats.restante),
+      subtext: `${facStats.count} docs • Mto: ${formatUsd(facStats.monto)}`,
+      color: COLORS.navy
+    },
+    {
+      label: 'Notas de Entrega',
+      value: formatUsd(neStats.restante),
+      subtext: `${neStats.count} docs • Mto: ${formatUsd(neStats.monto)}`,
+      color: COLORS.amber
+    },
+    {
+      label: 'Total Consolidado',
+      value: formatUsd(allStats.restante),
+      subtext: `${allStats.count} docs • ${formatBs(allStats.restante * tasa)}`,
+      color: COLORS.emerald
+    },
+    {
+      label: isClientView ? 'Clientes en Tabla' : 'Docs en Tabla',
+      value: isClientView ? `${safeClientRows.length} Clientes` : `${safeDocs.length} Documentos`,
+      subtext: `Restante visible: ${formatUsd(visStats.restante)}`,
+      color: COLORS.cyan
+    }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  const filterParts = [
+    `Vista: ${isClientView ? 'Por Cliente (Agrupado)' : 'Por Documento'}`,
+    `Tipo: ${filters?.typeLabel || 'Ambos (FAC + NE)'}`,
+    `Estado: ${filters?.statusLabel || 'Cartera activa'}`,
+    `Vendedor: ${filters?.sellerLabel || 'Todos los vendedores'}`
+  ];
+  if (filters?.searchTerm) {
+    filterParts.push(`Búsqueda: "${String(filters.searchTerm).trim()}"`);
+  }
+
+  currentY = addAnalyticalBox(
+    base.doc,
+    currentY,
+    'DESGLOSE CONSOLIDADO Y FILTROS APLICADOS',
+    `${filterParts.join(' | ')}\nFacturas Fiscales (${facStats.count}): Monto ${formatUsd(facStats.monto)}, Abonos ${formatUsd(facStats.abonos)}, Restante ${formatUsd(facStats.restante)} • Notas de Entrega (${neStats.count}): Monto ${formatUsd(neStats.monto)}, Abonos ${formatUsd(neStats.abonos)}, Restante ${formatUsd(neStats.restante)} • Vencido Total: ${formatUsd(allStats.vencido)} (${allStats.vencidas} docs).`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const formatDateCell = (d) => {
+    if (!d) return '—';
+    const date = d instanceof Date ? d : new Date(d);
+    if (isNaN(date.getTime())) return String(d).slice(0, 10);
+    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+  };
+
+  if (isClientView) {
+    const cliFacCount = safeClientRows.reduce((s, r) => s + Number(r.fac?.count || 0), 0);
+    const cliFacRest = safeClientRows.reduce((s, r) => s + Number(r.fac?.restante || 0), 0);
+    const cliNeCount = safeClientRows.reduce((s, r) => s + Number(r.ne?.count || 0), 0);
+    const cliNeRest = safeClientRows.reduce((s, r) => s + Number(r.ne?.restante || 0), 0);
+
+    const clientBody = safeClientRows.map((row) => [
+      String(row.cliente || 'Cliente Comercial'),
+      String(row.rif || 'N/A'),
+      String(row.fac?.count || 0),
+      formatUsd(row.fac?.restante || 0),
+      String(row.ne?.count || 0),
+      formatUsd(row.ne?.restante || 0),
+      formatUsd(row.totalMonto || 0),
+      formatUsd(row.totalAbonos || 0),
+      formatUsd(row.totalRestante || 0),
+      formatBs(Number(row.totalRestante || 0) * tasa),
+      String(Number(row.maxDias || 0))
+    ]);
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['CLIENTE', 'RIF', 'N° FAC.', 'SALDO FACTURAS', 'N° NOTAS', 'SALDO NOTAS', 'MONTO TOTAL', 'ABONOS', 'SALDO TOTAL ($)', 'SALDO TOTAL (BS.)', 'MÁX. DÍAS']],
+      body: clientBody.length > 0 ? clientBody : [['No hay clientes que coincidan con los filtros.', '-', '0', '$ 0.00', '0', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00', 'Bs. 0,00', '0']],
+      foot: [[
+        { content: `TOTAL (${safeClientRows.length} clientes)`, colSpan: 2, styles: { halign: 'left' } },
+        String(cliFacCount),
+        formatUsd(cliFacRest),
+        String(cliNeCount),
+        formatUsd(cliNeRest),
+        formatUsd(visStats.monto),
+        formatUsd(visStats.abonos),
+        formatUsd(visStats.restante),
+        formatBs(visStats.restante * tasa),
+        ''
+      ]],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
+      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { cellWidth: 48.4, fontStyle: 'bold' },
+        1: { cellWidth: 20, halign: 'center' },
+        2: { cellWidth: 11, halign: 'right', textColor: COLORS.navy, fontStyle: 'bold' },
+        3: { cellWidth: 23, halign: 'right', textColor: COLORS.navy },
+        4: { cellWidth: 11, halign: 'right', textColor: COLORS.amber, fontStyle: 'bold' },
+        5: { cellWidth: 23, halign: 'right', textColor: COLORS.amber },
+        6: { cellWidth: 23, halign: 'right' },
+        7: { cellWidth: 21, halign: 'right', textColor: COLORS.emerald },
+        8: { cellWidth: 23, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        9: { cellWidth: 28, halign: 'right', textColor: COLORS.slate },
+        10: { cellWidth: 12, halign: 'right', fontStyle: 'bold' }
+      }
+    });
+  } else {
+    const docBody = safeDocs.map((d) => {
+      const isNota = d.tipoDoc === 'NOTA_ENTREGA';
+      const estadoLabel = d.estado === 'VENCIDA' ? 'VENCIDA' : d.estado === 'PAGADA' ? 'SOLVENTE' : 'AL DÍA';
+      const rawNum = String(d.factura || d.factNum || d.nroDoc || d.id || '0000');
+      const docNumLabel = rawNum.startsWith('#') ? rawNum : `#${rawNum}`;
+      return [
+        isNota ? 'NOTA ENT.' : 'FACTURA',
+        docNumLabel,
+        String(d.cliente || d.clienteNombre || 'Cliente Comercial'),
+        String(d.rif || d.clienteRif || 'N/A'),
+        String(d.vendedorId || d.vendedor || 'OF'),
+        formatDateCell(d.fechaEmision || d.fechaEmisionIso),
+        formatDateCell(d.fechaVencimiento || d.fechaVencimientoIso),
+        String(Number(d.diasVencidos ?? 0)),
+        formatUsd(d.montoFacturaUsd ?? 0),
+        formatUsd(d.abonosUsd ?? 0),
+        formatUsd(d.restanteUsd ?? 0),
+        estadoLabel
+      ];
+    });
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'VEND.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
+      body: docBody.length > 0 ? docBody : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
+      foot: [[
+        { content: `TOTAL (${safeDocs.length} documentos)`, colSpan: 8, styles: { halign: 'left' } },
+        formatUsd(visStats.monto),
+        formatUsd(visStats.abonos),
+        formatUsd(visStats.restante),
+        ''
+      ]],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
+      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 52.4 },
+        3: { cellWidth: 21, halign: 'center' },
+        4: { cellWidth: 13, halign: 'center' },
+        5: { cellWidth: 17, halign: 'center' },
+        6: { cellWidth: 17, halign: 'center' },
+        7: { cellWidth: 11, halign: 'right', fontStyle: 'bold' },
+        8: { cellWidth: 19, halign: 'right' },
+        9: { cellWidth: 19, halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold' },
+        10: { cellWidth: 19, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        11: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body') {
+          if (data.column.index === 0) {
+            const isNota = String(data.cell.raw || '').includes('NOTA');
+            data.cell.styles.textColor = isNota ? COLORS.amber : COLORS.cyan;
+          } else if (data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+            data.cell.text = ''; // Vector badge drawn in didDrawCell
+          }
+        }
+      },
+      didDrawCell: (data) => {
+        if (data.section === 'body' && data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+          drawStatusBadge(base.doc, data.cell, data.cell.raw);
+        }
+      }
+    });
+  }
+
+  const finalY = base.doc.lastAutoTable?.finalY || currentY;
+  addGrandTotalBox(base.doc, finalY + 3.5, [
+    { label: 'MONTO EN TABLA (FAC + NE)', value: formatUsd(visStats.monto), subtext: `Abonos: ${formatUsd(visStats.abonos)}`, color: COLORS.navy },
+    { label: 'SALDO RESTANTE EN TABLA', value: formatUsd(visStats.restante), subtext: isClientView ? `${safeClientRows.length} clientes • ${visStats.count} docs` : `${safeDocs.length} documentos`, color: visStats.restante > 0 ? COLORS.red : COLORS.emerald },
+    { label: 'EQUIVALENTE EN BOLÍVARES', value: formatBs(visStats.restante * tasa), subtext: `Tasa BCV: ${formatBs(tasa)}`, color: COLORS.emerald }
+  ], base.tableWidth, base.startX);
+
+  const viewSuffix = isClientView ? 'Por_Cliente' : 'Documentos';
+  finalizeAndSave(base.doc, `Reporte_CxC_Consolidado_${viewSuffix}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -1389,6 +1698,7 @@ export function generateAccountsPayablePDF({
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Documentos_CxP_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -1494,7 +1804,7 @@ export function generateTaxReportPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Cierre_${isZ ? 'Z' : 'X'}_${closure.numeroReporteZ || '0001'}_${period}_SIGNUM.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // -------------------------------------------------------------------------
@@ -1531,7 +1841,7 @@ export function generateTaxReportPDF({
       base.startX
     );
 
-    const tableData = dataset.slice(0, 18).map((c, idx) => [
+    const tableData = dataset.map((c, idx) => [
       c.numeroReporteZ ? `Z-${c.numeroReporteZ}` : `REP-${idx + 1}`,
       c.tipo || 'Z',
       c.fechaCierre ? `${String(c.fechaCierre).slice(0, 10)} ${c.horaCierre || ''}` : '2026-10-23',
@@ -1582,7 +1892,7 @@ export function generateTaxReportPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Libro_Cierres_Fiscales_SENIAT_${period}_SIGNUM.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // -------------------------------------------------------------------------
@@ -1618,7 +1928,7 @@ export function generateTaxReportPDF({
       base.startX
     );
 
-    const tableData = dataset.slice(0, 18).map((w, idx) => {
+    const tableData = dataset.map((w, idx) => {
       const baseUsd = Number(w.baseImponibleUsd || w.totalUsd || 0);
       const retUsd = Number(w.montoRetenidoUsd || baseUsd * 0.02);
       const pct = w.porcentajeRetencion || 2;
@@ -1666,7 +1976,7 @@ export function generateTaxReportPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Comprobantes_Retencion_ISLR_${period}_SIGNUM.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // -------------------------------------------------------------------------
@@ -1702,7 +2012,7 @@ export function generateTaxReportPDF({
       base.startX
     );
 
-    const tableData = dataset.slice(0, 18).map((s, idx) => {
+    const tableData = dataset.map((s, idx) => {
       const usd = Number(s.totalUsd || s.total || 0);
       const igtfU = Number(s.igtfUsd || usd * 0.03);
       const bs = usd * tasa;
@@ -1750,7 +2060,7 @@ export function generateTaxReportPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Libro_Especial_IGTF_3Pct_${period}_SIGNUM.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // -------------------------------------------------------------------------
@@ -1822,7 +2132,7 @@ export function generateTaxReportPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Resumen_Consolidado_SENIAT_${period}_SIGNUM.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // -------------------------------------------------------------------------
@@ -1860,7 +2170,7 @@ export function generateTaxReportPDF({
     base.startX
   );
 
-  const tableData = dataset.slice(0, 18).map((d, idx) => {
+  const tableData = dataset.map((d, idx) => {
     const totalUsd = Number(d.totalUsd || d.total || 0);
     const totBs = totalUsd * tasa;
     const baseBs = totBs / 1.16;
@@ -1922,6 +2232,7 @@ export function generateTaxReportPDF({
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Libro_${isVentas ? 'Ventas' : 'Compras'}_SENIAT_${period}_SIGNUM.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -2110,6 +2421,8 @@ export function generateDashboardPDF({
   topClientsData = [],
   topClientesData = [],
   lubricantesAnalytics = {},
+  objetivosData = {},
+  cxpAnalytics = null,
   selectedMonth = 'ALL',
   ventasDelDia = null,
   ventasAcumuladoMes = null,
@@ -2232,7 +2545,7 @@ export function generateDashboardPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Reporte_Bloque1_Direccion_Comercial_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // =========================================================================
@@ -2316,7 +2629,7 @@ export function generateDashboardPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Reporte_Bloque2_Finanzas_Cobranzas_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // =========================================================================
@@ -2408,7 +2721,7 @@ export function generateDashboardPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Reporte_Bloque3_Clientes_Morosidad_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   // =========================================================================
@@ -2448,7 +2761,7 @@ export function generateDashboardPDF({
       base.startX
     );
 
-    const sampleProducts = (products && products.length > 0 ? products.slice(0, 16) : [
+    const sampleProducts = (products && products.length > 0 ? products : [
       { codigo: 'OIL-20W50-MIN', descripcion: 'OILSTONE MOTOR OIL 20W-50 MINERAL 12X1L', linea: 'Mineral', stockLitros: 1540, costoUsd: 3.45 },
       { codigo: 'OIL-15W40-DIESEL', descripcion: 'OILSTONE DIESEL PREMIUM 15W-40 CI-4/SL', linea: 'Diesel', stockLitros: 2200, costoUsd: 3.80 },
       { codigo: 'OIL-10W40-SEMI', descripcion: 'OILSTONE SYNTHETIC BLEND 10W-40 12X1L', linea: 'Semi-Sintético', stockLitros: 980, costoUsd: 4.20 },
@@ -2497,7 +2810,116 @@ export function generateDashboardPDF({
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Reporte_Bloque4_Inventario_Rotacion_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-    return;
+    return base.doc;
+  }
+
+  // =========================================================================
+  // CASO 4B: BLOQUE 5 -> CUENTAS POR PAGAR (CXP) & PROVEEDORES
+  // =========================================================================
+  if (block === 'cxp') {
+    const base = createBaseReport({
+      title: 'INFORME DE CUENTAS POR PAGAR (CXP) & PROVEEDORES',
+      subtitle: `Antigüedad de Saldos, Concentración de Acreedores y Cobertura Financiera - ${periodoLabel}`,
+      moduleCode: 'CXP',
+      currentUser,
+      config
+    });
+
+    const saldoTotalCxp = Number(cxpAnalytics?.totalSaldoUsd ?? objetivosData?.saldoPendiente ?? 0);
+    const vencidoCxp = Number(cxpAnalytics?.totalVencidoUsd || 0);
+    const morosidadCxp = Number(cxpAnalytics?.morosidadPct || 0);
+    const prox15Usd = Number(cxpAnalytics?.porVencer15Usd || 0);
+    const abonosCxp = Number(objetivosData?.abonosPeriodo ?? objetivosData?.abonosProveedores ?? 0);
+    const cobertura = cxpAnalytics?.coberturaRatio;
+
+    const cards = [
+      { label: 'Saldo Total CxP', value: formatUsd(saldoTotalCxp), subtext: `${cxpAnalytics?.openDocsCount || 0} docs (${cxpAnalytics?.suppliersWithDebtCount || 0} prov.)`, color: COLORS.navy },
+      { label: 'CxP Vencida', value: formatUsd(vencidoCxp), subtext: `${morosidadCxp.toFixed(1)}% morosidad`, color: vencidoCxp > 0 ? COLORS.red : COLORS.emerald },
+      { label: 'Próx. 15 Días', value: formatUsd(prox15Usd), subtext: `${cxpAnalytics?.porVencer15Count || 0} docs por vencer`, color: COLORS.amber },
+      { label: 'Cobertura Caja', value: cobertura !== null && cobertura !== undefined ? `${cobertura.toFixed(2)}x` : '100%', subtext: `Abonos: ${formatUsd(abonosCxp)}`, color: cobertura !== null && cobertura < 1 ? COLORS.red : COLORS.emerald }
+    ];
+
+    let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+    currentY = addAnalyticalBox(
+      base.doc,
+      currentY,
+      'SÍNTESIS EJECUTIVA DE OBLIGACIONES CON PROVEEDORES (CXP)',
+      `El saldo acumulado en Cuentas por Pagar alcanza ${formatUsd(saldoTotalCxp)} (${formatBs(saldoTotalCxp * tasa)}), de los cuales ${formatUsd(vencidoCxp)} (${morosidadCxp.toFixed(1)}%) se encuentran vencidos y ${formatUsd(prox15Usd)} vencen en los próximos 15 días. Se han liquidado ${formatUsd(abonosCxp)} en abonos a proveedores durante el período evaluado.`,
+      base.tableWidth,
+      base.startX
+    );
+
+    const agingRows = (cxpAnalytics?.agingChartData || []).map(b => [
+      b.name,
+      String(b.count || 0),
+      formatUsd(b.value || 0),
+      formatBs((b.value || 0) * tasa),
+      `${b.pct || 0}%`
+    ]);
+
+    if (agingRows.length > 0) {
+      autoTable(base.doc, {
+        startY: currentY,
+        margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+        tableWidth: base.tableWidth,
+        head: [['TRAMO DE ANTIGÜEDAD CXP', 'DOCS', 'SALDO USD', 'SALDO BS', '% TOTAL']],
+        body: agingRows,
+        theme: 'grid',
+        headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.8, fontStyle: 'bold', cellPadding: 1.6 },
+        styles: { fontSize: 6.3, cellPadding: 1.4, textColor: COLORS.dark },
+        alternateRowStyles: { fillColor: COLORS.lightBg },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 64 },
+          1: { halign: 'center', cellWidth: 20 },
+          2: { halign: 'right', fontStyle: 'bold', cellWidth: 34 },
+          3: { halign: 'right', cellWidth: 38 },
+          4: { halign: 'center', fontStyle: 'bold', cellWidth: 23.9 }
+        }
+      });
+      currentY = (base.doc.lastAutoTable?.finalY || currentY) + 5;
+    }
+
+    const topProvRows = (cxpAnalytics?.topProveedores || []).map(pr => [
+      pr.nombre,
+      pr.rif || '-',
+      String(pr.docsCount || 0),
+      formatUsd(pr.saldoUsd || 0),
+      formatUsd(pr.vencidoUsd || 0),
+      `${pr.pct || 0}%`
+    ]);
+
+    if (topProvRows.length > 0) {
+      autoTable(base.doc, {
+        startY: currentY,
+        margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+        tableWidth: base.tableWidth,
+        head: [['PROVEEDOR / ACREEDOR', 'RIF', 'DOCS', 'SALDO USD', 'VENCIDO USD', '% DEUDA']],
+        body: topProvRows,
+        theme: 'grid',
+        headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.6, fontStyle: 'bold', cellPadding: 1.5 },
+        styles: { fontSize: 6.1, cellPadding: 1.3, textColor: COLORS.dark },
+        alternateRowStyles: { fillColor: COLORS.lightBg },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 60 },
+          1: { halign: 'center', cellWidth: 26 },
+          2: { halign: 'center', cellWidth: 16 },
+          3: { halign: 'right', fontStyle: 'bold', cellWidth: 28 },
+          4: { halign: 'right', cellWidth: 28 },
+          5: { halign: 'center', fontStyle: 'bold', cellWidth: 21.9 }
+        }
+      });
+    }
+
+    const finalY5 = base.doc.lastAutoTable?.finalY || currentY;
+    addGrandTotalBox(base.doc, finalY5 + 3.5, [
+      { label: 'SALDO TOTAL CXP', value: formatUsd(saldoTotalCxp), subtext: formatBs(saldoTotalCxp * tasa), color: COLORS.navy },
+      { label: 'DEUDA VENCIDA', value: formatUsd(vencidoCxp), subtext: `${morosidadCxp.toFixed(1)}% morosidad`, color: vencidoCxp > 0 ? COLORS.red : COLORS.emerald },
+      { label: 'ABONOS REALIZADOS', value: formatUsd(abonosCxp), subtext: 'Pagos a proveedores', color: COLORS.emerald }
+    ], base.tableWidth, base.startX);
+
+    finalizeAndSave(base.doc, `Reporte_Bloque5_CuentasPorPagar_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+    return base.doc;
   }
 
   // =========================================================================
@@ -2780,9 +3202,13 @@ export function generateDashboardPDF({
     }
   });
 
-  // Top clientes en la misma página 3 si hay espacio
-  const topFinalY = base.doc.lastAutoTable?.finalY || currentY3;
-  if (topFinalY < 185 && effectiveTopClients.length > 0) {
+  // Top clientes en la misma página 3 si hay espacio, o nueva página si la tabla previa llenó la hoja
+  let topFinalY = base.doc.lastAutoTable?.finalY || currentY3;
+  if (effectiveTopClients.length > 0) {
+    if (topFinalY >= 185) {
+      base.doc.addPage();
+      topFinalY = 22;
+    }
     base.doc.setFont('helvetica', 'bold');
     base.doc.setFontSize(7.2);
     base.doc.setTextColor(...COLORS.navy);
@@ -2861,7 +3287,7 @@ export function generateDashboardPDF({
     base.startX
   );
 
-  const sampleProducts = (products && products.length > 0 ? products.slice(0, 16) : [
+  const sampleProducts = (products && products.length > 0 ? products : [
     { codigo: 'OIL-20W50-MIN', descripcion: 'OILSTONE MOTOR OIL 20W-50 MINERAL 12X1L', linea: 'Mineral', stockLitros: 1540, costoUsd: 3.45 },
     { codigo: 'OIL-15W40-DIESEL', descripcion: 'OILSTONE DIESEL PREMIUM 15W-40 CI-4/SL', linea: 'Diesel', stockLitros: 2200, costoUsd: 3.80 },
     { codigo: 'OIL-10W40-SEMI', descripcion: 'OILSTONE SYNTHETIC BLEND 10W-40 12X1L', linea: 'Semi-Sintético', stockLitros: 980, costoUsd: 4.20 },
@@ -2909,7 +3335,80 @@ export function generateDashboardPDF({
     { label: 'STOCK INMOVILIZADO', value: formatUsd(huesosUsd), subtext: 'Capital en "Huesos"', color: huesosUsd > 0 ? COLORS.red : COLORS.emerald }
   ], base.tableWidth, base.startX);
 
+  // -------------------------------------------------------------------------
+  // PÁGINA 5 (OPCIONAL): BLOQUE 5 -> CUENTAS POR PAGAR (CXP) & PROVEEDORES
+  // -------------------------------------------------------------------------
+  if (cxpAnalytics && (Number(cxpAnalytics.totalSaldoUsd || 0) > 0 || Number(objetivosData?.abonosProveedores || 0) > 0)) {
+    base.doc.addPage();
+    const saldoCxp = Number(cxpAnalytics.totalSaldoUsd || 0);
+    const vencidoCxp = Number(cxpAnalytics.totalVencidoUsd || 0);
+    const prox15 = Number(cxpAnalytics.porVencer15Usd || 0);
+    const abonosCxp = Number(objetivosData?.abonosPeriodo ?? objetivosData?.abonosProveedores ?? 0);
+
+    let currentY5 = addSectionHeader(
+      base.doc,
+      22,
+      'BLOQUE 5: CUENTAS POR PAGAR (CXP), ANTIGÜEDAD Y PROVEEDORES',
+      `Obligaciones Vigentes/Vencidas, Top Acreedores y Cobertura de Tesorería - ${periodoLabel}`,
+      base.tableWidth,
+      base.startX
+    );
+
+    currentY5 = addSummaryCards(base.doc, currentY5, [
+      { label: 'Saldo Total CxP', value: formatUsd(saldoCxp), subtext: `${cxpAnalytics.openDocsCount || 0} docs abiertos`, color: COLORS.navy },
+      { label: 'CxP Vencida', value: formatUsd(vencidoCxp), subtext: `${cxpAnalytics.morosidadPct || 0}% morosidad`, color: vencidoCxp > 0 ? COLORS.red : COLORS.emerald },
+      { label: 'Próx. 15 Días', value: formatUsd(prox15), subtext: `${cxpAnalytics.porVencer15Count || 0} docs por vencer`, color: COLORS.amber },
+      { label: 'Abonos Período', value: formatUsd(abonosCxp), subtext: 'Pagos a proveedores', color: COLORS.emerald }
+    ], base.tableWidth, base.startX);
+
+    const agingRowsAll = (cxpAnalytics.agingChartData || []).map(b => [
+      b.name,
+      String(b.count || 0),
+      formatUsd(b.value || 0),
+      `${b.pct || 0}%`
+    ]);
+
+    if (agingRowsAll.length > 0) {
+      autoTable(base.doc, {
+        startY: currentY5,
+        margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+        tableWidth: base.tableWidth,
+        head: [['TRAMO DE ANTIGÜEDAD CXP', 'DOCUMENTOS', 'SALDO USD', '% DEUDA']],
+        body: agingRowsAll,
+        theme: 'grid',
+        headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.6, fontStyle: 'bold', cellPadding: 1.5 },
+        styles: { fontSize: 6.2, cellPadding: 1.3, textColor: COLORS.dark },
+        alternateRowStyles: { fillColor: COLORS.lightBg }
+      });
+      currentY5 = (base.doc.lastAutoTable?.finalY || currentY5) + 4;
+    }
+
+    const topProvAll = (cxpAnalytics.topProveedores || []).slice(0, 6).map(pr => [
+      pr.nombre,
+      pr.rif || '-',
+      String(pr.docsCount || 0),
+      formatUsd(pr.saldoUsd || 0),
+      formatUsd(pr.vencidoUsd || 0),
+      `${pr.pct || 0}%`
+    ]);
+
+    if (topProvAll.length > 0) {
+      autoTable(base.doc, {
+        startY: currentY5,
+        margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+        tableWidth: base.tableWidth,
+        head: [['PROVEEDOR / ACREEDOR', 'RIF', 'DOCS', 'SALDO USD', 'VENCIDO USD', '% PART.']],
+        body: topProvAll,
+        theme: 'grid',
+        headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.5, fontStyle: 'bold', cellPadding: 1.5 },
+        styles: { fontSize: 6.0, cellPadding: 1.3, textColor: COLORS.dark },
+        alternateRowStyles: { fillColor: COLORS.lightBg }
+      });
+    }
+  }
+
   finalizeAndSave(base.doc, `Dossier_Ejecutivo_Integral_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -3210,7 +3709,7 @@ export function generateInventoryPDF({
 
     const physWhTag = is01 ? 'Alm01_' : is02 ? 'Alm02_' : '';
     finalizeAndSave(base.doc, `Toma_Fisica_Inventario_${physWhTag}SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   let tableHead;
@@ -3352,6 +3851,7 @@ export function generateInventoryPDF({
     : `Reporte_Inventario_Consolidado_Total_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`;
 
   finalizeAndSave(base.doc, pdfFileName, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -3381,7 +3881,7 @@ export function generateOrdersPDF({ orders = [], config = {}, currentUser = null
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  const tableData = orders.slice(0, 18).map((o) => [
+  const tableData = orders.map((o) => [
     String(o.id || o.correlativo || 'PED-000'),
     o.cliente || o.clienteNombre || 'Cliente',
     o.vendedor || 'Asesor Comercial',
@@ -3442,6 +3942,7 @@ export function generateOrdersPDF({ orders = [], config = {}, currentUser = null
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Pedidos_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // -------------------------------------------------------------------------
@@ -3765,9 +4266,10 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
   const pedidoOrigen = sale.pedidoOrigenDoc || order?.numeroDoc || order?.id || 'DIRECTO_MOSTRADOR';
   const fechaStr = sale.fecha ? new Date(sale.fecha).toLocaleDateString('es-VE') : new Date().toLocaleDateString('es-VE');
   const horaStr = sale.fecha ? new Date(sale.fecha).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
-  const clienteNombre = sale.clienteNombre || sale.cliente || 'CLIENTE MOSTRADOR';
-  const clienteRif = sale.clienteRif || 'J-000000000';
-  const direccion = sale.direccionEntrega || order?.direccionEntrega || 'Zona Industrial Valencia, Edo. Carabobo';
+  const resolvedGuideClient = resolveDocumentClientInfo({ ...sale, direccionEntrega: sale.direccionEntrega || order?.direccionEntrega }, null, null);
+  const clienteNombre = resolvedGuideClient.nombre || sale.clienteNombre || sale.cliente || 'CLIENTE MOSTRADOR';
+  const clienteRif = resolvedGuideClient.rif || sale.clienteRif || 'J-000000000';
+  const direccion = resolvedGuideClient.direccion || 'Zona Industrial Valencia, Edo. Carabobo';
   const zonaLogistica = sale.zonaDespacho || order?.zonaVenta || '01 - Valencia';
   const transportista = sale.transportista || order?.transporteId || order?.chofer || 'Transporte Motorven (Flota Propia)';
   const vendedor = sale.vendedor || order?.vendedorId || 'Asesor Comercial';
@@ -3951,197 +4453,165 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
 // =========================================================================
 // 8.C. FORMATO OFICIAL DE NOTA DE ENTREGA (TAMAÑO CARTA CON DESBORDAMIENTO)
 // =========================================================================
+const PLACEHOLDER_ADDRESSES = new Set([
+  '',
+  'n/a',
+  'na',
+  'venezuela',
+  'sin direccion',
+  'sin dirección',
+  'no registrada',
+  'barquisimeto, venezuela',
+  'barquisimeto / caracas, venezuela',
+  'sede / domicilio del cliente',
+  'direccion de entrega registrada',
+  'dirección de entrega registrada',
+  'calle 48 con av. pedro leon torres, barquisimeto',
+  'calle 48 con av. pedro león torres, barquisimeto',
+  'calle 48 con pedro leon torres, barquisimeto',
+  'calle 48 con pedro león torres, barquisimeto',
+  'zona industrial valencia, edo. carabobo'
+]);
+
+function cleanAddressCandidate(raw) {
+  const txt = String(raw || '').trim();
+  if (!txt) return '';
+  const norm = txt.toLowerCase().replace(/\s+/g, ' ');
+  return PLACEHOLDER_ADDRESSES.has(norm) ? '' : txt;
+}
+
 /**
- * Construye una matriz QR estándar ISO/IEC 18004 (Versión 4-L, 33×33 módulos,
- * hasta 78 bytes en Modo Byte con corrección Reed-Solomon de 16 codewords)
- * 100% determinista y escaneable sin dependencias externas.
+ * Resuelve la información registrada del cliente (dirección, teléfono, nombre, RIF)
+ * cruzando el documento contra el parámetro `client`, `clients` y el catálogo `REAL_CLIENTS`.
+ */
+export function resolveDocumentClientInfo(docData = {}, client = null, clients = null) {
+  const safeDoc = docData || {};
+  const normId = (v) => String(v || '').trim().toUpperCase();
+  const normRif = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const normName = (v) =>
+    String(v || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[.,]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const docClientId = normId(safeDoc.clienteId || safeDoc.coCli || safeDoc.co_cli);
+  const docRif = normRif(safeDoc.clienteRif || safeDoc.rif || safeDoc.cliente_rif);
+  const docName = normName(safeDoc.clienteNombre || safeDoc.cliente || safeDoc.cliDes || safeDoc.cli_des || safeDoc.cliente_nombre);
+
+  const findInList = (list) => {
+    if (!Array.isArray(list) || list.length === 0) return null;
+    if (docClientId && docClientId !== 'CLI-GEN' && docClientId !== 'CLI-TEMP') {
+      const byId = list.find((c) => c && (normId(c.id) === docClientId || normId(c.codigo) === docClientId));
+      if (byId) return byId;
+    }
+    if (docRif && docRif.length >= 6 && !/^J0+$|^V0+$/.test(docRif)) {
+      const byRif = list.find((c) => c && normRif(c.rif) === docRif);
+      if (byRif) return byRif;
+    }
+    if (docName && docName !== 'cliente general' && docName !== 'consumidor final') {
+      const byName = list.find((c) => c && normName(c.nombre || c.razonSocial || c.name) === docName);
+      if (byName) return byName;
+    }
+    return null;
+  };
+
+  const matchedClient =
+    client ||
+    findInList(clients) ||
+    findInList(REAL_CLIENTS) ||
+    null;
+
+  const clientRegisteredAddr = cleanAddressCandidate(
+    matchedClient?.direccion ||
+    matchedClient?.domicilioFiscal ||
+    matchedClient?.direccion2 ||
+    matchedClient?.address
+  );
+
+  const docAddr = cleanAddressCandidate(
+    safeDoc.clienteDireccion ||
+    safeDoc.direccionEntrega ||
+    safeDoc.dir_ent ||
+    safeDoc.dirEnt ||
+    safeDoc.domicilioFiscal ||
+    safeDoc.direccion
+  );
+
+  const resolvedAddress = clientRegisteredAddr || docAddr || 'Dirección no registrada en ficha del cliente';
+  const resolvedPhone = String(
+    matchedClient?.telefono ||
+    matchedClient?.phone ||
+    safeDoc.clienteTelefono ||
+    safeDoc.telefono ||
+    ''
+  ).trim();
+  const resolvedNombre = String(
+    safeDoc.clienteNombre ||
+    safeDoc.cliente ||
+    safeDoc.cliDes ||
+    safeDoc.cli_des ||
+    matchedClient?.nombre ||
+    matchedClient?.razonSocial ||
+    'CLIENTE GENERAL'
+  ).trim();
+  const resolvedRif = String(
+    safeDoc.clienteRif ||
+    safeDoc.rif ||
+    matchedClient?.rif ||
+    'J-00000000-0'
+  ).trim();
+
+  return {
+    client: matchedClient,
+    nombre: resolvedNombre,
+    rif: resolvedRif,
+    direccion: resolvedAddress,
+    telefono: resolvedPhone === 'N/A' ? '' : resolvedPhone
+  };
+}
+
+/**
+ * Construye el texto estático de las Cuentas Bancarias oficiales de Grupo Motorven
+ * para codificarlo en el QR de Notas de Entrega y Documentos Fiscales.
+ */
+export function getStaticBankAccountsQRPayload(config = {}, bankAccounts = null) {
+  const list = Array.isArray(bankAccounts) && bankAccounts.length > 0
+    ? bankAccounts
+    : (Array.isArray(REAL_PROFIT_BANK_ACCOUNTS) ? REAL_PROFIT_BANK_ACCOUNTS : []);
+  const empresa = String(config?.nombreEmpresa || 'GRUPO MOTORVEN, C.A.').trim();
+  const rif = String(config?.rif || 'J-31115365-9').trim();
+  const lines = [`CUENTAS BANCARIAS ${empresa}`, `RIF: ${rif}`];
+  list.forEach((acc, idx) => {
+    const bank = String(acc?.bancoNombre || acc?.banco_nombre || acc?.desBan || acc?.des_ban || 'BANCO').trim();
+    const num = String(acc?.numCta || acc?.num_cta || acc?.nroCta || acc?.nro_cta || '').trim();
+    if (num) {
+      lines.push(`${idx + 1}. ${bank}: ${num}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+/**
+ * Construye una matriz QR estándar ISO/IEC 18004 (ajuste automático de versión 1..40)
+ * 100% determinista y escaneable en dispositivos móviles.
  */
 export function buildQRCodeMatrix(rawText = '') {
-  const size = 33; // Version 4: 33x33
-  const dataCapacity = 64; // 64 bytes de datos + 16 ECC = 80 codewords totales
-  const ecCount = 16;
-
-  // Codificar texto a bytes UTF-8 / Latin-1 truncado a 62 bytes útiles
-  const cleanStr = String(rawText || 'SIGNUM MOTORVEN').slice(0, 62);
-  const msgBytes = [];
-  for (let i = 0; i < cleanStr.length && msgBytes.length < 62; i++) {
-    const code = cleanStr.charCodeAt(i);
-    msgBytes.push(code <= 0xff ? code : 0x3f);
-  }
-
-  // Flujo de bits: Mode 0100 (4 bits) + Longitud (8 bits) + Bytes + Terminador 0000
-  const bits = [];
-  const pushBits = (val, len) => {
-    for (let i = len - 1; i >= 0; i--) {
-      bits.push((val >>> i) & 1);
-    }
-  };
-  pushBits(0b0100, 4);
-  pushBits(msgBytes.length, 8);
-  msgBytes.forEach((b) => pushBits(b, 8));
-  pushBits(0, Math.min(4, dataCapacity * 8 - bits.length));
-  while (bits.length % 8 !== 0) bits.push(0);
-
-  const dataWords = [];
-  for (let i = 0; i < bits.length; i += 8) {
-    let byte = 0;
-    for (let b = 0; b < 8; b++) byte = (byte << 1) | (bits[i + b] || 0);
-    dataWords.push(byte);
-  }
-  const padBytes = [0xec, 0x11];
-  let padIdx = 0;
-  while (dataWords.length < dataCapacity) {
-    dataWords.push(padBytes[padIdx % 2]);
-    padIdx++;
-  }
-
-  // Tablas GF(256) con polinomio primitivo 0x11d
-  const gfExp = new Uint8Array(512);
-  const gfLog = new Uint8Array(256);
-  let xVal = 1;
-  for (let i = 0; i < 255; i++) {
-    gfExp[i] = xVal;
-    gfLog[xVal] = i;
-    xVal <<= 1;
-    if (xVal & 0x100) xVal ^= 0x11d;
-  }
-  for (let i = 255; i < 512; i++) gfExp[i] = gfExp[i - 255];
-
-  const gfMul = (a, b) => (a === 0 || b === 0 ? 0 : gfExp[gfLog[a] + gfLog[b]]);
-
-  // Polinomio generador Reed-Solomon de grado ecCount (16)
-  let gen = [1];
-  for (let i = 0; i < ecCount; i++) {
-    const nextGen = new Array(gen.length + 1).fill(0);
-    const factor = gfExp[i];
-    for (let j = 0; j < gen.length; j++) {
-      nextGen[j] ^= gen[j];
-      nextGen[j + 1] ^= gfMul(gen[j], factor);
-    }
-    gen = nextGen;
-  }
-
-  // División polinomial para obtener los 16 bytes de corrección de errores
-  const rem = new Array(ecCount).fill(0);
-  for (let i = 0; i < dataWords.length; i++) {
-    const factor = dataWords[i] ^ rem[0];
-    rem.shift();
-    rem.push(0);
-    if (factor !== 0) {
-      for (let j = 0; j < ecCount; j++) {
-        rem[j] ^= gfMul(gen[j + 1], factor);
-      }
-    }
-  }
-
-  const allCodewords = [...dataWords, ...rem];
-
-  // Matriz QR y máscara de módulos reservados
-  const modules = Array.from({ length: size }, () => new Array(size).fill(false));
-  const reserved = Array.from({ length: size }, () => new Array(size).fill(false));
-
-  const setModule = (r, c, dark) => {
-    if (r >= 0 && r < size && c >= 0 && c < size) {
-      modules[r][c] = Boolean(dark);
-      reserved[r][c] = true;
-    }
-  };
-
-  // Patrones de búsqueda (7x7) + separadores blancos en las 3 esquinas
-  const placeFinder = (row, col) => {
-    for (let dr = -1; dr <= 7; dr++) {
-      for (let dc = -1; dc <= 7; dc++) {
-        const r = row + dr;
-        const c = col + dc;
-        if (r < 0 || r >= size || c < 0 || c >= size) continue;
-        const inOuter = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
-        const onBorder = dr === 0 || dr === 6 || dc === 0 || dc === 6;
-        const inInner = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
-        setModule(r, c, inOuter && (onBorder || inInner));
-      }
-    }
-  };
-  placeFinder(0, 0);
-  placeFinder(0, size - 7);
-  placeFinder(size - 7, 0);
-
-  // Patrón de alineación 5x5 en (24, 24) para Versión 4
-  const alignCenter = 24;
-  for (let dr = -2; dr <= 2; dr++) {
-    for (let dc = -2; dc <= 2; dc++) {
-      const dist = Math.max(Math.abs(dr), Math.abs(dc));
-      setModule(alignCenter + dr, alignCenter + dc, dist !== 1);
-    }
-  }
-
-  // Líneas de sincronización (Timing patterns) en fila 6 y columna 6
-  for (let i = 8; i < size - 8; i++) {
-    if (!reserved[6][i]) setModule(6, i, i % 2 === 0);
-    if (!reserved[i][6]) setModule(i, 6, i % 2 === 0);
-  }
-
-  // Módulo oscuro fijo y reserva de áreas de formato
-  setModule(size - 8, 8, true);
-  for (let i = 0; i < 9; i++) {
-    if (i < size) {
-      if (!reserved[8][i]) reserved[8][i] = true;
-      if (!reserved[i][8]) reserved[i][8] = true;
-    }
-  }
-  for (let i = 0; i < 8; i++) {
-    reserved[8][size - 1 - i] = true;
-    reserved[size - 1 - i][8] = true;
-  }
-
-  // Colocación en zigzag de los bits de datos + ECC con Máscara 0 ((r + c) % 2 === 0)
-  let bitIdx = 0;
-  const totalBits = allCodewords.length * 8;
-  let upward = true;
-
-  for (let rightCol = size - 1; rightCol >= 1; rightCol -= 2) {
-    if (rightCol === 6) rightCol = 5; // Saltar columna de timing
-    for (let vert = 0; vert < size; vert++) {
-      const r = upward ? size - 1 - vert : vert;
-      for (let dc = 0; dc < 2; dc++) {
-        const c = rightCol - dc;
-        if (!reserved[r][c]) {
-          let bit = false;
-          if (bitIdx < totalBits) {
-            const word = allCodewords[bitIdx >>> 3];
-            bit = ((word >>> (7 - (bitIdx & 7))) & 1) === 1;
-            bitIdx++;
-          }
-          if ((r + c) % 2 === 0) bit = !bit; // Mask 0
-          modules[r][c] = bit;
-        }
-      }
-    }
-    upward = !upward;
-  }
-
-  // Bits de información de formato para Nivel L + Máscara 0: 0x77c4 (15 bits)
-  const formatBits = 0x77c4;
-  const formatCoords1 = [
-    [8, 0], [8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 7], [8, 8],
-    [7, 8], [5, 8], [4, 8], [3, 8], [2, 8], [1, 8], [0, 8]
-  ];
-  const formatCoords2 = [
-    [size - 1, 8], [size - 2, 8], [size - 3, 8], [size - 4, 8], [size - 5, 8], [size - 6, 8], [size - 7, 8],
-    [8, size - 8], [8, size - 7], [8, size - 6], [8, size - 5], [8, size - 4], [8, size - 3], [8, size - 2], [8, size - 1]
-  ];
-  for (let i = 0; i < 15; i++) {
-    const bit = ((formatBits >>> i) & 1) === 1;
-    const [r1, c1] = formatCoords1[i];
-    const [r2, c2] = formatCoords2[i];
-    modules[r1][c1] = bit;
-    modules[r2][c2] = bit;
-  }
-
+  const cleanStr = String(rawText || 'SIGNUM MOTORVEN');
+  const qr = qrcode(0, 'L');
+  qr.addData(cleanStr, 'Byte');
+  qr.make();
+  const size = qr.getModuleCount();
+  const modules = Array.from({ length: size }, (_, r) =>
+    Array.from({ length: size }, (_, c) => Boolean(qr.isDark(r, c)))
+  );
   return modules;
 }
 
 /**
- * Dibuja el recuadro de Código QR vectorial en la esquina inferior izquierda de la Nota de Entrega
+ * Dibuja el recuadro de Código QR vectorial en documentos Motorven
  */
 function drawDeliveryNoteQRBox(doc, x, y, boxSize, qrPayload) {
   // Marco contenedor del QR estilo Motorven
@@ -4152,7 +4622,7 @@ function drawDeliveryNoteQRBox(doc, x, y, boxSize, qrPayload) {
 
   const matrix = buildQRCodeMatrix(qrPayload);
   const gridCount = matrix.length;
-  const padding = 1.6;
+  const padding = 1.2;
   const innerSize = boxSize - padding * 2;
   const cellSize = innerSize / gridCount;
   const startX = x + padding;
@@ -4165,8 +4635,8 @@ function drawDeliveryNoteQRBox(doc, x, y, boxSize, qrPayload) {
         doc.rect(
           startX + c * cellSize,
           startY + r * cellSize,
-          cellSize + 0.04,
-          cellSize + 0.04,
+          cellSize + 0.03,
+          cellSize + 0.03,
           'F'
         );
       }
@@ -4384,7 +4854,9 @@ export function generateDeliveryNotePDF({
   config = {},
   currentUser = null,
   client = null,
+  clients = null,
   products = null,
+  bankAccounts = null,
   tasaBcv = null,
   autoPrint = false
 }) {
@@ -4407,10 +4879,11 @@ export function generateDeliveryNotePDF({
     : new Date(new Date(fechaObj).getTime() + (diasCredito * 24 * 60 * 60 * 1000));
   const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
 
-  const clienteNombre = String(docData.clienteNombre || docData.cliente || client?.nombre || 'CLIENTE GENERAL');
-  const clienteRif = String(docData.clienteRif || docData.rif || client?.rif || client?.ci || 'J-00000000-0');
-  const clienteDireccion = String(docData.clienteDireccion || docData.direccionEntrega || docData.direccion || client?.direccion || 'Barquisimeto / Caracas, Venezuela');
-  const clienteTelefono = String(docData.clienteTelefono || docData.telefono || client?.telefono || '');
+  const resolvedClient = resolveDocumentClientInfo(docData, client, clients);
+  const clienteNombre = resolvedClient.nombre;
+  const clienteRif = resolvedClient.rif;
+  const clienteDireccion = resolvedClient.direccion;
+  const clienteTelefono = resolvedClient.telefono;
 
   const almacenOrigen = docData.almacen || 'Almacén 02 (Mercancía General / Preventa)';
   const vendedor = docData.vendedor || docData.vendedorNombre || docData.vendedorDisplay || docData.vendedorId || currentUser?.nombre || 'Asesor Comercial';
@@ -4474,8 +4947,11 @@ export function generateDeliveryNotePDF({
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
   // 2. Bloque Bipartito: Datos del Receptor / Cliente vs Expedición
-  const boxH = 20;
   const colW = (base.tableWidth - 2) / 2;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.8);
+  const addrLines = base.doc.splitTextToSize(`Dirección Entrega: ${clienteDireccion}`, colW - 6).slice(0, 3);
+  const boxH = Math.max(20, 15 + addrLines.length * 3.1 + 2.4);
 
   base.doc.setFillColor(...COLORS.lightBg);
   base.doc.setDrawColor(...COLORS.border);
@@ -4497,8 +4973,9 @@ export function generateDeliveryNotePDF({
   base.doc.setTextColor(...COLORS.dark);
   base.doc.text(`Cliente: ${clienteNombre.slice(0, 44)}`, base.startX + 3, currentY + 8);
   base.doc.text(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`, base.startX + 3, currentY + 11.5);
-  base.doc.text(`Dirección Entrega: ${clienteDireccion.slice(0, 48)}`, base.startX + 3, currentY + 15);
-  base.doc.text(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`, base.startX + 3, currentY + 18.5);
+  base.doc.text(addrLines, base.startX + 3, currentY + 15);
+  const condY = currentY + 15 + (addrLines.length - 1) * 3.1 + 3.4;
+  base.doc.text(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`, base.startX + 3, condY);
 
   // Columna Derecha: Expedición
   base.doc.setFont('helvetica', 'bold');
@@ -4512,7 +4989,7 @@ export function generateDeliveryNotePDF({
   base.doc.text(`Despachado de: ${almacenOrigen}`, base.startX + colW + 3, currentY + 8);
   base.doc.text(`Pedido de Origen: ${pedidoOrigen} • Vendedor: ${vendedor}`, base.startX + colW + 3, currentY + 11.5);
   base.doc.text(`Unidad / Transportista: ${transportista.slice(0, 42)}`, base.startX + colW + 3, currentY + 15);
-  base.doc.text(`Método: ${metodoPago} • Tasa Oficial BCV: Bs. ${tasa.toFixed(2)} / USD`, base.startX + colW + 3, currentY + 18.5);
+  base.doc.text(`Método: ${metodoPago} • Tasa Oficial BCV: Bs. ${tasa.toFixed(2)} / USD`, base.startX + colW + 3, condY);
 
   currentY += boxH + 2.8;
 
@@ -4550,34 +5027,38 @@ export function generateDeliveryNotePDF({
   autoTable(base.doc, {
     startY: currentY,
     margin: { left: base.startX, right: PAGE_LETTER.margin + PAGE_LETTER.innerPadding, top: 28, bottom: 48 },
+    tableWidth: base.tableWidth,
     head: [['#', 'CÓDIGO', 'DESCRIPCIÓN DEL LUBRICANTE', 'PRESENTACIÓN', 'CANT.', 'VOLUMEN', 'P. UNIT ($)', 'TOTAL ($)', 'TOTAL (BS.)']],
     body: tableData.length > 0 ? tableData : [['1', 'LUB-GEN', 'Despacho de Lubricantes según Nota de Entrega', 'Caja', '1', totalLitros > 0 ? `${totalLitros.toFixed(1)} L` : '-', `$ ${totalNetoUsd.toFixed(2)}`, `$ ${totalNetoUsd.toFixed(2)}`, `Bs. ${totalNetoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`]],
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
       textColor: [255, 255, 255],
-      fontSize: 6.2,
+      fontSize: 6.8,
       fontStyle: 'bold',
-      cellPadding: 1.6
+      cellPadding: { top: 1.8, bottom: 1.8, left: 1.1, right: 1.1 },
+      valign: 'middle'
     },
     styles: {
-      fontSize: 5.8,
-      cellPadding: 1.4,
-      textColor: COLORS.dark
+      fontSize: 7.0,
+      cellPadding: { top: 1.7, bottom: 1.7, left: 1.1, right: 1.1 },
+      textColor: COLORS.dark,
+      overflow: 'linebreak',
+      valign: 'middle'
     },
     alternateRowStyles: {
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 7 },
-      1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
-      2: { halign: 'left', cellWidth: 54 },
-      3: { halign: 'center', cellWidth: 20 },
-      4: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
+      0: { halign: 'center', cellWidth: 6.5 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 18.5 },
+      2: { halign: 'left', cellWidth: 47.9 },
+      3: { halign: 'center', cellWidth: 21 },
+      4: { halign: 'center', fontStyle: 'bold', cellWidth: 11.5 },
       5: { halign: 'right', cellWidth: 16 },
-      6: { halign: 'right', cellWidth: 17 },
-      7: { halign: 'right', fontStyle: 'bold', cellWidth: 18 },
-      8: { halign: 'right', fontStyle: 'bold', cellWidth: 17.9 }
+      6: { halign: 'right', cellWidth: 17.5 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 19 },
+      8: { halign: 'right', fontStyle: 'bold', cellWidth: 22 }
     },
     didDrawPage: (data) => {
       if (data.pageNumber > 1) {
@@ -4648,9 +5129,9 @@ export function generateDeliveryNotePDF({
     }
   );
 
-  // 6. Dibujar en TODAS las páginas el Código QR (abajo a la izquierda), aviso de desbordamiento y el indicador grande 1/2, 2/2 (abajo a la derecha)
+  // 6. Dibujar en TODAS las páginas el Código QR estático (Cuentas Bancarias) abajo a la izquierda, aviso de desbordamiento y el indicador grande 1/2, 2/2 (abajo a la derecha)
   const totalPages = base.doc.internal.getNumberOfPages();
-  const qrPayload = `MOTORVEN|${correlativoDisplay}|RIF:${clienteRif}|F:${fechaStr}|USD:${totalNetoUsd.toFixed(2)}|BS:${totalNetoBs.toFixed(2)}`;
+  const qrPayload = getStaticBankAccountsQRPayload(config, bankAccounts);
   const qrSize = 21.5;
   const qrY = 233.5;
 
@@ -4674,8 +5155,17 @@ export function generateDeliveryNotePDF({
       );
     }
 
-    // Código QR en esquina inferior izquierda
+    // Código QR estático de Cuentas Bancarias en esquina inferior izquierda
     drawDeliveryNoteQRBox(base.doc, base.startX, qrY, qrSize, qrPayload);
+
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(6.0);
+    base.doc.setTextColor(...COLORS.navy);
+    base.doc.text('CUENTAS BANCARIAS (QR)', base.startX + qrSize + 3.5, qrY + 14.5);
+    base.doc.setFont('helvetica', 'normal');
+    base.doc.setFontSize(5.4);
+    base.doc.setTextColor(...COLORS.slate);
+    base.doc.text('Escanea para ver cuentas oficiales de Grupo Motorven, C.A.', base.startX + qrSize + 3.5, qrY + 18.2);
 
     // Numeración destacada de desbordamiento (ej. 1/1 o 1/2, 2/2) en esquina inferior derecha
     const badgeW = 22;
@@ -4701,10 +5191,11 @@ export function generateDeliveryNotePDF({
     pageNumberFormat: 'slash',
     skipOverflowHeader: true,
     skipOverflowNotice: true,
+    skipSave: Boolean(autoPrint),
     legalFooter: 'Nota de Entrega • Despacho Almacén 02 • Grupo Motorven, C.A.'
   });
 
-  // Soporte directo para imprimir una vez finalizado el documento completo
+  // Soporte directo para imprimir en navegador (Ctrl + P) sin guardar archivo
   if (autoPrint) {
     printPDFDocument(base.doc);
   }
@@ -4720,7 +5211,7 @@ export function generateDeliveryNotePDF({
 // =========================================================================
 // 9. REPORTE DE VENTAS & FACTURACIÓN POS
 // =========================================================================
-export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = null, tipoDoc = 'GENERAL' }) {
+export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = null, tipoDoc = 'GENERAL', client = null, clients = null, bankAccounts = null, autoPrint = false }) {
   const tasa = Number(config?.tasaDolar) || 827.73;
 
   // Si es un documento individual y corresponde a una Nota de Entrega, usar el formato Carta de Nota de Entrega
@@ -4729,7 +5220,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
     const rawDocType = String(singleDoc.tipoDoc || singleDoc.tipo_doc || tipoDoc || '').toUpperCase();
     const rawDocNum = String(singleDoc.numeroDoc || singleDoc.factNum || singleDoc.factura || singleDoc.nroFactura || '').toUpperCase();
     if (rawDocType.includes('NOTA_ENTREGA') || rawDocType.includes('NOTA DE ENTREGA') || rawDocNum.startsWith('NE')) {
-      return generateDeliveryNotePDF({ sale: singleDoc, config, currentUser });
+      return generateDeliveryNotePDF({ sale: singleDoc, config, currentUser, client, clients, bankAccounts, autoPrint });
     }
   }
 
@@ -4738,6 +5229,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
     const sale = sales[0];
     const items = sale.items || sale.renglones || [];
     const factNum = sale.factNum || sale.nroFactura || sale.id || 'FACT-001';
+    const resolvedClient = resolveDocumentClientInfo(sale, client, clients);
     const base = createBaseReport({
       title: 'FACTURA COMERCIAL / COMPROBANTE FISCAL DE VENTA',
       subtitle: 'Documento Mercantil de Venta Oficial • Emisión en Divisas y Bolívares (Tasa BCV)',
@@ -4764,12 +5256,12 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
       base.doc,
       currentY,
       `DATOS FISCALES DEL CLIENTE & EMISIÓN (${factNum})`,
-      `Cliente: ${sale.cliente || sale.clienteNombre || 'Consumidor Final'} • RIF/CI: ${sale.clienteRif || sale.rif || 'V-00000000-0'} • Teléfono: ${sale.clienteTelefono || sale.telefono || 'N/A'}\nDirección Fiscal: ${sale.clienteDireccion || sale.direccion || 'Venezuela'} • Vendedor Asignado: ${sale.vendedor || 'Asesor General'} • N° Control: ${sale.controlNum || sale.nroControl || '00-000001'}`,
+      `Cliente: ${resolvedClient.nombre} • RIF/CI: ${resolvedClient.rif} • Teléfono: ${resolvedClient.telefono || 'N/A'}\nDirección Entrega / Fiscal: ${resolvedClient.direccion} • Vendedor Asignado: ${sale.vendedor || 'Asesor General'} • N° Control: ${sale.controlNum || sale.nroControl || '00-000001'}`,
       base.tableWidth,
       base.startX
     );
 
-    const tableData = items.slice(0, 22).map((it, idx) => {
+    const tableData = items.map((it, idx) => {
       const cant = resolveItemQty(it);
       const precioU = resolveItemUnitPriceUsd(it);
       const subtotal = resolveItemSubtotalUsd(it);
@@ -4794,38 +5286,61 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
       headStyles: {
         fillColor: COLORS.navy,
         textColor: [255, 255, 255],
-        fontSize: 6.8,
+        fontSize: 7.4,
         fontStyle: 'bold',
-        cellPadding: 1.6
+        cellPadding: { top: 1.8, bottom: 1.8, left: 1.3, right: 1.3 },
+        valign: 'middle'
       },
       styles: {
-        fontSize: 6.2,
-        cellPadding: 1.4,
-        textColor: COLORS.dark
+        fontSize: 7.2,
+        cellPadding: { top: 1.7, bottom: 1.7, left: 1.3, right: 1.3 },
+        textColor: COLORS.dark,
+        overflow: 'linebreak',
+        valign: 'middle'
       },
       alternateRowStyles: {
         fillColor: COLORS.lightBg
       },
       columnStyles: {
-        0: { fontStyle: 'bold', halign: 'center', cellWidth: 22 },
-        1: { cellWidth: 65.9 },
+        0: { fontStyle: 'bold', halign: 'center', cellWidth: 21 },
+        1: { cellWidth: 61.9 },
         2: { halign: 'center', cellWidth: 14 },
-        3: { halign: 'center', fontStyle: 'bold', cellWidth: 14 },
-        4: { halign: 'right', cellWidth: 20 },
-        5: { halign: 'right', fontStyle: 'bold', cellWidth: 20 },
-        6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 }
+        3: { halign: 'center', fontStyle: 'bold', cellWidth: 13 },
+        4: { halign: 'right', cellWidth: 21 },
+        5: { halign: 'right', fontStyle: 'bold', cellWidth: 21 },
+        6: { halign: 'right', fontStyle: 'bold', cellWidth: 28 }
       }
     });
 
     const finalYFac = base.doc.lastAutoTable?.finalY || currentY;
-    addGrandTotalBox(base.doc, finalYFac + 3.5, [
+    const afterGrandTotalY = addGrandTotalBox(base.doc, finalYFac + 3.5, [
       { label: 'TOTAL FACTURA USD', value: formatUsd(totUsd), subtext: formatBs(totBs), color: COLORS.navy },
       { label: 'BASE IMPONIBLE USD', value: formatUsd(baseUsd), subtext: formatBs(baseUsd * tasa), color: COLORS.cyan },
       { label: 'DÉBITO FISCAL IVA 16%', value: formatUsd(ivaUsd), subtext: formatBs(ivaUsd * tasa), color: COLORS.emerald }
     ], base.tableWidth, base.startX);
 
-    finalizeAndSave(base.doc, `Factura_${factNum}_SIGNUM.pdf`, currentUser);
-    return;
+    const qrPayload = getStaticBankAccountsQRPayload(config, bankAccounts);
+    const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
+    let qrStartY = afterGrandTotalY + 1.5;
+    if (qrStartY + 22 > safeBottomY) {
+      base.doc.addPage();
+      qrStartY = continuationTopY;
+    }
+    drawDeliveryNoteQRBox(base.doc, base.startX, qrStartY, 21.5, qrPayload);
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(6.2);
+    base.doc.setTextColor(...COLORS.navy);
+    base.doc.text('CUENTAS BANCARIAS OFICIALES (QR ESTÁTICO)', base.startX + 24.5, qrStartY + 8);
+    base.doc.setFont('helvetica', 'normal');
+    base.doc.setFontSize(5.6);
+    base.doc.setTextColor(...COLORS.slate);
+    base.doc.text('Escanea este código QR desde tu teléfono para visualizar todas las cuentas bancarias de Grupo Motorven, C.A.', base.startX + 24.5, qrStartY + 12.5, { maxWidth: base.tableWidth - 26 });
+
+    finalizeAndSave(base.doc, `Factura_${factNum}_SIGNUM.pdf`, currentUser, { skipSave: Boolean(autoPrint) });
+    if (autoPrint) {
+      printPDFDocument(base.doc);
+    }
+    return base.doc;
   }
 
   const base = createBaseReport({
@@ -4849,7 +5364,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  const tableData = sales.slice(0, 18).map((s, idx) => [
+  const tableData = sales.map((s, idx) => [
     String(s.id || `FACT-${1000 + idx}`),
     s.fecha ? String(s.fecha).replace('T', ' ').slice(0, 16) : '2026-10-23',
     s.cliente || s.clienteNombre || 'Consumidor Final',
@@ -4900,6 +5415,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Ventas_POS_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 /**
@@ -4913,7 +5429,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
  * - Correlativo de 6 dígitos consecutivos (Ej: 000000, 000001, 000002...)
  * - Paginación dinámica "1/2", "2/2" al pie
  */
-export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser = null }) {
+export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser = null, client = null, clients = null, bankAccounts = null, autoPrint = false }) {
   if (!sale) return;
   const tasa = Number(sale.tasaDolar || config?.tasaDolar) || 827.73;
   const doc = new jsPDF({
@@ -4922,6 +5438,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
     format: 'letter'
   });
 
+  const resolvedClient = resolveDocumentClientInfo(sale, client, clients);
   const correlativo = String(sale.numeroDoc || sale.nroFactura || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
   const items = sale.items || sale.renglones || [];
 
@@ -4954,9 +5471,15 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   currentY += 12;
 
   // 2. Metadatos del Adquirente
+  const midX = startX + 110;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  const addrLines = doc.splitTextToSize(`Domicilio Fiscal: ${resolvedClient.direccion}`, (midX - 7) - (startX + 3)).slice(0, 3);
+  const acqBoxH = Math.max(22, 17 + addrLines.length * 3.4);
+
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(startX, currentY, tableWidth, 22, 2, 2, 'FD');
+  doc.roundedRect(startX, currentY, tableWidth, acqBoxH, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
@@ -4965,18 +5488,17 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
 
   doc.setFontSize(9);
   doc.setTextColor(15, 23, 42);
-  doc.text(String(sale.clienteNombre || sale.cliente || 'CLIENTE GENERAL').slice(0, 45), startX + 3, currentY + 9.5);
+  doc.text(resolvedClient.nombre.slice(0, 45), startX + 3, currentY + 9.5);
 
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
-  doc.text(`RIF / C.I.: ${sale.clienteRif || sale.rif || 'V-00000000-0'}`, startX + 3, currentY + 14);
-  doc.text(`Domicilio Fiscal: ${String(sale.clienteDireccion || sale.direccion || 'Barquisimeto, Venezuela').slice(0, 50)}`, startX + 3, currentY + 18.5);
+  doc.text(`RIF / C.I.: ${resolvedClient.rif}${resolvedClient.telefono ? ` • Tel: ${resolvedClient.telefono}` : ''}`, startX + 3, currentY + 13.8);
+  doc.text(addrLines, startX + 3, currentY + 17.8);
 
   // Columna derecha del adquirente
-  const midX = startX + 110;
   doc.setDrawColor(226, 232, 240);
-  doc.line(midX - 4, currentY + 2, midX - 4, currentY + 20);
+  doc.line(midX - 4, currentY + 2, midX - 4, currentY + acqBoxH - 2);
 
   const fecEmis = sale.fechaEmision ? new Date(sale.fechaEmision).toLocaleDateString('es-VE') : new Date().toLocaleDateString('es-VE');
   const fecVenc = sale.fechaVencimiento ? new Date(sale.fechaVencimiento).toLocaleDateString('es-VE') : fecEmis;
@@ -4991,7 +5513,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   doc.setTextColor(217, 119, 6);
   doc.text(`Tasa Oficial BCV: Bs. ${tasa.toFixed(2)} / USD`, midX, currentY + 18.5);
 
-  currentY += 26;
+  currentY += acqBoxH + 4;
 
   // 3. Tabla de Renglones Facturados
   const tableRows = items.map((it, idx) => {
@@ -5013,37 +5535,43 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   autoTable(doc, {
     startY: currentY,
     margin: { left: startX, right: 15, top: topMargin, bottom: bottomMargin },
+    tableWidth,
     head: [['#', 'DESCRIPCIÓN DEL LUBRICANTE', 'CANT.', 'P. UNIT ($)', 'ALÍC.', 'SUBTOTAL ($)', 'TOTAL (BS.)']],
     body: tableRows,
     theme: 'grid',
     styles: {
-      fontSize: 7.5,
-      cellPadding: 2,
+      fontSize: 8.6,
+      cellPadding: { top: 2.1, bottom: 2.1, left: 1.6, right: 1.6 },
       lineColor: [226, 232, 240],
       lineWidth: 0.15,
-      textColor: [15, 23, 42]
+      textColor: [15, 23, 42],
+      overflow: 'linebreak',
+      valign: 'middle'
     },
     headStyles: {
       fillColor: [0, 43, 122],
       textColor: [255, 255, 255],
+      fontSize: 8.4,
       fontStyle: 'bold',
-      halign: 'left'
+      halign: 'left',
+      cellPadding: { top: 2.2, bottom: 2.2, left: 1.6, right: 1.6 },
+      valign: 'middle'
     },
     columnStyles: {
       0: { halign: 'center', cellWidth: 10 },
-      1: { halign: 'left' },
+      1: { halign: 'left', cellWidth: 61.9 },
       2: { halign: 'center', cellWidth: 16 },
-      3: { halign: 'right', cellWidth: 22 },
-      4: { halign: 'center', cellWidth: 16 },
+      3: { halign: 'right', cellWidth: 23 },
+      4: { halign: 'center', cellWidth: 15 },
       5: { halign: 'right', cellWidth: 26 },
-      6: { halign: 'right', cellWidth: 32 }
+      6: { halign: 'right', cellWidth: 34 }
     },
     didDrawPage: (data) => {
       if (data.pageNumber > 1) {
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
         doc.setTextColor(71, 85, 105);
-        doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${sale.clienteNombre || 'Cliente'}`, startX, topMargin - 4);
+        doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${resolvedClient.nombre}`, startX, topMargin - 4);
       }
     }
   });
@@ -5052,7 +5580,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(71, 85, 105);
-    doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${sale.clienteNombre || 'Cliente'}`, startX, topMargin - 4);
+    doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${resolvedClient.nombre}`, startX, topMargin - 4);
   };
 
   let finalY = doc.lastAutoTable.finalY + 4;
@@ -5064,7 +5592,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
     drawSeniatContinuationHeader();
   }
 
-  // 4. Totales y Cajetín de Firma (anclados por sobre el pie de página)
+  // 4. Totales, QR Estático de Cuentas Bancarias y Cajetín de Firma (anclados por sobre el pie de página)
   const boxY = seniatBoxTopY;
   const totUsd = Number(sale.totalUsd || 0);
   const baseUsd = Number(sale.baseGeneralUsd || (totUsd / 1.16));
@@ -5072,19 +5600,27 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   const totBs = totUsd * tasa;
 
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(startX, boxY, 85, 30, 2, 2);
-  doc.line(startX + 8, boxY + 16, startX + 77, boxY + 16);
+  doc.roundedRect(startX, boxY, 60, 30, 2, 2);
+  doc.line(startX + 6, boxY + 16, startX + 54, boxY + 16);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
+  doc.setFontSize(6.8);
   doc.setTextColor(15, 23, 42);
-  doc.text('Firma y Sello de Recepción', startX + 42.5, boxY + 20, { align: 'center' });
+  doc.text('Firma y Sello de Recepción', startX + 30, boxY + 20, { align: 'center' });
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6);
+  doc.setFontSize(5.4);
   doc.setTextColor(100, 116, 139);
-  doc.text('C.I. / RIF del Receptor • Fecha: ____/____/________', startX + 42.5, boxY + 24, { align: 'center' });
+  doc.text('C.I. / RIF • Fecha: ___/___/_____', startX + 30, boxY + 24, { align: 'center' });
 
-  const totalsX = startX + 95;
-  const totalsWidth = 90.9;
+  // QR estático de Cuentas Bancarias
+  const qrPayload = getStaticBankAccountsQRPayload(config, bankAccounts);
+  drawDeliveryNoteQRBox(doc, startX + 64.5, boxY + 1.5, 24, qrPayload);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.2);
+  doc.setTextColor(...COLORS.navy);
+  doc.text('CUENTAS BANCARIAS', startX + 76.5, boxY + 28.5, { align: 'center' });
+
+  const totalsX = startX + 93;
+  const totalsWidth = 92.9;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
   doc.roundedRect(totalsX, boxY, totalsWidth, 30, 2, 2, 'FD');
@@ -5153,8 +5689,12 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
     doc.text(`Página ${p}/${totalPagesCount}${contText}`, startX + tableWidth, bottomLimitY, { align: 'right' });
   }
 
-  const filePrefix = isNe ? 'Nota_Entrega' : (isNc ? 'Nota_Credito' : (isNd ? 'Nota_Debito' : 'Factura'));
-  doc.save(`${filePrefix}_${correlativo}_SENIAT.pdf`);
+  if (autoPrint) {
+    printPDFDocument(doc);
+  } else {
+    const filePrefix = isNe ? 'Nota_Entrega' : (isNc ? 'Nota_Credito' : (isNd ? 'Nota_Debito' : 'Factura'));
+    doc.save(`${filePrefix}_${correlativo}_SENIAT.pdf`);
+  }
   return doc;
 }
 
@@ -5200,7 +5740,7 @@ export function generatePurchasesPDF({ purchases = [], suppliers = [], config = 
       base.startX
     );
 
-    const tableData = items.slice(0, 22).map((it, idx) => {
+    const tableData = items.map((it, idx) => {
       const cant = Number(it.cantidad || it.cant || 1);
       const costoU = Number(it.costo || it.costoUnitario || it.precio || 0);
       const subtotal = Number(it.total || (cant * costoU));
@@ -5256,7 +5796,7 @@ export function generatePurchasesPDF({ purchases = [], suppliers = [], config = 
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Recepcion_Compra_${factNum}_SIGNUM.pdf`, currentUser);
-    return;
+    return base.doc;
   }
 
   const base = createBaseReport({
@@ -5280,7 +5820,7 @@ export function generatePurchasesPDF({ purchases = [], suppliers = [], config = 
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  const tableData = purchases.slice(0, 18).map((p) => [
+  const tableData = purchases.map((p) => [
     String(p.numeroFacturaProv || p.factura || p.id || 'FAC-PROV'),
     p.proveedorNombre || p.proveedor || 'Proveedor',
     p.proveedorRif || 'J-00000000-0',
@@ -5331,7 +5871,7 @@ export function generatePurchasesPDF({ purchases = [], suppliers = [], config = 
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Compras_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-  return;
+  return base.doc;
 }
 
 // =========================================================================
@@ -5422,13 +5962,500 @@ export function generateCashflowPDF({ bankAccounts = [], cashDesks = [], cashMov
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Caja_Bancos_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+const ACCOUNTING_TABLE_THEME = {
+  theme: 'grid',
+  headStyles: {
+    fillColor: COLORS.navy,
+    textColor: [255, 255, 255],
+    fontSize: 6.6,
+    fontStyle: 'bold',
+    cellPadding: 1.6
+  },
+  styles: {
+    fontSize: 6.1,
+    cellPadding: 1.4,
+    textColor: COLORS.dark
+  },
+  alternateRowStyles: {
+    fillColor: COLORS.lightBg
+  }
+};
+
+/**
+ * Formatea una fila de Balance / Estado Financiero marcando encabezados de grupo y totales.
+ */
+function styleStatementRowCell(data) {
+  if (data.section !== 'body') return;
+  const rowMeta = data.row?.raw?.__meta;
+  if (!rowMeta) return;
+  if (rowMeta === 'group') {
+    data.cell.styles.fillColor = [226, 232, 240];
+    data.cell.styles.textColor = COLORS.navy;
+    data.cell.styles.fontStyle = 'bold';
+    data.cell.styles.fontSize = 6.5;
+  } else if (rowMeta === 'subtotal') {
+    data.cell.styles.fillColor = [241, 245, 249];
+    data.cell.styles.textColor = COLORS.dark;
+    data.cell.styles.fontStyle = 'bold';
+  } else if (rowMeta === 'total') {
+    data.cell.styles.fillColor = COLORS.navy;
+    data.cell.styles.textColor = [255, 255, 255];
+    data.cell.styles.fontStyle = 'bold';
+    data.cell.styles.fontSize = 6.5;
+  }
+}
+
+/**
+ * 12A. BALANCE DE COMPROBACIÓN DE SUMAS Y SALDOS EN PDF (CARTA VERTICAL)
+ */
+export function generateTrialBalancePDF({
+  trialBalance = null,
+  entries = [],
+  config = {},
+  currentUser = null
+} = {}) {
+  const tb = trialBalance || computeTrialBalance(entries);
+  const accounts = tb?.accounts || [];
+  const tasa = Number(config?.tasaDolar || 827.73);
+
+  const base = createBaseReport({
+    title: 'BALANCE DE COMPROBACIÓN DE SUMAS Y SALDOS',
+    subtitle: 'Plan Oficial de Cuentas Pro Motorven C.A. • Verificación de Partida Doble (Debe = Haber)',
+    moduleCode: 'BC',
+    currentUser,
+    config
+  });
+
+  const cards = [
+    { label: 'Cuentas Activas', value: `${accounts.length} Cuentas`, subtext: 'Plan Pro Motorven', color: COLORS.navy },
+    { label: 'Sumas Debe / Haber', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: `Haber: ${formatUsd(tb.totalSumasHaberUsd || 0)}`, color: COLORS.cyan },
+    { label: 'Saldos Deudor / Acreedor', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: `Acreedor: ${formatUsd(tb.totalSaldosAcreedorUsd || 0)}`, color: COLORS.emerald },
+    {
+      label: 'Estatus Equilibrio',
+      value: tb.isBalanced ? 'CUADRADO' : 'CON DESCUADRE',
+      subtext: tb.isBalanced ? 'Debe = Haber (VEN-NIF)' : 'Revisar diferencias',
+      color: tb.isBalanced ? COLORS.emerald : COLORS.red
+    }
+  ];
+
+  const currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  const bodyRows = accounts.length > 0
+    ? accounts.map((acc) => [
+        acc.codigo,
+        acc.nombre,
+        acc.grupo || '-',
+        acc.totalDebeUsd > 0 ? formatUsd(acc.totalDebeUsd) : '-',
+        acc.totalHaberUsd > 0 ? formatUsd(acc.totalHaberUsd) : '-',
+        acc.saldoDeudorUsd > 0 ? formatUsd(acc.saldoDeudorUsd) : '-',
+        acc.saldoAcreedorUsd > 0 ? formatUsd(acc.saldoAcreedorUsd) : '-'
+      ])
+    : [['-', 'Sin movimientos registrados en el período', '-', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00']];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_THEME,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    showFoot: 'lastPage',
+    head: [['CÓDIGO', 'DENOMINACIÓN DE LA CUENTA', 'GRUPO', 'SUMAS DEBE', 'SUMAS HABER', 'SALDO DEUDOR', 'SALDO ACREEDOR']],
+    body: bodyRows,
+    foot: [[
+      'TOTALES',
+      `${accounts.length} cuentas imputadas (Tasa BCV: Bs. ${tasa.toFixed(2)})`,
+      tb.isBalanced ? 'CUADRADO' : 'DESCUADRE',
+      formatUsd(tb.totalSumasDebeUsd || 0),
+      formatUsd(tb.totalSumasHaberUsd || 0),
+      formatUsd(tb.totalSaldosDeudorUsd || 0),
+      formatUsd(tb.totalSaldosAcreedorUsd || 0)
+    ]],
+    footStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 6.4,
+      fontStyle: 'bold',
+      cellPadding: 1.7
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 22 },
+      1: { cellWidth: 47.9 },
+      2: { halign: 'center', cellWidth: 20 },
+      3: { halign: 'right', cellWidth: 22.5 },
+      4: { halign: 'right', cellWidth: 22.5 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 22.5 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 22.5 }
+    }
+  });
+
+  const finalY = base.doc.lastAutoTable?.finalY || currentY;
+  const grandEndY = addGrandTotalBox(base.doc, finalY + 3, [
+    { label: 'TOTAL SUMAS DEBE', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: formatBs((tb.totalSumasDebeUsd || 0) * tasa), color: COLORS.navy },
+    { label: 'TOTAL SUMAS HABER', value: formatUsd(tb.totalSumasHaberUsd || 0), subtext: formatBs((tb.totalSumasHaberUsd || 0) * tasa), color: COLORS.cyan },
+    { label: 'SALDO DEUDOR = ACREEDOR', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: tb.isBalanced ? 'Cuadre Exacto $0.00' : 'Verificar Cuadre', color: tb.isBalanced ? COLORS.emerald : COLORS.red }
+  ], base.tableWidth, base.startX);
+
+  addSignatures(
+    base.doc,
+    grandEndY + 4,
+    ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Balance_Comprobacion_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+/**
+ * 12B. LIBRO MAYOR GENERAL ANALÍTICO POR CUENTA EN PDF (CARTA VERTICAL)
+ */
+export function generateGeneralLedgerPDF({
+  account = null,
+  generalLedger = null,
+  entries = [],
+  config = {},
+  currentUser = null
+} = {}) {
+  const ledger = generalLedger || computeGeneralLedger(entries);
+  const targetAccount = account || ledger?.accounts?.[0] || {
+    codigo: '-',
+    nombre: 'Sin cuenta seleccionada',
+    grupo: '-',
+    naturaleza: 'DEUDORA',
+    totalDebeUsd: 0,
+    totalHaberUsd: 0,
+    saldoFinalUsd: 0,
+    movements: []
+  };
+  const movements = targetAccount.movements || [];
+  const tasa = Number(config?.tasaDolar || 827.73);
+
+  const base = createBaseReport({
+    title: 'LIBRO MAYOR GENERAL ANALÍTICO POR CUENTA',
+    subtitle: `Cuenta ${targetAccount.codigo} — ${targetAccount.nombre} • Registro Cronológico de Partida Doble`,
+    moduleCode: 'MAY',
+    currentUser,
+    config
+  });
+
+  const cards = [
+    { label: 'Cuenta Contable', value: String(targetAccount.codigo), subtext: `${targetAccount.naturaleza || 'DEUDORA'} • ${targetAccount.grupo || '-'}`, color: COLORS.navy },
+    { label: 'Total Cargos (Debe)', value: formatUsd(targetAccount.totalDebeUsd || 0), subtext: `${movements.length} movimientos`, color: COLORS.emerald },
+    { label: 'Total Abonos (Haber)', value: formatUsd(targetAccount.totalHaberUsd || 0), subtext: formatBs((targetAccount.totalHaberUsd || 0) * tasa), color: COLORS.cyan },
+    {
+      label: 'Saldo Final Acumulado',
+      value: formatUsd(targetAccount.saldoFinalUsd || 0),
+      subtext: formatBs((targetAccount.saldoFinalUsd || 0) * tasa),
+      color: (targetAccount.saldoFinalUsd || 0) >= 0 ? COLORS.navy : COLORS.red
+    }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  currentY = addAnalyticalBox(
+    base.doc,
+    currentY,
+    'FICHA DE CUENTA CONTABLE EN MAYOR',
+    `Código Institucional: ${targetAccount.codigo} | Denominación: ${targetAccount.nombre} | Grupo: ${targetAccount.grupo || '-'} | Naturaleza: ${targetAccount.naturaleza || 'DEUDORA'} | Movimientos Cronológicos: ${movements.length}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const bodyRows = movements.length > 0
+    ? movements.map((m) => [
+        m.fecha ? String(m.fecha).slice(0, 10) : '-',
+        String(m.asientoNum || '-'),
+        String(m.documentoReferencia || '-'),
+        String(m.concepto || '-'),
+        m.debeUsd > 0 ? formatUsd(m.debeUsd) : '-',
+        m.haberUsd > 0 ? formatUsd(m.haberUsd) : '-',
+        formatUsd(m.saldoAcumuladoUsd || 0)
+      ])
+    : [['-', '-', '-', 'Sin movimientos cronológicos para esta cuenta', '$ 0.00', '$ 0.00', '$ 0.00']];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_THEME,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    showFoot: 'lastPage',
+    head: [['FECHA', 'ASIENTO', 'REFERENCIA', 'CONCEPTO / GLOSA CONTABLE', 'DEBE USD', 'HABER USD', 'SALDO ACUM.']],
+    body: bodyRows,
+    foot: [[
+      'TOTALES',
+      `${movements.length} movs`,
+      targetAccount.codigo,
+      'Totales Acumulados de la Cuenta',
+      formatUsd(targetAccount.totalDebeUsd || 0),
+      formatUsd(targetAccount.totalHaberUsd || 0),
+      formatUsd(targetAccount.saldoFinalUsd || 0)
+    ]],
+    footStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 6.4,
+      fontStyle: 'bold',
+      cellPadding: 1.7
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 18 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
+      2: { cellWidth: 22 },
+      3: { cellWidth: 55.9 },
+      4: { halign: 'right', cellWidth: 21 },
+      5: { halign: 'right', cellWidth: 21 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 }
+    }
+  });
+
+  const finalY = base.doc.lastAutoTable?.finalY || currentY;
+  addSignatures(
+    base.doc,
+    finalY + 5,
+    ['Elaborado por (Contabilidad)', 'Revisado por (Auditoría Interna)', 'Aprobado por (Gerencia)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  const safeCode = String(targetAccount.codigo || 'General').replace(/[^a-zA-Z0-9_-]/g, '_');
+  finalizeAndSave(base.doc, `Libro_Mayor_${safeCode}_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+/**
+ * 12C. ESTADOS FINANCIEROS BÁSICOS BA VEN-NIF 2 EN PDF (CARTA VERTICAL)
+ * Incluye Estado de Resultados Integral + Estado de Situación Financiera (Balance General).
+ */
+export function generateFinancialStatementsPDF({
+  financialStatements = null,
+  trialBalance = null,
+  entries = [],
+  config = {},
+  currentUser = null
+} = {}) {
+  const fsData = financialStatements || computeFinancialStatements(trialBalance || computeTrialBalance(entries));
+  const er = fsData?.estadoResultados || {
+    ingresos: [],
+    costos: [],
+    egresos: [],
+    totalIngresosUsd: 0,
+    totalIngresosBs: 0,
+    totalCostosUsd: 0,
+    totalCostosBs: 0,
+    utilidadBrutaUsd: 0,
+    utilidadBrutaBs: 0,
+    totalEgresosUsd: 0,
+    totalEgresosBs: 0,
+    resultadoEjercicioUsd: 0,
+    resultadoEjercicioBs: 0,
+    cuentaResultadoCodigo: '3.02.01.001',
+    cuentaResultadoNombre: 'Superavit del Ejercicio'
+  };
+  const bg = fsData?.balanceGeneral || {
+    activo: [],
+    pasivo: [],
+    patrimonio: [],
+    totalActivoUsd: 0,
+    totalActivoBs: 0,
+    totalPasivoUsd: 0,
+    totalPasivoBs: 0,
+    resultadoEjercicioUsd: 0,
+    resultadoEjercicioBs: 0,
+    totalPatrimonioUsd: 0,
+    totalPatrimonioBs: 0,
+    totalPasivoYPatrimonioUsd: 0,
+    totalPasivoYPatrimonioBs: 0,
+    diferenciaEcuacionUsd: 0,
+    ecuacionCuadrada: true
+  };
+  const tasa = Number(config?.tasaDolar || 827.73);
+  const toStatementRow = (codigo, concepto, usd, bs, meta = null) => {
+    const row = [
+      codigo,
+      concepto,
+      formatUsd(usd || 0),
+      formatBs(bs != null ? bs : (Number(usd || 0) * tasa))
+    ];
+    if (meta) row.__meta = meta;
+    return row;
+  };
+
+  const base = createBaseReport({
+    title: 'ESTADOS FINANCIEROS BÁSICOS (BA VEN-NIF 2)',
+    subtitle: 'Estado de Resultados Integral y Estado de Situación Financiera (Balance General)',
+    moduleCode: 'EF',
+    currentUser,
+    config
+  });
+
+  const cards = [
+    { label: 'Ingresos Netos', value: formatUsd(er.totalIngresosUsd), subtext: `Utilidad Bruta: ${formatUsd(er.utilidadBrutaUsd)}`, color: COLORS.cyan },
+    {
+      label: 'Resultado del Ejercicio',
+      value: formatUsd(er.resultadoEjercicioUsd),
+      subtext: `${er.cuentaResultadoCodigo} • ${er.cuentaResultadoNombre}`,
+      color: er.resultadoEjercicioUsd >= 0 ? COLORS.emerald : COLORS.red
+    },
+    { label: 'Total Activo', value: formatUsd(bg.totalActivoUsd), subtext: `Pasivo + Patr.: ${formatUsd(bg.totalPasivoYPatrimonioUsd)}`, color: COLORS.navy },
+    {
+      label: 'Ecuación Patrimonial',
+      value: bg.ecuacionCuadrada ? 'CUADRADA' : 'DESCUADRE',
+      subtext: `Diferencia: ${formatUsd(bg.diferenciaEcuacionUsd)}`,
+      color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red
+    }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  // 1. Estado de Resultados Integral
+  currentY = addSectionHeader(
+    base.doc,
+    currentY,
+    '1. ESTADO DE RESULTADOS INTEGRAL (PERÍODO OPERATIVO)',
+    'Clasificación oficial según Plan de Cuentas: Grupos 4 (Ingresos), 5 (Costos) y 6 (Egresos)',
+    base.tableWidth,
+    base.startX
+  );
+
+  const erRows = [
+    toStatementRow('4', '4. INGRESOS OPERACIONALES Y OTROS', er.totalIngresosUsd, er.totalIngresosBs, 'group'),
+    ...(er.ingresos.length > 0
+      ? er.ingresos.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
+      : [toStatementRow('-', 'Sin ingresos registrados en el período', 0, 0)]),
+    toStatementRow('', 'TOTAL INGRESOS NETOS', er.totalIngresosUsd, er.totalIngresosBs, 'subtotal'),
+
+    toStatementRow('5', '5. COSTOS DE VENTAS Y SERVICIOS', er.totalCostosUsd, er.totalCostosBs, 'group'),
+    ...(er.costos.length > 0
+      ? er.costos.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
+      : [toStatementRow('-', 'Sin costos registrados en el período', 0, 0)]),
+    toStatementRow('', 'UTILIDAD BRUTA EN VENTAS', er.utilidadBrutaUsd, er.utilidadBrutaBs, 'subtotal'),
+
+    toStatementRow('6', '6. GASTOS OPERATIVOS / EGRESOS', er.totalEgresosUsd, er.totalEgresosBs, 'group'),
+    ...(er.egresos.length > 0
+      ? er.egresos.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
+      : [toStatementRow('-', 'Sin egresos operativos registrados en el período', 0, 0)]),
+    toStatementRow('', 'TOTAL GASTOS OPERATIVOS', er.totalEgresosUsd, er.totalEgresosBs, 'subtotal'),
+
+    toStatementRow(
+      er.cuentaResultadoCodigo,
+      `RESULTADO DEL EJERCICIO (${er.cuentaResultadoNombre.toUpperCase()})`,
+      er.resultadoEjercicioUsd,
+      er.resultadoEjercicioBs,
+      'total'
+    )
+  ];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_THEME,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CÓDIGO', 'CUENTA / CONCEPTO DEL RESULTADO', 'MONTO USD', 'MONTO BS.']],
+    body: erRows,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 26 },
+      1: { cellWidth: 89.9 },
+      2: { halign: 'right', cellWidth: 30 },
+      3: { halign: 'right', cellWidth: 34 }
+    },
+    didParseCell: styleStatementRowCell
+  });
+
+  currentY = (base.doc.lastAutoTable?.finalY || currentY) + 4;
+
+  // 2. Balance General (Estado de Situación Financiera)
+  currentY = addSectionHeader(
+    base.doc,
+    currentY,
+    '2. BALANCE GENERAL (ESTADO DE SITUACIÓN FINANCIERA)',
+    'Ecuación Patrimonial BA VEN-NIF 2: Activo = Pasivo + Patrimonio + Resultado del Ejercicio',
+    base.tableWidth,
+    base.startX
+  );
+
+  const bgRows = [
+    toStatementRow('1', '1. ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'group'),
+    ...(bg.activo.length > 0
+      ? bg.activo.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
+      : [toStatementRow('-', 'Sin cuentas de activo con movimiento', 0, 0)]),
+    toStatementRow('', 'TOTAL ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'total'),
+
+    toStatementRow('2', '2. PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'group'),
+    ...(bg.pasivo.length > 0
+      ? bg.pasivo.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
+      : [toStatementRow('-', 'Sin cuentas de pasivo con movimiento', 0, 0)]),
+    toStatementRow('', 'TOTAL PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'subtotal'),
+
+    toStatementRow('3', '3. PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'group'),
+    ...(bg.patrimonio || []).map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs)),
+    toStatementRow(er.cuentaResultadoCodigo, er.cuentaResultadoNombre, bg.resultadoEjercicioUsd, bg.resultadoEjercicioBs),
+    toStatementRow('', 'TOTAL PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'subtotal'),
+
+    toStatementRow('', 'TOTAL PASIVO + PATRIMONIO', bg.totalPasivoYPatrimonioUsd, bg.totalPasivoYPatrimonioBs, 'total')
+  ];
+
+  autoTable(base.doc, {
+    ...ACCOUNTING_TABLE_THEME,
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CÓDIGO', 'CUENTA / RUBRO DE SITUACIÓN FINANCIERA', 'MONTO USD', 'MONTO BS.']],
+    body: bgRows,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 26 },
+      1: { cellWidth: 89.9 },
+      2: { halign: 'right', cellWidth: 30 },
+      3: { halign: 'right', cellWidth: 34 }
+    },
+    didParseCell: styleStatementRowCell
+  });
+
+  const finalY = base.doc.lastAutoTable?.finalY || currentY;
+  const grandEndY = addGrandTotalBox(base.doc, finalY + 3, [
+    { label: 'TOTAL ACTIVO', value: formatUsd(bg.totalActivoUsd), subtext: formatBs(bg.totalActivoBs || bg.totalActivoUsd * tasa), color: COLORS.navy },
+    { label: 'PASIVO + PATRIMONIO', value: formatUsd(bg.totalPasivoYPatrimonioUsd), subtext: formatBs(bg.totalPasivoYPatrimonioBs || bg.totalPasivoYPatrimonioUsd * tasa), color: COLORS.cyan },
+    { label: 'DIFERENCIA ECUACIÓN', value: formatUsd(bg.diferenciaEcuacionUsd), subtext: bg.ecuacionCuadrada ? 'BA VEN-NIF 2 Cuadrado' : 'Descuadre detectado', color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red }
+  ], base.tableWidth, base.startX);
+
+  addSignatures(
+    base.doc,
+    grandEndY + 4,
+    ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Estados_Financieros_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
 // 12. REPORTE DE AUDITORÍA & LIBRO CONTABLE DIGITAL (CARTA VERTICAL)
 // =========================================================================
-export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = {}, currentUser = null, subTab = 'diario' }) {
-  const isDiario = subTab === 'diario';
+export function generateAuditLedgerPDF({
+  entries = [],
+  auditLogs = [],
+  trialBalance = null,
+  generalLedger = null,
+  activeMayorAccount = null,
+  financialStatements = null,
+  config = {},
+  currentUser = null,
+  subTab = 'diario'
+}) {
+  if (subTab === 'balance') {
+    return generateTrialBalancePDF({ trialBalance, entries, config, currentUser });
+  }
+  if (subTab === 'mayor') {
+    return generateGeneralLedgerPDF({ account: activeMayorAccount, generalLedger, entries, config, currentUser });
+  }
+  if (subTab === 'estados') {
+    return generateFinancialStatementsPDF({ financialStatements, trialBalance, entries, config, currentUser });
+  }
+
+  const isDiario = subTab === 'diario' || subTab === 'export';
   const base = createBaseReport({
     title: isDiario ? 'LIBRO DIARIO GENERAL & ASIENTOS CONTABLES DIGITALES' : 'BITÁCORA DE AUDITORÍA DE SEGURIDAD & TRAZABILIDAD',
     subtitle: 'Registro de Partida Doble Automatizada, Eventos del Sistema y Trazabilidad de Operadores',
@@ -5448,7 +6475,7 @@ export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = 
 
   if (isDiario) {
     const tableData = [];
-    entries.slice(0, 18).forEach((e) => {
+    entries.forEach((e) => {
       (e.lines || []).forEach((l) => {
         tableData.push([
           String(e.asientoNum || '-'),
@@ -5495,7 +6522,7 @@ export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = 
       }
     });
   } else {
-    const tableData = auditLogs.slice(0, 20).map((l) => [
+    const tableData = auditLogs.map((l) => [
       l.fecha ? String(l.fecha).replace('T', ' ').slice(0, 16) : '2026-10-23',
       l.usuario || l.usuarioNombre || 'OPERADOR',
       l.tipo || l.accion || 'EVENTO',
@@ -5536,6 +6563,7 @@ export function generateAuditLedgerPDF({ entries = [], auditLogs = [], config = 
   }
 
   finalizeAndSave(base.doc, `Reporte_Auditoria_Contable_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -5563,7 +6591,7 @@ export function generateUsersPDF({ users = [], logs = [], activeSubTab = 'usuari
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  const tableData = users.slice(0, 18).map((u) => {
+  const tableData = users.map((u) => {
     const modulosCount = (u.modulos || []).length;
     return [
       `@${u.username}`,
@@ -5610,6 +6638,7 @@ export function generateUsersPDF({ users = [], logs = [], activeSubTab = 'usuari
   });
 
   finalizeAndSave(base.doc, `Reporte_Usuarios_Seguridad_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 // =========================================================================
@@ -5686,21 +6715,30 @@ export function generateConfigPDF({ config = {}, currentUser = null }) {
 }
 
 // =========================================================================
-// 15. REPORTE DE MANUAL DE USUARIO & GUÍA OPERATIVA
+// 15. REPORTE DE MANUAL DE USUARIO & GUÍA OPERATIVA (DINÁMICO)
 // =========================================================================
-export function generateManualPDF({ config = {}, currentUser = null, activeModule = null }) {
+export function generateManualPDF({
+  config = {},
+  currentUser = null,
+  activeModule = null,
+  modules = null,
+  workflows = null
+} = {}) {
+  const modulesList = Array.isArray(modules) && modules.length > 0 ? modules : MODULES_DOCUMENTATION;
+  const workflowsList = Array.isArray(workflows) && workflows.length > 0 ? workflows : WORKFLOWS_STEP_BY_STEP;
   const modTitle = activeModule?.name || activeModule?.title || 'Todos los Módulos';
+  const sysVersion = SYSTEM_METADATA?.version || 'v5.5.0 Enterprise';
   const base = createBaseReport({
     title: 'MANUAL DE USUARIO & PROCEDIMIENTOS OPERATIVOS',
-    subtitle: `Guía Oficial del Sistema ERP • Sección: ${modTitle} • Versión Industrial 5.0 Enterprise`,
+    subtitle: `Guía Oficial del Sistema ERP • Sección: ${modTitle} • ${sysVersion}`,
     moduleCode: 'AYU',
     currentUser,
     config
   });
 
   const cards = [
-    { label: 'Módulos Integrados', value: '18 Módulos', subtext: 'Control Operativo ERP', color: COLORS.navy },
-    { label: 'Versión del Sistema', value: 'v5.0.0 ERP', subtext: 'Multi-Dispositivo 100%', color: COLORS.cyan },
+    { label: 'Módulos Documentados', value: `${modulesList.length} Módulos`, subtext: `${workflowsList.length} Flujos SOP`, color: COLORS.navy },
+    { label: 'Versión del Sistema', value: sysVersion, subtext: 'Multi-Dispositivo 100%', color: COLORS.cyan },
     { label: 'Operador Activo', value: currentUser?.username ? `@${currentUser.username}` : '@admin', subtext: currentUser?.cargo || 'Dirección', color: COLORS.emerald },
     { label: 'Tasa BCV Referencial', value: formatBs(config.tasaDolar || 827.73), subtext: 'Cotización Oficial', color: COLORS.amber }
   ];
@@ -5710,36 +6748,31 @@ export function generateManualPDF({ config = {}, currentUser = null, activeModul
   currentY = addAnalyticalBox(
     base.doc,
     currentY,
-    'POLÍTICA DE OPERACIONES & PROCEDIMIENTOS ESTÁNDAR (SOP)',
-    'El presente manual documenta los procesos operativos, flujos de validación crediticia, facturación comercial, conciliación bancaria, control de asesores con zonas asignadas, centro de notificaciones y liquidación tributaria ante el SENIAT para SIGNUM MOTORVEN, C.A. Todos los operadores deben cumplir con las directrices de inmutabilidad y registro auditado de operaciones.',
+    'POLÍTICA DE OPERACIONES, CONTABILIDAD BA VEN-NIF 2 & PROCEDIMIENTOS ESTÁNDAR (SOP)',
+    `El presente manual documenta los ${modulesList.length} módulos del sistema ERP de ${SYSTEM_METADATA?.company || 'SIGNUM MOTORVEN, C.A.'} (${SYSTEM_METADATA?.rif || 'J-50478166-0'}): Reserva ATP 72 horas, segregación Almacén 01 (SENIAT) / Almacén 02 (Notas de Entrega), Cuenta por Cobrar Parte A y Cuenta por Pagar con retenciones IVA/ISLR, Plan de Cuentas Profit Plus, Partida Doble inmutable (Libro Diario, Mayor General, Balance de Comprobación, Estados Financieros) y respaldo/despliegue.`,
     base.tableWidth,
     base.startX
   );
 
-  const tableData = [
-    ['1. Panel de Control (Dashboard)', 'Supervisión en tiempo real de facturación, cumplimiento de cuota acumulada 2026, selector mensual, acceso a Notificaciones y distribución de asesores.'],
-    ['2. Centro de Notificaciones & Alertas', 'Bandeja centralizada de alertas críticas de stock ROP, moras y eventos fiscales. Acciones en lote, marcado como leídas y reporte PDF imprimible.'],
-    ['3. Catálogo & Existencias (Inventario)', 'Toma física de existencias, cálculo de punto de reorden (ROP), Kardex multialmacén y costeo de lubricantes.'],
-    ['4. Facturación & Punto de Venta (POS)', 'Emisión de comprobantes de venta contado/crédito, desglose de IVA 16% e IGTF 3% en divisas con validación estricta de crédito.'],
-    ['5. Pipeline Comercial (Pedidos & Preventa)', 'Flujo de cotización, autorización en caja, facturación formal y desbloqueo automático de orden de entrega.'],
-    ['6. Fuerza de Ventas & Zonas de Asesores', 'Supervisión de vendedores, asignación y reasignación de zonas comerciales, liquidación de comisiones y volumen en litros.'],
-    ['7. Gestión de Cobranzas (CxC & Aging)', 'Control de envejecimiento de deuda a 1-15, 16-30 y +30 días, límites de crédito, recordatorios estructurados por WhatsApp y scoring predictivo.'],
-    ['8. Tesorería, Cajas & Bancos Supabase', 'Arqueo físico interactivo por denominación, conciliación bancaria multimoneda y disponibilidad de cuentas en tiempo real.'],
-    ['9. Compras & Procura de Insumos (CxP)', 'Recepción de gandolas de lubricantes, verificación de costos en planta, retenciones de ISLR y programación de pagos a proveedores.'],
-    ['10. Módulo Tributario SENIAT', 'Generación de Libros Fiscales de Ventas y Compras (Arts. 75 y 76), comprobantes de ISLR, Cierres Diarios Z/X con hash SHA-256 y TXT/XML oficiales.'],
-    ['11. Auditoría Forense & Libros Contables', 'Registro inmutable de asientos diarios, balance de comprobación, pistas de trazabilidad y eventos de seguridad.'],
-    ['12. Rentabilidad Operativa (P&L BI)', 'Margen de contribución real por litro, análisis waterfall de EBITDA y simulación de sensibilidad de costos y precios.'],
-    ['13. Gestión de Usuarios & Seguridad', 'Estructura jerárquica de 9 roles, visualización segura de contraseñas (.btn-password-eye), fotos de perfil optimizadas y bitácora de auditoría.'],
-    ['14. Barra Superior & Ajustes Globales', 'Tasas BCV/Keystone/Euro/USDT, conmutador de tema Claro/Oscuro de alto contraste, diagnóstico Profit y soporte multi-dispositivo sin cortes.'],
-    ['15. Ejercicio & Período Fiscal Anual', 'Apertura y cierre de ejercicio dinámico, parametrización de fechas, consolidación histórica anual y archivo de ejercicios pasados.'],
-    ['16. Explorador Multi-Base de Datos & SQL Server', 'Supervisión de las 49 tablas transaccionales en tiempo real, búsqueda y exportación de datos de Supabase GRUMOTOR.']
-  ];
+  currentY = addSectionHeader(
+    base.doc,
+    currentY,
+    '1. CATÁLOGO INTEGRAL DE MÓDULOS Y ÁREAS FUNCIONALES',
+    'Resumen ejecutivo según permisología del rol y arquitectura vigente',
+    base.tableWidth,
+    base.startX
+  );
+
+  const tableData = modulesList.map((mod, idx) => [
+    `${idx + 1}. ${mod.title}\n[${mod.category || 'Sistema'}]`,
+    `${mod.summary}\n• Pestañas/Componentes: ${(mod.components || []).length} | Botones: ${(mod.buttons || []).length} | Modales: ${(mod.modals || []).length}`
+  ]);
 
   autoTable(base.doc, {
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['MÓDULO / ÁREA FUNCIONAL', 'DESCRIPCIÓN OPERATIVA & PROCEDIMIENTO ESTÁNDAR']],
+    head: [['MÓDULO / ÁREA FUNCIONAL', 'DESCRIPCIÓN OPERATIVA & ALCANCE FUNCIONAL']],
     body: tableData,
     theme: 'grid',
     headStyles: {
@@ -5750,7 +6783,7 @@ export function generateManualPDF({ config = {}, currentUser = null, activeModul
       cellPadding: 1.6
     },
     styles: {
-      fontSize: 6.2,
+      fontSize: 6.1,
       cellPadding: 1.4,
       textColor: COLORS.dark
     },
@@ -5758,10 +6791,82 @@ export function generateManualPDF({ config = {}, currentUser = null, activeModul
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { fontStyle: 'bold', cellWidth: 55 },
-      1: { fontStyle: 'normal', cellWidth: 124.9 }
+      0: { fontStyle: 'bold', cellWidth: 56 },
+      1: { fontStyle: 'normal', cellWidth: 123.9 }
     }
   });
+
+  currentY = (base.doc.lastAutoTable?.finalY || currentY) + 5;
+
+  if (activeModule && (activeModule.components?.length || activeModule.buttons?.length || activeModule.modals?.length || activeModule.bestPractices?.length)) {
+    currentY = addSectionHeader(
+      base.doc,
+      currentY,
+      `2. FICHA DETALLADA DEL MÓDULO: ${(activeModule.title || '').toUpperCase()}`,
+      `Categoría: ${activeModule.category || 'ERP'} • Roles: ${(activeModule.rolesAllowed || ['Todos']).join(', ')}`,
+      base.tableWidth,
+      base.startX
+    );
+
+    const detailRows = [];
+    (activeModule.components || []).forEach(c => detailRows.push(['Componente / Vista', c.name, c.description]));
+    (activeModule.buttons || []).forEach(b => detailRows.push(['Botón / Acción', b.name, `${b.action}${b.shortcut ? ` (${b.shortcut})` : ''}`]));
+    (activeModule.modals || []).forEach(md => detailRows.push(['Modal / Sub-pantalla', md.name, `${md.purpose}${md.fields?.length ? ` | Campos: ${md.fields.join(', ')}` : ''}`]));
+    (activeModule.bestPractices || []).forEach((bp, i) => detailRows.push(['Regla / Buena Práctica', `Directriz #${i + 1}`, bp]));
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['TIPO', 'ELEMENTO / CONTROL', 'DESCRIPCIÓN OPERATIVA Y REGLAS']],
+      body: detailRows,
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.red, textColor: [255, 255, 255], fontSize: 6.6, fontStyle: 'bold', cellPadding: 1.5 },
+      styles: { fontSize: 6.0, cellPadding: 1.3, textColor: COLORS.dark },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 32 },
+        1: { fontStyle: 'bold', cellWidth: 48 },
+        2: { fontStyle: 'normal', cellWidth: 99.9 }
+      }
+    });
+
+    currentY = (base.doc.lastAutoTable?.finalY || currentY) + 5;
+  }
+
+  const wfSectionNum = activeModule ? '3' : '2';
+  currentY = addSectionHeader(
+    base.doc,
+    currentY,
+    `${wfSectionNum}. FLUJOS OPERATIVOS PASO A PASO (SOP CERTIFICADOS)`,
+    `${workflowsList.length} secuencias oficiales de ejecución y control interno`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const wfRows = workflowsList.map((wf) => [
+    wf.title,
+    (wf.steps || []).map((st, sIdx) => `${sIdx + 1}. ${st}`).join('\n')
+  ]);
+
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['PROCEDIMIENTO ESTÁNDAR (SOP)', 'SECUENCIA OPERATIVA DETALLADA']],
+    body: wfRows,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.6, fontStyle: 'bold', cellPadding: 1.5 },
+    styles: { fontSize: 5.9, cellPadding: 1.4, textColor: COLORS.dark },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 54 },
+      1: { fontStyle: 'normal', cellWidth: 125.9 }
+    }
+  });
+
+  currentY = (base.doc.lastAutoTable?.finalY || currentY) + 5;
+  addSignatures(base.doc, currentY, ['Emitido por Soporte / Sistemas', 'Visto Bueno Dirección / Contabilidad'], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Manual_Usuario_SIGNUM_MOTORVEN_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
 }
@@ -5882,6 +6987,7 @@ export function generateNotificationsPDF({
   });
 
   finalizeAndSave(base.doc, `Reporte_Centro_Notificaciones_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
 }
 
 /**
@@ -6290,8 +7396,8 @@ export function generateProfitDatabaseTablePDF({
   const displayColumns = normColumns.slice(0, maxCols);
   const headHeaders = displayColumns.map(c => (c.name || 'CAMPO').toUpperCase());
 
-  // Preparar cuerpo de datos (hasta 150 filas para salvaguardar rendimiento y legibilidad)
-  const safeRows = rows.slice(0, 150);
+  // Imprimir todas las filas registradas en tantas páginas como sea necesario
+  const safeRows = rows;
   const bodyRows = safeRows.map((r) => {
     return displayColumns.map(col => {
       const val = r[col.name];
@@ -6363,16 +7469,12 @@ export function generateProfitDatabaseTablePDF({
 
   currentY = (base.doc.lastAutoTable?.finalY || currentY) + 4;
 
-  // Nota explicativa si la tabla tiene más columnas o filas que las mostradas
-  if (normColumns.length > maxCols || rows.length > 150) {
-    const notes = [];
-    if (normColumns.length > maxCols) {
-      notes.push(`Estructura: La tabla contiene ${normColumns.length} columnas en total. Se han incluido las primeras ${maxCols} columnas en este formato impreso.`);
-    }
-    if (rows.length > 150) {
-      notes.push(`Registros: Se imprimieron 150 filas de ${rows.length} disponibles.`);
-    }
-    notes.push('Para exportar la totalidad de columnas y registros, utilice la opción "CSV" o "JSON" en la barra de herramientas.');
+  // Nota explicativa si la tabla tiene más columnas que las mostradas horizontalmente
+  if (normColumns.length > maxCols) {
+    const notes = [
+      `Estructura: La tabla contiene ${normColumns.length} columnas en total. Se han incluido las primeras ${maxCols} columnas en este formato impreso.`,
+      'Para exportar la totalidad de columnas y registros, utilice la opción "CSV" o "JSON" en la barra de herramientas.'
+    ];
 
     currentY = addAnalyticalBox(
       base.doc,

@@ -48,6 +48,10 @@ export default function MobileAppLayout({
   onSaveOrder,
   onProceedToPOS,
   onProcessSale,
+  onSaveClient,
+  onDeleteClient,
+  onApproveClient,
+  onRejectClient,
   onSyncProfit,
   onLogout
 }) {
@@ -180,6 +184,9 @@ export default function MobileAppLayout({
               profitZones={profitZones}
               currentUser={currentUser}
               onSaveOrder={onSaveOrder}
+              onSaveClient={onSaveClient}
+              onApproveClient={onApproveClient}
+              onRejectClient={onRejectClient}
               onProceedToPOS={onProceedToPOS}
               onProcessSale={onProcessSale}
               onSyncProfit={onSyncProfit}
@@ -225,8 +232,15 @@ export default function MobileAppLayout({
               clients={clients}
               sales={sales}
               profitInvoices={profitInvoices}
+              profitSellers={profitSellers}
+              profitZones={profitZones}
               config={config}
               currentUser={currentUser}
+              onSaveClient={onSaveClient}
+              onDeleteClient={onDeleteClient}
+              onApproveClient={onApproveClient}
+              onRejectClient={onRejectClient}
+              onProcessSale={onProcessSale}
               onSyncProfit={onSyncProfit}
             />
           )}
@@ -237,6 +251,10 @@ export default function MobileAppLayout({
               config={config}
               currentUser={currentUser}
               clients={clients}
+              onSaveClient={onSaveClient}
+              onDeleteClient={onDeleteClient}
+              onApproveClient={onApproveClient}
+              onRejectClient={onRejectClient}
             />
           )}
 

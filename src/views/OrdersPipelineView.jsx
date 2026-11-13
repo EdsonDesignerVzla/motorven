@@ -30,11 +30,24 @@ import {
   ExternalLink,
   Lock
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import {
+  formatUsd,
+  formatBs,
+  resolveProductUnit,
+  resolveProductLitersPerUnit,
+  getProductWarehouseStocks,
+  validateWarehouseStockForDocument
+} from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
+import {
+  SENIAT_CONTRIBUTOR_TYPES,
+  resolveClientContributorType,
+  computeContributorTypeCounts
+} from '../services/fiscalService';
 import DispatchRouteModal from '../components/DispatchRouteModal';
-import { isMasterOrGerencia } from '../services/authService';
+import { isMasterOrGerencia, isClientApproved } from '../services/authService';
 import { generateOrdersPDF, generateSellerOrderPDF } from '../services/pdfReportService';
+import { useNotification } from '../context/NotificationContext';
 
 const STATUS_CONFIG = {
   PENDIENTE: {
@@ -95,8 +108,19 @@ export default function OrdersPipelineView({
   onOpenOrdersSalesModal,
   currentUser
 }) {
+  const notify = useNotification();
   const safeOrders = useMemo(() => Array.isArray(orders) ? orders : [], [orders]);
   const safeClients = useMemo(() => Array.isArray(clients) ? clients : [], [clients]);
+  const approvedClients = useMemo(() => safeClients.filter(c => isClientApproved(c)), [safeClients]);
+  const [newOrderClientTypeFilter, setNewOrderClientTypeFilter] = useState('ALL');
+  const newOrderContributorCounts = useMemo(
+    () => computeContributorTypeCounts(approvedClients),
+    [approvedClients]
+  );
+  const filteredNewOrderClients = useMemo(() => {
+    if (newOrderClientTypeFilter === 'ALL') return approvedClients;
+    return approvedClients.filter(c => resolveClientContributorType(c) === newOrderClientTypeFilter);
+  }, [approvedClients, newOrderClientTypeFilter]);
   const safeProducts = useMemo(() => Array.isArray(products) ? products : [], [products]);
   const safeProfitZones = useMemo(() => Array.isArray(profitZones) ? profitZones : [], [profitZones]);
   const safeProfitTransports = useMemo(() => Array.isArray(profitTransports) ? profitTransports : [], [profitTransports]);
@@ -118,9 +142,31 @@ export default function OrdersPipelineView({
   const [newOrderSeller, setNewOrderSeller] = useState(currentUser?.nombre || 'Vendedor Directo');
   const [newOrderDir, setNewOrderDir] = useState('');
   const [newOrderComments, setNewOrderComments] = useState('');
+  const [newOrderModalidad, setNewOrderModalidad] = useState('PREVENTA');
   const [newOrderItems, setNewOrderItems] = useState([
     { articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja (12L)' }
   ]);
+
+  const newOrderActiveWh = newOrderModalidad === 'OFICINA' ? '02' : '01';
+  const newOrderWarehouseCheck = useMemo(() => {
+    const selectedItems = newOrderItems.filter(it => it.articuloId);
+    if (selectedItems.length === 0) {
+      return {
+        isValid: true,
+        zeroStockItems: [],
+        invalidQtyItems: [],
+        warehouseCode: newOrderActiveWh,
+        message: ''
+      };
+    }
+    return validateWarehouseStockForDocument({
+      items: selectedItems,
+      products: safeProducts,
+      tipoDoc: newOrderModalidad === 'OFICINA' ? 'NOTA_ENTREGA' : 'FACTURA',
+      almacen: newOrderActiveWh,
+      modalidadVenta: newOrderModalidad
+    });
+  }, [newOrderItems, safeProducts, newOrderModalidad, newOrderActiveWh]);
 
   const tasaBcv = Number(config?.tasaDolar) || 827.73;
 
@@ -1217,9 +1263,28 @@ export default function OrdersPipelineView({
               onSubmit={async (e) => {
                 e.preventDefault();
                 const clientObj = safeClients.find(c => c && (c.id === newOrderClient || c.codigo === newOrderClient));
+                const isNotaEntrega = newOrderModalidad === 'OFICINA';
+                const targetWh = isNotaEntrega ? '02' : '01';
                 const orderId = `OC-${Date.now().toString().slice(-6)}`;
-                
+
                 const validItems = newOrderItems.filter(it => it.articuloId && it.cantidad > 0);
+                if (validItems.length === 0) {
+                  notify.warning('Debe agregar al menos un lubricante con cantidad válida.');
+                  return;
+                }
+
+                const stockCheck = validateWarehouseStockForDocument({
+                  items: validItems,
+                  products: safeProducts,
+                  tipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+                  almacen: targetWh,
+                  modalidadVenta: newOrderModalidad
+                });
+                if (!stockCheck.isValid) {
+                  notify.error(stockCheck.message);
+                  return;
+                }
+
                 const itemsToSave = validItems.map((it, idx) => {
                   const prod = safeProducts.find(p => p && (p.id === it.articuloId || p.codigo === it.articuloId));
                   const desc = prod?.descripcion || it.articuloId;
@@ -1251,7 +1316,11 @@ export default function OrdersPipelineView({
                 const newOrderObj = {
                   id: orderId,
                   numeroDoc: orderId,
-                  tipoDoc: 'ORDEN_COMPRA',
+                  prefijoDoc: isNotaEntrega ? 'PED-NE' : 'PED-FF',
+                  tipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+                  almacen: targetWh,
+                  almacenId: targetWh,
+                  modalidadVenta: newOrderModalidad,
                   fechaEmision: new Date().toISOString(),
                   clienteId: clientObj?.id || newOrderClient,
                   clienteNombre: clientObj?.nombre || 'Cliente General',
@@ -1279,9 +1348,59 @@ export default function OrdersPipelineView({
               }}
               style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem', overflowY: 'auto' }}
             >
+              <div>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Modalidad y Almacén de Despacho</label>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setNewOrderModalidad('PREVENTA')}
+                    className="btn btn-sm"
+                    style={{
+                      flex: 1,
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                      background: newOrderModalidad === 'PREVENTA' ? 'rgba(220, 38, 38, 0.2)' : 'var(--bg-industrial)',
+                      border: newOrderModalidad === 'PREVENTA' ? '1.5px solid var(--motorven-red)' : '1px solid var(--border-glass)',
+                      color: newOrderModalidad === 'PREVENTA' ? '#fca5a5' : 'var(--text-muted)'
+                    }}
+                  >
+                    🧾 Factura Fiscal · Almacén 01
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewOrderModalidad('OFICINA')}
+                    className="btn btn-sm"
+                    style={{
+                      flex: 1,
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                      background: newOrderModalidad === 'OFICINA' ? 'rgba(16, 185, 129, 0.18)' : 'var(--bg-industrial)',
+                      border: newOrderModalidad === 'OFICINA' ? '1.5px solid #10b981' : '1px solid var(--border-glass)',
+                      color: newOrderModalidad === 'OFICINA' ? '#34d399' : 'var(--text-muted)'
+                    }}
+                  >
+                    📋 Nota de Entrega · Almacén 02
+                  </button>
+                </div>
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div>
                   <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Cliente Destinatario *</label>
+                  <select
+                    value={newOrderClientTypeFilter}
+                    onChange={e => setNewOrderClientTypeFilter(e.target.value)}
+                    className="input"
+                    style={{ width: '100%', marginTop: '4px', fontSize: '0.78rem' }}
+                    title="Filtrar por clasificación SENIAT (J, V, E, G, P)"
+                  >
+                    <option value="ALL">Todos los tipos ({approvedClients.length})</option>
+                    {SENIAT_CONTRIBUTOR_TYPES.map(t => (
+                      <option key={t.code} value={t.code} title={t.description}>
+                        {t.label} ({newOrderContributorCounts[t.code] || 0})
+                      </option>
+                    ))}
+                  </select>
                   <select
                     required
                     value={newOrderClient}
@@ -1295,10 +1414,10 @@ export default function OrdersPipelineView({
                     className="input"
                     style={{ width: '100%', marginTop: '4px', fontSize: '0.82rem' }}
                   >
-                    <option value="">-- Seleccionar Cliente ({safeClients.length}) --</option>
-                    {safeClients.map(c => (
+                    <option value="">-- Seleccionar Cliente Aprobado ({filteredNewOrderClients.length}) --</option>
+                    {filteredNewOrderClients.map(c => (
                       <option key={c.id || c.codigo} value={c.id || c.codigo}>
-                        {c.codigo || c.id} • {c.nombre} ({c.rif})
+                        {c.codigo || c.id} • {c.nombre} ({c.rif}) · [{resolveClientContributorType(c)}]
                       </option>
                     ))}
                   </select>
@@ -1331,7 +1450,7 @@ export default function OrdersPipelineView({
               {/* Renglones */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>Lubricantes Requeridos</label>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>Lubricantes Requeridos (Almacén {newOrderActiveWh})</label>
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -1342,72 +1461,117 @@ export default function OrdersPipelineView({
                   </button>
                 </div>
 
-                {newOrderItems.map((item, idx) => (
-                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '6px', marginBottom: '6px', alignItems: 'center' }}>
-                    <select
-                      required
-                      value={item.articuloId}
-                      onChange={e => {
-                        const val = e.target.value;
-                        const p = safeProducts.find(prod => prod && (prod.id === val || prod.codigo === val));
-                        const updated = [...newOrderItems];
-                        updated[idx].articuloId = val;
-                        updated[idx].precioUsd = getProductWholesalePrice(p);
-                        updated[idx].unidad = resolveProductUnit(p, 'Caja');
-                        setNewOrderItems(updated);
-                      }}
-                      className="input"
-                      style={{ fontSize: '0.78rem' }}
-                    >
-                      <option value="">-- Seleccionar Lubricante --</option>
-                      {safeProducts.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.codigo} - {p.descripcion} ({formatUsd(getProductWholesalePrice(p))})
-                        </option>
-                      ))}
-                    </select>
+                {newOrderItems.map((item, idx) => {
+                  const selectedProd = item.articuloId
+                    ? safeProducts.find(prod => prod && (prod.id === item.articuloId || prod.codigo === item.articuloId))
+                    : null;
+                  const selectedStocks = selectedProd ? getProductWarehouseStocks(selectedProd) : null;
+                  const selectedWhStock = selectedStocks ? (newOrderActiveWh === '02' ? selectedStocks.stock02 : selectedStocks.stock01) : null;
 
-                    <input
-                      type="number"
-                      min="1"
-                      placeholder="Cant"
-                      value={item.cantidad}
-                      onChange={e => {
-                        const updated = [...newOrderItems];
-                        updated[idx].cantidad = Math.max(1, Number(e.target.value));
-                        setNewOrderItems(updated);
-                      }}
-                      className="input"
-                      style={{ fontSize: '0.78rem' }}
-                    />
+                  return (
+                    <div key={idx} style={{ marginBottom: '6px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '6px', alignItems: 'center' }}>
+                        <select
+                          required
+                          value={item.articuloId}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const p = safeProducts.find(prod => prod && (prod.id === val || prod.codigo === val));
+                            if (val && p) {
+                              const pStocks = getProductWarehouseStocks(p);
+                              const whStock = newOrderActiveWh === '02' ? pStocks.stock02 : pStocks.stock01;
+                              if (!(whStock > 0)) {
+                                notify.warning(`No se puede cargar ${p.codigo || p.descripcion}: existencia en 0 en Almacén ${newOrderActiveWh}.`);
+                                return;
+                              }
+                            }
+                            const updated = [...newOrderItems];
+                            updated[idx].articuloId = val;
+                            updated[idx].precioUsd = p ? getProductWholesalePrice(p) : 0;
+                            updated[idx].unidad = p ? resolveProductUnit(p, 'Caja') : 'Caja';
+                            setNewOrderItems(updated);
+                          }}
+                          className="input"
+                          style={{ fontSize: '0.78rem' }}
+                        >
+                          <option value="">-- Seleccionar Lubricante --</option>
+                          {safeProducts.map(p => {
+                            const pStocks = getProductWarehouseStocks(p);
+                            const whStock = newOrderActiveWh === '02' ? pStocks.stock02 : pStocks.stock01;
+                            return (
+                              <option key={p.id || p.codigo} value={p.id || p.codigo} disabled={whStock <= 0}>
+                                {p.codigo} - {p.descripcion} ({formatUsd(getProductWholesalePrice(p))}) [Alm {newOrderActiveWh}: {whStock}{whStock <= 0 ? ' · AGOTADO' : ''}]
+                              </option>
+                            );
+                          })}
+                        </select>
 
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="Precio $"
-                      value={item.precioUsd}
-                      onChange={e => {
-                        const updated = [...newOrderItems];
-                        updated[idx].precioUsd = Number(e.target.value);
-                        setNewOrderItems(updated);
-                      }}
-                      className="input"
-                      style={{ fontSize: '0.78rem' }}
-                    />
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="Cant"
+                          value={item.cantidad}
+                          onChange={e => {
+                            const updated = [...newOrderItems];
+                            updated[idx].cantidad = Math.max(1, Number(e.target.value));
+                            setNewOrderItems(updated);
+                          }}
+                          className="input"
+                          style={{ fontSize: '0.78rem' }}
+                        />
 
-                    {newOrderItems.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => setNewOrderItems(newOrderItems.filter((_, i) => i !== idx))}
-                        className="btn btn-icon"
-                        style={{ color: 'var(--motorven-red)', padding: '6px' }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Precio $"
+                          value={item.precioUsd}
+                          onChange={e => {
+                            const updated = [...newOrderItems];
+                            updated[idx].precioUsd = Number(e.target.value);
+                            setNewOrderItems(updated);
+                          }}
+                          className="input"
+                          style={{ fontSize: '0.78rem' }}
+                        />
+
+                        {newOrderItems.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setNewOrderItems(newOrderItems.filter((_, i) => i !== idx))}
+                            className="btn btn-icon"
+                            style={{ color: 'var(--motorven-red)', padding: '6px' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                      {selectedProd && !(selectedWhStock > 0) && (
+                        <div style={{ fontSize: '0.7rem', color: '#f87171', fontWeight: 700, marginTop: '3px' }}>
+                          ⚠️ {selectedProd.codigo} tiene existencia 0 en Almacén {newOrderActiveWh} — retire este renglón para emitir.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
+
+              {!newOrderWarehouseCheck.isValid && (
+                <div style={{
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.14)',
+                  border: '1px solid rgba(239, 68, 68, 0.45)',
+                  color: '#fca5a5',
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0, color: '#ef4444' }} />
+                  <span>{newOrderWarehouseCheck.message}</span>
+                </div>
+              )}
 
               <div>
                 <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Comentarios / Observaciones</label>
@@ -1425,7 +1589,19 @@ export default function OrdersPipelineView({
                 <button type="button" className="btn btn-secondary" onClick={() => setShowNewOrderModal(false)}>
                   Cancelar
                 </button>
-                <button type="submit" className="btn btn-primary" style={{ gap: '6px', background: 'linear-gradient(135deg, var(--motorven-red), #b91c1c)', borderColor: 'var(--motorven-red)', fontWeight: 800 }}>
+                <button
+                  type="submit"
+                  disabled={!newOrderWarehouseCheck.isValid}
+                  className="btn btn-primary"
+                  style={{
+                    gap: '6px',
+                    background: !newOrderWarehouseCheck.isValid ? '#475569' : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
+                    borderColor: !newOrderWarehouseCheck.isValid ? '#64748b' : 'var(--motorven-red)',
+                    fontWeight: 800,
+                    opacity: !newOrderWarehouseCheck.isValid ? 0.6 : 1,
+                    cursor: !newOrderWarehouseCheck.isValid ? 'not-allowed' : 'pointer'
+                  }}
+                >
                   <Send size={16} /> 1. Emitir Nota de Pedido a Caja
                 </button>
               </div>

@@ -28,7 +28,8 @@ import {
   generateSeniatVatRetentionTxt,
   generateSeniatIslrXml,
   generarReporteX,
-  ejecutarCierreZ
+  ejecutarCierreZ,
+  dedupeCanonicalDocs
 } from '../services/fiscalService';
 import FiscalTicketModal from '../components/FiscalTicketModal';
 import IslrWithholdingModal from '../components/IslrWithholdingModal';
@@ -66,9 +67,9 @@ export default function TaxReportsView({
   const [isClosingZ, setIsClosingZ] = useState(false);
   const [zConfirmCheck, setZConfirmCheck] = useState(false);
 
-  // Filtrado por mes seleccionado
+  // Filtrado por mes seleccionado (deduplicado por clave canónica)
   const filteredSales = useMemo(() => {
-    return sales.filter(s => {
+    return dedupeCanonicalDocs(sales || []).filter(s => {
       if (!s.fecha) return true;
       return s.fecha.startsWith(mesFiltro);
     });

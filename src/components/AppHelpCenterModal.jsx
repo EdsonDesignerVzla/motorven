@@ -28,7 +28,17 @@ import {
   Bell,
   MapPin,
   Calendar,
-  Database
+  Database,
+  Building2,
+  Smartphone,
+  Award,
+  ShieldCheck,
+  ShoppingBag,
+  RefreshCw,
+  CreditCard,
+  FileSpreadsheet,
+  Plus,
+  Download
 } from 'lucide-react';
 import {
   SYSTEM_METADATA,
@@ -90,9 +100,20 @@ export default function AppHelpCenterModal({
       m.category.toLowerCase().includes(q) ||
       m.components.some(c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)) ||
       m.buttons.some(b => b.name.toLowerCase().includes(q) || b.action.toLowerCase().includes(q)) ||
-      m.modals.some(md => md.name.toLowerCase().includes(q) || md.purpose.toLowerCase().includes(q))
+      m.modals.some(md => md.name.toLowerCase().includes(q) || md.purpose.toLowerCase().includes(q)) ||
+      (m.bestPractices || []).some(bp => bp.toLowerCase().includes(q))
     );
   }, [searchQuery, roleModules]);
+
+  // ── Filtrado de flujos paso a paso por búsqueda ──────────────────────────
+  const filteredWorkflows = useMemo(() => {
+    if (!searchQuery.trim()) return WORKFLOWS_STEP_BY_STEP;
+    const q = searchQuery.toLowerCase();
+    return WORKFLOWS_STEP_BY_STEP.filter(wf =>
+      wf.title.toLowerCase().includes(q) ||
+      wf.steps.some(step => step.toLowerCase().includes(q))
+    );
+  }, [searchQuery]);
 
   // ── Directorio de botones (solo módulos visibles al rol) ─────────────────
   const allButtons = useMemo(() => {
@@ -181,6 +202,22 @@ export default function AppHelpCenterModal({
       case 'MapPin': return <MapPin {...props} />;
       case 'Calendar': return <Calendar {...props} />;
       case 'Database': return <Database {...props} />;
+      case 'Building2': return <Building2 {...props} />;
+      case 'Smartphone': return <Smartphone {...props} />;
+      case 'Award': return <Award {...props} />;
+      case 'ShieldCheck': return <ShieldCheck {...props} />;
+      case 'ShoppingBag': return <ShoppingBag {...props} />;
+      case 'RefreshCw': return <RefreshCw {...props} />;
+      case 'CreditCard': return <CreditCard {...props} />;
+      case 'FileSpreadsheet': return <FileSpreadsheet {...props} />;
+      case 'Plus': return <Plus {...props} />;
+      case 'Download': return <Download {...props} />;
+      case 'Printer': return <Printer {...props} />;
+      case 'CheckCircle2': return <CheckCircle2 {...props} />;
+      case 'ExternalLink': return <ExternalLink {...props} />;
+      case 'Layers': return <Layers {...props} />;
+      case 'FileText': return <FileText {...props} />;
+      case 'Compass': return <Compass {...props} />;
       default: return <BookOpen {...props} />;
     }
   };
@@ -189,7 +226,9 @@ export default function AppHelpCenterModal({
     generateManualPDF({
       config,
       currentUser,
-      activeModule: currentModule
+      activeModule: currentModule,
+      modules: roleModules,
+      workflows: filteredWorkflows
     });
   };
 
@@ -454,8 +493,8 @@ export default function AppHelpCenterModal({
               { id: 'modulos', label: 'Módulos & Componentes', icon: Layers },
               { id: 'botones', label: 'Guía de Botones', icon: Activity, count: allButtons.length },
               { id: 'modales', label: 'Catálogo de Modales', icon: Compass, count: allModals.length },
-              { id: 'guias', label: 'Flujos Paso a Paso', icon: FileText },
-              { id: 'faq', label: 'Preguntas Frecuentes', icon: HelpCircle }
+              { id: 'guias', label: 'Flujos Paso a Paso', icon: FileText, count: filteredWorkflows.length },
+              { id: 'faq', label: 'Preguntas Frecuentes', icon: HelpCircle, count: filteredFaqs.length }
             ].map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -611,7 +650,7 @@ export default function AppHelpCenterModal({
                       </div>
                     </div>
 
-                    {onNavigate && currentModule.id !== 'header_rates' && (
+                    {onNavigate && !['header_rates', 'config_fiscal', 'explorador_tablas'].includes(currentModule.id) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -911,7 +950,11 @@ export default function AppHelpCenterModal({
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-                {WORKFLOWS_STEP_BY_STEP.map((wf, idx) => (
+                {filteredWorkflows.length === 0 ? (
+                  <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                    No se encontraron flujos operativos que coincidan con "{searchQuery}".
+                  </div>
+                ) : filteredWorkflows.map((wf, idx) => (
                   <div
                     key={idx}
                     style={{

@@ -289,7 +289,12 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           break;
 
         case 'client':
-          if (handlers.pushClientToSupabase) {
+          if (item.action === 'DELETE') {
+            if (handlers.deleteSupabaseClientDirect) {
+              await handlers.deleteSupabaseClientDirect(item.data.id);
+              syncSuccess = true;
+            }
+          } else if (handlers.pushClientToSupabase) {
             await handlers.pushClientToSupabase(item.data);
             syncSuccess = true;
           }

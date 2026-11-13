@@ -42,7 +42,9 @@ import {
   Smartphone,
   Laptop,
   Tablet,
-  Monitor
+  Monitor,
+  Eye,
+  Receipt
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import {
@@ -60,10 +62,11 @@ import ExecutiveSummaryModal from '../components/ExecutiveSummaryModal';
 import ClientsDirectoryModal from '../components/ClientsDirectoryModal';
 import CreditScoreEngineModal from '../components/CreditScoreEngineModal';
 import NotificationsCenterModal from '../components/NotificationsCenterModal';
-import { isMasterOrGerencia, isMasterAdmin } from '../services/authService';
+import { isMasterOrGerencia, isMasterAdmin, getClientApprovalStatus } from '../services/authService';
 import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { generateDashboardPDF, generateNotificationsPDF } from '../services/pdfReportService';
 import { getSupabaseNotifications, seedInitialNotificationsIfEmpty } from '../services/supabaseService';
+import { getCanonicalDocKey, dedupeCanonicalDocs } from '../services/fiscalService';
 
 function formatAdvisorName(name) {
   if (!name) return 'Asesor';
@@ -116,6 +119,57 @@ function toDateKey(dateVal) {
   return isNaN(d.getTime()) ? '' : toDateKey(d);
 }
 
+function isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth = 'ALL') {
+  if (!dateStr) return true;
+  const d = toDateKey(dateStr) || String(dateStr).substring(0, 10);
+  if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
+  if (selectedMonth !== 'ALL') {
+    return extractMonthNumber(dateStr) === selectedMonth;
+  }
+  return true;
+}
+
+function resolveAmountUsd(row, usdKeys, bsKeys, tasaBcv) {
+  let rawUsd = 0;
+  for (const k of usdKeys) {
+    if (row?.[k] !== undefined && row?.[k] !== null && Number(row[k]) > 0) {
+      rawUsd = Number(row[k]);
+      break;
+    }
+  }
+  if (rawUsd > 0) return rawUsd;
+  let rawBs = 0;
+  for (const k of bsKeys) {
+    if (row?.[k] !== undefined && row?.[k] !== null && Number(row[k]) > 0) {
+      rawBs = Number(row[k]);
+      break;
+    }
+  }
+  const t = Number(row?.tasa || 0) > 10 ? Number(row.tasa) : tasaBcv;
+  return rawBs > 0 && t > 1 ? rawBs / t : 0;
+}
+
+function resolveCollectionNormalized(c, tasaBcv) {
+  const rawUsd = Number(c?.montoUsd ?? c?.monto_usd ?? 0) || 0;
+  const rawBs = Number(c?.montoBs ?? c?.monto_bs ?? 0) || 0;
+  const cTasa = Number(c?.tasa || 0);
+  const effectiveTasa = cTasa > 10 ? cTasa : (tasaBcv > 1 ? tasaBcv : 0);
+
+  let usdVal = rawUsd;
+  let bsVal = rawBs;
+  if (cTasa > 10 && rawBs > 0 && Math.abs((rawUsd * cTasa) - rawBs) <= Math.max(2, rawBs * 0.05)) {
+    usdVal = rawUsd;
+    bsVal = rawBs;
+  } else if (cTasa > 10 && rawUsd > 0 && (Math.abs(rawUsd - rawBs) < 1 || rawBs === 0)) {
+    usdVal = rawUsd / cTasa;
+    bsVal = rawBs > 0 ? rawBs : rawUsd;
+  } else if (rawUsd <= 0 && rawBs > 0 && effectiveTasa > 0) {
+    usdVal = rawBs / effectiveTasa;
+    bsVal = rawBs;
+  }
+  return { rawUsd, rawBs, cTasa, effectiveTasa, usdVal, bsVal };
+}
+
 export default function DashboardView({
   products = [],
   sales = [],
@@ -134,6 +188,8 @@ export default function DashboardView({
   onSyncProfit,
   onSaveClient,
   onDeleteClient,
+  onApproveClient,
+  onRejectClient,
   onOpenOrdersSalesModal,
 }) {
   // Estados de Modales
@@ -224,7 +280,8 @@ export default function DashboardView({
   // Filtrar facturas según el rango del ejercicio fiscal y el mes seleccionado
   const filteredProfitInvoices = useMemo(() => {
     if (!Array.isArray(profitInvoices)) return [];
-    const valid = profitInvoices.filter(f => {
+    const deduped = dedupeCanonicalDocs(profitInvoices);
+    const valid = deduped.filter(f => {
       if (f.anulada) return false;
       const dateStr = f?.fechaEmision || f?.fecEmis || f?.fec_emis || f?.fecha || '';
       if (!dateStr) return true;
@@ -243,6 +300,7 @@ export default function DashboardView({
   // Cálculo dinámico de Litros Facturados locales
   const litrosRealesVendidos = useMemo(() => {
     return (sales || []).filter(s => {
+      if (!s || s.anulada) return false;
       const d = (s.fecha || '').substring(0, 10);
       if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
       if (selectedMonth === 'ALL') return true;
@@ -303,8 +361,11 @@ export default function DashboardView({
       const sInvoices = (filteredProfitInvoices || []).filter(f => matchesSeller(f?.vendedorId || f?.co_ven || f?.vendedor || f?.asesor));
       const sInvoicesLitros = sInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros ?? f?.total_litros) || 0), 0);
 
-      // Ventas locales POS asignadas al vendedor
+      // Ventas locales POS asignadas al vendedor dentro del período fiscal activo
       const sSales = (sales || []).filter(s => {
+        if (s.anulada) return false;
+        const d = (s.fecha || '').substring(0, 10);
+        if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
         if (selectedMonth !== 'ALL') {
           const m = extractMonthNumber(s.fecha);
           if (m !== selectedMonth) return false;
@@ -317,7 +378,7 @@ export default function DashboardView({
 
       const sLitros = sInvoicesLitros + sSalesLitros;
       const sMetaBase = Number(seller?.metaLitrosMes ?? seller?.meta_litros_mes) || 3000;
-      const sMeta = selectedMonth === 'ALL' ? sMetaBase * 10 : sMetaBase;
+      const sMeta = selectedMonth === 'ALL' ? sMetaBase * 12 : sMetaBase;
 
       return {
         ...seller,
@@ -340,7 +401,7 @@ export default function DashboardView({
         pctAporteEmpresa: parseFloat(pctAporteEmpresa.toFixed(2))
       };
     }).sort((a, b) => b.litrosFinales - a.litrosFinales || b.pctAporteEmpresa - a.pctAporteEmpresa);
-  }, [effectiveSellersList, filteredProfitInvoices, sales, metaLitros, selectedMonth]);
+  }, [effectiveSellersList, filteredProfitInvoices, sales, metaLitros, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Histórico de Metas y Cumplimiento real de todos los meses de 2026 calculado de Supabase
   const monthlyHistoryData = useMemo(() => {
@@ -416,7 +477,7 @@ export default function DashboardView({
       .reduce((sum, o) => sum + (Number(o.totalLitros ?? o.total_litros) || 0), 0);
   }, [orders]);
 
-  const kpiData = {
+  const kpiData = useMemo(() => ({
     litrosFacturados: totalLitros,
     cajasFacturadas: parseFloat((totalLitros / 11.35).toFixed(2)),
     pendienteFacturar: parseFloat(basePendiente.toFixed(2)),
@@ -428,7 +489,7 @@ export default function DashboardView({
     metaMensualBase: metaMensualBase,
     cajasMetaMensual: parseFloat((metaMensualBase / 11.35).toFixed(2)),
     cumplimientoMetaPct: cumplimientoPct
-  };
+  }), [totalLitros, basePendiente, metaLitros, metaMensualBase, cumplimientoPct]);
 
   // Cartera de Clientes calculada directamente de profit_invoices y ventas a crédito
   const { cxcDia, cxcVen } = useMemo(() => {
@@ -436,10 +497,14 @@ export default function DashboardView({
     let alDia = 0;
     let vencida = 0;
 
-    // Facturas Supabase
+    const seenCxcKeys = new Set();
+
+    // Facturas Supabase (deduplicadas)
     if (Array.isArray(profitInvoices)) {
-      profitInvoices.forEach(f => {
-        if (f.anulada) return;
+      dedupeCanonicalDocs(profitInvoices).forEach(f => {
+        if (!f || f.anulada) return;
+        const ck = getCanonicalDocKey(f);
+        if (ck) seenCxcKeys.add(ck);
         let saldo = Number(f.saldoUsd ?? f.saldo_usd ?? 0);
         if (saldo <= 0.01 && (f.saldoBs ?? f.saldo_bs) && tasaBcv > 0) {
           saldo = Number(f.saldoBs ?? f.saldo_bs) / tasaBcv;
@@ -454,9 +519,12 @@ export default function DashboardView({
       });
     }
 
-    // Ventas locales POS a crédito con saldo pendiente
+    // Ventas locales POS a crédito con saldo pendiente (sin duplicar las ya reflejadas en profitInvoices)
     if (Array.isArray(sales)) {
-      sales.forEach(s => {
+      dedupeCanonicalDocs(sales).forEach(s => {
+        if (!s || s.anulada) return;
+        const ck = getCanonicalDocKey(s);
+        if (ck && seenCxcKeys.has(ck)) return;
         if (s.condicionPago === 'CREDITO' || s.aCredito) {
           const saldo = Number(s.saldoPendiente ?? s.saldoUsd ?? (s.totalUsd && !s.pagado ? s.totalUsd : 0));
           if (saldo > 0.01) {
@@ -513,58 +581,119 @@ export default function DashboardView({
     return disponibilidadBancariaData.reduce((acc, b) => acc + (Number(b.monto) || 0), 0);
   }, [disponibilidadBancariaData]);
 
-  // Gestión de Cobranzas calculada directamente de profit_collections en Supabase
+  // Gestión de Cobranzas calculada directamente de profit_collections en Supabase (con normalización Profit Bs/USD y filtro de período)
   const cobranzasData = useMemo(() => {
     if (!Array.isArray(profitCollections) || profitCollections.length === 0) {
-      return { acumulada: 0, enBs: 0, efectivoZelle: 0 };
+      return { acumulada: 0, enBs: 0, enBsUsd: 0, efectivoZelle: 0 };
     }
-    const active = profitCollections.filter(c => !c.anulado);
-    const sumUsd = active.reduce((sum, c) => sum + (Number(c.montoUsd ?? c.monto_usd ?? 0) || 0), 0);
-    const sumBs = active.reduce((sum, c) => sum + (Number(c.montoBs ?? c.monto_bs ?? 0) || 0), 0);
-    
-    // Total de cobranzas en divisas (Efectivo USD / Zelle / Depósito USD)
-    const efectivoZelle = active.reduce((sum, c) => {
-      const metodo = (c.metodo || c.formaPago || c.forma_pago || c.tipo || '').toUpperCase();
-      if (metodo.includes('EFECTIVO') || metodo.includes('ZELLE') || metodo.includes('DIVISA') || metodo.includes('CASH') || metodo.includes('USD')) {
-        return sum + (Number(c.montoUsd ?? c.monto_usd ?? 0) || 0);
+
+    const active = profitCollections.filter(c => {
+      if (!c || c.anulado) return false;
+      const dateStr = c.fecha || c.fechaEmision || c.fecEmis || c.fecCob || c.createdAt || '';
+      return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
+    });
+
+    const isForeignMethod = (label, codCaja = '') => {
+      const m = String(label || '').toUpperCase();
+      const caja = String(codCaja || '').toUpperCase();
+      return (
+        m.includes('ZELLE') ||
+        m.includes('EFECTIVO_USD') ||
+        m.includes('DIVISA') ||
+        m.includes('CASH') ||
+        m.includes('USD') ||
+        m.includes('USDT') ||
+        m === 'EFEC' ||
+        caja.includes('USDT')
+      );
+    };
+
+    let sumUsd = 0;
+    let sumBs = 0;
+    let sumBsUsd = 0;
+    let efectivoZelle = 0;
+
+    active.forEach(c => {
+      const { rawUsd, cTasa, effectiveTasa, usdVal, bsVal } = resolveCollectionNormalized(c, tasaBcv);
+      sumUsd += usdVal;
+
+      const formas = Array.isArray(c.formasPago) ? c.formasPago : [];
+      if (formas.length > 0 && usdVal > 0) {
+        const totalFpMonto = formas.reduce((acc, fp) => acc + (Number(fp.montoUsd ?? fp.monto ?? 0) || 0), 0);
+        let cobBsEnItem = false;
+
+        formas.forEach(fp => {
+          const fpLabel = fp.tipo || fp.formaPago || fp.forma_pago || '';
+          const fpUsdExplicit = Number(fp.montoUsd ?? fp.monto_usd ?? 0) || 0;
+          const fpUsd = (fpUsdExplicit > 0 && !(cTasa > 10 && Math.abs(fpUsdExplicit - rawUsd) < 1 && usdVal < rawUsd))
+            ? fpUsdExplicit
+            : (totalFpMonto > 0 ? ((Number(fp.montoUsd ?? fp.monto ?? 0) || 0) / totalFpMonto) * usdVal : 0);
+
+          if (isForeignMethod(fpLabel, fp.codCaja)) {
+            efectivoZelle += fpUsd;
+          } else {
+            const fpUpper = String(fpLabel).toUpperCase();
+            const isBsForm = fpUpper.includes('BS') || fpUpper === 'DEPO' || fpUpper === 'TRAN' || fpUpper === 'PAGO_MOVIL' || String(c.moneda || '').toUpperCase().includes('BS') || bsVal > 0;
+            if (isBsForm) {
+              sumBsUsd += fpUsd;
+              cobBsEnItem = true;
+            }
+          }
+        });
+
+        if (cobBsEnItem && bsVal > 0) {
+          sumBs += bsVal;
+        } else if (cobBsEnItem && effectiveTasa > 0) {
+          sumBs += usdVal * effectiveTasa;
+        }
+      } else {
+        const metodo = (c.metodo || c.formaPago || c.forma_pago || c.tipo || '').toUpperCase();
+        const moneda = String(c.moneda || '').toUpperCase();
+        if (isForeignMethod(metodo) || ((moneda === 'US$' || moneda === 'USD') && !metodo && bsVal <= 0)) {
+          efectivoZelle += usdVal;
+        } else if (moneda.includes('BS') || bsVal > 0 || metodo.includes('DEPO') || metodo.includes('TRAN') || metodo.includes('BS')) {
+          sumBsUsd += usdVal;
+          sumBs += bsVal > 0 ? bsVal : (effectiveTasa > 0 ? usdVal * effectiveTasa : 0);
+        }
       }
-      return sum;
-    }, 0);
+    });
 
     return {
       acumulada: parseFloat(sumUsd.toFixed(2)),
       enBs: parseFloat(sumBs.toFixed(2)),
+      enBsUsd: parseFloat(sumBsUsd.toFixed(2)),
       efectivoZelle: parseFloat(efectivoZelle.toFixed(2))
     };
-  }, [profitCollections]);
+  }, [profitCollections, tasaBcv, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
-  // Objetivos Estratégicos (Abonos Proveedores y Saldo Pendiente CxP) desde Supabase
+  // Objetivos Estratégicos (Abonos Proveedores acumulados/período y Saldo Pendiente CxP) desde Supabase
   const objetivosData = useMemo(() => {
-    const totalAbonos = Array.isArray(profitSupplierPayments)
-      ? profitSupplierPayments.filter(p => !p.anulado).reduce((sum, p) => {
-          let val = Number(p.montoUsd ?? p.monto_usd ?? 0);
-          if (p.moneda === 'BS' && val > 0 && tasaBcv > 1) {
-            val = val / tasaBcv;
-          }
-          return sum + val;
-        }, 0)
-      : 0;
+    const activePayments = Array.isArray(profitSupplierPayments)
+      ? profitSupplierPayments.filter(p => p && !p.anulado)
+      : [];
+
+    const totalAbonos = activePayments.reduce(
+      (sum, p) => sum + resolveAmountUsd(p, ['montoUsd', 'monto_usd'], ['montoBs', 'monto_bs'], tasaBcv),
+      0
+    );
+
+    const abonosPeriodo = activePayments
+      .filter(p => isWithinFiscalPeriod(p.fechaPago || p.fec_pago || p.fecha || p.createdAt, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth))
+      .reduce((sum, p) => sum + resolveAmountUsd(p, ['montoUsd', 'monto_usd'], ['montoBs', 'monto_bs'], tasaBcv), 0);
 
     const totalSaldoPendiente = Array.isArray(profitAccountsPayable)
-      ? profitAccountsPayable.filter(d => !d.anulado).reduce((sum, d) => {
-          let val = Number(d.saldoUsd ?? d.saldo_usd ?? 0);
-          if (d.moneda === 'BS' && val > 0 && tasaBcv > 1) {
-            val = val / tasaBcv;
-          }
-          return sum + val;
-        }, 0)
+      ? profitAccountsPayable
+          .filter(d => d && !d.anulado)
+          .reduce((sum, d) => sum + resolveAmountUsd(d, ['saldoUsd', 'saldo_usd'], ['saldoBs', 'saldo_bs'], tasaBcv), 0)
       : 0;
 
     return {
       abonosProveedores: parseFloat(totalAbonos.toFixed(2)),
-      saldoPendiente: parseFloat(totalSaldoPendiente.toFixed(2))
+      abonosPeriodo: parseFloat(abonosPeriodo.toFixed(2)),
+      saldoPendiente: parseFloat(totalSaldoPendiente.toFixed(2)),
+      flujoNetoPeriodo: parseFloat((cobranzasData.acumulada - abonosPeriodo).toFixed(2))
     };
-  }, [profitSupplierPayments, profitAccountsPayable, tasaBcv]);
+  }, [profitSupplierPayments, profitAccountsPayable, tasaBcv, cobranzasData.acumulada, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
   const comparativoMetaData = selectedMonth === 'ALL'
     ? [
@@ -584,6 +713,7 @@ export default function DashboardView({
       return acc + (Number(f.totNetoUsd ?? f.tot_neto_usd ?? f.totalNetoUsd ?? 0) || 0);
     }, 0);
     const salesTotal = (sales || []).filter(s => {
+      if (!s || s.anulada) return false;
       const d = (s.fecha || '').substring(0, 10);
       if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
       if (selectedMonth === 'ALL') return true;
@@ -684,7 +814,7 @@ export default function DashboardView({
     const seenDocKeys = new Set();
     const docs = [];
 
-    (profitInvoices || []).forEach(inv => {
+    (dedupeCanonicalDocs(profitInvoices) || []).forEach(inv => {
       if (!inv || inv.anulada) return;
       const tipo = inv.tipoDoc || inv.tipo_doc || '';
       if (String(tipo).toUpperCase() === 'NOTA_CREDITO') return;
@@ -693,6 +823,7 @@ export default function DashboardView({
 
       const idStr = inv.id ? String(inv.id) : '';
       const dk = getDocDedupKey(tipo, inv.factNum || inv.fact_num || inv.originalFactNum || inv.id);
+      if ((idStr && seenIds.has(idStr)) || (dk && seenDocKeys.has(dk))) return;
       if (idStr) seenIds.add(idStr);
       if (dk) seenDocKeys.add(dk);
 
@@ -707,9 +838,11 @@ export default function DashboardView({
         : (matchingSale?.items || []);
       const items = normalizeDocItems(rawItems, tasaDoc, headerLitros);
       const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
+      const docCategory = dk.startsWith('NE|') ? 'NE' : 'FISCAL';
 
       docs.push({
         dateKey,
+        docCategory,
         usd,
         bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
         litros: headerLitros > 0 ? headerLitros : itemsLitros,
@@ -737,9 +870,11 @@ export default function DashboardView({
       const headerLitros = Number(s.totalLitros ?? s.total_litros ?? 0) || 0;
       const items = normalizeDocItems(s.items || [], tasaDoc, headerLitros);
       const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
+      const docCategory = dk.startsWith('NE|') ? 'NE' : 'FISCAL';
 
       docs.push({
         dateKey,
+        docCategory,
         usd,
         bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
         litros: headerLitros > 0 ? headerLitros : itemsLitros,
@@ -841,19 +976,47 @@ export default function DashboardView({
 
   // Métricas de Clientes, Ticket Promedio y Top 5 Clientes en el período
   const { ticketPromedioUsd, cantDocumentos, clientesActivosCount, topClientesData } = useMemo(() => {
-    const cantDocs = (filteredProfitInvoices || []).length;
+    const filteredSales = (sales || []).filter(s => {
+      if (!s || s.anulada) return false;
+      const d = (s.fecha || '').substring(0, 10);
+      if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
+      if (selectedMonth === 'ALL') return true;
+      return extractMonthNumber(s.fecha) === selectedMonth;
+    });
+
+    const cantDocs = (filteredProfitInvoices || []).length + filteredSales.length;
     const ticket = cantDocs > 0 ? parseFloat((totalFacturadoUsd / cantDocs).toFixed(2)) : 0;
 
     const clientMap = new Map();
+    const accumulateClient = (cid, cname, crif, montoUsd) => {
+      if (!cid && !cname) return;
+      const key = String(cid || cname).trim();
+      const current = clientMap.get(key) || {
+        id: cid || key,
+        nombre: cname || key,
+        rif: crif || '',
+        totalUsd: 0,
+        facturasCount: 0
+      };
+      current.totalUsd += montoUsd;
+      current.facturasCount += 1;
+      clientMap.set(key, current);
+    };
+
     (filteredProfitInvoices || []).forEach(f => {
       const cid = f.clienteId || f.cliente_id || f.co_cli;
-      if (!cid) return;
       const cname = f.clienteNombre || f.cliente_nombre || f.cli_des || cid;
       const crif = f.clienteRif || f.cliente_rif || f.rif || '';
-      const current = clientMap.get(cid) || { id: cid, nombre: cname, rif: crif, totalUsd: 0, facturasCount: 0 };
-      current.totalUsd += Number(f.totNetoUsd ?? f.tot_neto_usd ?? f.totalNetoUsd ?? 0);
-      current.facturasCount += 1;
-      clientMap.set(cid, current);
+      const monto = Number(f.totNetoUsd ?? f.tot_neto_usd ?? f.totalNetoUsd ?? 0) || 0;
+      accumulateClient(cid, cname, crif, monto);
+    });
+
+    filteredSales.forEach(s => {
+      const cid = s.clienteId || s.cliente_id || s.co_cli || s.cliente;
+      const cname = s.clienteNombre || s.cliente_nombre || s.cliente || cid;
+      const crif = s.clienteRif || s.cliente_rif || s.rif || '';
+      const monto = Number(s.totalUsd ?? s.total_usd ?? 0) || 0;
+      accumulateClient(cid, cname, crif, monto);
     });
 
     const activeCount = clientMap.size;
@@ -872,7 +1035,318 @@ export default function DashboardView({
       clientesActivosCount: activeCount,
       topClientesData: sortedTop
     };
-  }, [filteredProfitInvoices, totalFacturadoUsd]);
+  }, [filteredProfitInvoices, sales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva, totalFacturadoUsd]);
+
+  // Desglose Fiscal vs. Notas de Entrega (N.E.) y Notas de Crédito en el período activo
+  const docTypeBreakdown = useMemo(() => {
+    let fiscalUsd = 0, fiscalLitros = 0, fiscalCount = 0;
+    let neUsd = 0, neLitros = 0, neCount = 0;
+
+    ventasDocsNormalizados.forEach(d => {
+      if (!isWithinFiscalPeriod(d.dateKey, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth)) return;
+      if (d.docCategory === 'NE') {
+        neUsd += d.usd;
+        neLitros += d.litros;
+        neCount += 1;
+      } else {
+        fiscalUsd += d.usd;
+        fiscalLitros += d.litros;
+        fiscalCount += 1;
+      }
+    });
+
+    let ncUsd = 0, ncCount = 0;
+    dedupeCanonicalDocs(profitInvoices || []).forEach(inv => {
+      if (!inv || inv.anulada) return;
+      const tipo = String(inv.tipoDoc || inv.tipo_doc || '').toUpperCase();
+      if (tipo !== 'NOTA_CREDITO') return;
+      const dateStr = inv.fechaEmision || inv.fecEmis || inv.fec_emis || inv.fecha || '';
+      if (!isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth)) return;
+      ncUsd += Number(inv.totNetoUsd ?? inv.tot_neto_usd ?? inv.totalNetoUsd ?? 0) || 0;
+      ncCount += 1;
+    });
+
+    const totalCombined = fiscalUsd + neUsd;
+    return {
+      fiscalUsd: parseFloat(fiscalUsd.toFixed(2)),
+      fiscalLitros: parseFloat(fiscalLitros.toFixed(2)),
+      fiscalCount,
+      fiscalPct: totalCombined > 0 ? parseFloat(((fiscalUsd / totalCombined) * 100).toFixed(1)) : 0,
+      neUsd: parseFloat(neUsd.toFixed(2)),
+      neLitros: parseFloat(neLitros.toFixed(2)),
+      neCount,
+      nePct: totalCombined > 0 ? parseFloat(((neUsd / totalCombined) * 100).toFixed(1)) : 0,
+      ncUsd: parseFloat(ncUsd.toFixed(2)),
+      ncCount
+    };
+  }, [ventasDocsNormalizados, profitInvoices, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth]);
+
+  // Comparativo Mes vs. Mes Anterior (MoM) para Ventas USD, Litros y Cobranzas
+  const momComparison = useMemo(() => {
+    const activeMonthsInYear = Array.from(new Set(
+      ventasDocsNormalizados
+        .filter(d => d.dateKey && d.dateKey.startsWith(`${anioActivo}-`) && d.dateKey <= todayKey)
+        .map(d => d.dateKey.substring(0, 7))
+    )).sort();
+
+    const targetPrefix = selectedMonth !== 'ALL'
+      ? `${anioActivo}-${selectedMonth}`
+      : (activeMonthsInYear[activeMonthsInYear.length - 1] || `${anioActivo}-${todayKey.substring(5, 7)}`);
+
+    const [tYear, tMonth] = targetPrefix.split('-').map(Number);
+    const prevDate = new Date(tYear, (tMonth || 1) - 2, 1);
+    const prevPrefix = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+
+    const monthShort = (prefix) => {
+      const mId = prefix.substring(5, 7);
+      const found = MONTHS_LIST.find(m => m.id === mId);
+      return found ? `${found.short} ${prefix.substring(0, 4)}` : prefix;
+    };
+
+    let facturadoCurr = 0, facturadoPrev = 0;
+    let litrosCurr = 0, litrosPrev = 0;
+    ventasDocsNormalizados.forEach(d => {
+      if (!d.dateKey) return;
+      if (d.dateKey.startsWith(targetPrefix)) {
+        facturadoCurr += d.usd;
+        litrosCurr += d.litros;
+      } else if (d.dateKey.startsWith(prevPrefix)) {
+        facturadoPrev += d.usd;
+        litrosPrev += d.litros;
+      }
+    });
+
+    let cobCurr = 0, cobPrev = 0;
+    (profitCollections || []).forEach(c => {
+      if (!c || c.anulada) return;
+      const dKey = toDateKey(c.fecha || c.fec_cob || c.fec_emis || c.createdAt);
+      if (!dKey) return;
+      const { usdVal } = resolveCollectionNormalized(c, tasaBcv);
+      if (dKey.startsWith(targetPrefix)) cobCurr += usdVal;
+      else if (dKey.startsWith(prevPrefix)) cobPrev += usdVal;
+    });
+
+    const calcDeltaPct = (curr, prev) => {
+      if (prev <= 0) return null;
+      return parseFloat((((curr - prev) / prev) * 100).toFixed(1));
+    };
+
+    return {
+      targetPrefix,
+      prevPrefix,
+      targetLabel: monthShort(targetPrefix),
+      prevLabel: monthShort(prevPrefix),
+      facturadoCurr: parseFloat(facturadoCurr.toFixed(2)),
+      facturadoPrev: parseFloat(facturadoPrev.toFixed(2)),
+      facturadoPct: calcDeltaPct(facturadoCurr, facturadoPrev),
+      litrosCurr: parseFloat(litrosCurr.toFixed(2)),
+      litrosPrev: parseFloat(litrosPrev.toFixed(2)),
+      litrosPct: calcDeltaPct(litrosCurr, litrosPrev),
+      cobCurr: parseFloat(cobCurr.toFixed(2)),
+      cobPrev: parseFloat(cobPrev.toFixed(2)),
+      cobPct: calcDeltaPct(cobCurr, cobPrev)
+    };
+  }, [ventasDocsNormalizados, profitCollections, tasaBcv, anioActivo, selectedMonth, todayKey, MONTHS_LIST]);
+
+  // Analítica Completa Bloque 5: Cuentas por Pagar (CxP), Antigüedad, Proveedores y Flujo Compras vs. Abonos
+  const cxpAnalytics = useMemo(() => {
+    const todayDate = new Date(`${todayKey}T12:00:00`);
+    const buckets = {
+      VIGENTE: { montoUsd: 0, count: 0 },
+      '1_15': { montoUsd: 0, count: 0 },
+      '16_30': { montoUsd: 0, count: 0 },
+      OVER_30: { montoUsd: 0, count: 0 }
+    };
+
+    let totalVigenteUsd = 0;
+    let totalVencidoUsd = 0;
+    let porVencer15Usd = 0;
+    let porVencer15Count = 0;
+    let openDocsCount = 0;
+    let vencidosDocsCount = 0;
+    let monedaUsd = 0;
+    let monedaBsUsd = 0;
+
+    const supplierMap = new Map();
+    const docTypeMap = new Map();
+    const openDocsList = [];
+
+    (profitAccountsPayable || []).forEach(d => {
+      if (!d || d.anulado) return;
+      const saldoUsd = resolveAmountUsd(d, ['saldoUsd', 'saldo_usd'], ['saldoBs', 'saldo_bs'], tasaBcv);
+      if (saldoUsd <= 0.01) return;
+
+      openDocsCount += 1;
+      const montoNetUsd = resolveAmountUsd(d, ['montoNetUsd', 'monto_net_usd', 'montoNetoUsd'], ['montoNetBs', 'monto_net_bs'], tasaBcv);
+      const emisKey = toDateKey(d.fechaEmision || d.fec_emis || d.fecha) || '';
+      const vencKey = toDateKey(d.fechaVencimiento || d.fec_venc || d.fechaEmision || d.fec_emis) || emisKey;
+
+      let diffDays = 0;
+      if (vencKey) {
+        const vencDate = new Date(`${vencKey}T12:00:00`);
+        if (!isNaN(vencDate.getTime())) {
+          diffDays = Math.ceil((todayDate - vencDate) / 86400000);
+        }
+      }
+
+      let bucketKey = 'VIGENTE';
+      if (diffDays <= 0) {
+        bucketKey = 'VIGENTE';
+        totalVigenteUsd += saldoUsd;
+        if (diffDays >= -15) {
+          porVencer15Usd += saldoUsd;
+          porVencer15Count += 1;
+        }
+      } else {
+        totalVencidoUsd += saldoUsd;
+        vencidosDocsCount += 1;
+        if (diffDays <= 15) bucketKey = '1_15';
+        else if (diffDays <= 30) bucketKey = '16_30';
+        else bucketKey = 'OVER_30';
+      }
+      buckets[bucketKey].montoUsd += saldoUsd;
+      buckets[bucketKey].count += 1;
+
+      const monedaUpper = String(d.moneda || '').toUpperCase();
+      if (monedaUpper.includes('BS')) monedaBsUsd += saldoUsd;
+      else monedaUsd += saldoUsd;
+
+      const tipoDocRaw = String(d.tipoDoc || d.tipo_doc || 'FACT').toUpperCase();
+      const prevTipo = docTypeMap.get(tipoDocRaw) || { tipo: tipoDocRaw, montoUsd: 0, count: 0 };
+      prevTipo.montoUsd += saldoUsd;
+      prevTipo.count += 1;
+      docTypeMap.set(tipoDocRaw, prevTipo);
+
+      const provNombre = (d.provNombre || d.prov_nombre || d.coProv || d.co_prov || 'Proveedor S/N').trim();
+      const provKey = String(d.coProv || d.co_prov || d.provRif || d.prov_rif || provNombre).trim().toUpperCase();
+      const prevSup = supplierMap.get(provKey) || {
+        key: provKey,
+        nombre: provNombre,
+        rif: d.provRif || d.prov_rif || '',
+        coProv: d.coProv || d.co_prov || '',
+        saldoUsd: 0,
+        vencidoUsd: 0,
+        vigenteUsd: 0,
+        docsCount: 0,
+        maxDiasMora: 0
+      };
+      prevSup.saldoUsd += saldoUsd;
+      if (diffDays > 0) {
+        prevSup.vencidoUsd += saldoUsd;
+        if (diffDays > prevSup.maxDiasMora) prevSup.maxDiasMora = diffDays;
+      } else {
+        prevSup.vigenteUsd += saldoUsd;
+      }
+      prevSup.docsCount += 1;
+      supplierMap.set(provKey, prevSup);
+
+      openDocsList.push({
+        id: d.id || `${tipoDocRaw}-${d.nroDoc || d.nro_doc || openDocsCount}`,
+        tipoDoc: tipoDocRaw,
+        nroDoc: d.nroDoc || d.nro_doc || 'S/N',
+        provNombre,
+        fechaEmision: emisKey,
+        fechaVencimiento: vencKey,
+        diasMora: diffDays > 0 ? diffDays : 0,
+        diasRestantes: diffDays < 0 ? Math.abs(diffDays) : 0,
+        bucket: bucketKey,
+        moneda: monedaUpper || 'US$',
+        montoNetUsd: parseFloat(montoNetUsd.toFixed(2)),
+        saldoUsd: parseFloat(saldoUsd.toFixed(2))
+      });
+    });
+
+    const totalSaldoUsd = parseFloat((totalVigenteUsd + totalVencidoUsd).toFixed(2));
+    const morosidadPct = totalSaldoUsd > 0 ? parseFloat(((totalVencidoUsd / totalSaldoUsd) * 100).toFixed(1)) : 0;
+    const urgenteUsd = totalVencidoUsd + porVencer15Usd;
+    const coberturaRatio = urgenteUsd > 0
+      ? parseFloat((totalDisponibilidad / urgenteUsd).toFixed(2))
+      : (totalDisponibilidad > 0 ? 99 : 0);
+
+    const agingChartData = [
+      { label: 'Vigente', bucket: 'VIGENTE', montoUsd: parseFloat(buckets.VIGENTE.montoUsd.toFixed(2)), count: buckets.VIGENTE.count, color: '#10b981' },
+      { label: '1-15 días', bucket: '1_15', montoUsd: parseFloat(buckets['1_15'].montoUsd.toFixed(2)), count: buckets['1_15'].count, color: '#f59e0b' },
+      { label: '16-30 días', bucket: '16_30', montoUsd: parseFloat(buckets['16_30'].montoUsd.toFixed(2)), count: buckets['16_30'].count, color: '#f97316' },
+      { label: '>30 días', bucket: 'OVER_30', montoUsd: parseFloat(buckets.OVER_30.montoUsd.toFixed(2)), count: buckets.OVER_30.count, color: '#ef4444' }
+    ];
+
+    const topProveedores = Array.from(supplierMap.values())
+      .sort((a, b) => b.saldoUsd - a.saldoUsd)
+      .slice(0, 6)
+      .map(s => ({
+        ...s,
+        saldoUsd: parseFloat(s.saldoUsd.toFixed(2)),
+        vencidoUsd: parseFloat(s.vencidoUsd.toFixed(2)),
+        vigenteUsd: parseFloat(s.vigenteUsd.toFixed(2)),
+        pctTotal: totalSaldoUsd > 0 ? parseFloat(((s.saldoUsd / totalSaldoUsd) * 100).toFixed(1)) : 0
+      }));
+
+    const criticalDocs = openDocsList
+      .sort((a, b) => b.diasMora - a.diasMora || b.saldoUsd - a.saldoUsd)
+      .slice(0, 6);
+
+    const monthlyFlowMap = new Map(
+      MONTHS_LIST.map(m => [m.id, { mesId: m.id, mes: m.short, comprasUsd: 0, abonosUsd: 0 }])
+    );
+
+    (profitPurchases || []).forEach(p => {
+      if (!p || p.anulada) return;
+      const dKey = toDateKey(p.fechaEmision || p.fec_emis || p.fecha);
+      if (!dKey || !dKey.startsWith(`${anioActivo}-`)) return;
+      const mId = dKey.substring(5, 7);
+      const entry = monthlyFlowMap.get(mId);
+      if (entry) {
+        entry.comprasUsd += resolveAmountUsd(p, ['totNetoUsd', 'tot_neto_usd'], ['totNetoBs', 'tot_neto_bs'], tasaBcv);
+      }
+    });
+
+    (profitSupplierPayments || []).forEach(p => {
+      if (!p || p.anulado) return;
+      const dKey = toDateKey(p.fechaPago || p.fec_pago || p.fecha || p.createdAt);
+      if (!dKey || !dKey.startsWith(`${anioActivo}-`)) return;
+      const mId = dKey.substring(5, 7);
+      const entry = monthlyFlowMap.get(mId);
+      if (entry) {
+        entry.abonosUsd += resolveAmountUsd(p, ['montoUsd', 'monto_usd'], ['montoBs', 'monto_bs'], tasaBcv);
+      }
+    });
+
+    const currentMonthId = todayKey.substring(5, 7);
+    const comprasVsAbonosMensual = Array.from(monthlyFlowMap.values())
+      .filter(m => m.comprasUsd > 0 || m.abonosUsd > 0 || m.mesId <= currentMonthId)
+      .map(m => ({
+        mes: m.mes,
+        comprasUsd: parseFloat(m.comprasUsd.toFixed(2)),
+        abonosUsd: parseFloat(m.abonosUsd.toFixed(2))
+      }));
+
+    return {
+      totalSaldoUsd,
+      totalVigenteUsd: parseFloat(totalVigenteUsd.toFixed(2)),
+      totalVencidoUsd: parseFloat(totalVencidoUsd.toFixed(2)),
+      porVencer15Usd: parseFloat(porVencer15Usd.toFixed(2)),
+      porVencer15Count,
+      morosidadPct,
+      openDocsCount,
+      vencidosDocsCount,
+      suppliersWithDebtCount: supplierMap.size,
+      urgenteUsd: parseFloat(urgenteUsd.toFixed(2)),
+      coberturaRatio,
+      agingChartData,
+      topProveedores,
+      criticalDocs,
+      comprasVsAbonosMensual,
+      currencyBreakdown: {
+        usd: parseFloat(monedaUsd.toFixed(2)),
+        bsUsd: parseFloat(monedaBsUsd.toFixed(2)),
+        usdPct: totalSaldoUsd > 0 ? parseFloat(((monedaUsd / totalSaldoUsd) * 100).toFixed(1)) : 0,
+        bsPct: totalSaldoUsd > 0 ? parseFloat(((monedaBsUsd / totalSaldoUsd) * 100).toFixed(1)) : 0
+      },
+      docTypeBreakdownCxp: Array.from(docTypeMap.values())
+        .map(t => ({ ...t, montoUsd: parseFloat(t.montoUsd.toFixed(2)) }))
+        .sort((a, b) => b.montoUsd - a.montoUsd)
+    };
+  }, [profitAccountsPayable, profitPurchases, profitSupplierPayments, tasaBcv, totalDisponibilidad, todayKey, anioActivo, MONTHS_LIST]);
 
   // Métricas de Inventario, Valorización y Mix de Líneas de Producto
   const { stockTotalLitros, stockTotalUnidades, stockTotalCajas, stockValorizadoUsd, productosEnRopCount, mixLineasData, breakdownByUnit, stockBreakdownLabel } = useMemo(() => {
@@ -951,6 +1425,24 @@ export default function DashboardView({
       return true;
     };
 
+    const nowDate = new Date();
+    const currentYearNum = nowDate.getFullYear();
+    const currentMonthNum = nowDate.getMonth() + 1;
+
+    const productsBySku = new Map();
+    (products || []).forEach(p => {
+      const sku = String(p.codigo || p.id || '').trim();
+      if (sku) productsBySku.set(sku, p);
+    });
+
+    const resolveItemLitros = (it, sku) => {
+      const explicit = Number(it.litrosTotales ?? it.litros_totales ?? 0);
+      if (explicit > 0) return explicit;
+      const prod = productsBySku.get(sku);
+      const qty = Number(it.cantidad || 0);
+      return prod ? qty * resolveProductLitersPerUnit(prod) : qty;
+    };
+
     // Mapear ventas por SKU desde profitInvoices (respetando período de filtrado)
     const salesMap = new Map();
     let totalLtsVendidosReal = 0;
@@ -961,7 +1453,7 @@ export default function DashboardView({
       (inv.items || []).forEach(it => {
         const sku = String(it.articuloId || it.codigo || '').trim();
         if (!sku) return;
-        const lts = Number(it.litrosTotales || it.cantidad || 0);
+        const lts = resolveItemLitros(it, sku);
         totalLtsVendidosReal += lts;
         const prev = salesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
         prev.litros += lts;
@@ -996,7 +1488,7 @@ export default function DashboardView({
       const valUsd = cant * costo;
 
       // Determinar año y mes de lote (desde compras reales o rotación histórica)
-      let yearLote = '2026';
+      let yearLote = String(currentYearNum);
       let monthLote = '01';
       const fCompra = purchaseDatesBySku.get(sku);
 
@@ -1008,30 +1500,24 @@ export default function DashboardView({
         }
       } else {
         if (s.litros === 0 && cant > 0) {
-          yearLote = '2024';
+          yearLote = String(currentYearNum - 2);
           monthLote = '04';
         } else if (s.litros < 100 && cant > 30) {
-          yearLote = '2025';
+          yearLote = String(currentYearNum - 1);
           monthLote = '08';
         } else {
-          yearLote = '2026';
-          monthLote = '05';
+          yearLote = String(currentYearNum);
+          monthLote = String(Math.max(1, currentMonthNum - 3)).padStart(2, '0');
         }
       }
 
-      // Estatus de caducidad según antigüedad respecto a hoy (norma 3-5 años)
-      let estatusCaducidad = 'OPTIMO'; // 'OPTIMO' (<12m) | 'ATENCION_FIFO' (12-24m) | 'RIESGO_VENCIDO' (>24m)
-      let mesesBodega = 4;
-
-      if (Number(yearLote) <= 2024) {
+      // Estatus de caducidad según antigüedad respecto a la fecha actual (norma 3-5 años)
+      const mesesBodega = Math.max(1, (currentYearNum - Number(yearLote)) * 12 + (currentMonthNum - Number(monthLote)));
+      let estatusCaducidad = 'OPTIMO'; // 'OPTIMO' (<12m) | 'ATENCION_FIFO' (12-24m) | 'RIESGO_VENCIDO' (>=24m)
+      if (mesesBodega >= 24) {
         estatusCaducidad = 'RIESGO_VENCIDO';
-        mesesBodega = (2026 - Number(yearLote)) * 12 + (10 - Number(monthLote));
-      } else if (yearLote === '2025') {
+      } else if (mesesBodega >= 12) {
         estatusCaducidad = 'ATENCION_FIFO';
-        mesesBodega = 12 + (10 - Number(monthLote));
-      } else {
-        estatusCaducidad = 'OPTIMO';
-        mesesBodega = Math.max(1, 10 - Number(monthLote));
       }
 
       return {
@@ -1073,7 +1559,7 @@ export default function DashboardView({
       (inv.items || []).forEach(it => {
         const sku = String(it.articuloId || it.codigo || '').trim();
         if (!sku) return;
-        const lts = Number(it.litrosTotales || it.cantidad || 0);
+        const lts = resolveItemLitros(it, sku);
         comparativaTotalLts += lts;
         const prev = comparativaSalesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
         prev.litros += lts;
@@ -1088,7 +1574,7 @@ export default function DashboardView({
       const sku = String(p.codigo || p.id || '').trim();
       const s = comparativaSalesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
       const cant = Number(p.stock || p.existencia || 0);
-      const ltsUnit = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 12);
+      const ltsUnit = resolveProductLitersPerUnit(p);
       const ltsStock = cant * ltsUnit;
       const costo = Number(p.costoUsd ?? p.costo ?? p.costo_unitario ?? 22.5);
       const valUsd = cant * costo;
@@ -1114,7 +1600,7 @@ export default function DashboardView({
       const sku = String(p.codigo || p.id || '').trim();
       const s = comparativaSalesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
       const cant = Number(p.stock || p.existencia || 0);
-      const ltsUnit = Number(p.litrosPorUnidad ?? p.litros_por_unidad ?? 12);
+      const ltsUnit = resolveProductLitersPerUnit(p);
       const ltsStock = cant * ltsUnit;
       const costo = Number(p.costoUsd ?? p.costo ?? p.costo_unitario ?? 22.5);
       const valUsd = cant * costo;
@@ -1260,13 +1746,18 @@ export default function DashboardView({
       }
     ].sort((a, b) => b.lts - a.lts);
 
-    const capitalHuesosUsd = filteredCaducidadList
-      .filter(p => p.estatusCaducidad === 'RIESGO_VENCIDO')
-      .reduce((acc, p) => acc + p.valUsd, 0);
+    const riesgoVencidoSkus = filteredCaducidadList.filter(p => p.estatusCaducidad === 'RIESGO_VENCIDO');
+    const capitalHuesosUsd = riesgoVencidoSkus.reduce((acc, p) => acc + p.valUsd, 0);
+    const riesgoVencidoCount = riesgoVencidoSkus.filter(p => p.stock > 0).length;
 
-    // Días de Cobertura de Inventario (DSI)
-    const consumoDiarioLts = totalLtsVendidosReal > 0 ? (totalLtsVendidosReal / 300) : 500;
-    const diasInventarioPromedio = consumoDiarioLts > 0 ? Math.round(totalStockLitros / consumoDiarioLts) : 48;
+    // Días de Cobertura de Inventario (DSI) calculados sobre días transcurridos reales del período
+    const startMs = new Date(`${fechaInicioEfectiva}T00:00:00`).getTime();
+    const endCapDate = nowDate < new Date(`${fechaFinEfectiva}T23:59:59`) ? nowDate : new Date(`${fechaFinEfectiva}T23:59:59`);
+    const periodDays = selectedMonth === 'ALL'
+      ? Math.max(1, Math.ceil((endCapDate.getTime() - startMs) / (1000 * 60 * 60 * 24)))
+      : new Date(Number(anioActivo), Number(selectedMonth), 0).getDate();
+    const consumoDiarioLts = totalLtsVendidosReal > 0 ? (totalLtsVendidosReal / periodDays) : 0;
+    const diasInventarioPromedio = consumoDiarioLts > 0 ? Math.round(totalStockLitros / consumoDiarioLts) : 0;
 
     return {
       todosMasVendidos,
@@ -1278,6 +1769,8 @@ export default function DashboardView({
       filteredCaducidadList,
       filteredLotesCount: filteredCaducidadList.length,
       capitalHuesosUsd: parseFloat(capitalHuesosUsd.toFixed(2)),
+      riesgoVencidoCount,
+      huesosTotalCount: todosHuesosMenosVendidos.length,
       diasInventarioPromedio,
       totalStockLitros: parseFloat(totalStockLitros.toFixed(1)),
       frescosTiers,
@@ -1293,11 +1786,11 @@ export default function DashboardView({
       pctFifo: totalStockLitros > 0 ? parseFloat(((ltsFifo / totalStockLitros) * 100).toFixed(1)) : 0,
       pctRiesgo: totalStockLitros > 0 ? parseFloat(((ltsRiesgo / totalStockLitros) * 100).toFixed(1)) : 0
     };
-  }, [products, filteredProfitInvoices, profitInvoices, profitPurchases, tasaBcv, caducidadYearFilter, caducidadMonthFilter, comparativaYearFilter, comparativaMonthFilter]);
+  }, [products, filteredProfitInvoices, profitInvoices, profitPurchases, tasaBcv, caducidadYearFilter, caducidadMonthFilter, comparativaYearFilter, comparativaMonthFilter, selectedMonth, anioActivo, fechaInicioEfectiva, fechaFinEfectiva]);
 
-  // Mix de Medios de Pago en Cobranzas
+  // Mix de Medios de Pago en Cobranzas (en equivalente USD para consistencia en gráfico)
   const mixMediosPagoData = useMemo(() => {
-    const bsUsd = cobranzasData.enBs;
+    const bsUsd = cobranzasData.enBsUsd;
     const divUsd = cobranzasData.efectivoZelle;
     const otrosUsd = Math.max(0, cobranzasData.acumulada - (bsUsd + divUsd));
 
@@ -1311,8 +1804,98 @@ export default function DashboardView({
     return list.filter(item => item.value > 0);
   }, [cobranzasData]);
 
-  // Pestaña de bloque activa para navegación rápida ('ALL' | 'comercial' | 'financiero' | 'clientes' | 'operaciones')
+  // Pestaña de bloque activa para navegación rápida ('ALL' | 'comercial' | 'financiero' | 'clientes' | 'operaciones' | 'cxp')
   const [activeBlock, setActiveBlock] = useState('ALL');
+
+  const periodoLabel = useMemo(() => {
+    if (selectedMonth === 'ALL') return `Ejercicio Fiscal ${anioActivo} (Anual)`;
+    return MONTHS_LIST.find(m => m.id === selectedMonth)?.label || `${selectedMonth}/${anioActivo}`;
+  }, [selectedMonth, anioActivo, MONTHS_LIST]);
+
+  const enrichedKpiData = useMemo(() => {
+    const facturacionTotalUsd = Number(totalFacturadoUsd || 0);
+    const preventaPendienteUsd = parseFloat((basePendiente * (precioPromedioLitro || 5.93)).toFixed(2));
+    const cobradoTotalUsd = parseFloat(Number(cobranzasData?.acumulada || 0).toFixed(2));
+    const porcentajeCobranza = efectividadCobranzaPct;
+    const disponibilidadTotalUsd = parseFloat(Number(totalDisponibilidad || 0).toFixed(2));
+    const totalCarteraUsd = parseFloat(Number(cxcTot || 0).toFixed(2));
+    const indiceMorosidad = cxcVenPct;
+
+    return {
+      ...kpiData,
+      litrosFacturados: kpiData.litrosFacturados,
+      cajasFacturadas: kpiData.cajasFacturadas,
+      preventaPendienteUsd,
+      precioPromedioLitro,
+      cumplimientoLitrosPct: kpiData.cumplimientoMetaPct,
+      facturacionTotalUsd,
+      cobradoTotalUsd,
+      porcentajeCobranza,
+      disponibilidadTotalUsd,
+      totalCarteraUsd,
+      indiceMorosidad,
+      ticketPromedioUsd,
+      clientesActivosCount,
+      stockTotalLitros,
+      stockTotalCajas,
+      valorizacionInventarioUsd: stockValorizadoUsd,
+      topLubricanteNombre: lubricantesAnalytics?.productoEstrella?.descripcion || 'Oilstone 20W-50',
+      topLubricanteLitros: lubricantesAnalytics?.productoEstrella?.litrosVendidos || 0,
+      capitalHuesosUsd: lubricantesAnalytics?.capitalHuesosUsd || 0,
+      huesosCount: lubricantesAnalytics?.riesgoVencidoCount ?? 0,
+      diasInventarioPromedio: lubricantesAnalytics?.diasInventarioPromedio || 0,
+      abonosPeriodo: objetivosData?.abonosPeriodo || 0,
+      flujoNetoPeriodo: objetivosData?.flujoNetoPeriodo || 0,
+      saldoCxP: cxpAnalytics?.totalSaldoUsd || 0,
+      cxpVencida: cxpAnalytics?.totalVencidoUsd || 0,
+      cxpMorosidadPct: cxpAnalytics?.morosidadPct || 0
+    };
+  }, [
+    kpiData,
+    totalFacturadoUsd,
+    basePendiente,
+    precioPromedioLitro,
+    cobranzasData?.acumulada,
+    efectividadCobranzaPct,
+    totalDisponibilidad,
+    cxcTot,
+    cxcVenPct,
+    ticketPromedioUsd,
+    clientesActivosCount,
+    stockTotalLitros,
+    stockTotalCajas,
+    stockValorizadoUsd,
+    lubricantesAnalytics,
+    objetivosData,
+    cxpAnalytics
+  ]);
+
+  const renderMoMBadge = (pct, refLabel) => {
+    if (pct === null || pct === undefined || isNaN(pct)) return null;
+    const isUp = pct >= 0;
+    const color = isUp ? '#10b981' : '#ef4444';
+    const bg = isUp ? 'rgba(16, 185, 129, 0.14)' : 'rgba(239, 68, 68, 0.14)';
+    const sign = isUp ? '+' : '';
+    return (
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          marginTop: '4px',
+          padding: '1px 6px',
+          borderRadius: '8px',
+          fontSize: '0.62rem',
+          fontWeight: 800,
+          background: bg,
+          color
+        }}
+        title={`Variación mensual vs. ${refLabel}`}
+      >
+        {isUp ? '▲' : '▼'} {sign}{pct}% {refLabel}
+      </span>
+    );
+  };
 
   const handleManualSync = async () => {
     if (!onSyncProfit) return;
@@ -1329,53 +1912,27 @@ export default function DashboardView({
     }
   };
 
-  const handlePrintReport = (block = 'ALL') => {
+  const handlePrintReport = (block = 'ALL', customConfig = null) => {
     try {
-      const facturacionTotalUsd = Number(totalFacturadoUsd || 0);
-      const preventaPendienteUsd = parseFloat((basePendiente * (precioPromedioLitro || 5.93)).toFixed(2));
-      const cobradoTotalUsd = parseFloat(Number(cobranzasData?.acumulada || 0).toFixed(2));
-      const porcentajeCobranza = efectividadCobranzaPct;
-      const disponibilidadTotalUsd = parseFloat(Number(totalDisponibilidad || 0).toFixed(2));
-      const totalCarteraUsd = parseFloat(Number(cxcTot || 0).toFixed(2));
-      const indiceMorosidad = cxcVenPct;
+      const targetBlock = typeof block === 'string' ? block : 'ALL';
+      const effectiveConfig = (customConfig && typeof customConfig === 'object') ? { ...config, ...customConfig } : config;
 
       generateDashboardPDF({
-        kpiData: {
-          ...kpiData,
-          litrosFacturados: kpiData.litrosFacturados,
-          cajasFacturadas: kpiData.cajasFacturadas,
-          preventaPendienteUsd,
-          precioPromedioLitro,
-          cumplimientoLitrosPct: kpiData.cumplimientoMetaPct,
-          facturacionTotalUsd,
-          cobradoTotalUsd,
-          porcentajeCobranza,
-          disponibilidadTotalUsd,
-          totalCarteraUsd,
-          indiceMorosidad,
-          ticketPromedioUsd,
-          clientesActivosCount,
-          stockTotalLitros,
-          stockTotalCajas,
-          valorizacionInventarioUsd: stockValorizadoUsd,
-          topLubricanteNombre: lubricantesAnalytics?.productoEstrella?.descripcion || 'Oilstone 20W-50',
-          topLubricanteLitros: lubricantesAnalytics?.productoEstrella?.litrosVendidos || 0,
-          capitalHuesosUsd: lubricantesAnalytics?.capitalHuesosUsd || 0,
-          huesosCount: lubricantesAnalytics?.huesosMenosVendidos?.length || 0,
-          diasInventarioPromedio: lubricantesAnalytics?.diasInventarioPromedio || 45
-        },
+        kpiData: enrichedKpiData,
         sales,
         products,
         orders,
-        config,
+        config: effectiveConfig,
         currentUser,
-        block,
+        block: targetBlock,
         sellers: (sellersCompliance && sellersCompliance.length > 0) ? sellersCompliance : effectiveSellersList,
         cobranzasData,
         disponibilidadBancariaData,
         carteraClientesData,
         topClientsData: topClientesData || [],
         lubricantesAnalytics,
+        objetivosData,
+        cxpAnalytics,
         selectedMonth,
         ventasDelDia,
         ventasAcumuladoMes,
@@ -1618,7 +2175,8 @@ export default function DashboardView({
             { id: 'comercial', label: '🔵 1. Ventas & Volumen', color: '#0284c7' },
             { id: 'financiero', label: '🟢 2. Finanzas & Cobranzas', color: '#10b981' },
             { id: 'clientes', label: '🟡 3. Clientes & Morosidad', color: '#f59e0b' },
-            { id: 'operaciones', label: '🟣 4. Inventario & Proveedores', color: '#8b5cf6' }
+            { id: 'operaciones', label: '🟣 4. Inventario & Proveedores', color: '#8b5cf6' },
+            { id: 'cxp', label: '🧾 5. Cuentas por Pagar (CxP)', color: '#ef4444' }
           ].map(tab => {
             const isActive = activeBlock === tab.id;
             return (
@@ -1645,24 +2203,66 @@ export default function DashboardView({
           })}
         </div>
 
-        {/* BOTÓN IMPRIMIR REPORTE COMPLETO ALINEADO TOTALMENTE A LA DERECHA */}
-        <button
-          type="button"
-          className="btn btn-print-report"
-          onClick={() => handlePrintReport('ALL')}
-          title="Descargar Informe Ejecutivo Consolidado en PDF con todos los bloques y KPIs"
-          style={{
-            marginLeft: 'auto',
-            padding: '6px 14px',
-            borderRadius: '20px',
-            fontSize: '0.75rem',
-            whiteSpace: 'nowrap',
-            flexShrink: 0
-          }}
-        >
-          <Printer size={13} style={{ flexShrink: 0 }} />
-          <span>Imprimir Reporte Completo</span>
-        </button>
+        {/* ACCIONES GLOBALES DEL DASHBOARD ALINEADAS A LA DERECHA */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          {typeof onSyncProfit === 'function' && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              title="Sincronizar datos financieros, cobranzas e inventario desde Profit / Supabase"
+              style={{
+                padding: '6px 14px',
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <RefreshCw size={13} style={{ flexShrink: 0, animation: isSyncing ? 'spin 1s linear infinite' : 'none' }} />
+              <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar Profit'}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setShowPrintModal(true)}
+            title="Abrir vista previa interactiva del Resumen Ejecutivo Consolidado"
+            style={{
+              padding: '6px 14px',
+              borderRadius: '20px',
+              fontSize: '0.75rem',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <Eye size={13} style={{ flexShrink: 0 }} />
+            <span>Vista Previa Ejecutiva</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-print-report"
+            onClick={() => handlePrintReport('ALL')}
+            title="Descargar Informe Ejecutivo Consolidado en PDF con todos los bloques y KPIs"
+            style={{
+              padding: '6px 14px',
+              borderRadius: '20px',
+              fontSize: '0.75rem',
+              whiteSpace: 'nowrap',
+              flexShrink: 0
+            }}
+          >
+            <Printer size={13} style={{ flexShrink: 0 }} />
+            <span>Imprimir Reporte Completo</span>
+          </button>
+        </div>
       </div>
 
       {/* ========================================================================= */}
@@ -1892,6 +2492,7 @@ export default function DashboardView({
                       {kpiData.litrosFacturados.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--motorven-gold)' }}>({kpiData.cajasFacturadas} cajas)</div>
+                    {renderMoMBadge(momComparison.litrosPct, `vs ${momComparison.prevLabel}`)}
                   </div>
                 </div>
                 <ArrowUpRight size={16} color="var(--neon-cyan)" />
@@ -2322,6 +2923,7 @@ export default function DashboardView({
                       {formatUsd(totalFacturadoUsd)}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{formatBs(totalFacturadoUsd * tasaBcv)}</div>
+                    {renderMoMBadge(momComparison.facturadoPct, `vs ${momComparison.prevLabel}`)}
                   </div>
                 </div>
                 <ArrowUpRight size={16} color="#10b981" />
@@ -2346,6 +2948,7 @@ export default function DashboardView({
                       {formatUsd(cobranzasData.acumulada)}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Divisas: {formatUsd(cobranzasData.efectivoZelle)}</div>
+                    {renderMoMBadge(momComparison.cobPct, `vs ${momComparison.prevLabel}`)}
                   </div>
                 </div>
                 <ArrowUpRight size={16} color="#0284c7" />
@@ -2491,6 +3094,68 @@ export default function DashboardView({
                 >
                   <Landmark size={14} /> Conciliación Bancaria & Flujo
                 </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Fila Resumen Financiero Complementario: Flujo Neto Real & Naturaleza de Documentos */}
+          <div className="bento-grid">
+            <div className="bento-card col-span-6" style={{ padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-heading)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <TrendingUp size={15} color={objetivosData.flujoNetoPeriodo >= 0 ? '#10b981' : '#ef4444'} />
+                  FLUJO DE CAJA NETO DEL PERÍODO (COBRANZAS − ABONOS)
+                </span>
+                <span
+                  style={{
+                    fontFamily: 'var(--font-tech)',
+                    fontSize: '1.05rem',
+                    fontWeight: 900,
+                    color: objetivosData.flujoNetoPeriodo >= 0 ? '#10b981' : '#ef4444'
+                  }}
+                >
+                  {objetivosData.flujoNetoPeriodo >= 0 ? '+' : ''}{formatUsd(objetivosData.flujoNetoPeriodo)}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.72rem' }}>
+                <div style={{ padding: '6px 10px', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Ingresos Cobrados</span>
+                  <strong style={{ color: '#10b981' }}>{formatUsd(cobranzasData.acumulada)}</strong>
+                </div>
+                <div style={{ padding: '6px 10px', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Abonos Proveedores</span>
+                  <strong style={{ color: '#ef4444' }}>{formatUsd(objetivosData.abonosPeriodo)}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="bento-card col-span-6" style={{ padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-heading)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FileText size={15} color="#0284c7" />
+                  DESGLOSE DE FACTURACIÓN: FISCAL vs. NOTAS DE ENTREGA
+                </span>
+                {docTypeBreakdown.ncCount > 0 && (
+                  <span style={{ fontSize: '0.65rem', padding: '1px 7px', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.14)', color: '#f59e0b', fontWeight: 700 }}>
+                    {docTypeBreakdown.ncCount} N/C ({formatUsd(docTypeBreakdown.ncUsd)}) excl.
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.72rem' }}>
+                <div style={{ padding: '6px 10px', borderRadius: '8px', background: 'rgba(2, 132, 199, 0.08)', border: '1px solid rgba(2, 132, 199, 0.25)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#38bdf8' }}>Fiscal (FACT) · {docTypeBreakdown.fiscalPct}%</div>
+                    <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>{docTypeBreakdown.fiscalCount} docs · {docTypeBreakdown.fiscalLitros.toLocaleString('es-VE', { maximumFractionDigits: 0 })} L</div>
+                  </div>
+                  <strong style={{ color: 'var(--text-heading)' }}>{formatUsd(docTypeBreakdown.fiscalUsd)}</strong>
+                </div>
+                <div style={{ padding: '6px 10px', borderRadius: '8px', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#a78bfa' }}>Notas Entrega · {docTypeBreakdown.nePct}%</div>
+                    <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>{docTypeBreakdown.neCount} docs · {docTypeBreakdown.neLitros.toLocaleString('es-VE', { maximumFractionDigits: 0 })} L</div>
+                  </div>
+                  <strong style={{ color: 'var(--text-heading)' }}>{formatUsd(docTypeBreakdown.neUsd)}</strong>
+                </div>
               </div>
             </div>
           </div>
@@ -2696,9 +3361,14 @@ export default function DashboardView({
                   type="button"
                   onClick={() => setShowClientsModal(true)}
                   className="btn btn-secondary btn-sm"
-                  style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                  style={{ fontSize: '0.72rem', padding: '4px 6px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
                 >
                   <Users size={13} /> Clientes ({clients?.length || 0})
+                  {(clients || []).filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length > 0 && (
+                    <span className="badge badge-warning" style={{ fontSize: '0.62rem', padding: '0 5px' }}>
+                      {(clients || []).filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length} pend.
+                    </span>
+                  )}
                 </button>
 
                 <button
@@ -2893,7 +3563,7 @@ export default function DashboardView({
                       {formatUsd(lubricantesAnalytics.capitalHuesosUsd)}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: '#fca5a5' }}>
-                      {lubricantesAnalytics.huesosMenosVendidos.length} SKUs con &gt;24m sin rotación
+                      {lubricantesAnalytics.riesgoVencidoCount} SKUs con &ge;24m sin rotación
                     </div>
                   </div>
                 </div>
@@ -2969,14 +3639,22 @@ export default function DashboardView({
                 </div>
               </div>
 
-              <div style={{ marginTop: 'auto', paddingTop: '10px', borderTop: '1px solid var(--border-glass)' }}>
+              <div style={{ marginTop: 'auto', paddingTop: '10px', borderTop: '1px solid var(--border-glass)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setActiveBlock('cxp')}
+                  className="btn btn-secondary btn-sm"
+                  style={{ width: '100%', fontSize: '0.72rem', gap: '4px', borderColor: 'rgba(239, 68, 68, 0.45)', color: '#f87171' }}
+                >
+                  <Receipt size={13} /> Ver Bloque 5 CxP
+                </button>
                 <button
                   type="button"
                   onClick={() => onNavigate && onNavigate('compras')}
                   className="btn btn-secondary btn-sm"
-                  style={{ width: '100%', fontSize: '0.75rem', gap: '4px' }}
+                  style={{ width: '100%', fontSize: '0.72rem', gap: '4px' }}
                 >
-                  <ShoppingCart size={14} /> Cuentas por Pagar & Compras
+                  <ShoppingCart size={13} /> Compras & Órdenes
                 </button>
               </div>
             </div>
@@ -3383,6 +4061,361 @@ export default function DashboardView({
       )}
 
       {/* ========================================================================= */}
+      {/* 🧾 BLOQUE 5: CUENTAS POR PAGAR (CXP), ANTIGÜEDAD & PROVEEDORES             */}
+      {/* ========================================================================= */}
+      {(activeBlock === 'ALL' || activeBlock === 'cxp') && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', borderBottom: '1px solid var(--border-glass)', paddingBottom: '6px' }}>
+            <h2 style={{ fontSize: '0.9rem', fontWeight: 900, letterSpacing: '0.06em', color: 'var(--text-heading)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>🧾 BLOQUE 5: CUENTAS POR PAGAR (CXP) & PROVEEDORES</span>
+            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handlePrintReport('cxp')}
+                style={{ fontSize: '0.68rem', padding: '2px 8px', gap: '4px', display: 'flex', alignItems: 'center' }}
+                title="Generar PDF exclusivo del Bloque 5: Cuentas por Pagar"
+              >
+                <Printer size={12} /> Imprimir
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => onNavigate && onNavigate('cxp')}
+                style={{ fontSize: '0.68rem', padding: '2px 8px', gap: '4px', display: 'flex', alignItems: 'center', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.45)' }}
+                title="Abrir gestión operativa completa de Cuentas por Pagar"
+              >
+                <Receipt size={12} /> Gestionar CxP
+              </button>
+              <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', fontWeight: 800 }}>
+                OBLIGACIONES & TESORERÍA
+              </span>
+            </div>
+          </div>
+
+          {/* 4 KPI Cards del Bloque 5 */}
+          <div className="bento-grid">
+            {/* KPI 5.1: Saldo Total CxP */}
+            <div
+              className="bento-card col-span-3"
+              style={{ padding: '1rem', cursor: 'pointer' }}
+              onClick={() => onNavigate && onNavigate('cxp')}
+              title="Clic para abrir el módulo de Cuentas por Pagar"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #ef4444', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Receipt size={20} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Saldo Total CxP</div>
+                    <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.25rem', fontWeight: 900, color: 'var(--text-heading)' }}>
+                      {formatUsd(cxpAnalytics.totalSaldoUsd)}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {cxpAnalytics.openDocsCount} docs · {cxpAnalytics.suppliersWithDebtCount} acreedores
+                    </div>
+                  </div>
+                </div>
+                <ArrowUpRight size={16} color="#ef4444" />
+              </div>
+            </div>
+
+            {/* KPI 5.2: CxP Vencida & Morosidad */}
+            <div
+              className="bento-card col-span-3"
+              style={{ padding: '1rem', cursor: 'pointer' }}
+              onClick={() => onNavigate && onNavigate('cxp')}
+              title="Clic para revisar facturas de proveedores vencidas"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(230, 0, 18, 0.16)', border: '1px solid var(--motorven-red)', color: 'var(--motorven-red)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <AlertTriangle size={20} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>CxP Vencida</div>
+                    <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.25rem', fontWeight: 900, color: cxpAnalytics.totalVencidoUsd > 0 ? '#ef4444' : '#10b981' }}>
+                      {formatUsd(cxpAnalytics.totalVencidoUsd)}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: cxpAnalytics.morosidadPct > 40 ? '#ef4444' : 'var(--motorven-gold)', fontWeight: 700 }}>
+                      {cxpAnalytics.morosidadPct}% mora · {cxpAnalytics.vencidosDocsCount} docs
+                    </div>
+                  </div>
+                </div>
+                <ArrowUpRight size={16} color="#ef4444" />
+              </div>
+            </div>
+
+            {/* KPI 5.3: Compromisos Próximos 15 Días */}
+            <div
+              className="bento-card col-span-3"
+              style={{ padding: '1rem', cursor: 'pointer' }}
+              onClick={() => onNavigate && onNavigate('cxp')}
+              title="Compromisos vigentes por vencer en los próximos 15 días"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid #f59e0b', color: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Clock size={20} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Vence Próx. 15 Días</div>
+                    <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.25rem', fontWeight: 900, color: '#f59e0b' }}>
+                      {formatUsd(cxpAnalytics.porVencer15Usd)}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {cxpAnalytics.porVencer15Count} compromisos próximos
+                    </div>
+                  </div>
+                </div>
+                <ArrowUpRight size={16} color="#f59e0b" />
+              </div>
+            </div>
+
+            {/* KPI 5.4: Cobertura Caja vs. CxP Urgente */}
+            <div
+              className="bento-card col-span-3"
+              style={{ padding: '1rem', cursor: 'pointer' }}
+              onClick={() => onNavigate && onNavigate('caja')}
+              title="Disponibilidad en Caja/Bancos dividida entre (Vencido + Próx. 15 días)"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div
+                    style={{
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '10px',
+                      background: cxpAnalytics.coberturaRatio >= 1 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      border: `1px solid ${cxpAnalytics.coberturaRatio >= 1 ? '#10b981' : '#ef4444'}`,
+                      color: cxpAnalytics.coberturaRatio >= 1 ? '#10b981' : '#ef4444',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <ShieldCheck size={20} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Cobertura Caja / Urg.</div>
+                    <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.25rem', fontWeight: 900, color: cxpAnalytics.coberturaRatio >= 1 ? '#10b981' : '#ef4444' }}>
+                      {cxpAnalytics.coberturaRatio}x
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      Abonos período: {formatUsd(objetivosData.abonosPeriodo)}
+                    </div>
+                  </div>
+                </div>
+                <ArrowUpRight size={16} color={cxpAnalytics.coberturaRatio >= 1 ? '#10b981' : '#ef4444'} />
+              </div>
+            </div>
+          </div>
+
+          {/* Fila 1 Bloque 5: Antigüedad de Saldos (Aging) & Top Proveedores Acreedores */}
+          <div className="bento-grid">
+            {/* Widget 5.1: Antigüedad de Saldos CxP */}
+            <div className="bento-card col-span-6" style={{ display: 'flex', flexDirection: 'column' }}>
+              <div className="bento-card-header">
+                <span className="bento-card-header-title">
+                  <BarChart2 size={16} color="#ef4444" /> ANTIGÜEDAD DE SALDOS CXP (AGING)
+                </span>
+                <span className="badge badge-danger">{cxpAnalytics.morosidadPct}% Vencido</span>
+              </div>
+
+              <div style={{ width: '100%', height: 185 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={cxpAnalytics.agingChartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
+                    <Tooltip
+                      formatter={(value) => [formatUsd(value), 'Saldo']}
+                      contentStyle={{ background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.3)', borderRadius: '8px', fontSize: '12px' }}
+                    />
+                    <Bar dataKey="montoUsd" radius={[6, 6, 0, 0]} maxBarSize={52}>
+                      {cxpAnalytics.agingChartData.map((entry, idx) => (
+                        <Cell key={`aging-cell-${idx}`} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginTop: '8px' }}>
+                {cxpAnalytics.agingChartData.map((b) => (
+                  <div key={b.bucket} style={{ padding: '6px 8px', borderRadius: '8px', background: 'var(--bg-subtle, rgba(255,255,255,0.03))', border: `1px solid ${b.color}40`, textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.62rem', color: b.color, fontWeight: 800, textTransform: 'uppercase' }}>{b.label}</div>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-heading)' }}>{formatUsd(b.montoUsd)}</div>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{b.count} docs</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Widget 5.2: Top Proveedores Acreedores */}
+            <div className="bento-card col-span-6" style={{ display: 'flex', flexDirection: 'column' }}>
+              <div className="bento-card-header">
+                <span className="bento-card-header-title">
+                  <Truck size={16} color="#f59e0b" /> TOP ACREEDORES / PROVEEDORES CXP
+                </span>
+                <span className="badge badge-warning">{cxpAnalytics.suppliersWithDebtCount} con saldo</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
+                {cxpAnalytics.topProveedores.length > 0 ? (
+                  cxpAnalytics.topProveedores.map((prov, idx) => (
+                    <div key={prov.key || idx} style={{ display: 'flex', flexDirection: 'column', gap: '3px', padding: '6px 8px', borderRadius: '8px', background: 'var(--bg-subtle, rgba(255,255,255,0.03))', border: '1px solid var(--border-glass)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '0.75rem' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {idx + 1}. {prov.nombre}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          {prov.vencidoUsd > 0 && (
+                            <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', fontWeight: 700 }}>
+                              Venc: {formatUsd(prov.vencidoUsd)} ({prov.maxDiasMora}d)
+                            </span>
+                          )}
+                          <strong style={{ color: 'var(--text-heading)' }}>{formatUsd(prov.saldoUsd)}</strong>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>({prov.pctTotal}%)</span>
+                        </div>
+                      </div>
+                      <div style={{ width: '100%', height: '5px', borderRadius: '4px', background: 'rgba(148, 163, 184, 0.15)', overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, prov.pctTotal)}%`, height: '100%', background: prov.vencidoUsd > 0 ? '#ef4444' : '#10b981' }} />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Sin saldos pendientes con proveedores.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Fila 2 Bloque 5: Compras vs. Abonos Mensuales & Documentos Críticos CxP */}
+          <div className="bento-grid">
+            {/* Widget 5.3: Flujo Compras vs. Abonos Mensuales */}
+            <div className="bento-card col-span-6" style={{ display: 'flex', flexDirection: 'column' }}>
+              <div className="bento-card-header">
+                <span className="bento-card-header-title">
+                  <DollarSign size={16} color="#10b981" /> COMPRAS vs. ABONOS PROVEEDORES ({anioActivo})
+                </span>
+                <span className="badge badge-info">Mensual</span>
+              </div>
+
+              <div style={{ width: '100%', height: 195 }}>
+                {cxpAnalytics.comprasVsAbonosMensual.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={cxpAnalytics.comprasVsAbonosMensual} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+                      <XAxis dataKey="mes" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
+                      <Tooltip
+                        formatter={(value, name) => [formatUsd(value), name === 'comprasUsd' ? 'Compras Netas' : 'Abonos / Pagos']}
+                        contentStyle={{ background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.3)', borderRadius: '8px', fontSize: '12px' }}
+                      />
+                      <Bar dataKey="comprasUsd" name="Compras Netas" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="abonosUsd" name="Abonos / Pagos" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Sin registros de compras o pagos en {anioActivo}.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-glass)', fontSize: '0.72rem' }}>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <span style={{ color: '#a78bfa', fontWeight: 700 }}>● Compras Netas</span>
+                  <span style={{ color: '#10b981', fontWeight: 700 }}>● Abonos Liquidados</span>
+                </div>
+                <span style={{ color: 'var(--text-muted)' }}>
+                  Histórico Abonos: <strong style={{ color: 'var(--text-heading)' }}>{formatUsd(objetivosData.abonosProveedores)}</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Widget 5.4: Exposición por Moneda & Documentos Críticos por Pagar */}
+            <div className="bento-card col-span-6" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div className="bento-card-header">
+                <span className="bento-card-header-title">
+                  <AlertOctagon size={16} color="#ef4444" /> DOCUMENTOS CRÍTICOS & MONEDA CXP
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onNavigate && onNavigate('cxp')}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.68rem', padding: '2px 8px', gap: '4px' }}
+                >
+                  <ExternalLink size={11} /> Ver Todos ({cxpAnalytics.openDocsCount})
+                </button>
+              </div>
+
+              {/* Exposición USD vs Bs */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.72rem' }}>
+                <div style={{ padding: '6px 10px', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Deuda en Divisas ({cxpAnalytics.currencyBreakdown.usdPct}%)</span>
+                  <strong style={{ color: '#10b981' }}>{formatUsd(cxpAnalytics.currencyBreakdown.usd)}</strong>
+                </div>
+                <div style={{ padding: '6px 10px', borderRadius: '8px', background: 'rgba(2, 132, 199, 0.08)', border: '1px solid rgba(2, 132, 199, 0.25)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Deuda en Bs eq. ({cxpAnalytics.currencyBreakdown.bsPct}%)</span>
+                  <strong style={{ color: '#38bdf8' }}>{formatUsd(cxpAnalytics.currencyBreakdown.bsUsd)}</strong>
+                </div>
+              </div>
+
+              {/* Top 5-6 Documentos Críticos */}
+              <div style={{ overflowX: 'auto', flex: 1 }}>
+                {cxpAnalytics.criticalDocs.length > 0 ? (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-glass)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                        <th style={{ padding: '4px 6px' }}>Proveedor</th>
+                        <th style={{ padding: '4px 6px' }}>Documento</th>
+                        <th style={{ padding: '4px 6px', textAlign: 'center' }}>Estatus</th>
+                        <th style={{ padding: '4px 6px', textAlign: 'right' }}>Saldo USD</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cxpAnalytics.criticalDocs.map((doc) => (
+                        <tr key={doc.id} style={{ borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}>
+                          <td style={{ padding: '5px 6px', fontWeight: 600, color: 'var(--text-main)', maxWidth: '170px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {doc.provNombre}
+                          </td>
+                          <td style={{ padding: '5px 6px', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                            {doc.tipoDoc} #{doc.nroDoc}
+                          </td>
+                          <td style={{ padding: '5px 6px', textAlign: 'center' }}>
+                            {doc.diasMora > 0 ? (
+                              <span style={{ padding: '1px 6px', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.16)', color: '#f87171', fontWeight: 800, fontSize: '0.64rem' }}>
+                                +{doc.diasMora}d mora
+                              </span>
+                            ) : (
+                              <span style={{ padding: '1px 6px', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 700, fontSize: '0.64rem' }}>
+                                {doc.diasRestantes}d vig.
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: 'var(--text-heading)' }}>
+                            {formatUsd(doc.saldoUsd)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '1.5rem 1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    No hay documentos abiertos en Cuentas por Pagar.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
       {/* 5. BANNER DESTACADO DEL CENTRO DE NOTIFICACIONES & ALERTAS OPERACIONALES  */}
       {/* ========================================================================= */}
       <div
@@ -3492,21 +4525,28 @@ export default function DashboardView({
       <ExecutiveSummaryModal
         isOpen={showPrintModal}
         onClose={() => setShowPrintModal(false)}
-        kpiData={kpiData}
+        kpiData={enrichedKpiData}
         semMeta={semMeta}
         config={config}
         currentUser={currentUser}
         sales={sales}
+        products={products}
+        orders={orders}
         carteraClientesData={carteraClientesData}
         cobranzasData={cobranzasData}
         disponibilidadBancariaData={disponibilidadBancariaData}
         objetivosData={objetivosData}
+        topClientsData={topClientesData}
+        lubricantesAnalytics={lubricantesAnalytics}
+        cxpAnalytics={cxpAnalytics}
         ventasDelDia={ventasDelDia}
         ventasAcumuladoMes={ventasAcumuladoMes}
         ventasMesLabel={MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || ventasMesFilter}
         todayLabel={todayLabel}
         sellers={(sellersCompliance && sellersCompliance.length > 0) ? sellersCompliance : effectiveSellersList}
         selectedMonth={selectedMonth}
+        periodoLabel={periodoLabel}
+        onDownloadFullPdf={handlePrintReport}
       />
 
       {/* Modal 2: Directorio de 610+ Clientes de Supabase */}
@@ -3518,6 +4558,8 @@ export default function DashboardView({
         currentUser={currentUser}
         onSaveClient={onSaveClient}
         onDeleteClient={onDeleteClient}
+        onApproveClient={onApproveClient}
+        onRejectClient={onRejectClient}
         onSelectClientForPOS={(client) => {
           setShowClientsModal(false);
           if (onNavigate) onNavigate('ventas');

@@ -31,6 +31,7 @@ import {
   generateSellersPDF,
   generateProfitabilityPDF,
   generateAccountsReceivablePDF,
+  generateConsolidatedCxcPDF,
   generateAccountsPayablePDF,
   generateTaxReportPDF,
   generateDashboardPDF,
@@ -46,6 +47,9 @@ import {
   generatePurchasesPDF,
   generateCashflowPDF,
   generateAuditLedgerPDF,
+  generateTrialBalancePDF,
+  generateGeneralLedgerPDF,
+  generateFinancialStatementsPDF,
   generateUsersPDF,
   generateConfigPDF,
   generateManualPDF,
@@ -53,8 +57,13 @@ import {
   generateBankAccountsPDF,
   generateProfitDatabaseTablePDF,
   generateWhatsAppCollectionPDF,
-  getPageLayoutMetrics
+  getPageLayoutMetrics,
+  resolveDocumentClientInfo,
+  getStaticBankAccountsQRPayload,
+  buildQRCodeMatrix
 } from '../services/pdfReportService.js';
+import { REAL_CLIENTS } from '../data/supabaseRealData.js';
+import { computeTrialBalance, computeGeneralLedger, computeFinancialStatements } from '../services/accountingService.js';
 
 const mockConfig = {
   nombreEmpresa: 'SIGNUM MOTORVEN, C.A.',
@@ -324,6 +333,50 @@ async function runPdfTests() {
       config: mockConfig,
       currentUser: mockUser,
       block: 'operaciones'
+    });
+  });
+
+  testGen('Dashboard Ejecutivo (Bloque 5 CxP y ALL con cxpAnalytics)', () => {
+    const sampleCxp = {
+      totalSaldoUsd: 38500,
+      totalVencidoUsd: 12400,
+      totalVigenteUsd: 26100,
+      porVencer15Usd: 9500,
+      porVencer15Count: 3,
+      morosidadPct: 32.2,
+      openDocsCount: 9,
+      vencidosDocsCount: 2,
+      suppliersWithDebtCount: 4,
+      coberturaRatio: 1.55,
+      agingChartData: [
+        { label: 'Vigente', bucket: 'VIGENTE', montoUsd: 26100, count: 7 },
+        { label: '1-15 días', bucket: '1_15', montoUsd: 4200, count: 1 },
+        { label: '16-30 días', bucket: '16_30', montoUsd: 0, count: 0 },
+        { label: '>30 días', bucket: 'OVER_30', montoUsd: 8200, count: 1 }
+      ],
+      topProveedores: [
+        { nombre: 'REFINERIA NACIONAL C.A.', docsCount: 4, saldoUsd: 22000, vencidoUsd: 8200, maxDiasMora: 35, pctTotal: 57.1 }
+      ],
+      criticalDocs: [
+        { provNombre: 'REFINERIA NACIONAL C.A.', tipoDoc: 'FACT', nroDoc: 'F-9012', fechaVencimiento: '2026-10-05', diasMora: 38, diasRestantes: 0, saldoUsd: 8200 }
+      ]
+    };
+    const sampleObjetivos = { abonosProveedores: 95000, abonosPeriodo: 18400, saldoPendiente: 38500, flujoNetoPeriodo: 53600 };
+    generateDashboardPDF({
+      kpiData: { disponibilidadTotalUsd: 34000 },
+      objetivosData: sampleObjetivos,
+      cxpAnalytics: sampleCxp,
+      config: mockConfig,
+      currentUser: mockUser,
+      block: 'cxp'
+    });
+    generateDashboardPDF({
+      kpiData: { litrosFacturados: 154926.3, cajasFacturadas: 13649.9, facturacionTotalUsd: 887874.48, cobradoTotalUsd: 72000, disponibilidadTotalUsd: 34000 },
+      objetivosData: sampleObjetivos,
+      cxpAnalytics: sampleCxp,
+      config: mockConfig,
+      currentUser: mockUser,
+      block: 'ALL'
     });
   });
 
@@ -686,6 +739,55 @@ async function runPdfTests() {
     });
   });
 
+  const sampleAccountingEntries = [
+    {
+      asientoNum: 'ASI-1',
+      fecha: '2026-11-01T10:00:00Z',
+      documentoReferencia: 'FAC-1001',
+      concepto: 'Venta de lubricantes',
+      lines: [
+        { cuentaCodigo: '1.01.03.001', cuentaNombre: 'Cuentas por Cobrar', debeUsd: 1160, haberUsd: 0, debeBs: 960166.8, haberBs: 0 },
+        { cuentaCodigo: '4.01.01.001', cuentaNombre: 'Ingresos por Ventas', debeUsd: 0, haberUsd: 1000, debeBs: 0, haberBs: 827730 },
+        { cuentaCodigo: '2.03.01.005', cuentaNombre: 'Debito Fiscal', debeUsd: 0, haberUsd: 160, debeBs: 0, haberBs: 132436.8 }
+      ]
+    },
+    {
+      asientoNum: 'ASI-2',
+      fecha: '2026-11-02T14:00:00Z',
+      documentoReferencia: 'COB-501',
+      concepto: 'Cobro transferencia Banco Venezuela',
+      lines: [
+        { cuentaCodigo: '1.01.02.001', cuentaNombre: 'Banco de Venezuela', debeUsd: 1160, haberUsd: 0, debeBs: 960166.8, haberBs: 0 },
+        { cuentaCodigo: '1.01.03.001', cuentaNombre: 'Cuentas por Cobrar', debeUsd: 0, haberUsd: 1160, debeBs: 0, haberBs: 960166.8 }
+      ]
+    }
+  ];
+  const sampleTb = computeTrialBalance(sampleAccountingEntries);
+  const sampleLedger = computeGeneralLedger(sampleAccountingEntries);
+  const sampleFs = computeFinancialStatements(sampleTb);
+
+  testGen('Balance de Comprobación de Sumas y Saldos PDF', () => {
+    const doc = generateTrialBalancePDF({ trialBalance: sampleTb, config: mockConfig, currentUser: mockUser });
+    if (!doc || doc.internal.getNumberOfPages() < 1) throw new Error('PDF vacío');
+  });
+
+  testGen('Libro Mayor General Analítico PDF', () => {
+    const doc = generateGeneralLedgerPDF({ account: sampleLedger.accountsByCode['1.01.03.001'], config: mockConfig, currentUser: mockUser });
+    if (!doc || doc.internal.getNumberOfPages() < 1) throw new Error('PDF vacío');
+  });
+
+  testGen('Estados Financieros Básicos (BA VEN-NIF 2) PDF', () => {
+    const doc = generateFinancialStatementsPDF({ financialStatements: sampleFs, config: mockConfig, currentUser: mockUser });
+    if (!doc || doc.internal.getNumberOfPages() < 1) throw new Error('PDF vacío');
+  });
+
+  testGen('Delegación generateAuditLedgerPDF (balance / mayor / estados / export)', () => {
+    generateAuditLedgerPDF({ trialBalance: sampleTb, subTab: 'balance', config: mockConfig, currentUser: mockUser });
+    generateAuditLedgerPDF({ activeMayorAccount: sampleLedger.accountsByCode['1.01.03.001'], generalLedger: sampleLedger, subTab: 'mayor', config: mockConfig, currentUser: mockUser });
+    generateAuditLedgerPDF({ financialStatements: sampleFs, subTab: 'estados', config: mockConfig, currentUser: mockUser });
+    generateAuditLedgerPDF({ entries: sampleAccountingEntries, subTab: 'export', config: mockConfig, currentUser: mockUser });
+  });
+
   // 13. Usuarios & Roles
   testGen('Usuarios & Permisología', () => {
     generateUsersPDF({
@@ -703,6 +805,24 @@ async function runPdfTests() {
   // 15. Manual de Usuario
   testGen('Manual de Usuario & SOP', () => {
     generateManualPDF({ config: mockConfig, currentUser: mockUser });
+  });
+
+  testGen('Manual de Usuario & SOP (con módulo activo detallado)', () => {
+    generateManualPDF({
+      config: mockConfig,
+      currentUser: mockUser,
+      activeModule: {
+        id: 'cxc',
+        title: 'Cuentas por Cobrar (CxC)',
+        category: 'Finanzas & Crédito',
+        rolesAllowed: ['Dirección', 'Cobranzas / CxC'],
+        summary: 'Módulo de cobranzas y cartera Parte A.',
+        components: [{ name: 'Scoring & Aging', description: 'Clasificación 1-15, 16-30 y +30 días.' }],
+        buttons: [{ name: 'Registrar Pago (Parte A)', action: 'Abre modal y aplica abono atómico.' }],
+        modals: [{ name: 'Modal Pago CxC', purpose: 'Registra cobro con retenciones IVA/ISLR.', fields: ['Monto', 'Método'] }],
+        bestPractices: ['Verificar comprobante bancario antes de aprobar.']
+      }
+    });
   });
 
   // 16. Centro de Notificaciones & Alertas
@@ -982,6 +1102,442 @@ async function runPdfTests() {
     const dbSigYs = extractTextYPositionsMm(dbDoc, totalDbP, 'Firma y Sello Oficial');
     if (dbSigYs.length !== 2 || dbSigYs.some(y => y < landFooterY - 10 || y >= landFooterY)) {
       throw new Error(`Firmas Landscape fuera de anclaje sobre footerY (${landFooterY.toFixed(1)}mm): ${JSON.stringify(dbSigYs)}`);
+    }
+  });
+
+  // 43c. Paginación Multi-Página Completa sin truncamiento en CxC y demás reportes del sistema
+  testGen('Multi-página sin truncamiento: CxC Facturas/Notas, Rentabilidad, Pedidos, Ventas, Compras, SENIAT, Auditoría, Usuarios, Dashboard y ProfitDB (>150 filas)', () => {
+    const extractPageTjText = (doc, pageNum) => {
+      const stream = (doc.internal.pages[pageNum] || []).join('\n');
+      const parts = [];
+      const re = /\((?:\\.|[^\\()])*\)\s*Tj/g;
+      let m;
+      while ((m = re.exec(stream)) !== null) {
+        const inner = m[0].replace(/\)\s*Tj$/, '').slice(1).replace(/\\([()\\])/g, '$1');
+        parts.push(inner);
+      }
+      return parts.join('');
+    };
+    const docContains = (doc, text) => {
+      const total = doc.internal.getNumberOfPages();
+      for (let p = 1; p <= total; p++) {
+        if (extractPageTjText(doc, p).includes(text)) return true;
+      }
+      return false;
+    };
+    const assertMultiPageComplete = (doc, label, firstMarker, lastMarker) => {
+      const pages = doc.internal.getNumberOfPages();
+      if (pages < 2) {
+        throw new Error(`${label} debió desbordarse a >=2 páginas, obtuvo ${pages}`);
+      }
+      const p1 = (doc.internal.pages[1] || []).join('\n');
+      const pLast = (doc.internal.pages[pages] || []).join('\n');
+      if (!p1.includes(`1/${pages}`) || !pLast.includes(`${pages}/${pages}`)) {
+        throw new Error(`${label} no muestra paginación 1/${pages} y ${pages}/${pages}`);
+      }
+      if (!docContains(doc, firstMarker) || !docContains(doc, lastMarker)) {
+        throw new Error(`${label} truncó registros: faltó ${firstMarker} o ${lastMarker}`);
+      }
+    };
+
+    // CxC Facturas (80 docs > antiguo límite 28)
+    const cxcFacturas = Array.from({ length: 80 }, (_, i) => ({
+      vendedorId: 'V-01',
+      factura: `FAC-CXC-${String(i + 1).padStart(3, '0')}`,
+      rif: `J-40000${String(i + 1).padStart(3, '0')}-1`,
+      cliente: `Cliente Mayorista Autopartes #${i + 1} C.A.`,
+      fechaEmisionIso: '2026-10-01',
+      fechaVencimientoIso: '2026-10-16',
+      diasVencidos: i % 4 === 0 ? 12 : 0,
+      diasCredito: 15,
+      montoFacturaUsd: 120 + i,
+      abonosUsd: 20,
+      restanteUsd: 100 + i
+    }));
+    const cxcFacDoc = generateAccountsReceivablePDF(cxcFacturas, {}, mockConfig, 'FACTURA');
+    assertMultiPageComplete(cxcFacDoc, 'CxC Facturas (80 docs)', 'FAC-CXC-001', 'FAC-CXC-080');
+
+    // CxC Notas de Entrega (85 docs > antiguo límite 28)
+    const cxcNotas = Array.from({ length: 85 }, (_, i) => ({
+      vendedorId: 'V-02',
+      factura: `NE-CXC-${String(i + 1).padStart(3, '0')}`,
+      rif: `J-50000${String(i + 1).padStart(3, '0')}-2`,
+      cliente: `Talleres Lubricentro #${i + 1}`,
+      fechaEmisionIso: '2026-10-05',
+      fechaVencimientoIso: '2026-10-20',
+      diasVencidos: 0,
+      diasCredito: 15,
+      montoFacturaUsd: 95 + i,
+      abonosUsd: 0,
+      restanteUsd: 95 + i
+    }));
+    const cxcNeDoc = generateAccountsReceivablePDF(cxcNotas, {}, mockConfig, 'NOTA_ENTREGA');
+    assertMultiPageComplete(cxcNeDoc, 'CxC Notas de Entrega (85 docs)', 'NE-CXC-001', 'NE-CXC-085');
+
+    // Rentabilidad (50 SKUs > antiguo límite 18)
+    const profProducts = Array.from({ length: 50 }, (_, i) => ({
+      codigo: `SKU-PR-${String(i + 1).padStart(3, '0')}`,
+      descripcion: `Lubricante Sintético Grado ${i + 1}`,
+      categoria: 'Sintéticos',
+      stock: 50 + i,
+      costoUsd: 20,
+      precioA: 32
+    }));
+    const profDoc = generateProfitabilityPDF({ products: profProducts, sales: [], config: mockConfig, currentUser: mockUser });
+    assertMultiPageComplete(profDoc, 'Rentabilidad BI (50 SKUs)', 'SKU-PR-001', 'SKU-PR-050');
+
+    // Pedidos (50 pedidos > antiguo límite 18)
+    const orders50 = Array.from({ length: 50 }, (_, i) => ({
+      id: `PED-MP-${String(i + 1).padStart(3, '0')}`,
+      cliente: `Distribuidora ${i + 1}`,
+      vendedor: 'V-01',
+      fecha: '2026-11-01',
+      totalUsd: 350,
+      status: 'PENDIENTE'
+    }));
+    const ordersDoc = generateOrdersPDF({ orders: orders50, config: mockConfig, currentUser: mockUser });
+    assertMultiPageComplete(ordersDoc, 'Pedidos (50 órdenes)', 'PED-MP-001', 'PED-MP-050');
+
+    // Ventas POS individual (45 renglones > antiguo límite 22) y listado (50 facturas > antiguo límite 18)
+    const saleItems45 = Array.from({ length: 45 }, (_, i) => ({
+      codigo: `VTA-IT-${String(i + 1).padStart(3, '0')}`,
+      descripcion: `Producto Factura Renglón #${i + 1}`,
+      cantidad: 2,
+      precioUsd: 15,
+      totalUsd: 30
+    }));
+    const vtaSingleDoc = generateSalesPOSPDF({
+      sales: [{ id: 'FAC-MULTI-ITEMS', totalUsd: 1350, items: saleItems45 }],
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    assertMultiPageComplete(vtaSingleDoc, 'Factura POS Individual (45 ítems)', 'VTA-IT-001', 'VTA-IT-045');
+
+    const sales50 = Array.from({ length: 50 }, (_, i) => ({
+      id: `FAC-LST-${String(i + 1).padStart(3, '0')}`,
+      fecha: '2026-11-01T10:00:00',
+      cliente: `Cliente POS ${i + 1}`,
+      totalUsd: 200
+    }));
+    const vtaListDoc = generateSalesPOSPDF({ sales: sales50, config: mockConfig, currentUser: mockUser });
+    assertMultiPageComplete(vtaListDoc, 'Listado Ventas POS (50 facturas)', 'FAC-LST-001', 'FAC-LST-050');
+
+    // Compras individual (45 ítems > 22) y listado (50 compras > 18)
+    const purItems45 = Array.from({ length: 45 }, (_, i) => ({
+      codigo: `CMP-IT-${String(i + 1).padStart(3, '0')}`,
+      descripcion: `Insumo Recepción #${i + 1}`,
+      cantidad: 3,
+      costo: 10,
+      total: 30
+    }));
+    const purSingleDoc = generatePurchasesPDF({
+      purchases: [{ id: 'CMP-MULTI-ITEMS', totalUsd: 1350, items: purItems45 }],
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    assertMultiPageComplete(purSingleDoc, 'Compra Individual (45 ítems)', 'CMP-IT-001', 'CMP-IT-045');
+
+    const purchases50 = Array.from({ length: 50 }, (_, i) => ({
+      id: `CMP-LST-${String(i + 1).padStart(3, '0')}`,
+      proveedorNombre: `Proveedor ${i + 1}`,
+      proveedorRif: 'J-12345678-0',
+      fecha: '2026-11-01',
+      totalUsd: 400
+    }));
+    const purListDoc = generatePurchasesPDF({ purchases: purchases50, suppliers: [], config: mockConfig, currentUser: mockUser });
+    assertMultiPageComplete(purListDoc, 'Listado Compras (50 docs)', 'CMP-LST-001', 'CMP-LST-050');
+
+    // SENIAT Libro de Ventas, ISLR, IGTF y Cierres Fiscales (50 registros > 18)
+    const libro50 = Array.from({ length: 50 }, (_, i) => ({
+      factNum: `SEN-LV-${String(i + 1).padStart(3, '0')}`,
+      controlNum: `00-${String(i + 1).padStart(6, '0')}`,
+      clienteNombre: `Contribuyente ${i + 1}`,
+      clienteRif: 'J-30000000-1',
+      fecha: '2026-11-01',
+      totalUsd: 100
+    }));
+    assertMultiPageComplete(
+      generateTaxReportPDF({ reportType: 'LIBRO_VENTAS', period: '2026-11', sales: libro50, config: mockConfig, currentUser: mockUser }),
+      'SENIAT Libro Ventas (50 filas)', 'SEN-LV-001', 'SEN-LV-050'
+    );
+    const islr50 = Array.from({ length: 50 }, (_, i) => ({
+      nroComprobante: `ISLR-${String(i + 1).padStart(3, '0')}`,
+      proveedorNombre: `Prov Ret ${i + 1}`,
+      rif: 'J-20000000-1',
+      baseImponibleUsd: 200,
+      montoRetenidoUsd: 4,
+      fecha: '2026-11-01'
+    }));
+    assertMultiPageComplete(
+      generateTaxReportPDF({ reportType: 'ISLR', period: '2026-11', withholdings: islr50, config: mockConfig, currentUser: mockUser }),
+      'SENIAT ISLR (50 filas)', 'ISLR-001', 'ISLR-050'
+    );
+    const igtf50 = Array.from({ length: 50 }, (_, i) => ({
+      factNum: `IGTF-${String(i + 1).padStart(3, '0')}`,
+      clienteNombre: `Cliente Divisa ${i + 1}`,
+      fecha: '2026-11-01',
+      totalUsd: 150,
+      igtfUsd: 4.5
+    }));
+    assertMultiPageComplete(
+      generateTaxReportPDF({ reportType: 'IGTF', period: '2026-11', sales: igtf50, config: mockConfig, currentUser: mockUser }),
+      'SENIAT IGTF (50 filas)', 'IGTF-001', 'IGTF-050'
+    );
+    const cierres50 = Array.from({ length: 50 }, (_, i) => ({
+      numeroReporteZ: `Z${String(i + 1).padStart(3, '0')}`,
+      tipo: 'Z',
+      fechaCierre: '2026-11-01',
+      baseImponible16Bs: 5000,
+      iva16Bs: 800,
+      granTotalBs: 5800
+    }));
+    assertMultiPageComplete(
+      generateTaxReportPDF({ reportType: 'CIERRES_FISCALES', period: '2026-11', fiscalClosures: cierres50, config: mockConfig, currentUser: mockUser }),
+      'SENIAT Cierres Fiscales (50 filas)', 'Z001', 'Z050'
+    );
+
+    // Auditoría Contable Diario y Logs (50 > 18/20)
+    const diario50 = Array.from({ length: 50 }, (_, i) => ({
+      asientoNum: `AS-${String(i + 1).padStart(3, '0')}`,
+      fecha: '2026-11-01',
+      usuario: 'admin',
+      lines: [{ cuentaCodigo: '1101', cuentaNombre: `Movimiento Contable #${i + 1}`, debeUsd: 100, haberUsd: 0 }]
+    }));
+    assertMultiPageComplete(
+      generateAuditLedgerPDF({ entries: diario50, subTab: 'diario', config: mockConfig, currentUser: mockUser }),
+      'Auditoría Diario (50 asientos)', 'AS-001', 'AS-050'
+    );
+    const logs50 = Array.from({ length: 50 }, (_, i) => ({
+      fecha: '2026-11-01T12:00:00',
+      usuario: `oper_${i + 1}`,
+      tipo: 'AUDIT',
+      titulo: `Evento de Seguridad #${String(i + 1).padStart(3, '0')}`,
+      estado: 'CONFIRMADO'
+    }));
+    assertMultiPageComplete(
+      generateAuditLedgerPDF({ auditLogs: logs50, subTab: 'logs', config: mockConfig, currentUser: mockUser }),
+      'Auditoría Logs (50 eventos)', 'Evento de Seguridad #001', 'Evento de Seguridad #050'
+    );
+
+    // Mayor General (50 movimientos cronológicos > 18)
+    const mayorAccount50 = {
+      codigo: '1.01.03.001',
+      nombre: 'Cuentas por Cobrar Clientes',
+      grupo: 'ACTIVO',
+      naturaleza: 'DEUDORA',
+      totalDebeUsd: 5000,
+      totalHaberUsd: 0,
+      saldoFinalUsd: 5000,
+      movements: Array.from({ length: 50 }, (_, i) => ({
+        fecha: '2026-11-01',
+        asientoNum: `ASI-${String(i + 1).padStart(3, '0')}`,
+        documentoReferencia: `FAC-${String(i + 1).padStart(3, '0')}`,
+        concepto: `Factura Mayor #${String(i + 1).padStart(3, '0')}`,
+        debeUsd: 100,
+        haberUsd: 0,
+        saldoAcumuladoUsd: (i + 1) * 100
+      }))
+    };
+    assertMultiPageComplete(
+      generateGeneralLedgerPDF({ account: mayorAccount50, config: mockConfig, currentUser: mockUser }),
+      'Mayor General (50 movimientos)', 'Factura Mayor #001', 'Factura Mayor #050'
+    );
+
+    // Balance de Comprobación (50 cuentas > 18)
+    const tb50 = {
+      accounts: Array.from({ length: 50 }, (_, i) => ({
+        codigo: `1.01.${String(i + 1).padStart(2, '0')}.001`,
+        nombre: `Cuenta Balance #${String(i + 1).padStart(3, '0')}`,
+        grupo: i < 25 ? 'ACTIVO' : 'PASIVO',
+        totalDebeUsd: i < 25 ? 100 : 0,
+        totalHaberUsd: i < 25 ? 0 : 100,
+        saldoDeudorUsd: i < 25 ? 100 : 0,
+        saldoAcreedorUsd: i < 25 ? 0 : 100
+      })),
+      totalSumasDebeUsd: 2500,
+      totalSumasHaberUsd: 2500,
+      totalSaldosDeudorUsd: 2500,
+      totalSaldosAcreedorUsd: 2500,
+      isBalanced: true
+    };
+    assertMultiPageComplete(
+      generateTrialBalancePDF({ trialBalance: tb50, config: mockConfig, currentUser: mockUser }),
+      'Balance de Comprobación (50 cuentas)', 'Cuenta Balance #001', 'Cuenta Balance #050'
+    );
+
+    // Usuarios (50 > 18)
+    const users50 = Array.from({ length: 50 }, (_, i) => ({
+      username: `usr_mp_${String(i + 1).padStart(3, '0')}`,
+      nombre: `Operador ${i + 1}`,
+      cargo: 'Analista',
+      departamento: 'VENTAS',
+      rol: 'VENTAS',
+      modulos: ['cxc'],
+      activo: true
+    }));
+    assertMultiPageComplete(
+      generateUsersPDF({ users: users50, config: mockConfig, currentUser: mockUser }),
+      'Usuarios (50 operadores)', '@usr_mp_001', '@usr_mp_050'
+    );
+
+    // Dashboard Operaciones & ALL Dossier con 45 productos (> antiguo límite 16)
+    const dashProds45 = Array.from({ length: 45 }, (_, i) => ({
+      codigo: `DSH-PR-${String(i + 1).padStart(3, '0')}`,
+      descripcion: `Lubricante Tablero #${i + 1}`,
+      linea: 'Mineral',
+      stockLitros: 100 + i,
+      costoUsd: 4.5
+    }));
+    assertMultiPageComplete(
+      generateDashboardPDF({ products: dashProds45, config: mockConfig, currentUser: mockUser, block: 'operaciones' }),
+      'Dashboard Bloque 4 Operaciones (45 SKUs)', 'DSH-PR-001', 'DSH-PR-045'
+    );
+    assertMultiPageComplete(
+      generateDashboardPDF({ products: dashProds45, config: mockConfig, currentUser: mockUser, block: 'ALL' }),
+      'Dashboard Dossier ALL (45 SKUs)', 'DSH-PR-001', 'DSH-PR-045'
+    );
+
+    // Profit Database Table (> antiguo límite 150 filas)
+    const dbRows180 = Array.from({ length: 180 }, (_, i) => ({
+      co_art: `DBART-${String(i + 1).padStart(3, '0')}`,
+      art_des: `Artículo Profit ${i + 1}`,
+      costo_act: 10 + i
+    }));
+    const db180Doc = generateProfitDatabaseTablePDF({
+      database: 'GRUMOTOR',
+      tableName: 'art',
+      columns: ['co_art', 'art_des', 'costo_act'],
+      rows: dbRows180,
+      totalRows: 180,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    assertMultiPageComplete(db180Doc, 'Tabla Profit DB (180 filas)', 'DBART-001', 'DBART-180');
+
+    // CxC Consolidado (Facturas Fiscales + Notas de Entrega): Por documento (70 docs) y Por cliente (55 clientes)
+    const consDocs70 = Array.from({ length: 70 }, (_, i) => {
+      const isNota = i % 2 === 1;
+      return {
+        tipoDoc: isNota ? 'NOTA_ENTREGA' : 'FACTURA',
+        factura: isNota ? `NE-CON-${String(i + 1).padStart(3, '0')}` : `FAC-CON-${String(i + 1).padStart(3, '0')}`,
+        cliente: `Cliente Mixto #${i + 1} C.A.`,
+        rif: `J-30000${String(i + 1).padStart(3, '0')}-1`,
+        vendedorId: i % 2 === 0 ? 'KB' : 'CM',
+        fechaEmision: '2026-11-01',
+        fechaVencimiento: '2026-11-16',
+        diasVencidos: i % 3 === 0 ? 8 : 0,
+        montoFacturaUsd: 150 + i,
+        abonosUsd: 25,
+        restanteUsd: 125 + i,
+        estado: i % 3 === 0 ? 'VENCIDA' : i % 5 === 0 ? 'PAGADA' : 'POR_VENCER'
+      };
+    });
+    const consDocsPdf = generateConsolidatedCxcPDF({
+      docs: consDocs70,
+      tasaBcv: 904.44,
+      viewMode: 'DOCS',
+      filters: { typeLabel: 'Ambos (FAC + NE)', statusLabel: 'Cartera activa', sellerLabel: 'Todos los vendedores' },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    assertMultiPageComplete(consDocsPdf, 'CxC Consolidado Documentos (70 docs)', 'FAC-CON-001', 'NE-CON-070');
+    if (!docContains(consDocsPdf, 'NOTA ENT.') || !docContains(consDocsPdf, 'TOTAL (70 documentos)')) {
+      throw new Error('CxC Consolidado Documentos omitió tipo NOTA ENT. o fila TOTAL (70 documentos)');
+    }
+
+    const consClients55 = Array.from({ length: 55 }, (_, i) => ({
+      key: `CLI-${i + 1}`,
+      cliente: `Cliente Consolidado #${String(i + 1).padStart(3, '0')} C.A.`,
+      rif: `J-40000${String(i + 1).padStart(3, '0')}-2`,
+      fac: { count: 2, monto: 200, abonos: 50, restante: 150 },
+      ne: { count: 3, monto: 300, abonos: 0, restante: 300 },
+      totalMonto: 500,
+      totalAbonos: 50,
+      totalRestante: 450,
+      maxDias: i % 4 === 0 ? 15 : 0
+    }));
+    const consClientsPdf = generateConsolidatedCxcPDF({
+      docs: consDocs70,
+      clientRows: consClients55,
+      tasaBcv: 904.44,
+      viewMode: 'CLIENTES',
+      filters: { typeLabel: 'Ambos (FAC + NE)', statusLabel: 'Cartera activa', sellerLabel: 'Todos los vendedores' },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    assertMultiPageComplete(consClientsPdf, 'CxC Consolidado Por Cliente (55 clientes)', 'Cliente Consolidado #001', 'Cliente Consolidado #055');
+    if (!docContains(consClientsPdf, 'TOTAL (55 clientes)')) {
+      throw new Error('CxC Consolidado Por Cliente omitió fila TOTAL (55 clientes)');
+    }
+
+    // CxC Consolidado vacío (ambas vistas)
+    generateConsolidatedCxcPDF({ docs: [], clientRows: [], tasaBcv: 904.44, viewMode: 'DOCS', config: mockConfig, currentUser: mockUser });
+    generateConsolidatedCxcPDF({ docs: [], clientRows: [], tasaBcv: 904.44, viewMode: 'CLIENTES', config: mockConfig, currentUser: mockUser });
+  });
+
+  // 43d. Verificación de Dirección Registrada del Cliente, QR Estático Bancario y autoPrint sin guardado en disco
+  testGen('NE y Factura SENIAT: Dirección real del cliente, QR estático bancario y autoPrint sin descarga', () => {
+    const euroClient = REAL_CLIENTS.find(c => String(c.rif || '').replace(/[^A-Z0-9]/gi, '').includes('406701360'));
+    if (!euroClient || !euroClient.direccion || euroClient.direccion.length < 20) {
+      throw new Error('Cliente de prueba J406701360 no encontrado en REAL_CLIENTS con dirección registrada');
+    }
+    const resolved = resolveDocumentClientInfo({
+      clienteNombre: euroClient.nombre,
+      clienteRif: 'J-406701360',
+      clienteDireccion: 'Barquisimeto / Caracas, Venezuela'
+    });
+    if (resolved.direccion !== euroClient.direccion) {
+      throw new Error(`Dirección no resuelta al registro oficial. Obtenido: ${resolved.direccion}`);
+    }
+
+    const staticQrPayload = getStaticBankAccountsQRPayload(mockConfig);
+    const upperPayload = staticQrPayload.toUpperCase();
+    if (!upperPayload.includes('CUENTAS BANCARIAS') || !upperPayload.includes('MERCANTIL') || !upperPayload.includes('VENEZUELA')) {
+      throw new Error(`Payload de QR estático bancario incompleto: ${staticQrPayload.slice(0, 120)}`);
+    }
+    const qrMatrix = buildQRCodeMatrix(staticQrPayload);
+    if (!Array.isArray(qrMatrix) || qrMatrix.length < 25 || qrMatrix.length !== qrMatrix[0].length) {
+      throw new Error(`Matriz QR estática inválida: ${qrMatrix?.length}`);
+    }
+
+    const pdfCountBefore = fs.readdirSync(process.cwd()).filter(f => f.endsWith('.pdf')).length;
+    const neRes = generateDeliveryNotePDF({
+      sale: {
+        numeroDoc: 'NE-002222',
+        clienteNombre: euroClient.nombre,
+        clienteRif: 'J-406701360',
+        clienteDireccion: 'Barquisimeto / Caracas, Venezuela',
+        totalUsd: 83,
+        items: [{ codigo: 'LUB-MANUAL', descripcion: 'Despacho Nota de Entrega', cantidad: 1, volumenTotal: 11.3, precioUsd: 83, totalUsd: 83 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser,
+      autoPrint: true
+    });
+    const seniatDoc = generateLetterInvoiceSeniatPDF({
+      sale: {
+        numeroFactura: '000583',
+        clienteNombre: euroClient.nombre,
+        clienteRif: 'J-406701360',
+        totalUsd: 116,
+        items: [{ codigo: '001', descripcion: 'Aceite 15W40', cantidad: 2, precioUnitUsd: 50, totalUsd: 100 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser,
+      autoPrint: true
+    });
+    const pdfCountAfter = fs.readdirSync(process.cwd()).filter(f => f.endsWith('.pdf')).length;
+    if (pdfCountAfter !== pdfCountBefore) {
+      throw new Error(`autoPrint=true guardó PDF en disco (${pdfCountBefore} -> ${pdfCountAfter})`);
+    }
+    const addrSnippet = euroClient.direccion.slice(0, 18);
+    const neStream = (neRes.doc.internal.pages[1] || []).join('\n');
+    const seniatStream = (seniatDoc.internal.pages[1] || []).join('\n');
+    if (!neStream.includes(addrSnippet) || !neStream.includes('CUENTAS BANCARIAS')) {
+      throw new Error('NE no incluyó la dirección registrada o el QR de CUENTAS BANCARIAS');
+    }
+    if (!seniatStream.includes(addrSnippet) || !seniatStream.includes('CUENTAS BANCARIAS')) {
+      throw new Error('Factura SENIAT no incluyó el domicilio registrado o el QR de CUENTAS BANCARIAS');
     }
   });
 

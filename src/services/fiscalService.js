@@ -107,6 +107,117 @@ export const validateCedula = (cedula) => {
   return regex.test(clean);
 };
 
+/**
+ * Clasificación oficial SENIAT de los 5 tipos de Contribuyentes / Clientes.
+ */
+export const SENIAT_CONTRIBUTOR_TYPES = [
+  {
+    code: 'J',
+    label: 'J - Personas Jurídicas',
+    shortLabel: 'Persona Jurídica',
+    description: 'Empresas privadas, sociedades anónimas (S.A.), compañías anónimas (C.A.) y sociedades de responsabilidad limitada (S.R.L.) que comercializan bienes o servicios gravados.'
+  },
+  {
+    code: 'V',
+    label: 'V - Personas Naturales Venezolanas',
+    shortLabel: 'Persona Natural Venezolana',
+    description: 'Ciudadanos venezolanos que actúan como firmas personales, profesionales independientes o comerciantes que superan el límite de ingresos para ser formales.'
+  },
+  {
+    code: 'E',
+    label: 'E - Personas Naturales Extranjeras',
+    shortLabel: 'Persona Natural Extranjera',
+    description: 'Ciudadanos extranjeros residenciados en el país que realizan actividades económicas independientes sujetas a IVA.'
+  },
+  {
+    code: 'G',
+    label: 'G - Entes Gubernamentales',
+    shortLabel: 'Ente Gubernamental',
+    description: 'Instituciones del Estado, alcaldías o ministerios que, a pesar de ser públicos, realizan actividades comerciales o adquieren bienes/servicios gravados.'
+  },
+  {
+    code: 'P',
+    label: 'P - Personas Jurídicas Extranjeras',
+    shortLabel: 'Persona Jurídica Extranjera',
+    description: 'Empresas de origen extranjero que operan o tienen base legal/sucursales en Venezuela.'
+  }
+];
+
+const CONTRIBUTOR_CODES = ['J', 'V', 'E', 'G', 'P'];
+
+/**
+ * Resuelve la clasificación SENIAT ('J' | 'V' | 'E' | 'G' | 'P') de un cliente.
+ * Prioriza tipoPersona / tipoContribuyente explícito si coincide, luego prefijo del RIF/código, y por último heurística por nombre.
+ */
+export const resolveClientContributorType = (client) => {
+  if (!client) return 'J';
+  const explicit = String(client.tipoPersona || client.tipo_persona || client.tipoContribuyente || '').trim().toUpperCase();
+  if (CONTRIBUTOR_CODES.includes(explicit)) return explicit;
+
+  const rawRif = String(client.rif || client.codigo || client.id || '').trim().toUpperCase();
+  const match = rawRif.match(/^([JVEGP])/);
+  if (match) return match[1];
+
+  const rawType = String(client.tipoCliente || '').trim().toUpperCase();
+  if (CONTRIBUTOR_CODES.includes(rawType)) return rawType;
+
+  const name = String(client.nombre || client.razonSocial || '').toUpperCase();
+  if (/(ALCALD|MINISTERIO|GOBERNACI|INSTITUTO|FUNDACI|CONCEJO|ENTE )/.test(name)) return 'G';
+  if (/(C\.A|S\.A|S\.R\.L|R\.L|INVERSIONES|DISTRIBUIDORA|CORPORACI|COMERCIALIZADORA|SERVICIOS|TRANSPORTE|LUBRICANTES|REPUESTOS|AUTO)/.test(name)) return 'J';
+  return 'V';
+};
+
+/**
+ * Aplica o sincroniza el prefijo de clasificación SENIAT ('J'|'V'|'E'|'G'|'P') en un campo RIF / Cédula.
+ */
+export const applyContributorPrefixToRif = (rawValue, contributorCode) => {
+  const code = CONTRIBUTOR_CODES.includes(String(contributorCode || '').toUpperCase())
+    ? String(contributorCode).toUpperCase()
+    : 'J';
+  const trimmed = String(rawValue || '').trim().toUpperCase();
+  if (!trimmed) return `${code}-`;
+  const body = trimmed.replace(/^[JVEGPC][-\s]*/i, '').replace(/^\-+/, '');
+  return body ? `${code}-${body}` : `${code}-`;
+};
+
+/**
+ * Calcula los totales por cada clasificación SENIAT sobre una lista de clientes.
+ */
+export const computeContributorTypeCounts = (clientsList = []) => {
+  const counts = { J: 0, V: 0, E: 0, G: 0, P: 0 };
+  (clientsList || []).forEach(c => {
+    if (!c) return;
+    const code = resolveClientContributorType(c);
+    if (counts[code] !== undefined) counts[code] += 1;
+  });
+  return counts;
+};
+
+/**
+ * Valida un documento tributario o cédula según su prefijo y formato SENIAT.
+ */
+export const validateDocumentNumber = (rawValue, contributorCode) => {
+  const normalized = String(rawValue || '').trim().toUpperCase();
+  if (!normalized || /^[JVEGP]-?$/.test(normalized)) {
+    return { isValid: false, kind: 'NONE', message: '' };
+  }
+  const rifRes = validateRif(normalized);
+  if (rifRes.isValid) {
+    return { isValid: true, kind: 'RIF', formatted: rifRes.formatted, message: '✓ RIF SENIAT válido' };
+  }
+  const effectiveCode = contributorCode || (normalized.match(/^([JVEGP])/)?.[1] || 'J');
+  if ((effectiveCode === 'V' || effectiveCode === 'E') && validateCedula(normalized)) {
+    return { isValid: true, kind: 'CEDULA', formatted: normalized, message: '✓ Cédula válida (formato V/E)' };
+  }
+  return {
+    isValid: false,
+    kind: 'INVALID',
+    message: (effectiveCode === 'V' || effectiveCode === 'E')
+      ? 'Ingrese Cédula (Ej: V-12345678) o RIF completo con dígito verificador (Ej: V-12345678-9)'
+      : `Verifique formato RIF SENIAT (Ej: ${effectiveCode}-12345678-9)`
+  };
+};
+
 // ==============================================================================
 // 2. MOTOR DE CÁLCULOS TRIBUTARIOS MULTIMONEDA (IVA MULTI-ALÍCUOTA, IGTF Y RETENCIONES)
 // ==============================================================================
@@ -280,6 +391,90 @@ export const calculateFiscalTaxes = ({
 // ==============================================================================
 
 /**
+ * Normaliza cualquier documento o referencia fiscal a una clave canónica
+ * independiente de prefijos (FAC-/NE-/NC-/ND-) y ceros a la izquierda.
+ * Ejemplo: "000003", "FAC-000003" y 3 -> "FAC:3"; "NE-002227" -> "NE:2227".
+ * @param {object|string|number} docOrNum
+ * @param {string} [explicitTipoDoc]
+ * @returns {string}
+ */
+export const getCanonicalDocKey = (docOrNum, explicitTipoDoc = '') => {
+  if (docOrNum === null || docOrNum === undefined || docOrNum === '') return '';
+  const isObj = typeof docOrNum === 'object';
+  const rawTipo = String(
+    explicitTipoDoc || (isObj ? (docOrNum.tipoDoc || docOrNum.tipo_doc || '') : '')
+  ).toUpperCase().trim();
+  const rawId = isObj ? String(docOrNum.id ?? '').trim().toUpperCase() : '';
+  const rawNum = String(
+    isObj
+      ? (docOrNum.numeroDoc ?? docOrNum.numero_doc ?? docOrNum.factNum ?? docOrNum.fact_num ?? docOrNum.nroFactura ?? docOrNum.factura ?? docOrNum.originalFactNum ?? docOrNum.id ?? '')
+      : docOrNum
+  ).trim().toUpperCase();
+  if (!rawNum && !rawId) return '';
+
+  const isNe =
+    rawTipo === 'NOTA_ENTREGA' ||
+    rawTipo === 'N/E' ||
+    rawTipo === 'NE' ||
+    /^(NE-|NDE-)/.test(rawId) ||
+    /^(NE-|NDE-)/.test(rawNum);
+  const isNc = rawTipo === 'NOTA_CREDITO' || /^(NC-)/.test(rawId) || /^(NC-)/.test(rawNum);
+  const isNd = rawTipo === 'NOTA_DEBITO' || /^(ND-)/.test(rawId) || /^(ND-)/.test(rawNum);
+  const family = isNe ? 'NE' : isNc ? 'NC' : isNd ? 'ND' : 'FAC';
+
+  const base = rawNum || rawId;
+  const digits = base.replace(/^(FAC-|FACT-|NE-|NDE-|NC-|ND-|INV-|DOC-)/i, '').replace(/^0+(?=\d)/, '');
+  return `${family}:${digits || base}`;
+};
+
+const pickBestLineItems = (a, b) => {
+  const arrA = Array.isArray(a) ? a : [];
+  const arrB = Array.isArray(b) ? b : [];
+  if (arrB.length === 0) return arrA;
+  if (arrA.length === 0) return arrB;
+  return arrB.length >= arrA.length ? arrB : arrA;
+};
+
+/**
+ * Deduplica un arreglo de documentos (ventas o profit_invoices) por clave canónica,
+ * fusionando campos útiles (renglones no vacíos, número formateado y última actualización).
+ * @param {Array} docs
+ * @returns {Array}
+ */
+export const dedupeCanonicalDocs = (docs = []) => {
+  if (!Array.isArray(docs) || docs.length === 0) return [];
+  const map = new Map();
+  for (const doc of docs) {
+    if (!doc) continue;
+    const cKey = getCanonicalDocKey(doc);
+    if (!cKey) continue;
+    const existing = map.get(cKey);
+    if (!existing) {
+      map.set(cKey, doc);
+      continue;
+    }
+    const tsExisting = Date.parse(existing.updated_at || existing.fechaSincronizacion || existing.fecha_sincronizacion || 0) || 0;
+    const tsIncoming = Date.parse(doc.updated_at || doc.fechaSincronizacion || doc.fecha_sincronizacion || 0) || 0;
+    const newer = tsIncoming >= tsExisting ? doc : existing;
+    const older = tsIncoming >= tsExisting ? existing : doc;
+    const merged = {
+      ...older,
+      ...newer,
+      items: pickBestLineItems(older.items || older.renglones, newer.items || newer.renglones)
+    };
+    const candA = String(existing.factNum || existing.numeroDoc || '').trim();
+    const candB = String(doc.factNum || doc.numeroDoc || '').trim();
+    const bestPadded = /^0+\d+$/.test(candA) ? candA : (/^0+\d+$/.test(candB) ? candB : '');
+    if (bestPadded && !merged._customCreated) {
+      if (merged.factNum !== undefined) merged.factNum = bestPadded;
+      if (merged.numeroDoc !== undefined) merged.numeroDoc = bestPadded;
+    }
+    map.set(cKey, merged);
+  }
+  return Array.from(map.values());
+};
+
+/**
  * Genera un Número de Control Fiscal conforme a la Providencia SNAT/2011/00071.
  * Formato estándar: 00-XXXXXX (6 dígitos numéricos)
  * @param {number} sequenceNumber 
@@ -292,11 +487,12 @@ export const generateFiscalControlNumber = (sequenceNumber) => {
 
 /**
  * Genera el nuevo correlativo fiscal de factura de 6 dígitos consecutivos.
- * Ejemplos: "000000", "000001", "000002" y así sucesivamente.
+ * Evita colisiones entre navegadores/PCs verificando siempre contra los documentos reales.
  * @param {Array} sales - Lista de ventas/facturas existentes
+ * @param {Array} [extraDocs] - Documentos adicionales (ej. profit_invoices) a considerar
  * @returns {string} - Correlativo formateado a 6 dígitos
  */
-export const getNextInvoiceCorrelativo = (sales = []) => {
+export const getNextInvoiceCorrelativo = (sales = [], extraDocs = []) => {
   // Inicialización automática obligatoria de la nueva serie "000000" para Contado y Crédito
   try {
     const initFlag = localStorage.getItem('sm_invoice_correlativo_zero_init');
@@ -307,33 +503,52 @@ export const getNextInvoiceCorrelativo = (sales = []) => {
     }
   } catch (_) {}
 
-  // 1. Si el usuario reinició o fijó explícitamente el correlativo (ej: 0 para "000000")
+  let highest = -1;
+  const usedFacturaNums = new Set();
+  let maxLowSeries = -1;
+  const list = [...(Array.isArray(sales) ? sales : []), ...(Array.isArray(extraDocs) ? extraDocs : [])];
+
+  list.forEach(s => {
+    if (!s) return;
+    const rawTipo = String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim();
+    const rawId = String(s.id || '').trim();
+    const raw = String(s.numeroDoc || s.numero_doc || s.nroFactura || s.factNum || s.fact_num || '');
+    if (rawTipo && rawTipo !== 'FACTURA') return;
+    if (/^(NE-|NDE-|NC-|ND-)/i.test(rawId) || /^(NE-|NDE-|NC-|ND-)/i.test(raw)) return;
+    if (!raw) return;
+    const digitsOnly = raw.replace(/[^0-9]/g, '');
+    if (digitsOnly) {
+      const val = parseInt(digitsOnly, 10);
+      if (!isNaN(val) && val >= 0 && val <= 999999) {
+        usedFacturaNums.add(val);
+        if (val < 400 && val > maxLowSeries) {
+          maxLowSeries = val;
+        }
+        // Valid correlativo en la serie activa iniciada desde 000000 (aislando semillas demo >= 1000)
+        if (val < 50000 && (val < 1000 || highest > 900) && val > highest) {
+          highest = val;
+        }
+      }
+    }
+  });
+
+  // 1. Si el usuario reinició o fijó explícitamente el correlativo (evitando colisión con otra PC)
   try {
     const forcedSeq = localStorage.getItem('sm_invoice_correlativo_force');
     if (forcedSeq !== null && forcedSeq !== '') {
       const forcedVal = parseInt(forcedSeq, 10);
       if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal <= 999999) {
-        return String(forcedVal).padStart(6, '0');
+        let candidate = forcedVal;
+        if (forcedVal < 400 && maxLowSeries >= forcedVal) {
+          candidate = maxLowSeries + 1;
+        }
+        while (usedFacturaNums.has(candidate) && candidate < 999999) {
+          candidate++;
+        }
+        return String(candidate).padStart(6, '0');
       }
     }
   } catch (_) {}
-
-  let highest = -1;
-  const list = Array.isArray(sales) ? sales : [];
-
-  list.forEach(s => {
-    if (s.tipoDoc && s.tipoDoc !== 'FACTURA') return;
-    const raw = String(s.numeroDoc || s.nroFactura || s.factNum || '');
-    if (!raw) return;
-    const digitsOnly = raw.replace(/[^0-9]/g, '');
-    if (digitsOnly) {
-      const val = parseInt(digitsOnly, 10);
-      // Valid correlativo en la serie activa iniciada desde 000000 (aislando semillas demo >= 1000)
-      if (!isNaN(val) && val >= 0 && val < 50000 && (val < 1000 || highest > 900) && val > highest) {
-        highest = val;
-      }
-    }
-  });
 
   try {
     const storedSeq = localStorage.getItem('sm_invoice_correlativo_seq');
@@ -345,7 +560,10 @@ export const getNextInvoiceCorrelativo = (sales = []) => {
     }
   } catch (_) {}
 
-  const nextVal = highest >= 0 ? highest + 1 : 0;
+  let nextVal = highest >= 0 ? highest + 1 : 0;
+  while (usedFacturaNums.has(nextVal) && nextVal < 999999) {
+    nextVal++;
+  }
   return String(nextVal).padStart(6, '0');
 };
 
@@ -370,21 +588,8 @@ export const commitInvoiceCorrelativo = (correlativo) => {
  */
 export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix = 'NE') => {
   const cleanPrefix = String(prefix || 'NE').toUpperCase().trim();
-
-  // 1. Si el usuario fijó manualmente el correlativo de Nota de Entrega
-  try {
-    if (cleanPrefix === 'NE' && typeof localStorage !== 'undefined') {
-      const forcedSeq = localStorage.getItem('sm_ne_correlativo_force');
-      if (forcedSeq !== null && forcedSeq !== '') {
-        const forcedVal = parseInt(forcedSeq, 10);
-        if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal <= 999999) {
-          return `NE-${String(forcedVal).padStart(6, '0')}`;
-        }
-      }
-    }
-  } catch (_) {}
-
   let highest = 0;
+  const usedNums = new Set();
 
   const inspectRecord = (rec) => {
     if (!rec) return;
@@ -410,8 +615,9 @@ export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix 
       const digits = String(candidate || '').replace(/[^0-9]/g, '');
       if (digits) {
         const val = parseInt(digits, 10);
-        if (!isNaN(val) && val > 0 && val < 900000 && val > highest) {
-          highest = val;
+        if (!isNaN(val) && val > 0 && val < 900000) {
+          usedNums.add(val);
+          if (val > highest) highest = val;
         }
       }
     }
@@ -419,6 +625,23 @@ export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix 
 
   if (Array.isArray(sales)) sales.forEach(inspectRecord);
   if (Array.isArray(invoices)) invoices.forEach(inspectRecord);
+
+  // 1. Si el usuario fijó manualmente el correlativo de Nota de Entrega (evitando colisión con otra PC)
+  try {
+    if (cleanPrefix === 'NE' && typeof localStorage !== 'undefined') {
+      const forcedSeq = localStorage.getItem('sm_ne_correlativo_force');
+      if (forcedSeq !== null && forcedSeq !== '') {
+        const forcedVal = parseInt(forcedSeq, 10);
+        if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal <= 999999) {
+          let candidate = forcedVal;
+          while (usedNums.has(candidate) && candidate < 999999) {
+            candidate++;
+          }
+          return `NE-${String(candidate).padStart(6, '0')}`;
+        }
+      }
+    }
+  } catch (_) {}
 
   try {
     if (typeof localStorage !== 'undefined') {
@@ -441,7 +664,10 @@ export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix 
     }
   } catch (_) {}
 
-  const nextVal = highest + 1;
+  let nextVal = highest + 1;
+  while (usedNums.has(nextVal) && nextVal < 999999) {
+    nextVal++;
+  }
   return `${cleanPrefix}-${String(nextVal).padStart(6, '0')}`;
 };
 

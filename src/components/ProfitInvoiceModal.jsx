@@ -264,7 +264,8 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
               sales: [invoice],
               config: { ...config, tasaDolar: tasaBcv },
               currentUser,
-              tipoDoc: 'FACTURA_PROFIT'
+              tipoDoc: 'FACTURA_PROFIT',
+              autoPrint: true
             })}
             style={{ fontSize: '0.82rem' }}
           >

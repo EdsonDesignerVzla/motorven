@@ -47,6 +47,7 @@ import { generateSellersPDF } from '../services/pdfReportService';
 import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { getCommissionSettlements, deleteCommissionSettlement } from '../services/storageService';
 import { useNotification } from '../context/NotificationContext';
+import { dedupeCanonicalDocs } from '../services/fiscalService';
 
 function extractMonthNumber(dateVal) {
   if (!dateVal) return '';
@@ -190,10 +191,11 @@ export default function SellersView({
     return DEFAULT_PROFIT_SELLERS;
   }, [profitSellers]);
 
-  // Filtrado de Facturas según el Mes Seleccionado
+  // Filtrado de Facturas según el Mes Seleccionado (deduplicado por clave canónica)
   const filteredProfitInvoices = useMemo(() => {
-    if (selectedMonth === 'ALL') return profitInvoices;
-    return (profitInvoices || []).filter(inv => {
+    const deduped = dedupeCanonicalDocs(profitInvoices || []);
+    if (selectedMonth === 'ALL') return deduped;
+    return deduped.filter(inv => {
       if (inv.anulada) return false;
       const raw = inv?.fechaEmision || inv?.fec_emis || inv?.fecha || '';
       if (!raw) return true;

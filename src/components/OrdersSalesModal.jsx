@@ -36,9 +36,10 @@ import {
   Eye,
   Hash,
   Check,
-  ArrowUpDown
+  ArrowUpDown,
+  Users
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -49,7 +50,7 @@ import {
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
 import SalesInvoiceModal from './SalesInvoiceModal';
-import { isMasterOrGerencia } from '../services/authService';
+import { isMasterOrGerencia, isClientApproved } from '../services/authService';
 import { CREDIT_APPROVERS_CATALOG } from './AppConfigModal';
 import {
   generateOrdersPDF,
@@ -61,9 +62,10 @@ import {
   pickPreferredLineItems
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
-import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
+import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
+import ClientsDirectoryModal from './ClientsDirectoryModal';
 import { saveSupabaseProfitInvoice } from '../services/supabaseService';
 
 const STATUS_CONFIG = {
@@ -159,11 +161,16 @@ export default function OrdersSalesModal({
   initialTab = 'nuevo',
   initialOrder = null,
   onProceedToPOS,
-  onSaveCxcDocument
+  onSaveCxcDocument,
+  onSaveClient,
+  onDeleteClient,
+  onApproveClient,
+  onRejectClient
 }) {
   const notify = useNotification();
   const [activeTab, setActiveTab] = useState(initialTab || 'nuevo'); // 'nuevo' | 'pipeline' | 'facturar' | 'imprimir' | 'metricas'
   const [selectedOrder, setSelectedOrder] = useState(initialOrder || null);
+  const [showClientsDirectoryModal, setShowClientsDirectoryModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [zoneFilter, setZoneFilter] = useState('ALL');
@@ -230,8 +237,8 @@ export default function OrdersSalesModal({
 
   // Correlativo actual calculado para la próxima factura
   const currentNextCorrelativo = useMemo(() => {
-    return getNextInvoiceCorrelativo(sales);
-  }, [sales, correlativoRefreshKey]);
+    return getNextInvoiceCorrelativo(sales, profitInvoices);
+  }, [sales, profitInvoices, correlativoRefreshKey]);
 
   // Correlativo actual calculado para la próxima Nota de Entrega
   const currentNextNeCorrelativo = useMemo(() => {
@@ -343,7 +350,7 @@ export default function OrdersSalesModal({
       clienteId: order.clienteId || 'CLI-001',
       clienteNombre: order.clienteNombre || 'Cliente General',
       clienteRif: order.clienteRif || 'J-00000000',
-      clienteDireccion: order.direccionEntrega || 'Dirección de Entrega Registrada',
+      clienteDireccion: order.direccionEntrega || order.clienteDireccion || '',
       fechaEmision: order.fechaFactura || order.fecha || new Date().toISOString(),
       fechaVencimiento: order.fechaVencimiento || (isCredit ? calculateExpirationDate(order.fechaFactura || new Date(), resolveCreditDaysFromTerm(order.condicionPago)) : new Date().toISOString()),
       condicionPago: order.condicionPago || 'CONTADO',
@@ -498,80 +505,32 @@ export default function OrdersSalesModal({
     return Array.from(byName.values()).sort((a, b) => a.venDes.localeCompare(b.venDes));
   }, [profitSellers, safeProfitZones]);
 
-  // Clasificación SENIAT de los 5 tipos de Contribuyentes Ordinarios
-  const SENIAT_CONTRIBUTOR_TYPES = useMemo(() => [
-    {
-      code: 'J',
-      label: 'J - Personas Jurídicas',
-      shortLabel: 'Persona Jurídica',
-      description: 'Empresas privadas, sociedades anónimas (S.A.), compañías anónimas (C.A.) y sociedades de responsabilidad limitada (S.R.L.) que comercializan bienes o servicios gravados.'
-    },
-    {
-      code: 'V',
-      label: 'V - Personas Naturales Venezolanas',
-      shortLabel: 'Persona Natural Venezolana',
-      description: 'Ciudadanos venezolanos que actúan como firmas personales, profesionales independientes o comerciantes que superan el límite de ingresos para ser formales.'
-    },
-    {
-      code: 'E',
-      label: 'E - Personas Naturales Extranjeras',
-      shortLabel: 'Persona Natural Extranjera',
-      description: 'Ciudadanos extranjeros residenciados en el país que realizan actividades económicas independientes sujetas a IVA.'
-    },
-    {
-      code: 'G',
-      label: 'G - Entes Gubernamentales',
-      shortLabel: 'Ente Gubernamental',
-      description: 'Instituciones del Estado, alcaldías o ministerios que, a pesar de ser públicos, realizan actividades comerciales o adquieren bienes/servicios gravados.'
-    },
-    {
-      code: 'P',
-      label: 'P - Personas Jurídicas Extranjeras',
-      shortLabel: 'Persona Jurídica Extranjera',
-      description: 'Empresas de origen extranjero que operan o tienen base legal/sucursales en Venezuela.'
-    }
-  ], []);
-
-  const resolveClientContributorType = (client) => {
-    if (!client) return 'J';
-    const rawRif = String(client.rif || client.codigo || client.id || '').trim().toUpperCase();
-    const match = rawRif.match(/^([JVEGP])/);
-    if (match) return match[1];
-    const rawType = String(client.tipoPersona || client.tipoCliente || '').trim().toUpperCase();
-    if (['J', 'V', 'E', 'G', 'P'].includes(rawType)) return rawType;
-    const name = String(client.nombre || client.razonSocial || '').toUpperCase();
-    if (/(ALCALD|MINISTERIO|GOBERNACI|INSTITUTO|FUNDACI|CONCEJO|ENTE )/.test(name)) return 'G';
-    if (/(C\.A|S\.A|S\.R\.L|R\.L|INVERSIONES|DISTRIBUIDORA|CORPORACI|COMERCIALIZADORA|SERVICIOS|TRANSPORTE|LUBRICANTES|REPUESTOS|AUTO)/.test(name)) return 'J';
-    return 'V';
-  };
-
   // Formulario Nuevo Pedido
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clientSearchText, setClientSearchText] = useState('');
   const [clientTypeFilter, setClientTypeFilter] = useState('ALL');
-  const clientContributorCounts = useMemo(() => {
-    const counts = { J: 0, V: 0, E: 0, G: 0, P: 0 };
-    safeClients.forEach(c => {
-      if (!c) return;
-      const code = resolveClientContributorType(c);
-      if (counts[code] !== undefined) counts[code] += 1;
-    });
-    return counts;
-  }, [safeClients]);
+  const approvedClients = useMemo(
+    () => safeClients.filter(c => c && isClientApproved(c)),
+    [safeClients]
+  );
+  const clientContributorCounts = useMemo(
+    () => computeContributorTypeCounts(approvedClients),
+    [approvedClients]
+  );
   const selectedContributorTypeMeta = useMemo(
     () => SENIAT_CONTRIBUTOR_TYPES.find(t => t.code === clientTypeFilter) || null,
-    [SENIAT_CONTRIBUTOR_TYPES, clientTypeFilter]
+    [clientTypeFilter]
   );
   const filteredClients = useMemo(() => {
     const q = clientSearchText.trim().toLowerCase();
-    return safeClients.filter(c => {
+    return approvedClients.filter(c => {
       if (!c) return false;
       const contribCode = resolveClientContributorType(c);
       if (clientTypeFilter !== 'ALL' && contribCode !== clientTypeFilter) return false;
       if (!q) return true;
       return [c.codigo, c.id, c.nombre, c.razonSocial, c.rif].some(v => v && String(v).toLowerCase().includes(q));
     });
-  }, [safeClients, clientSearchText, clientTypeFilter]);
+  }, [approvedClients, clientSearchText, clientTypeFilter]);
   const [modalidadVenta, setModalidadVenta] = useState('PREVENTA'); // 'PREVENTA' | 'OFICINA'
   const [selectedSeller, setSelectedSeller] = useState(currentUser?.nombre || 'Vendedor Directo');
   const [selectedZone, setSelectedZone] = useState('01');
@@ -1052,6 +1011,27 @@ export default function OrdersSalesModal({
     };
   }, [orderRows, safeProducts, tasaBcv]);
 
+  const tab1WarehouseCheck = useMemo(() => {
+    const selectedRows = orderRows.filter(r => r.articuloId);
+    const activeWhCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+    if (selectedRows.length === 0) {
+      return {
+        isValid: true,
+        zeroStockItems: [],
+        invalidQtyItems: [],
+        warehouseCode: activeWhCode,
+        message: ''
+      };
+    }
+    return validateWarehouseStockForDocument({
+      items: selectedRows,
+      products: safeProducts,
+      tipoDoc: modalidadVenta === 'OFICINA' ? 'NOTA_ENTREGA' : 'FACTURA',
+      almacen: activeWhCode,
+      modalidadVenta
+    });
+  }, [orderRows, safeProducts, modalidadVenta]);
+
   // Manejo de renglones de pedido
   const handleAddRow = () => {
     setOrderRows(prev => [
@@ -1066,6 +1046,21 @@ export default function OrdersSalesModal({
   };
 
   const handleRowChange = (index, field, value) => {
+    if (field === 'articuloId' && value) {
+      const prod = findProductById(value);
+      if (prod) {
+        const activeWhCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+        const pStocks = getProductWarehouseStocks(prod);
+        const activeStock = activeWhCode === '02' ? pStocks.stock02 : pStocks.stock01;
+        if (!(activeStock > 0)) {
+          const msg = `No se puede cargar ${prod.codigo || prod.descripcion || value}: existencia en 0 en Almacén ${activeWhCode}.`;
+          notify.warning(msg);
+          setFeedbackMsg({ type: 'error', text: msg });
+          return;
+        }
+      }
+    }
+
     setOrderRows(prev => {
       const updated = [...prev];
       const target = { ...updated[index], [field]: value };
@@ -1094,6 +1089,19 @@ export default function OrdersSalesModal({
     const validRows = orderRows.filter(r => r.articuloId && r.cantidad > 0);
     if (validRows.length === 0) {
       setFeedbackMsg({ type: 'error', text: 'Debe agregar al menos un lubricante con cantidad válida.' });
+      return;
+    }
+
+    const orderWarehouseCheck = validateWarehouseStockForDocument({
+      items: validRows,
+      products: safeProducts,
+      tipoDoc: modalidadVenta === 'OFICINA' ? 'NOTA_ENTREGA' : 'FACTURA',
+      almacen: modalidadVenta === 'OFICINA' ? '02' : '01',
+      modalidadVenta
+    });
+    if (!orderWarehouseCheck.isValid) {
+      setFeedbackMsg({ type: 'error', text: orderWarehouseCheck.message });
+      notify.error(orderWarehouseCheck.message);
       return;
     }
 
@@ -1516,7 +1524,17 @@ export default function OrdersSalesModal({
       tipoDoc: inv.tipoDoc || 'FACTURA',
       clienteNombre: inv.clienteNombre || inv.cliente || inv.cliDes || inv.cli_des || inv.cliente_nombre || 'Cliente General',
       clienteRif: inv.clienteRif || inv.rif || inv.cliente_rif || inv.coCli || inv.co_cli || 'V-00000000-0',
-      clienteDireccion: inv.clienteDireccion || inv.dir_ent || inv.direccionEntrega || '',
+      clienteDireccion: (() => {
+        const directAddr = inv.clienteDireccion || inv.dir_ent || inv.direccionEntrega || '';
+        if (directAddr) return directAddr;
+        const matched = safeClients.find(c =>
+          (inv.clienteId && c.id === inv.clienteId) ||
+          (inv.clienteRif && c.rif === inv.clienteRif) ||
+          (inv.rif && c.rif === inv.rif) ||
+          ((inv.clienteNombre || inv.cliente) && (c.nombre || c.name)?.toLowerCase() === (inv.clienteNombre || inv.cliente)?.toLowerCase())
+        );
+        return matched?.direccion || matched?.domicilioFiscal || matched?.direccion2 || '';
+      })(),
       fechaEmision,
       fechaVencimiento: fechaVencimiento || fechaEmision,
       condicionPago,
@@ -1670,10 +1688,10 @@ export default function OrdersSalesModal({
     };
     try {
       if (isNe) {
-        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser, products: safeProducts });
-        notify.success(`Nota de Entrega #${correlativo} generada con éxito`);
+        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser, products: safeProducts, clients: safeClients, autoPrint: true });
+        notify.success(`Nota de Entrega #${correlativo} enviada a impresión`);
       } else {
-        generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser });
+        generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser, clients: safeClients, autoPrint: true });
         notify.success(`Factura #${correlativo} enviada a impresión`);
       }
     } catch (err) {
@@ -1813,6 +1831,39 @@ export default function OrdersSalesModal({
 
           {/* Botones de Cabecera */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setShowClientsDirectoryModal(true)}
+              className="btn btn-sm"
+              style={{
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(0, 43, 122, 0.35))',
+                border: '1.5px solid rgba(16, 185, 129, 0.55)',
+                color: isDark ? '#34d399' : '#047857',
+                fontWeight: 800,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '7px',
+                padding: '7px 14px',
+                borderRadius: '10px',
+                cursor: 'pointer'
+              }}
+              title="Abrir Cartera Maestra de Clientes (Crear, Modificar, Guardar, Aprobar y Eliminar con Doble Seguridad)"
+            >
+              <Users size={16} />
+              <span>Cartera de Clientes</span>
+              <span
+                style={{
+                  background: isDark ? 'rgba(16, 185, 129, 0.25)' : '#d1fae5',
+                  color: isDark ? '#a7f3d0' : '#065f46',
+                  fontSize: '0.72rem',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontWeight: 800
+                }}
+              >
+                {clients.length}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -2130,7 +2181,7 @@ export default function OrdersSalesModal({
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.9rem' }}>
                   <div>
                     <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                      Cliente Destinatario * ({filteredClients.length} de {safeClients.length})
+                      Cliente Destinatario * ({filteredClients.length} de {approvedClients.length} aprobados)
                     </label>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
                       <input
@@ -2148,7 +2199,7 @@ export default function OrdersSalesModal({
                         style={{ fontSize: '0.8rem', flex: '1.2 1 160px', minWidth: 0, boxSizing: 'border-box' }}
                         title="Filtrar por tipo de Contribuyente Ordinario SENIAT (J, V, E, G, P)"
                       >
-                        <option value="ALL">Todos los tipos ({safeClients.length})</option>
+                        <option value="ALL">Todos los tipos ({approvedClients.length})</option>
                         {SENIAT_CONTRIBUTOR_TYPES.map(t => (
                           <option key={t.code} value={t.code} title={t.description}>
                             {t.label} ({clientContributorCounts[t.code] || 0})
@@ -2715,12 +2766,31 @@ export default function OrdersSalesModal({
                             {(matchedProd && !filteredLubricants.includes(matchedProd)
                               ? [matchedProd, ...filteredLubricants]
                               : filteredLubricants
-                            ).map(p => (
-                              <option key={p.id || p.codigo} value={p.id || p.codigo}>
-                                {p.codigo} - {p.descripcion} ({formatUsd(resolveProductWholesalePrice(p))})
-                              </option>
-                            ))}
+                            ).map(p => {
+                              const pStocks = getProductWarehouseStocks(p);
+                              const activeWhCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+                              const activeStock = activeWhCode === '02' ? pStocks.stock02 : pStocks.stock01;
+                              return (
+                                <option
+                                  key={p.id || p.codigo}
+                                  value={p.id || p.codigo}
+                                  disabled={activeStock <= 0}
+                                >
+                                  {p.codigo} - {p.descripcion} ({formatUsd(resolveProductWholesalePrice(p))}) [Alm {activeWhCode}: {activeStock}{activeStock <= 0 ? ' · AGOTADO' : ''}]
+                                </option>
+                              );
+                            })}
                           </select>
+                          {matchedProd && (() => {
+                            const mStocks = getProductWarehouseStocks(matchedProd);
+                            const whCode = modalidadVenta === 'OFICINA' ? '02' : '01';
+                            const whStock = whCode === '02' ? mStocks.stock02 : mStocks.stock01;
+                            return whStock <= 0 ? (
+                              <div style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 800, marginTop: '3px' }}>
+                                ⚠️ SKU con stock en 0 en Almacén {whCode} — no se permitirá emitir
+                              </div>
+                            ) : null;
+                          })()}
                         </div>
 
                         <div style={{ flex: '1 1 110px', minWidth: 0 }}>
@@ -2837,14 +2907,32 @@ export default function OrdersSalesModal({
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+                  {!tab1WarehouseCheck.isValid && (
+                    <div style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      background: 'rgba(239, 68, 68, 0.14)',
+                      border: '1px solid rgba(239, 68, 68, 0.45)',
+                      color: '#fca5a5',
+                      fontSize: '0.76rem',
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}>
+                      <AlertTriangle size={15} style={{ flexShrink: 0, color: '#ef4444' }} />
+                      <span>{tab1WarehouseCheck.message}</span>
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
-                      disabled={isSaving}
+                      disabled={isSaving || !tab1WarehouseCheck.isValid}
                       onClick={() => handleSaveOrderForm('PENDIENTE')}
                       className="btn btn-secondary"
-                      style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem' }}
-                      title="Guardar borrador de nota de pedido sin enviar todavía a caja"
+                      style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', opacity: !tab1WarehouseCheck.isValid ? 0.55 : 1, cursor: !tab1WarehouseCheck.isValid ? 'not-allowed' : 'pointer' }}
+                      title={!tab1WarehouseCheck.isValid ? tab1WarehouseCheck.message : 'Guardar borrador de nota de pedido sin enviar todavía a caja'}
                     >
                       <Clock size={16} />
                       <span>Guardar Borrador</span>
@@ -2852,7 +2940,7 @@ export default function OrdersSalesModal({
 
                     <button
                       type="button"
-                      disabled={isSaving}
+                      disabled={isSaving || !tab1WarehouseCheck.isValid}
                       onClick={() => handleSaveOrderForm('APROBADO', true)}
                       className="btn btn-print-report"
                       style={{
@@ -2861,12 +2949,14 @@ export default function OrdersSalesModal({
                         gap: '6px',
                         fontSize: '0.84rem',
                         fontWeight: 800,
-                        background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
-                        borderColor: 'rgba(59, 130, 246, 0.4)',
+                        background: !tab1WarehouseCheck.isValid ? '#475569' : 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
+                        borderColor: !tab1WarehouseCheck.isValid ? '#64748b' : 'rgba(59, 130, 246, 0.4)',
                         color: '#fff',
-                        boxShadow: '0 4px 14px rgba(30, 64, 175, 0.35)'
+                        boxShadow: !tab1WarehouseCheck.isValid ? 'none' : '0 4px 14px rgba(30, 64, 175, 0.35)',
+                        opacity: !tab1WarehouseCheck.isValid ? 0.6 : 1,
+                        cursor: !tab1WarehouseCheck.isValid ? 'not-allowed' : 'pointer'
                       }}
-                      title="Emitir nota de pedido y descargar automáticamente el PDF oficial para el vendedor y cliente"
+                      title={!tab1WarehouseCheck.isValid ? tab1WarehouseCheck.message : 'Emitir nota de pedido y descargar automáticamente el PDF oficial para el vendedor y cliente'}
                     >
                       <Printer size={16} color="#ffffff" />
                       <span>Emitir y Descargar PDF Pedido</span>
@@ -2874,7 +2964,7 @@ export default function OrdersSalesModal({
 
                     <button
                       type="button"
-                      disabled={isSaving}
+                      disabled={isSaving || !tab1WarehouseCheck.isValid}
                       onClick={() => handleSaveOrderForm('APROBADO', false, !isCreditNegado)}
                       className="btn btn-primary"
                       style={{
@@ -2883,16 +2973,22 @@ export default function OrdersSalesModal({
                         gap: '6px',
                         fontSize: '0.84rem',
                         fontWeight: 800,
-                        background: isCreditNegado
-                          ? 'linear-gradient(135deg, #d97706, #b45309)'
-                          : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
-                        borderColor: isCreditNegado ? '#d97706' : 'var(--motorven-red)',
+                        background: !tab1WarehouseCheck.isValid
+                          ? '#475569'
+                          : isCreditNegado
+                            ? 'linear-gradient(135deg, #d97706, #b45309)'
+                            : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
+                        borderColor: !tab1WarehouseCheck.isValid ? '#64748b' : (isCreditNegado ? '#d97706' : 'var(--motorven-red)'),
                         color: '#fff',
-                        boxShadow: isCreditNegado
-                          ? '0 4px 14px rgba(217, 119, 6, 0.4)'
-                          : '0 4px 14px rgba(220, 38, 38, 0.35)'
+                        boxShadow: !tab1WarehouseCheck.isValid
+                          ? 'none'
+                          : isCreditNegado
+                            ? '0 4px 14px rgba(217, 119, 6, 0.4)'
+                            : '0 4px 14px rgba(220, 38, 38, 0.35)',
+                        opacity: !tab1WarehouseCheck.isValid ? 0.6 : 1,
+                        cursor: !tab1WarehouseCheck.isValid ? 'not-allowed' : 'pointer'
                       }}
-                      title={isCreditNegado ? 'Solicitar aprobación de crédito a Gerencia' : 'Emitir nota de pedido y enviarla al POS de Caja (Modo No Modificar)'}
+                      title={!tab1WarehouseCheck.isValid ? tab1WarehouseCheck.message : (isCreditNegado ? 'Solicitar aprobación de crédito a Gerencia' : 'Emitir nota de pedido y enviarla al POS de Caja (Modo No Modificar)')}
                     >
                       {isCreditNegado ? <ShieldAlert size={16} /> : <Send size={16} />}
                       <span>{isCreditNegado ? 'SOLICITAR APROBACIÓN' : '🚀 Emitir a Caja'}</span>
@@ -3215,6 +3311,7 @@ export default function OrdersSalesModal({
                                     config,
                                     currentUser,
                                     products: safeProducts,
+                                    clients: safeClients,
                                     client: safeClients.find(c => c.id === ord.clienteId || c.rif === ord.clienteRif),
                                     autoPrint: true
                                   });
@@ -3653,23 +3750,67 @@ export default function OrdersSalesModal({
                           ℹ️ Al presionar el botón inferior, la <strong>Cajera</strong> emite la <strong>Factura de Venta</strong> y el sistema <strong>generará automáticamente la Orden de Entrega</strong> para despacho.
                         </div>
 
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={async () => {
-                            setIsSaving(true);
-                            try {
-                              const isOrdNotaEntrega = isOrderNotaEntrega(selectedOrder);
-                              const nextInvoiceNum = isOrdNotaEntrega
-                                ? getNextNotaEntregaCorrelativo(sales, profitInvoices)
-                                : getNextInvoiceCorrelativo(sales);
-                              if (!isOrdNotaEntrega) {
-                                commitInvoiceCorrelativo(nextInvoiceNum);
-                                setCorrelativoRefreshKey(k => k + 1);
-                              } else {
-                                commitNotaEntregaCorrelativo(nextInvoiceNum);
-                                setCorrelativoRefreshKey(k => k + 1);
-                              }
+                        {(() => {
+                          const isOrdNE = isOrderNotaEntrega(selectedOrder);
+                          const billingWarehouseCheck = validateWarehouseStockForDocument({
+                            items: selectedOrder?.items || [],
+                            products: safeProducts,
+                            tipoDoc: isOrdNE ? 'NOTA_ENTREGA' : 'FACTURA',
+                            almacen: isOrdNE ? '02' : '01',
+                            modalidadVenta: selectedOrder?.modalidadVenta
+                          });
+                          return (
+                            <>
+                              {!billingWarehouseCheck.isValid && (
+                                <div
+                                  style={{
+                                    background: 'rgba(239, 68, 68, 0.14)',
+                                    border: '1px solid rgba(239, 68, 68, 0.55)',
+                                    color: '#fca5a5',
+                                    padding: '9px 11px',
+                                    borderRadius: '8px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700,
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: '7px',
+                                    lineHeight: 1.35
+                                  }}
+                                >
+                                  <AlertTriangle size={15} color="#f87171" style={{ flexShrink: 0, marginTop: '1px' }} />
+                                  <span>{billingWarehouseCheck.message}</span>
+                                </div>
+                              )}
+
+                              <button
+                                type="button"
+                                disabled={isSaving || !billingWarehouseCheck.isValid}
+                                onClick={async () => {
+                                  const isOrdNotaEntrega = isOrderNotaEntrega(selectedOrder);
+                                  const currentCheck = validateWarehouseStockForDocument({
+                                    items: selectedOrder?.items || [],
+                                    products: safeProducts,
+                                    tipoDoc: isOrdNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+                                    almacen: isOrdNotaEntrega ? '02' : '01',
+                                    modalidadVenta: selectedOrder?.modalidadVenta
+                                  });
+                                  if (!currentCheck.isValid) {
+                                    notify.error(currentCheck.message);
+                                    setFeedbackMsg({ type: 'error', text: currentCheck.message });
+                                    return;
+                                  }
+                                  setIsSaving(true);
+                                  try {
+                                    const nextInvoiceNum = isOrdNotaEntrega
+                                      ? getNextNotaEntregaCorrelativo(sales, profitInvoices)
+                                      : getNextInvoiceCorrelativo(sales, profitInvoices);
+                                    if (!isOrdNotaEntrega) {
+                                      commitInvoiceCorrelativo(nextInvoiceNum);
+                                      setCorrelativoRefreshKey(k => k + 1);
+                                    } else {
+                                      commitNotaEntregaCorrelativo(nextInvoiceNum);
+                                      setCorrelativoRefreshKey(k => k + 1);
+                                    }
                               const isCredit = isOrdNotaEntrega || isCreditPaymentCondition(selectedOrder.condicionPago, billingPaymentMethod);
                               const totNeto = Number(selectedOrder.totalNetoUsd) || 0;
                               const totBs = totNeto * tasaBcv;
@@ -3761,11 +3902,16 @@ export default function OrdersSalesModal({
                             color: '#fff',
                             borderRadius: '10px',
                             boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)',
-                            marginTop: 'auto'
+                            marginTop: 'auto',
+                            opacity: (isSaving || !billingWarehouseCheck.isValid) ? 0.55 : 1,
+                            cursor: (isSaving || !billingWarehouseCheck.isValid) ? 'not-allowed' : 'pointer'
                           }}
                         >
                           {isSaving ? 'Emitiendo Factura...' : '⚡ 2. Emitir Factura en Caja & Generar Orden de Entrega'}
                         </button>
+                            </>
+                          );
+                        })()}
                       </>
                     )}
                   </div>
@@ -3923,6 +4069,7 @@ export default function OrdersSalesModal({
                               config,
                               currentUser,
                               products: safeProducts,
+                              clients: safeClients,
                               client: clientMatch,
                               autoPrint: true
                             });
@@ -4203,6 +4350,7 @@ export default function OrdersSalesModal({
                                   config,
                                   currentUser,
                                   products: safeProducts,
+                                  clients: safeClients,
                                   client: clientMatch,
                                   autoPrint: true
                                 });
@@ -6225,6 +6373,7 @@ export default function OrdersSalesModal({
             config={config}
             currentUser={currentUser}
             products={safeProducts}
+            clients={safeClients}
             onClose={() => setShowInvoiceModal(false)}
             onNewSale={() => {
               setShowInvoiceModal(false);
@@ -6242,6 +6391,26 @@ export default function OrdersSalesModal({
           sellers={profitSellers}
           config={config}
           suggestedCorrelativo={currentNextCorrelativo}
+        />
+
+        {/* MODAL: CARTERA MAESTRA DE CLIENTES */}
+        <ClientsDirectoryModal
+          isOpen={showClientsDirectoryModal}
+          onClose={() => setShowClientsDirectoryModal(false)}
+          clients={clients}
+          tasaBcv={tasaBcv}
+          currentUser={currentUser}
+          profitSellers={profitSellers}
+          profitZones={profitZones}
+          onSaveClient={onSaveClient}
+          onDeleteClient={onDeleteClient}
+          onApproveClient={onApproveClient}
+          onRejectClient={onRejectClient}
+          onSelectClientForOrder={(client) => {
+            setSelectedClientId(client.id || client.codigo);
+            setActiveTab('nuevo');
+            notify.success(`Cliente "${client.nombre}" seleccionado para Nota de Pedido.`);
+          }}
         />
 
         </div>

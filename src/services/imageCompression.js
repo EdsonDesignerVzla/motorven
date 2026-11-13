@@ -119,6 +119,50 @@ export async function compressImageToBase64(fileOrDataUrl, options = {}) {
 }
 
 /**
+ * Compresión optimizada en formato Base64 ligero para fichas de clientes (RIF/Cédula y Local Comercial).
+ * Garantiza archivos livianos (<= ~75 KB) para no recargar el sistema, localStorage ni la BD JSON.
+ *
+ * @param {File|Blob|string} fileOrDataUrl
+ * @param {object} options { maxBytes, maxWidth, maxHeight, quality }
+ * @returns {Promise<{ dataUrl: string, width: number, height: number, sizeBytes: number, sizeKb: number, mimeType: string }>}
+ */
+export async function compressClientImageToBase64(fileOrDataUrl, options = {}) {
+  const {
+    maxBytes = 75 * 1024,
+    maxWidth = 800,
+    maxHeight = 800,
+    quality = 0.72
+  } = options;
+
+  let result = await compressImageToBase64(fileOrDataUrl, {
+    maxWidth,
+    maxHeight,
+    quality,
+    mimeType: 'image/jpeg'
+  });
+
+  if (result.sizeBytes > maxBytes) {
+    result = await compressImageToBase64(result.dataUrl, {
+      maxWidth: 640,
+      maxHeight: 640,
+      quality: 0.56,
+      mimeType: 'image/jpeg'
+    });
+  }
+
+  if (result.sizeBytes > maxBytes) {
+    result = await compressImageToBase64(result.dataUrl, {
+      maxWidth: 540,
+      maxHeight: 540,
+      quality: 0.45,
+      mimeType: 'image/jpeg'
+    });
+  }
+
+  return result;
+}
+
+/**
  * Compresión de fotos de perfil y avatares (cuadrado 1:1 centrado)
  */
 export async function compressProfileImage(file, options = {}) {

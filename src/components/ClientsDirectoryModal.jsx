@@ -3,37 +3,37 @@ import {
   X,
   Users,
   Search,
-  Building2,
-  Phone,
-  Mail,
   MapPin,
   CreditCard,
   Calendar,
-  FileText,
   DollarSign,
   ShieldCheck,
   ShieldAlert,
   Download,
   CheckCircle2,
   AlertTriangle,
-  UserCheck,
-  Globe,
-  Tag,
-  Percent,
-  Briefcase,
-  ExternalLink,
-  ChevronRight,
-  Filter,
   ShoppingCart,
   Printer,
   Plus,
   Edit2,
   Trash2,
-  Save,
-  RotateCcw
+  Clock,
+  Image as ImageIcon,
+  Eye,
+  Power,
+  FileText
 } from 'lucide-react';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { canApproveClients, getClientApprovalStatus, isClientApproved } from '../services/authService';
+import {
+  SENIAT_CONTRIBUTOR_TYPES,
+  resolveClientContributorType,
+  computeContributorTypeCounts
+} from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
+import ImagePreviewLightbox from './ImagePreviewLightbox';
+import ClientRegistrationModal from './ClientRegistrationModal';
+import ClientDeleteConfirmModal from './ClientDeleteConfirmModal';
 
 export default function ClientsDirectoryModal({
   isOpen,
@@ -41,39 +41,38 @@ export default function ClientsDirectoryModal({
   clients = [],
   tasaBcv = 42.50,
   currentUser,
+  profitSellers = [],
+  profitZones = [],
   onSaveClient,
   onDeleteClient,
+  onApproveClient,
+  onRejectClient,
   onSelectClientForPayment,
-  onSelectClientForPOS
+  onSelectClientForPOS,
+  onSelectClientForOrder
 }) {
   const notify = useNotification();
+  const userCanApproveClients = canApproveClients(currentUser);
+  const [isProcessingApproval, setIsProcessingApproval] = useState(false);
+  const [previewPhoto, setPreviewPhoto] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [statusFilter, setStatusFilter] = useState('ALL'); // ALL, ACTIVE, INACTIVE
+  const [contributorFilter, setContributorFilter] = useState('ALL'); // ALL, J, V, E, G, P
   const [creditFilter, setCreditFilter] = useState('ALL'); // ALL, WITH_CREDIT, NO_CREDIT
   const [debtFilter, setDebtFilter] = useState('ALL'); // ALL, WITH_DEBT, ZERO_DEBT
   const [zoneFilter, setZoneFilter] = useState('ALL');
   const [sellerFilter, setSellerFilter] = useState('ALL');
   const [activeTab, setActiveTab] = useState('FICHA'); // FICHA, UBICACION, CREDITO, HISTORIAL
 
-  // Estado del Formulario CRUD (Crear / Modificar Cliente)
+  // Estado del Formulario CRUD (Crear / Modificar usando ClientRegistrationModal)
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [isSavingClient, setIsSavingClient] = useState(false);
-  const [clientForm, setClientForm] = useState({
-    codigo: '',
-    nombre: '',
-    rif: '',
-    tipoCliente: 'Mayorista',
-    direccion: '',
-    telefono: '',
-    email: '',
-    limiteCreditoUsd: 0,
-    diasCredito: 0,
-    vendedorAsignado: 'OF',
-    zonaVenta: '03',
-    inactivo: false
-  });
+  const [editingClientTarget, setEditingClientTarget] = useState(null);
+  const [isTogglingStatus, setIsTogglingStatus] = useState(false);
+
+  // Estado del Modal de Eliminación con Doble Seguridad (Paso 1 + Paso 2)
+  const [clientToDelete, setClientToDelete] = useState(null);
+  const [isDeletingClient, setIsDeletingClient] = useState(false);
 
   // Extraer Zonas y Vendedores únicos
   const availableZones = useMemo(() => {
@@ -91,6 +90,11 @@ export default function ClientsDirectoryModal({
     });
     return Array.from(sellers).sort();
   }, [clients]);
+
+  const clientContributorCounts = useMemo(
+    () => computeContributorTypeCounts(clients),
+    [clients]
+  );
 
   // Clientes filtrados
   const filteredClients = useMemo(() => {
@@ -111,9 +115,15 @@ export default function ClientsDirectoryModal({
         }
       }
 
-      // Filtro Estatus
-      if (statusFilter === 'ACTIVE' && c.inactivo) return false;
+      // Filtro Clasificación SENIAT (J / V / E / G / P)
+      if (contributorFilter !== 'ALL' && resolveClientContributorType(c) !== contributorFilter) return false;
+
+      // Filtro Estatus / Aprobación
+      const approvalStatus = getClientApprovalStatus(c);
+      if (statusFilter === 'ACTIVE' && (c.inactivo || approvalStatus !== 'APROBADO')) return false;
       if (statusFilter === 'INACTIVE' && !c.inactivo) return false;
+      if (statusFilter === 'PENDING' && approvalStatus !== 'PENDIENTE') return false;
+      if (statusFilter === 'REJECTED' && approvalStatus !== 'RECHAZADO') return false;
 
       // Filtro Crédito
       if (creditFilter === 'WITH_CREDIT' && c.sinCredito) return false;
@@ -132,7 +142,7 @@ export default function ClientsDirectoryModal({
 
       return true;
     });
-  }, [clients, searchTerm, statusFilter, creditFilter, debtFilter, zoneFilter, sellerFilter]);
+  }, [clients, searchTerm, contributorFilter, statusFilter, creditFilter, debtFilter, zoneFilter, sellerFilter]);
 
   // Cliente seleccionado (por defecto el primero de la lista o el seleccionado)
   const selectedClient = useMemo(() => {
@@ -242,90 +252,59 @@ export default function ClientsDirectoryModal({
   };
 
   const handleOpenCreate = () => {
-    setIsEditing(false);
-    setClientForm({
-      codigo: `CLI-${Date.now().toString().slice(-6)}`,
-      nombre: '',
-      rif: '',
-      tipoCliente: 'Mayorista',
-      direccion: 'Valencia, Carabobo',
-      telefono: '',
-      email: '',
-      limiteCreditoUsd: 1000,
-      diasCredito: 15,
-      vendedorAsignado: 'OF',
-      zonaVenta: '03',
-      inactivo: false
-    });
+    setEditingClientTarget(null);
     setIsFormOpen(true);
   };
 
   const handleOpenEdit = (client) => {
     if (!client) return;
-    setIsEditing(true);
-    setClientForm({
-      id: client.id || client.codigo,
-      codigo: client.codigo || client.id || '',
-      nombre: client.nombre || '',
-      rif: client.rif || '',
-      tipoCliente: client.tipoCliente || 'Mayorista',
-      direccion: client.direccion || '',
-      telefono: client.telefono || '',
-      email: client.email || '',
-      limiteCreditoUsd: Number(client.limiteCreditoUsd || 0),
-      diasCredito: Number(client.diasCredito || 0),
-      vendedorAsignado: client.vendedorAsignado || 'OF',
-      zonaVenta: client.zonaVenta || '03',
-      inactivo: Boolean(client.inactivo)
-    });
+    setEditingClientTarget(client);
     setIsFormOpen(true);
   };
 
-  const handleDeleteClientAction = async (client) => {
-    if (!client || !onDeleteClient) return;
-    const clientId = client.id || client.codigo;
-    await onDeleteClient(clientId);
-    if (selectedClientId === clientId) {
-      setSelectedClientId(null);
+  const handleToggleClientStatus = async (client) => {
+    if (!client || !onSaveClient || !userCanApproveClients) return;
+    setIsTogglingStatus(true);
+    try {
+      const nextInactive = !client.inactivo;
+      const saved = await onSaveClient({
+        ...client,
+        inactivo: nextInactive,
+        estadoAprobacion: client.estadoAprobacion || 'APROBADO'
+      });
+      if (saved) {
+        setSelectedClientId(saved.id || saved.codigo);
+      }
+    } catch (err) {
+      console.error(err);
+      notify?.error?.('No se pudo actualizar el estatus del cliente.');
+    } finally {
+      setIsTogglingStatus(false);
     }
   };
 
-  const handleSaveForm = async (e) => {
-    e.preventDefault();
-    if (!clientForm.codigo.trim()) {
-      notify?.error ? notify.error('El código de cliente es obligatorio') : alert('El código de cliente es obligatorio');
-      return;
-    }
-    if (!clientForm.nombre.trim()) {
-      notify?.error ? notify.error('La razón social o nombre es obligatoria') : alert('La razón social o nombre es obligatoria');
-      return;
-    }
-    if (!clientForm.rif.trim()) {
-      notify?.error ? notify.error('El RIF es obligatorio') : alert('El RIF es obligatorio');
-      return;
-    }
+  const handleRequestDeleteClient = (client) => {
+    if (!client || !onDeleteClient || !userCanApproveClients) return;
+    setClientToDelete(client);
+  };
 
-    setIsSavingClient(true);
+  const handleConfirmDeleteClient = async () => {
+    if (!clientToDelete || !onDeleteClient) return;
+    const clientId = clientToDelete.id || clientToDelete.codigo;
+    setIsDeletingClient(true);
     try {
-      const payload = {
-        ...clientForm,
-        id: clientForm.id || clientForm.codigo.trim(),
-        codigo: clientForm.codigo.trim().toUpperCase(),
-        nombre: clientForm.nombre.trim(),
-        rif: clientForm.rif.trim().toUpperCase(),
-        limiteCreditoUsd: Number(clientForm.limiteCreditoUsd || 0),
-        diasCredito: Number(clientForm.diasCredito || 0)
-      };
-      if (onSaveClient) {
-        await onSaveClient(payload);
+      const deleted = await onDeleteClient(clientId, { skipConfirm: true });
+      if (deleted !== false) {
+        if (selectedClientId === clientId || selectedClientId === clientToDelete.codigo) {
+          setSelectedClientId(null);
+        }
+        setClientToDelete(null);
       }
-      setIsFormOpen(false);
-      setSelectedClientId(payload.codigo);
     } catch (err) {
       console.error(err);
-      notify?.error ? notify.error('Error al guardar el cliente en Supabase') : alert('Error al guardar cliente');
+      notify?.error?.('Error al eliminar el cliente.');
     } finally {
-      setIsSavingClient(false);
+      setIsDeletingClient(false);
     }
   };
 
@@ -370,15 +349,18 @@ export default function ClientsDirectoryModal({
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button
-              onClick={handleOpenCreate}
-              className="btn btn-primary btn-sm"
-              style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-              title="Registrar un nuevo cliente en Supabase y sincronizar con Supabase"
-            >
-              <Plus size={14} /> Nuevo Cliente
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {onSaveClient && (
+              <button
+                type="button"
+                onClick={handleOpenCreate}
+                className="btn btn-primary btn-sm"
+                style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                title={userCanApproveClients ? 'Registrar un nuevo cliente activo en el sistema' : 'Solicitar registro de nuevo cliente para aprobación en Caja Principal'}
+              >
+                <Plus size={14} /> {userCanApproveClients ? 'Nuevo Cliente' : 'Solicitar Cliente'}
+              </button>
+            )}
             <button
               onClick={exportClientsCsv}
               className="btn btn-secondary btn-sm"
@@ -507,15 +489,33 @@ export default function ClientsDirectoryModal({
             )}
           </div>
 
+          {/* Filtro Clasificación SENIAT */}
+          <select
+            value={contributorFilter}
+            onChange={e => setContributorFilter(e.target.value)}
+            className="input"
+            style={{ width: '215px', height: '36px', fontSize: '0.78rem', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
+            title="Filtrar por clasificación SENIAT (J, V, E, G, P)"
+          >
+            <option value="ALL">Todos los tipos ({clients.length})</option>
+            {SENIAT_CONTRIBUTOR_TYPES.map(t => (
+              <option key={t.code} value={t.code} title={t.description}>
+                {t.label} ({clientContributorCounts[t.code] || 0})
+              </option>
+            ))}
+          </select>
+
           {/* Filtro Estatus */}
           <select
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}
             className="input"
-            style={{ width: '130px', height: '36px', fontSize: '0.78rem', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
+            style={{ width: '165px', height: '36px', fontSize: '0.78rem', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
           >
             <option value="ALL">Estatus: Todos</option>
             <option value="ACTIVE">Solo Activos</option>
+            <option value="PENDING">⏳ Pendientes ({clients.filter(cl => getClientApprovalStatus(cl) === 'PENDIENTE').length})</option>
+            <option value="REJECTED">✕ Rechazados</option>
             <option value="INACTIVE">Solo Inactivos</option>
           </select>
 
@@ -624,7 +624,17 @@ export default function ClientsDirectoryModal({
                           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
                             {c.rif || 'S/R'}
                           </span>
-                          {isInactive && (
+                          {getClientApprovalStatus(c) === 'PENDIENTE' && (
+                            <span className="badge badge-warning" style={{ fontSize: '0.6rem', padding: '1px 5px' }}>
+                              ⏳ Pendiente
+                            </span>
+                          )}
+                          {getClientApprovalStatus(c) === 'RECHAZADO' && (
+                            <span className="badge badge-danger" style={{ fontSize: '0.6rem', padding: '1px 5px' }}>
+                              Rechazado
+                            </span>
+                          )}
+                          {isInactive && getClientApprovalStatus(c) === 'APROBADO' && (
                             <span className="badge badge-danger" style={{ fontSize: '0.6rem', padding: '1px 4px' }}>
                               Inactivo
                             </span>
@@ -705,6 +715,16 @@ export default function ClientsDirectoryModal({
                       <span className="badge badge-primary" style={{ fontSize: '0.72rem' }}>
                         {selectedClient.tipoCliente || 'Mayorista'}
                       </span>
+                      {getClientApprovalStatus(selectedClient) === 'PENDIENTE' && (
+                        <span className="badge badge-warning" style={{ fontSize: '0.72rem' }}>
+                          <Clock size={12} style={{ marginRight: '3px' }} /> Pendiente Aprobación (Caja)
+                        </span>
+                      )}
+                      {getClientApprovalStatus(selectedClient) === 'RECHAZADO' && (
+                        <span className="badge badge-danger" style={{ fontSize: '0.72rem' }}>
+                          <AlertTriangle size={12} style={{ marginRight: '3px' }} /> Solicitud Rechazada
+                        </span>
+                      )}
                       {selectedClient.inactivo ? (
                         <span className="badge badge-danger" style={{ fontSize: '0.72rem' }}>
                           <AlertTriangle size={12} style={{ marginRight: '3px' }} /> Inactivo en Supabase
@@ -760,7 +780,86 @@ export default function ClientsDirectoryModal({
 
                     {/* Botonera de Enlace Funcional */}
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end', width: '100%' }}>
-                      {onSelectClientForPOS && (
+                      {userCanApproveClients && onApproveClient && getClientApprovalStatus(selectedClient) !== 'APROBADO' && (
+                        <button
+                          type="button"
+                          disabled={isProcessingApproval}
+                          className="btn-primary"
+                          onClick={async () => {
+                            setIsProcessingApproval(true);
+                            try {
+                              await onApproveClient(selectedClient);
+                            } finally {
+                              setIsProcessingApproval(false);
+                            }
+                          }}
+                          style={{
+                            fontSize: '0.75rem',
+                            padding: '6px 10px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            background: 'linear-gradient(135deg, #10b981, #059669)',
+                            border: 'none'
+                          }}
+                          title="Aprobar registro de cliente para que quede activo en ventas y preventas"
+                        >
+                          <CheckCircle2 size={13} />
+                          <span>Aprobar Cliente</span>
+                        </button>
+                      )}
+                      {userCanApproveClients && onRejectClient && getClientApprovalStatus(selectedClient) === 'PENDIENTE' && (
+                        <button
+                          type="button"
+                          disabled={isProcessingApproval}
+                          className="btn-secondary"
+                          onClick={async () => {
+                            const motivo = window.prompt('Motivo del rechazo (opcional):', 'Documentación / RIF incompleto');
+                            if (motivo === null) return;
+                            setIsProcessingApproval(true);
+                            try {
+                              await onRejectClient(selectedClient, motivo);
+                            } finally {
+                              setIsProcessingApproval(false);
+                            }
+                          }}
+                          style={{
+                            fontSize: '0.75rem',
+                            padding: '6px 10px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            color: 'var(--motorven-red)',
+                            borderColor: 'rgba(220,38,38,0.45)'
+                          }}
+                          title="Rechazar solicitud de registro de cliente"
+                        >
+                          <X size={13} />
+                          <span>Rechazar</span>
+                        </button>
+                      )}
+                      {onSelectClientForOrder && isClientApproved(selectedClient) && (
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => {
+                            onSelectClientForOrder(selectedClient);
+                            if (onClose) onClose();
+                          }}
+                          style={{
+                            fontSize: '0.75rem',
+                            padding: '6px 10px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px'
+                          }}
+                          title="Cargar este cliente en la Nota de Pedido del Flujo Comercial"
+                        >
+                          <FileText size={13} />
+                          <span>Usar en Pedido</span>
+                        </button>
+                      )}
+                      {onSelectClientForPOS && isClientApproved(selectedClient) && (
                         <button
                           type="button"
                           className="btn-primary"
@@ -802,38 +901,59 @@ export default function ClientsDirectoryModal({
                           <span>Cobro / Abono</span>
                         </button>
                       )}
-                      {onSaveClient && (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => handleOpenEdit(selectedClient)}
-                          style={{
-                            fontSize: '0.75rem',
-                            padding: '6px 10px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '5px'
-                          }}
-                          title="Modificar datos del cliente en Supabase"
-                        >
-                          <Edit2 size={13} />
-                          <span>Modificar</span>
-                        </button>
+                      {userCanApproveClients && onSaveClient && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => handleOpenEdit(selectedClient)}
+                            style={{
+                              fontSize: '0.75rem',
+                              padding: '6px 10px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px'
+                            }}
+                            title="Modificar ficha completa, crédito e imágenes del cliente"
+                          >
+                            <Edit2 size={13} />
+                            <span>Modificar</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isTogglingStatus}
+                            className="btn-secondary"
+                            onClick={() => handleToggleClientStatus(selectedClient)}
+                            style={{
+                              fontSize: '0.75rem',
+                              padding: '6px 10px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              color: selectedClient.inactivo ? '#34d399' : '#fbbf24'
+                            }}
+                            title={selectedClient.inactivo ? 'Activar cliente en el sistema' : 'Desactivar cliente temporalmente'}
+                          >
+                            <Power size={13} />
+                            <span>{selectedClient.inactivo ? 'Activar' : 'Inactivar'}</span>
+                          </button>
+                        </>
                       )}
-                      {onDeleteClient && (
+                      {userCanApproveClients && onDeleteClient && (
                         <button
                           type="button"
                           className="btn-secondary"
-                          onClick={() => handleDeleteClientAction(selectedClient)}
+                          onClick={() => handleRequestDeleteClient(selectedClient)}
                           style={{
                             fontSize: '0.75rem',
                             padding: '6px 10px',
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '5px',
-                            color: 'var(--motorven-red)'
+                            color: 'var(--motorven-red)',
+                            borderColor: 'rgba(220,38,38,0.45)'
                           }}
-                          title="Eliminar cliente de Supabase"
+                          title="Eliminar cliente del sistema (requiere doble seguridad)"
                         >
                           <Trash2 size={13} />
                           <span>Eliminar</span>
@@ -929,6 +1049,44 @@ export default function ClientsDirectoryModal({
                         {selectedClient.porcentajeRetencionEspecial ? `${selectedClient.porcentajeRetencionEspecial}%` : '0.00%'}
                       </div>
                     </div>
+
+                    {(selectedClient.imagenDocumento || selectedClient.imagen_documento || selectedClient.imagenLocal || selectedClient.imagen_local) && (
+                      <div className="clients-info-card" style={{ gridColumn: '1 / -1' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <ImageIcon size={13} /> SOPORTES FOTOGRÁFICOS (RIF / CÉDULA Y LOCAL COMERCIAL)
+                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '8px' }}>
+                          {[
+                            { label: 'RIF / Cédula', src: selectedClient.imagenDocumento || selectedClient.imagen_documento },
+                            { label: 'Local Comercial', src: selectedClient.imagenLocal || selectedClient.imagen_local }
+                          ]
+                            .filter(it => Boolean(it.src))
+                            .map(it => (
+                              <button
+                                key={it.label}
+                                type="button"
+                                onClick={() => setPreviewPhoto({ title: `${selectedClient.nombre} — ${it.label}`, src: it.src })}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                  padding: '6px 10px',
+                                  borderRadius: '8px',
+                                  border: '1px solid var(--border-glass)',
+                                  background: 'var(--bg-secondary)',
+                                  color: 'var(--text-primary)',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <img src={it.src} alt={it.label} style={{ width: '60px', height: '46px', objectFit: 'cover', borderRadius: '6px' }} />
+                                <span style={{ fontSize: '0.74rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                  <Eye size={13} color="var(--neon-cyan)" /> {it.label}
+                                </span>
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1130,482 +1288,40 @@ export default function ClientsDirectoryModal({
         </div>
 
         {/* ========================================================================= */}
-        {/* 5. MODAL FLOTANTE DE CREACIÓN / EDICIÓN DE CLIENTE (SUPABASE) */}
+        {/* 5. CREACIÓN / EDICIÓN COMPLETA (REUTILIZA ClientRegistrationModal) */}
         {/* ========================================================================= */}
-        {isFormOpen && (
-          <div
-            style={{
-              position: 'fixed',
-              inset: 0,
-              backgroundColor: 'rgba(5, 12, 28, 0.82)',
-              backdropFilter: 'blur(6px)',
-              zIndex: 11000,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '16px'
-            }}
-            onClick={() => !isSavingClient && setIsFormOpen(false)}
-          >
-            <div
-              style={{
-                background: 'var(--bg-primary, #0c1427)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.12))',
-                borderRadius: '16px',
-                width: '100%',
-                maxWidth: '680px',
-                maxHeight: '90vh',
-                overflowY: 'auto',
-                boxShadow: '0 24px 60px rgba(0, 0, 0, 0.65)',
-                display: 'flex',
-                flexDirection: 'column'
-              }}
-              onClick={e => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div
-                style={{
-                  padding: '18px 24px',
-                  borderBottom: '1px solid var(--border-glass, rgba(255, 255, 255, 0.1))',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: 'var(--bg-secondary, #111c38)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div
-                    style={{
-                      width: '40px',
-                      height: '40px',
-                      borderRadius: '10px',
-                      background: isEditing
-                        ? 'linear-gradient(135deg, var(--motorven-navy), #0ea5e9)'
-                        : 'linear-gradient(135deg, var(--motorven-navy), var(--motorven-red))',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#ffffff'
-                    }}
-                  >
-                    {isEditing ? <Edit2 size={20} /> : <Plus size={22} />}
-                  </div>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>
-                      {isEditing ? 'Modificar Cliente en Supabase' : 'Registrar Nuevo Cliente en Supabase'}
-                    </h3>
-                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                      Sincronización bidireccional automática con Supabase
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsFormOpen(false)}
-                  disabled={isSavingClient}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    padding: '6px'
-                  }}
-                >
-                  <X size={20} />
-                </button>
-              </div>
+        <ClientRegistrationModal
+          isOpen={isFormOpen}
+          onClose={() => {
+            setIsFormOpen(false);
+            setEditingClientTarget(null);
+          }}
+          editingClient={editingClientTarget}
+          clients={clients}
+          profitSellers={profitSellers}
+          profitZones={profitZones}
+          currentUser={currentUser}
+          onSaveClient={onSaveClient}
+          onSuccess={(saved) => {
+            if (saved) {
+              setSelectedClientId(saved.id || saved.codigo);
+            }
+            setIsFormOpen(false);
+            setEditingClientTarget(null);
+          }}
+        />
 
-              {/* Form Body */}
-              <form onSubmit={handleSaveForm} style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      CÓDIGO (co_cli) *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={clientForm.codigo}
-                      onChange={e => setClientForm({ ...clientForm, codigo: e.target.value.toUpperCase() })}
-                      disabled={isEditing || isSavingClient}
-                      placeholder="Ej: CLI-00123"
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: isEditing ? 'rgba(255,255,255,0.04)' : 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-code)',
-                        fontSize: '0.85rem'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      RIF (rif) *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={clientForm.rif}
-                      onChange={e => setClientForm({ ...clientForm, rif: e.target.value.toUpperCase() })}
-                      disabled={isSavingClient}
-                      placeholder="Ej: J-12345678-9"
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-code)',
-                        fontSize: '0.85rem'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                    RAZÓN SOCIAL / NOMBRE (cli_des) *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={clientForm.nombre}
-                    onChange={e => setClientForm({ ...clientForm, nombre: e.target.value })}
-                    disabled={isSavingClient}
-                    placeholder="Ej: Repuestos y Servicios El Motor C.A."
-                    style={{
-                      width: '100%',
-                      padding: '9px 12px',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-glass, #334155)',
-                      background: 'var(--bg-secondary)',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.88rem'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      TIPO DE CLIENTE
-                    </label>
-                    <select
-                      value={clientForm.tipoCliente}
-                      onChange={e => setClientForm({ ...clientForm, tipoCliente: e.target.value })}
-                      disabled={isSavingClient}
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.85rem'
-                      }}
-                    >
-                      <option value="Mayorista">Mayorista</option>
-                      <option value="Minorista">Minorista</option>
-                      <option value="Taller">Taller Mecánico</option>
-                      <option value="Distribuidor">Distribuidor</option>
-                      <option value="Corporativo">Corporativo / Flotas</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      VENDEDOR ASIGNADO (co_ven)
-                    </label>
-                    <select
-                      value={clientForm.vendedorAsignado}
-                      onChange={e => {
-                        const newVen = e.target.value;
-                        const sellerZoneMap = {
-                          FS: '01',
-                          YC: '02',
-                          JR: '02',
-                          VV: '03',
-                          CB: '03',
-                          CM: '04',
-                          KB: '05',
-                          VP: '06',
-                          MS: '07',
-                          OF: '07'
-                        };
-                        const mappedZone = sellerZoneMap[newVen] || clientForm.zonaVenta;
-                        setClientForm({ ...clientForm, vendedorAsignado: newVen, zonaVenta: mappedZone });
-                      }}
-                      disabled={isSavingClient}
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.85rem'
-                      }}
-                    >
-                      <option value="FS">FS - Freddy Sepulveda · Zona 01</option>
-                      <option value="YC">YC - Yheyson Calderon · Zona 02</option>
-                      <option value="JR">JR - Juan Rodriguez · Zona 02</option>
-                      <option value="VV">VV - Victor Veloz · Zona 03</option>
-                      <option value="CB">CB - Carlos Becerra · Zona 03</option>
-                      <option value="CM">CM - Carlos Machado · Zona 04</option>
-                      <option value="KB">KB - Katherine Becerra · Zona 05</option>
-                      <option value="VP">VP - Vanessa Prieto · Zona 06</option>
-                      <option value="MS">MS - Michael Santana · Zona 07</option>
-                      <option value="OF">OF - Oficina Principal · Zona 07</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      ZONA DE VENTA (co_zon)
-                    </label>
-                    <select
-                      value={clientForm.zonaVenta}
-                      onChange={e => {
-                        const newZon = e.target.value;
-                        const sellerZoneMap = {
-                          FS: '01',
-                          YC: '02',
-                          JR: '02',
-                          VV: '03',
-                          CB: '03',
-                          CM: '04',
-                          KB: '05',
-                          VP: '06',
-                          MS: '07',
-                          OF: '07'
-                        };
-                        const zonePrimarySeller = {
-                          '01': 'FS',
-                          '02': 'YC',
-                          '03': 'VV',
-                          '04': 'CM',
-                          '05': 'KB',
-                          '06': 'VP',
-                          '07': 'MS'
-                        };
-                        const currentSellerZone = sellerZoneMap[clientForm.vendedorAsignado];
-                        if (currentSellerZone && currentSellerZone !== newZon) {
-                          const ok = window.confirm(
-                            'Se está seleccionando al vendedor fuera de su zona correspondiente, ¿desea continuar?'
-                          );
-                          if (!ok) {
-                            setClientForm({
-                              ...clientForm,
-                              zonaVenta: newZon,
-                              vendedorAsignado: zonePrimarySeller[newZon] || clientForm.vendedorAsignado
-                            });
-                            return;
-                          }
-                        }
-                        setClientForm({ ...clientForm, zonaVenta: newZon });
-                      }}
-                      disabled={isSavingClient}
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.85rem'
-                      }}
-                    >
-                      <option value="01">01 - Pto cabello - Juan jose Mora (FS)</option>
-                      <option value="02">02 - Isabelica - Pque Valencia - Flor Amarillo (YC / JR)</option>
-                      <option value="03">03 - San diego - Naguanagua (VV / CB)</option>
-                      <option value="04">04 - Zona Sur de Valencia (CM)</option>
-                      <option value="05">05 - Florida-Tocuyito-Bejuma-Montalban-Miranda (KB)</option>
-                      <option value="06">06 - Los Guayos-Guacara-San Joaquin-Mariara (VP)</option>
-                      <option value="07">07 - Carabobo (MS / OF)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      TELÉFONO DE CONTACTO
-                    </label>
-                    <input
-                      type="text"
-                      value={clientForm.telefono}
-                      onChange={e => setClientForm({ ...clientForm, telefono: e.target.value })}
-                      disabled={isSavingClient}
-                      placeholder="Ej: 0241-8712345 / 0414-1234567"
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.85rem'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      CORREO ELECTRÓNICO (email)
-                    </label>
-                    <input
-                      type="email"
-                      value={clientForm.email}
-                      onChange={e => setClientForm({ ...clientForm, email: e.target.value })}
-                      disabled={isSavingClient}
-                      placeholder="contacto@cliente.com"
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.85rem'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      DIRECCIÓN FISCAL / DESPACHO
-                    </label>
-                    <input
-                      type="text"
-                      value={clientForm.direccion}
-                      onChange={e => setClientForm({ ...clientForm, direccion: e.target.value })}
-                      disabled={isSavingClient}
-                      placeholder="Ej: Av. Bolívar Norte, Valencia"
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.85rem'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      LÍMITE DE CRÉDITO (USD)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={clientForm.limiteCreditoUsd}
-                      onChange={e => setClientForm({ ...clientForm, limiteCreditoUsd: e.target.value })}
-                      disabled={isSavingClient}
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-tech)',
-                        fontSize: '0.9rem'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, marginBottom: '5px', color: 'var(--text-muted)' }}>
-                      DÍAS DE CRÉDITO
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="360"
-                      value={clientForm.diasCredito}
-                      onChange={e => setClientForm({ ...clientForm, diasCredito: e.target.value })}
-                      disabled={isSavingClient}
-                      style={{
-                        width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-glass, #334155)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-tech)',
-                        fontSize: '0.9rem'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                  <input
-                    type="checkbox"
-                    id="clientInactivoCheck"
-                    checked={clientForm.inactivo}
-                    onChange={e => setClientForm({ ...clientForm, inactivo: e.target.checked })}
-                    disabled={isSavingClient}
-                    style={{ width: '16px', height: '16px', accentColor: 'var(--motorven-red)' }}
-                  />
-                  <label htmlFor="clientInactivoCheck" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                    Marcar cliente como inactivo en Supabase
-                  </label>
-                </div>
-
-                {/* Footer Buttons */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '14px', paddingTop: '14px', borderTop: '1px solid var(--border-glass, rgba(255,255,255,0.08))' }}>
-                  <button
-                    type="button"
-                    onClick={() => setIsFormOpen(false)}
-                    disabled={isSavingClient}
-                    className="btn btn-secondary"
-                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSavingClient}
-                    className="btn btn-primary"
-                    style={{
-                      padding: '8px 20px',
-                      fontSize: '0.85rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      background: 'linear-gradient(135deg, var(--motorven-navy), var(--motorven-red))'
-                    }}
-                  >
-                    {isSavingClient ? (
-                      <>
-                        <RotateCcw size={15} className="spin" /> Guardando en Supabase...
-                      </>
-                    ) : (
-                      <>
-                        <Save size={15} /> {isEditing ? 'Guardar Cambios' : 'Registrar Cliente'}
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+        {/* ========================================================================= */}
+        {/* 6. MODAL DE ELIMINACIÓN CON DOBLE SEGURIDAD */}
+        {/* ========================================================================= */}
+        <ClientDeleteConfirmModal
+          client={clientToDelete}
+          isDeleting={isDeletingClient}
+          onClose={() => setClientToDelete(null)}
+          onConfirmDelete={handleConfirmDeleteClient}
+        />
       </div>
+      <ImagePreviewLightbox photo={previewPhoto} onClose={() => setPreviewPhoto(null)} />
     </div>
   );
 }

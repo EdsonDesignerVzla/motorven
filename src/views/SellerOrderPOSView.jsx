@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   User,
+  UserPlus,
   MapPin,
   FileText,
   DollarSign,
@@ -31,8 +32,13 @@ import {
   Zap,
   Warehouse
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from '../services/formatService';
+import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
 import { resolveUnitPrice, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
+import {
+  SENIAT_CONTRIBUTOR_TYPES,
+  resolveClientContributorType,
+  computeContributorTypeCounts
+} from '../services/fiscalService';
 import {
   resolveCreditDaysFromTerm,
   calculateExpirationDate,
@@ -42,6 +48,9 @@ import {
 } from '../services/creditPolicyService';
 import { generateSellerOrderPDF } from '../services/pdfReportService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
+import ClientRegistrationModal from '../components/ClientRegistrationModal';
+import ClientApprovalsModal from '../components/ClientApprovalsModal';
+import { canApproveClients, getClientApprovalStatus, isClientApproved } from '../services/authService';
 import { useNotification } from '../context/NotificationContext';
 
 export default function SellerOrderPOSView({
@@ -55,6 +64,9 @@ export default function SellerOrderPOSView({
   profitZones = [],
   currentUser,
   onSaveOrder,
+  onSaveClient,
+  onApproveClient,
+  onRejectClient,
   onProceedToPOS,
   onProcessSale,
   onSyncProfit
@@ -100,6 +112,9 @@ export default function SellerOrderPOSView({
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [lastEmittedOrder, setLastEmittedOrder] = useState(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showNewClientModal, setShowNewClientModal] = useState(false);
+  const [showClientApprovalsModal, setShowClientApprovalsModal] = useState(false);
+  const userCanApproveClients = canApproveClients(currentUser);
 
   // Estados de Aprobación Excepcional de Crédito
   const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
@@ -183,15 +198,18 @@ export default function SellerOrderPOSView({
     return (target[keyId] || 0) + (keyCode && keyCode !== keyId ? (target[keyCode] || 0) : 0);
   };
 
-  // Clientes asignados al vendedor o lista completa filtrable
-  const filteredClients = useMemo(() => {
+  // Clientes aprobados asignados al vendedor o lista completa filtrable
+  // Regla: clientes PENDIENTE / RECHAZADO no pueden recibir pedidos hasta ser aprobados
+  const approvedClients = useMemo(() => {
     if (!Array.isArray(clients)) return [];
-    if (!clientSearchText.trim()) {
-      // Priorizar clientes asignados a este asesor o mostrar los primeros 25
-      return clients.slice(0, 30);
-    }
+    return clients.filter(c => isClientApproved(c));
+  }, [clients]);
+
+  const pendingClientsMatchingSearch = useMemo(() => {
+    if (!Array.isArray(clients) || !clientSearchText.trim()) return [];
     const q = clientSearchText.toLowerCase().trim();
     return clients.filter((c) => {
+      if (isClientApproved(c)) return false;
       const nom = (c.nombre || c.razonSocial || c.cli_des || '').toLowerCase();
       const rif = (c.rif || c.co_cli || '').toLowerCase();
       const cod = (c.id || c.codigo || '').toLowerCase();
@@ -199,12 +217,52 @@ export default function SellerOrderPOSView({
     });
   }, [clients, clientSearchText]);
 
+  const pendingClientRequestsCount = useMemo(() => {
+    if (!Array.isArray(clients)) return 0;
+    if (userCanApproveClients) {
+      return clients.filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length;
+    }
+    const uname = String(currentUser?.username || '').trim().toLowerCase();
+    const coVen = String(currentUser?.co_ven || currentUser?.coVen || '').trim().toUpperCase();
+    return clients.filter(c => {
+      if (getClientApprovalStatus(c) !== 'PENDIENTE') return false;
+      const reqUname = String(c?.solicitadoPorUsername || c?.solicitado_por_username || '').trim().toLowerCase();
+      const ven = String(c?.vendedorAsignado || c?.vendedor_asignado || '').trim().toUpperCase();
+      return (uname && reqUname === uname) || (coVen && ven === coVen);
+    }).length;
+  }, [clients, userCanApproveClients, currentUser]);
+
+  const [clientTypeFilter, setClientTypeFilter] = useState('ALL');
+  const clientContributorCounts = useMemo(
+    () => computeContributorTypeCounts(approvedClients),
+    [approvedClients]
+  );
+
+  const filteredClients = useMemo(() => {
+    const q = clientSearchText.toLowerCase().trim();
+    const list = approvedClients.filter((c) => {
+      if (clientTypeFilter !== 'ALL' && resolveClientContributorType(c) !== clientTypeFilter) {
+        return false;
+      }
+      if (!q) return true;
+      const nom = (c.nombre || c.razonSocial || c.cli_des || '').toLowerCase();
+      const rif = (c.rif || c.co_cli || '').toLowerCase();
+      const cod = (c.id || c.codigo || '').toLowerCase();
+      return nom.includes(q) || rif.includes(q) || cod.includes(q);
+    });
+    return !q && clientTypeFilter === 'ALL' ? list.slice(0, 30) : list;
+  }, [approvedClients, clientSearchText, clientTypeFilter]);
+
   // Selección automática de dirección al cambiar cliente
   const handleSelectClient = (client) => {
+    if (!isClientApproved(client)) {
+      notify.warning('Este cliente aún está pendiente de aprobación por Caja Principal (Vanessa).');
+      return;
+    }
     setSelectedClient(client);
     setCreditOverrideApproved(false);
     setCreditOverrideJustification('');
-    setDeliveryAddress(client?.domicilioFiscal || client?.direccion || 'Zona Industrial Valencia, Edo. Carabobo');
+    setDeliveryAddress(client?.direccion || client?.domicilioFiscal || client?.direccion2 || '');
     if (client?.diasCredito && client.diasCredito > 0) {
       setCondicionPago(client.diasCredito >= 30 ? '30_DIAS' : (client.diasCredito >= 21 ? '21_DIAS' : (client.diasCredito >= 15 ? '15_DIAS' : '7_DIAS')));
     } else {
@@ -443,6 +501,18 @@ export default function SellerOrderPOSView({
   const currentDebt = clientCreditEvaluation.saldoDeudorUsd || Number(selectedClient?.saldoDeudorUsd) || 0;
   const availableCredit = Math.max(0, creditLimit - currentDebt);
 
+  const cartWarehouseValidation = useMemo(
+    () =>
+      validateWarehouseStockForDocument({
+        items: cartItems,
+        products,
+        tipoDoc: modalidadVenta === 'OFICINA' ? 'NOTA_ENTREGA' : 'FACTURA',
+        almacen: modalidadVenta === 'OFICINA' ? '02' : '01',
+        modalidadVenta
+      }),
+    [cartItems, products, modalidadVenta]
+  );
+
   // Enviar preventa / venta por oficina a facturación (Paso a Caja)
   const handleSubmitOrder = async (openDirectlyInPOS = false) => {
     if (!selectedClient) {
@@ -452,6 +522,11 @@ export default function SellerOrderPOSView({
 
     if (cartItems.length === 0) {
       notify.warning('El pedido está vacío. Seleccione al menos un lubricante del catálogo.');
+      return;
+    }
+
+    if (!cartWarehouseValidation.isValid) {
+      notify.error(cartWarehouseValidation.message);
       return;
     }
 
@@ -548,6 +623,10 @@ export default function SellerOrderPOSView({
     }
     if (cartItems.length === 0) {
       notify.warning('El pedido está vacío. Seleccione al menos un producto.');
+      return;
+    }
+    if (!cartWarehouseValidation.isValid) {
+      notify.error(cartWarehouseValidation.message);
       return;
     }
     if (isCreditDenied) {
@@ -715,67 +794,143 @@ export default function SellerOrderPOSView({
               zIndex: isClientDropdownOpen ? 1050 : 2
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
               <label style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--neon-cyan)', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
                 <User size={14} /> 1. Cliente Destinatario de la Preventa
               </label>
-              {selectedClient && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedClient(null);
-                    setIsClientDropdownOpen(true);
-                  }}
-                  className="btn btn-secondary btn-sm"
-                  style={{ fontSize: '0.7rem', padding: '3px 10px', color: 'var(--neon-cyan)' }}
-                >
-                  Cambiar Cliente
-                </button>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                {onSaveClient && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewClientModal(true)}
+                    className="btn btn-secondary btn-sm"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '4px 10px',
+                      color: '#34d399',
+                      borderColor: 'rgba(16,185,129,0.45)',
+                      background: 'rgba(16,185,129,0.1)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontWeight: 700
+                    }}
+                    title={userCanApproveClients ? 'Registrar nuevo cliente aprobado en oficina' : 'Enviar solicitud de nuevo cliente para aprobación en Caja Principal'}
+                  >
+                    <UserPlus size={13} /> {userCanApproveClients ? '+ Nuevo Cliente' : 'Solicitar Nuevo Cliente'}
+                  </button>
+                )}
+                {(pendingClientRequestsCount > 0 || userCanApproveClients || onSaveClient) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowClientApprovalsModal(true)}
+                    className="btn btn-secondary btn-sm"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '4px 10px',
+                      color: pendingClientRequestsCount > 0 ? '#fbbf24' : 'var(--text-secondary)',
+                      borderColor: pendingClientRequestsCount > 0 ? 'rgba(245,158,11,0.5)' : 'var(--border-glass)',
+                      background: pendingClientRequestsCount > 0 ? 'rgba(245,158,11,0.12)' : 'transparent',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontWeight: 700
+                    }}
+                    title={userCanApproveClients ? 'Revisar y aprobar solicitudes de clientes nuevos' : 'Consultar estado de mis solicitudes de clientes'}
+                  >
+                    <Clock size={13} />
+                    {userCanApproveClients ? 'Aprobar Clientes' : 'Mis Solicitudes'}
+                    {pendingClientRequestsCount > 0 && (
+                      <span style={{
+                        background: '#f59e0b',
+                        color: '#000',
+                        borderRadius: '999px',
+                        padding: '0 6px',
+                        fontSize: '0.66rem',
+                        fontWeight: 900
+                      }}>
+                        {pendingClientRequestsCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+                {selectedClient && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedClient(null);
+                      setIsClientDropdownOpen(true);
+                    }}
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.7rem', padding: '4px 10px', color: 'var(--neon-cyan)' }}
+                  >
+                    Cambiar Cliente
+                  </button>
+                )}
+              </div>
             </div>
 
             {!selectedClient ? (
               <div ref={clientSearchContainerRef} style={{ position: 'relative', zIndex: isClientDropdownOpen ? 1051 : 1 }}>
-                <div style={{ position: 'relative' }}>
-                  <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                  <input
-                    type="text"
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                  <select
                     className="form-control"
-                    placeholder="🔍 Buscar cliente por nombre, RIF o código..."
-                    value={clientSearchText}
-                    onFocus={() => setIsClientDropdownOpen(true)}
-                    onClick={() => setIsClientDropdownOpen(true)}
+                    value={clientTypeFilter}
                     onChange={(e) => {
-                      setClientSearchText(e.target.value);
+                      setClientTypeFilter(e.target.value);
                       setIsClientDropdownOpen(true);
                     }}
-                    style={{ paddingLeft: '36px', paddingRight: clientSearchText ? '32px' : '12px', fontSize: '0.85rem', width: '100%' }}
-                  />
-                  {clientSearchText && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setClientSearchText('');
+                    style={{ flex: '1 1 210px', fontSize: '0.8rem', minWidth: 0 }}
+                    title="Clasificar y filtrar clientes por tipo SENIAT (J, V, E, G, P)"
+                  >
+                    <option value="ALL">Todos los tipos ({approvedClients.length})</option>
+                    {SENIAT_CONTRIBUTOR_TYPES.map(t => (
+                      <option key={t.code} value={t.code} title={t.description}>
+                        {t.label} ({clientContributorCounts[t.code] || 0})
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ position: 'relative', flex: '2 1 240px', minWidth: 0 }}>
+                    <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="🔍 Buscar cliente por nombre, RIF o código..."
+                      value={clientSearchText}
+                      onFocus={() => setIsClientDropdownOpen(true)}
+                      onClick={() => setIsClientDropdownOpen(true)}
+                      onChange={(e) => {
+                        setClientSearchText(e.target.value);
                         setIsClientDropdownOpen(true);
                       }}
-                      title="Limpiar búsqueda"
-                      style={{
-                        position: 'absolute',
-                        right: '8px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        padding: '4px',
-                        display: 'flex',
-                        alignItems: 'center'
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
+                      style={{ paddingLeft: '36px', paddingRight: clientSearchText ? '32px' : '12px', fontSize: '0.85rem', width: '100%' }}
+                    />
+                    {clientSearchText && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setClientSearchText('');
+                          setIsClientDropdownOpen(true);
+                        }}
+                        title="Limpiar búsqueda"
+                        style={{
+                          position: 'absolute',
+                          right: '8px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          padding: '4px',
+                          display: 'flex',
+                          alignItems: 'center'
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {isClientDropdownOpen && (
@@ -802,8 +957,47 @@ export default function SellerOrderPOSView({
                       zIndex: 1050
                     }}>
                       {filteredClients.length === 0 ? (
-                        <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                          No se encontraron clientes con "{clientSearchText}".
+                        <div style={{ padding: '0.9rem 1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.78rem', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
+                          {pendingClientsMatchingSearch.length > 0 ? (
+                            <div style={{
+                              width: '100%',
+                              padding: '8px 10px',
+                              borderRadius: '8px',
+                              background: 'rgba(245, 158, 11, 0.1)',
+                              border: '1px solid rgba(245, 158, 11, 0.35)',
+                              color: '#fbbf24',
+                              textAlign: 'left',
+                              fontSize: '0.75rem'
+                            }}>
+                              <strong>⏳ {pendingClientsMatchingSearch.length} cliente(s) coincidente(s) pendiente(s) o rechazado(s):</strong>
+                              <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                                {pendingClientsMatchingSearch.slice(0, 3).map(pc => (
+                                  <li key={pc.id || pc.rif}>
+                                    {pc.nombre} ({pc.rif}) — <strong>{getClientApprovalStatus(pc)}</strong>
+                                    {getClientApprovalStatus(pc) === 'PENDIENTE' ? ' (espera aprobación de Caja Principal / Vanessa)' : ''}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <div>No se encontraron clientes aprobados con "{clientSearchText}".</div>
+                          )}
+                          {onSaveClient && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setIsClientDropdownOpen(false);
+                                setShowNewClientModal(true);
+                              }}
+                              className="btn btn-primary btn-sm"
+                              style={{ fontSize: '0.74rem', padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                            >
+                              <UserPlus size={13} />
+                              {userCanApproveClients ? 'Registrar Nuevo Cliente Directamente' : 'Enviar Solicitud de Nuevo Cliente'}
+                            </button>
+                          )}
                         </div>
                       ) : (
                         filteredClients.map((cl) => (
@@ -832,7 +1026,7 @@ export default function SellerOrderPOSView({
                                 {cl.nombre || cl.razonSocial || cl.cli_des}
                               </div>
                               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                RIF: <strong style={{ color: 'var(--text-primary)' }}>{cl.rif || cl.co_cli}</strong> • Zona: {cl.zona || 'General'}
+                                RIF/Cédula: <strong style={{ color: 'var(--text-primary)' }}>{cl.rif || cl.co_cli}</strong> · [{resolveClientContributorType(cl)}] • Zona: {cl.zona || 'General'}
                               </div>
                             </div>
                             <ChevronRight size={14} color="var(--neon-cyan)" />
@@ -1448,11 +1642,32 @@ export default function SellerOrderPOSView({
               </div>
             </div>
 
+            {cartItems.length > 0 && !cartWarehouseValidation.isValid && (
+              <div
+                style={{
+                  background: 'rgba(239, 68, 68, 0.14)',
+                  border: '1px solid rgba(239, 68, 68, 0.55)',
+                  color: '#fca5a5',
+                  padding: '8px 10px',
+                  borderRadius: '8px',
+                  fontSize: '0.73rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '6px',
+                  lineHeight: 1.3
+                }}
+              >
+                <AlertTriangle size={14} color="#f87171" style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>{cartWarehouseValidation.message}</span>
+              </div>
+            )}
+
             {/* BOTONES DE ACCIÓN PRINCIPAL */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <button
                 type="button"
-                disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
+                disabled={isSubmitting || cartItems.length === 0 || !selectedClient || !cartWarehouseValidation.isValid}
                 onClick={() => handleSubmitOrder(false)}
                 className="btn btn-primary"
                 style={{
@@ -1469,7 +1684,7 @@ export default function SellerOrderPOSView({
                         ? 'linear-gradient(135deg, #0284c7, #0369a1)'
                         : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)'),
                   boxShadow: modalidadVenta === 'OFICINA' ? '0 4px 16px rgba(2, 132, 199, 0.4)' : '0 4px 16px rgba(220, 38, 38, 0.4)',
-                  opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
+                  opacity: cartItems.length === 0 || !selectedClient || !cartWarehouseValidation.isValid ? 0.5 : 1
                 }}
               >
                 <Send size={17} />
@@ -1483,7 +1698,7 @@ export default function SellerOrderPOSView({
               {onProcessSale && !isCreditDenied && (
                 <button
                   type="button"
-                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
+                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient || !cartWarehouseValidation.isValid}
                   onClick={handleDirectSale}
                   className="btn btn-sm"
                   style={{
@@ -1499,7 +1714,7 @@ export default function SellerOrderPOSView({
                     border: 'none',
                     borderRadius: '8px',
                     boxShadow: '0 3px 10px rgba(0,0,0,0.25)',
-                    opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
+                    opacity: cartItems.length === 0 || !selectedClient || !cartWarehouseValidation.isValid ? 0.5 : 1
                   }}
                 >
                   <CheckCircle2 size={15} />
@@ -1510,7 +1725,7 @@ export default function SellerOrderPOSView({
               {!isCreditDenied && onProceedToPOS && (
                 <button
                   type="button"
-                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
+                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient || !cartWarehouseValidation.isValid}
                   onClick={() => handleSubmitOrder(true)}
                   className="btn btn-secondary"
                   style={{
@@ -1523,7 +1738,7 @@ export default function SellerOrderPOSView({
                     gap: '6px',
                     border: '1px solid var(--neon-cyan)',
                     color: 'var(--neon-cyan)',
-                    opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
+                    opacity: cartItems.length === 0 || !selectedClient || !cartWarehouseValidation.isValid ? 0.5 : 1
                   }}
                 >
                   <Zap size={15} /> Emitir y Abrir Directamente en POS de Caja
@@ -1941,17 +2156,34 @@ export default function SellerOrderPOSView({
               >
                 Cerrar Ficha
               </button>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                style={{ background: 'linear-gradient(135deg, var(--motorven-red), #b91c1c)' }}
-                onClick={() => {
-                  addToCart(selectedSpecProduct, 1);
-                  setSelectedSpecProduct(null);
-                }}
-              >
-                <Plus size={14} style={{ marginRight: '4px' }} /> Agregar a Preventa
-              </button>
+              {(() => {
+                const isNota = modalidadVenta === 'OFICINA';
+                const targetWh = isNota ? '02' : '01';
+                const specStocks = getProductWarehouseStocks(selectedSpecProduct);
+                const rawStock = Number(isNota ? specStocks.stock02 : specStocks.stock01);
+                const committed = getProductCommittedQty(selectedSpecProduct, targetWh);
+                const specInCart = cartItems.find((it) => it.product.id === selectedSpecProduct.id || it.product.codigo === selectedSpecProduct.codigo)?.cantidad || 0;
+                const specAtp = Math.max(0, rawStock - committed - specInCart);
+                return (
+                  <button
+                    type="button"
+                    disabled={specAtp <= 0}
+                    className="btn btn-primary btn-sm"
+                    style={{
+                      background: specAtp <= 0 ? '#475569' : 'linear-gradient(135deg, var(--motorven-red), #b91c1c)',
+                      cursor: specAtp <= 0 ? 'not-allowed' : 'pointer',
+                      opacity: specAtp <= 0 ? 0.65 : 1
+                    }}
+                    title={specAtp <= 0 ? `Sin existencia disponible en Almacén ${targetWh}` : 'Agregar producto al pedido'}
+                    onClick={() => {
+                      addToCart(selectedSpecProduct, 1);
+                      setSelectedSpecProduct(null);
+                    }}
+                  >
+                    <Plus size={14} style={{ marginRight: '4px' }} /> {specAtp <= 0 ? `Sin Stock Alm ${targetWh}` : 'Agregar a Preventa'}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -2095,6 +2327,34 @@ export default function SellerOrderPOSView({
           </div>
         </div>
       )}
+
+      {/* MODAL: SOLICITUD / REGISTRO DIRECTO DE NUEVO CLIENTE */}
+      <ClientRegistrationModal
+        isOpen={showNewClientModal}
+        onClose={() => setShowNewClientModal(false)}
+        clients={clients}
+        profitSellers={profitSellers}
+        profitZones={profitZones}
+        currentUser={currentUser}
+        onSaveClient={onSaveClient}
+        onSuccess={(saved) => {
+          if (saved && isClientApproved(saved)) {
+            handleSelectClient(saved);
+            setIsClientDropdownOpen(false);
+          }
+        }}
+      />
+
+      {/* MODAL: APROBACIÓN / ESTADO DE SOLICITUDES DE CLIENTES */}
+      <ClientApprovalsModal
+        isOpen={showClientApprovalsModal}
+        onClose={() => setShowClientApprovalsModal(false)}
+        clients={clients}
+        currentUser={currentUser}
+        onApproveClient={onApproveClient}
+        onRejectClient={onRejectClient}
+        onOpenNewClient={() => setShowNewClientModal(true)}
+      />
 
     </div>
   );

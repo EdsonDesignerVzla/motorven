@@ -4,7 +4,7 @@ import {
     DollarSign, Users, Calendar, Filter, ArrowUpDown, ChevronDown,
     ChevronUp, Printer, ShieldAlert, TrendingDown, Eye, Trash2, Edit2,
     Plus, Landmark, Wallet, Receipt, FileText, Check, RefreshCw, MessageSquare,
-    ExternalLink, Database
+    ExternalLink, Database, Layers, UserPlus, UserCheck
 } from 'lucide-react';
 import {
     REAL_PROFIT_CASH_DESKS,
@@ -20,6 +20,11 @@ import {
 } from '../services/supabaseService';
 import { generateAccountsReceivablePDF, generateDeliveryNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
+import { CxcConsolidatedModal } from './CxcConsolidatedModal';
+import ClientRegistrationModal from './ClientRegistrationModal';
+import ClientApprovalsModal from './ClientApprovalsModal';
+import ClientsDirectoryModal from './ClientsDirectoryModal';
+import { canApproveClients, getClientApprovalStatus } from '../services/authService';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
@@ -197,6 +202,7 @@ export function AccountsReceivableModal({
     clients = [],
     sellers = [],
     profitSellers = [],
+    profitZones = [],
     config = {},
     currentUser = null,
     profitInvoices = [],
@@ -206,8 +212,20 @@ export function AccountsReceivableModal({
     onDeleteSale,
     onSaveDocument,
     onRegisterCollection,
-    onOpenCollectionIntelligence
+    onOpenCollectionIntelligence,
+    onSaveClient,
+    onDeleteClient,
+    onApproveClient,
+    onRejectClient
 }) {
+    const userCanApproveClients = canApproveClients(currentUser);
+    const [showNewClientModal, setShowNewClientModal] = useState(false);
+    const [showClientApprovalsModal, setShowClientApprovalsModal] = useState(false);
+    const [showClientsDirectoryModal, setShowClientsDirectoryModal] = useState(false);
+    const pendingClientApprovalsCount = useMemo(
+        () => (clients || []).filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length,
+        [clients]
+    );
     // Notificaciones corporativas del sistema
     let notify = { success: () => {}, error: () => {}, warning: () => {}, info: () => {} };
     try {
@@ -219,6 +237,9 @@ export function AccountsReceivableModal({
 
     // Selector superior entre Facturas Fiscales y Notas de Entrega
     const [activeDocType, setActiveDocType] = useState('FACTURA'); // 'FACTURA' | 'NOTA_ENTREGA'
+
+    // Modal consolidado: Facturas Fiscales + Notas de Entrega sumadas
+    const [isConsolidatedOpen, setIsConsolidatedOpen] = useState(false);
 
     // Filtros del Reporte (Parte B)
     const [searchTerm, setSearchTerm] = useState('');
@@ -277,6 +298,8 @@ export function AccountsReceivableModal({
             const desc = c.descripcion || c.desCaja || c.des_caja || c.nombre || c.descrip || `Caja ${code}`;
             list.push({
                 key: `CAJA:${id}`,
+                kind: 'CAJA',
+                rawId: id,
                 accountType: 'CAJA',
                 id,
                 nombre: desc,
@@ -293,6 +316,8 @@ export function AccountsReceivableModal({
             const bancoName = b.bancoNombre || b.banco_nombre || b.banco || b.des_ban || b.desBan || 'Banco';
             list.push({
                 key: `BANCO:${code}`,
+                kind: 'BANCO',
+                rawId: code,
                 accountType: 'BANCO',
                 id: code,
                 nombre: `${bancoName} (${num})`,
@@ -636,7 +661,7 @@ export function AccountsReceivableModal({
             const clientObj = clients.find(c =>
                 (inv.clienteId && c.id === inv.clienteId) ||
                 (inv.clienteRif && c.rif === inv.clienteRif) ||
-                (inv.clienteNombre && c.name?.toLowerCase() === inv.clienteNombre?.toLowerCase())
+                (inv.clienteNombre && (c.nombre || c.name)?.toLowerCase() === inv.clienteNombre?.toLowerCase())
             );
             const { sellerId, sellerName } = resolveSellerFromCatalog(
                 inv.vendedorId,
@@ -655,10 +680,10 @@ export function AccountsReceivableModal({
                 vendedorNombre: sellerName,
                 vendedorDisplay: sellerName && sellerName !== sellerId ? `${sellerId} - ${sellerName}` : sellerId,
                 clienteId: inv.clienteId || clientObj?.id || 'CLI-GEN',
-                cliente: inv.clienteNombre || clientObj?.name || 'Cliente General',
+                cliente: inv.clienteNombre || clientObj?.nombre || clientObj?.name || 'Cliente General',
                 rif: inv.clienteRif || clientObj?.rif || 'J-00000000-0',
-                telefono: clientObj?.phone || 'N/A',
-                direccion: clientObj?.address || 'N/A',
+                telefono: clientObj?.telefono || clientObj?.phone || 'N/A',
+                direccion: clientObj?.direccion || clientObj?.direccion2 || clientObj?.domicilioFiscal || clientObj?.address || inv.clienteDireccion || 'N/A',
                 fechaEmision: fechaEmisionDate,
                 fechaEmisionIso,
                 fechaVencimiento: fechaVencDate,
@@ -1104,8 +1129,10 @@ export function AccountsReceivableModal({
         setIsSavingCobro(true);
         try {
             const factKey = String(selectedCobroDoc.factNum);
+            const cobroNum = `COB-${Date.now().toString().slice(-6)}`;
+            const observacionCobro = `Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} @ Tasa ${tasaNum}`;
             const cobroRecord = {
-                cobroNum: `COB-${Date.now().toString().slice(-6)}`,
+                cobroNum,
                 factNum: factKey,
                 tipoDoc: selectedCobroDoc.tipoDoc,
                 fecha: cobroFecha,
@@ -1113,11 +1140,41 @@ export function AccountsReceivableModal({
                 montoUsd: effectiveAbonoUsd,
                 montoBs: effectiveAbonoBs,
                 cuentaKey: cuentaObj.key,
-                cuentaId: cuentaObj.id,
+                cuentaId: cuentaObj.rawId || cuentaObj.id,
                 cuentaNombre: cuentaObj.nombre,
                 accountType: cuentaObj.accountType,
                 moneda: cuentaObj.moneda,
                 referencia: cobroReferencia.trim()
+            };
+
+            const collectionPayload = {
+                id: `cob-${cobroNum}`,
+                cobNum: cobroNum,
+                fecha: cobroFecha,
+                clienteId: selectedCobroDoc.clienteId || '',
+                clienteNombre: selectedCobroDoc.cliente || 'Cliente General',
+                clienteRif: selectedCobroDoc.rif || '',
+                vendedorId: selectedCobroDoc.vendedorId || 'OF',
+                montoUsd: effectiveAbonoUsd,
+                montoBs: effectiveAbonoBs,
+                tasa: tasaNum,
+                cuentaId: cuentaObj.rawId || cuentaObj.id,
+                cuentaNombre: cuentaObj.nombre,
+                descrip: observacionCobro,
+                formasPago: [{
+                    formaPago: cuentaObj.accountType === 'CAJA' ? 'EFEC' : 'TRANS',
+                    monto: effectiveAbonoBs,
+                    montoUsd: effectiveAbonoUsd,
+                    referencia: cobroReferencia.trim(),
+                    codCaja: cuentaObj.accountType === 'CAJA' ? (cuentaObj.rawId || cuentaObj.id) : '',
+                    codCta: cuentaObj.accountType === 'BANCO' ? (cuentaObj.rawId || cuentaObj.id) : ''
+                }],
+                documentosAfectados: [{
+                    numDoc: factKey,
+                    tipoDoc: selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'N/E' : 'FACT',
+                    montoCobrado: effectiveAbonoBs,
+                    montoCobradoUsd: effectiveAbonoUsd
+                }]
             };
 
             const updatedInvoicePayload = {
@@ -1166,6 +1223,9 @@ export function AccountsReceivableModal({
             // 2. Persistir en App / Supabase / Cajas y Bancos
             if (onRegisterCollection) {
                 await onRegisterCollection({
+                    updatedDoc: updatedInvoicePayload,
+                    collectionPayload,
+                    selectedAccount: cuentaObj,
                     factNum: factKey,
                     tipoDoc: selectedCobroDoc.tipoDoc,
                     clienteId: selectedCobroDoc.clienteId,
@@ -1177,11 +1237,11 @@ export function AccountsReceivableModal({
                     montoBs: effectiveAbonoBs,
                     moneda: cuentaObj.moneda,
                     accountType: cuentaObj.accountType,
-                    accountId: cuentaObj.id,
+                    accountId: cuentaObj.rawId || cuentaObj.id,
                     cuentaDestino: cuentaObj.nombre,
                     formaPago: cuentaObj.accountType === 'CAJA' ? 'EFECTIVO' : 'TRANSFERENCIA',
                     referencia: cobroReferencia.trim(),
-                    observaciones: `Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} @ Tasa ${tasaNum}`,
+                    observaciones: observacionCobro,
                     updatedInvoice: updatedInvoicePayload
                 });
             }
@@ -1604,9 +1664,10 @@ export function AccountsReceivableModal({
                 diasCredito: inv.diasCredito || 0,
                 condicionPago: inv.diasCredito > 0 ? `CRÉDITO ${inv.diasCredito} DÍAS` : 'CONTADO',
                 metodoPago: inv.formaPago || 'CRÉDITO / DESPACHO',
+                clienteId: inv.clienteId,
                 clienteNombre: inv.cliente,
                 clienteRif: inv.rif,
-                clienteDireccion: inv.direccion !== 'N/A' ? inv.direccion : 'Sede / Domicilio del Cliente',
+                clienteDireccion: (inv.direccion && inv.direccion !== 'N/A') ? inv.direccion : '',
                 vendedor: inv.vendedorDisplay || inv.vendedorNombre || inv.vendedor,
                 almacenOrigen: '02 - Almacén 02',
                 subtotalUsd: totalUsdVal,
@@ -1622,6 +1683,7 @@ export function AccountsReceivableModal({
             },
             config: { ...config, tasaDolar: rate },
             products,
+            clients,
             tasaBcv: rate,
             currentUser,
             autoPrint: true
@@ -1798,6 +1860,40 @@ export function AccountsReceivableModal({
                                 {docTypeCounts.notasEntrega}
                             </span>
                         </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setIsConsolidatedOpen(true)}
+                            title="Ver Facturas Fiscales y Notas de Entrega juntas con sus montos sumados"
+                            style={{
+                                padding: '0.5rem 1rem',
+                                borderRadius: '9px',
+                                fontSize: '0.82rem',
+                                fontWeight: 700,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                border: 'none',
+                                background: isConsolidatedOpen
+                                    ? 'linear-gradient(135deg, #059669 0%, #047857 100%)'
+                                    : 'transparent',
+                                color: isConsolidatedOpen ? '#ffffff' : 'var(--text-muted)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            <Layers size={15} />
+                            <span>Consolidado (FAC + NE)</span>
+                            <span style={{
+                                padding: '1px 7px',
+                                borderRadius: '10px',
+                                fontSize: '0.72rem',
+                                background: 'rgba(16, 185, 129, 0.18)',
+                                color: '#34d399'
+                            }}>
+                                {docTypeCounts.facturas + docTypeCounts.notasEntrega}
+                            </span>
+                        </button>
                     </div>
 
                     {/* Botón Nuevo Documento */}
@@ -1820,6 +1916,73 @@ export function AccountsReceivableModal({
                         <Plus size={16} />
                         <span>{isNotaEntregaTab ? '+ Nueva Nota de Entrega' : '+ Nueva Factura Fiscal'}</span>
                     </button>
+
+                    {/* Botones de Clientes Nuevos / Aprobación / Directorio para Cobranzas y Caja Principal */}
+                    {userCanApproveClients && (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setShowClientApprovalsModal(true)}
+                                className="btn btn-secondary"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    padding: '0.55rem 0.9rem',
+                                    fontSize: '0.82rem',
+                                    borderColor: pendingClientApprovalsCount > 0 ? 'rgba(245,158,11,0.55)' : undefined,
+                                    background: pendingClientApprovalsCount > 0 ? 'rgba(245,158,11,0.14)' : undefined,
+                                    color: pendingClientApprovalsCount > 0 ? '#fbbf24' : undefined
+                                }}
+                                title="Aprobar o rechazar solicitudes de nuevos clientes enviadas por vendedores"
+                            >
+                                <UserCheck size={16} color={pendingClientApprovalsCount > 0 ? '#fbbf24' : '#38bdf8'} />
+                                <span className="hide-on-mobile">Solicitudes Clientes</span>
+                                <span style={{
+                                    background: pendingClientApprovalsCount > 0 ? '#f59e0b' : 'rgba(255,255,255,0.16)',
+                                    color: pendingClientApprovalsCount > 0 ? '#000' : '#fff',
+                                    borderRadius: '999px',
+                                    padding: '1px 7px',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 900
+                                }}>
+                                    {pendingClientApprovalsCount}
+                                </span>
+                            </button>
+
+                            {onSaveClient && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowNewClientModal(true)}
+                                    className="btn btn-secondary"
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.45rem',
+                                        padding: '0.55rem 0.9rem',
+                                        fontSize: '0.82rem',
+                                        color: '#34d399',
+                                        borderColor: 'rgba(16,185,129,0.45)'
+                                    }}
+                                    title="Registrar nuevo cliente directamente en oficina"
+                                >
+                                    <UserPlus size={16} color="#34d399" />
+                                    <span className="hide-on-mobile">+ Nuevo Cliente</span>
+                                </button>
+                            )}
+
+                            <button
+                                type="button"
+                                onClick={() => setShowClientsDirectoryModal(true)}
+                                className="btn btn-secondary"
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.55rem 0.9rem', fontSize: '0.82rem' }}
+                                title="Abrir Directorio Maestro de Clientes"
+                            >
+                                <Users size={16} color="#38bdf8" />
+                                <span className="hide-on-mobile">Clientes</span>
+                            </button>
+                        </>
+                    )}
 
                     {/* Botón WhatsApp Intelligence si existe */}
                     {onOpenCollectionIntelligence && (
@@ -3451,6 +3614,19 @@ export function AccountsReceivableModal({
             )}
 
             {/* ============================================================
+                MODAL CONSOLIDADO: FACTURAS FISCALES + NOTAS DE ENTREGA
+            ============================================================ */}
+            <CxcConsolidatedModal
+                isOpen={isConsolidatedOpen}
+                onClose={() => setIsConsolidatedOpen(false)}
+                documents={allDocuments}
+                tasaBcv={tasaBcv}
+                onViewDetail={(doc) => setSelectedInvoiceDetail(doc)}
+                config={config}
+                currentUser={currentUser}
+            />
+
+            {/* ============================================================
                 MODAL DE DETALLE DE DOCUMENTO
             ============================================================ */}
             {selectedInvoiceDetail && (
@@ -3680,6 +3856,40 @@ export function AccountsReceivableModal({
                     </div>
                 </div>
             )}
+
+            <ClientRegistrationModal
+                isOpen={showNewClientModal}
+                onClose={() => setShowNewClientModal(false)}
+                clients={clients}
+                profitSellers={profitSellers.length > 0 ? profitSellers : REAL_PROFIT_SELLERS}
+                profitZones={profitZones}
+                currentUser={currentUser}
+                onSaveClient={onSaveClient}
+            />
+
+            <ClientApprovalsModal
+                isOpen={showClientApprovalsModal}
+                onClose={() => setShowClientApprovalsModal(false)}
+                clients={clients}
+                currentUser={currentUser}
+                onApproveClient={onApproveClient}
+                onRejectClient={onRejectClient}
+                onOpenNewClient={() => setShowNewClientModal(true)}
+            />
+
+            <ClientsDirectoryModal
+                isOpen={showClientsDirectoryModal}
+                onClose={() => setShowClientsDirectoryModal(false)}
+                clients={clients}
+                tasaBcv={Number(config?.tasaDolar) || 827.73}
+                currentUser={currentUser}
+                profitSellers={profitSellers.length > 0 ? profitSellers : REAL_PROFIT_SELLERS}
+                profitZones={profitZones}
+                onSaveClient={onSaveClient}
+                onDeleteClient={onDeleteClient}
+                onApproveClient={onApproveClient}
+                onRejectClient={onRejectClient}
+            />
         </>
     );
 }

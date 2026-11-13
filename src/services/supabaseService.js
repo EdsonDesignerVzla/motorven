@@ -51,9 +51,11 @@ import {
   getNextInvoiceCorrelativo,
   commitInvoiceCorrelativo,
   getNextNotaEntregaCorrelativo,
-  commitNotaEntregaCorrelativo
+  commitNotaEntregaCorrelativo,
+  getCanonicalDocKey,
+  dedupeCanonicalDocs
 } from './fiscalService.js';
-import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
+import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from './formatService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import {
   getConfig as getStorageConfig,
@@ -63,6 +65,7 @@ import {
   deleteProduct as deleteStorageProduct,
   getClients as getStorageClients,
   saveClient as saveStorageClient,
+  deleteClient as deleteStorageClient,
   getSuppliers as getStorageSuppliers,
   saveSupplier as saveStorageSupplier,
   getSales as getStorageSales,
@@ -849,6 +852,7 @@ const mapClientToDb = (c) => ({
   saldo_deudor_usd: Number(c.saldoDeudorUsd ?? c.saldo_deudor_usd ?? 0),
   dias_credito: Number(c.diasCredito ?? c.dias_credito ?? 0),
   tipo_cliente: c.tipoCliente || c.tipo_cliente || 'Mayorista',
+  tipo_persona: c.tipoPersona || c.tipo_persona || c.tipoContribuyente || '',
   nit: c.nit || '',
   direccion2: c.direccion2 || '',
   ciudad: c.ciudad || '',
@@ -873,11 +877,22 @@ const mapClientToDb = (c) => ({
   ultima_factura: c.ultimaFactura || c.ultima_factura || '',
   fecha_ultima_venta: c.fechaUltimaVenta || c.fecha_ultima_venta || '',
   monto_ultima_venta: Number(c.montoUltimaVenta ?? c.monto_ultima_venta ?? 0),
-  comentarios: c.comentarios || ''
+  comentarios: c.comentarios || '',
+  estado_aprobacion: String(c.estadoAprobacion || c.estado_aprobacion || 'APROBADO').toUpperCase(),
+  solicitado_por: c.solicitadoPor || c.solicitado_por || '',
+  solicitado_por_username: c.solicitadoPorUsername || c.solicitado_por_username || '',
+  fecha_solicitud: c.fechaSolicitud || c.fecha_solicitud || null,
+  aprobado_por: c.aprobadoPor || c.aprobado_por || '',
+  aprobado_por_username: c.aprobadoPorUsername || c.aprobado_por_username || '',
+  fecha_aprobacion: c.fechaAprobacion || c.fecha_aprobacion || null,
+  motivo_rechazo: c.motivoRechazo || c.motivo_rechazo || '',
+  imagen_documento: c.imagenDocumento || c.imagen_documento || '',
+  imagen_local: c.imagenLocal || c.imagen_local || ''
 });
 
 const mapClientFromDb = (c) => {
   if (!c) return null;
+  const estadoAprobacion = String(c.estado_aprobacion || c.estadoAprobacion || 'APROBADO').toUpperCase();
   return {
     id: c.id,
     codigo: c.codigo || c.id,
@@ -886,10 +901,11 @@ const mapClientFromDb = (c) => {
     telefono: c.telefono || '',
     email: c.email || '',
     direccion: c.direccion || '',
-    limiteCreditoUsd: Number(c.limite_credito_usd || 0),
-    saldoDeudorUsd: Number(c.saldo_deudor_usd || 0),
-    diasCredito: Number(c.dias_credito || 0),
-    tipoCliente: c.tipo_cliente || 'Mayorista',
+    limiteCreditoUsd: Number(c.limite_credito_usd ?? c.limiteCreditoUsd ?? 0),
+    saldoDeudorUsd: Number(c.saldo_deudor_usd ?? c.saldoDeudorUsd ?? 0),
+    diasCredito: Number(c.dias_credito ?? c.diasCredito ?? 0),
+    tipoCliente: c.tipo_cliente || c.tipoCliente || 'Mayorista',
+    tipoPersona: String(c.tipo_persona || c.tipoPersona || c.tipoContribuyente || '').trim().toUpperCase(),
     nit: c.nit || '',
     direccion2: c.direccion2 || '',
     ciudad: c.ciudad || '',
@@ -898,23 +914,34 @@ const mapClientFromDb = (c) => {
     fax: c.fax || '',
     website: c.website || '',
     responsable: c.responsable || '',
-    saldoInicial: Number(c.saldo_inicial || 0),
-    descuentoProntoPago: Number(c.descuento_pronto_pago || 0),
-    descuentoGlobal: Number(c.descuento_global || 0),
-    zonaVenta: c.zona_venta || '',
+    saldoInicial: Number(c.saldo_inicial ?? c.saldoInicial ?? 0),
+    descuentoProntoPago: Number(c.descuento_pronto_pago ?? c.descuentoProntoPago ?? 0),
+    descuentoGlobal: Number(c.descuento_global ?? c.descuentoGlobal ?? 0),
+    zonaVenta: c.zona_venta || c.zonaVenta || '',
     segmento: c.segmento || '',
-    vendedorAsignado: c.vendedor_asignado || '',
-    tipoIva: c.tipo_iva || '1',
-    esContribuyente: Boolean(c.es_contribuyente),
-    esContribuyenteEspecial: Boolean(c.es_contribuyente_especial),
-    porcentajeRetencionEspecial: Number(c.porcentaje_retencion_especial || 0),
+    vendedorAsignado: c.vendedor_asignado || c.vendedorAsignado || '',
+    tipoIva: c.tipo_iva || c.tipoIva || '1',
+    esContribuyente: Boolean(c.es_contribuyente ?? c.esContribuyente ?? true),
+    esContribuyenteEspecial: Boolean(c.es_contribuyente_especial ?? c.esContribuyenteEspecial ?? false),
+    porcentajeRetencionEspecial: Number(c.porcentaje_retencion_especial ?? c.porcentajeRetencionEspecial ?? 0),
     inactivo: Boolean(c.inactivo),
-    sinCredito: Boolean(c.sin_credito),
-    fechaRegistro: c.fecha_registro || '',
-    ultimaFactura: c.ultima_factura || '',
-    fechaUltimaVenta: c.fecha_ultima_venta || '',
-    montoUltimaVenta: Number(c.monto_ultima_venta || 0),
-    comentarios: c.comentarios || ''
+    sinCredito: Boolean(c.sin_credito ?? c.sinCredito),
+    fechaRegistro: c.fecha_registro || c.fechaRegistro || '',
+    ultimaFactura: c.ultima_factura || c.ultimaFactura || '',
+    fechaUltimaVenta: c.fecha_ultima_venta || c.fechaUltimaVenta || '',
+    montoUltimaVenta: Number(c.monto_ultima_venta ?? c.montoUltimaVenta ?? 0),
+    comentarios: c.comentarios || '',
+    estadoAprobacion,
+    estado_aprobacion: estadoAprobacion,
+    solicitadoPor: c.solicitado_por || c.solicitadoPor || '',
+    solicitadoPorUsername: c.solicitado_por_username || c.solicitadoPorUsername || '',
+    fechaSolicitud: c.fecha_solicitud || c.fechaSolicitud || '',
+    aprobadoPor: c.aprobado_por || c.aprobadoPor || '',
+    aprobadoPorUsername: c.aprobado_por_username || c.aprobadoPorUsername || '',
+    fechaAprobacion: c.fecha_aprobacion || c.fechaAprobacion || '',
+    motivoRechazo: c.motivo_rechazo || c.motivoRechazo || '',
+    imagenDocumento: c.imagen_documento || c.imagenDocumento || '',
+    imagenLocal: c.imagen_local || c.imagenLocal || ''
   };
 };
 
@@ -2040,15 +2067,24 @@ export const getSupabaseClients = async () => {
 export const saveSupabaseClient = async (client) => {
   saveStorageClient(client);
   const currentClients = getStorageClients();
-  const clientToSave = currentClients.find(c => (client.id && c.id === client.id) || c.rif === client.rif) || client;
+  const clientToSave = currentClients.find(
+    c => (client.id && c.id === client.id) || (client.codigo && c.codigo === client.codigo) || (client.rif && c.rif === client.rif)
+  ) || client;
+  const mergedClient = { ...clientToSave, ...client };
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
-    enqueueSyncAction('client', 'UPDATE', clientToSave);
-    return clientToSave;
+    enqueueSyncAction('client', 'UPDATE', mergedClient);
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'RECONCILE',
+      key: mergedClient.id || mergedClient.codigo,
+      item: mergedClient
+    });
+    return mergedClient;
   }
 
   try {
-    const payload = mapClientToDb(clientToSave);
+    const payload = mapClientToDb(mergedClient);
     const { data, error } = await withTimeout(
       supabase.from('clients').upsert(payload).select().single()
     );
@@ -2069,45 +2105,84 @@ export const saveSupabaseClient = async (client) => {
       console.warn('[saveSupabaseClient] Aviso escribiendo en Supabase:', e.message);
     }
 
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'RECONCILE',
+      key: mapped.id || mapped.codigo,
+      item: mapped
+    });
+
     return mapped;
   } catch (err) {
     markSupabaseOffline(err, 'saveSupabaseClient');
-    enqueueSyncAction('client', 'UPDATE', clientToSave);
-    writeProfitClient(clientToSave, 'SAVE').catch(() => {});
-    return clientToSave;
+    enqueueSyncAction('client', 'UPDATE', mergedClient);
+    writeProfitClient(mergedClient, 'SAVE').catch(() => {});
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'RECONCILE',
+      key: mergedClient.id || mergedClient.codigo,
+      item: mergedClient
+    });
+    return mergedClient;
   }
 };
 
 export const deleteSupabaseClient = async (id) => {
+  const targetId = String(id || '').trim();
   const currentClients = getStorageClients();
-  const target = currentClients.find(c => c.id === id || c.codigo === id);
-  const coCli = target?.codigo || target?.rif || id;
+  const target = currentClients.find(
+    c => c.id === targetId || c.codigo === targetId || c.rif === targetId
+  );
+  const coCli = target?.codigo || targetId;
+
+  deleteStorageClient(targetId);
+  if (coCli && coCli !== targetId) {
+    deleteStorageClient(coCli);
+  }
 
   // Reflejo en tiempo real en Supabase (SQL Server: clientes inactivo=1)
-  writeProfitClient({ id, codigo: coCli, inactivo: true }, 'DELETE').catch(e => {
+  writeProfitClient({ id: targetId, codigo: coCli, inactivo: true }, 'DELETE').catch(e => {
     console.warn('[deleteSupabaseClient] Aviso eliminando en Supabase:', e.message);
   });
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
-    enqueueSyncAction('client', 'DELETE', { id });
+    enqueueSyncAction('client', 'DELETE', { id: targetId, codigo: coCli });
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'DELETE',
+      key: targetId
+    });
     return true;
   }
 
   try {
     const { error } = await withTimeout(
-      supabase.from('clients').delete().eq('id', id)
+      supabase.from('clients').delete().eq('id', targetId)
     );
 
     if (error) {
-      // Si tiene facturas o documentos en cuentas por cobrar, aplicar soft delete
-      await supabase.from('clients').update({ inactivo: true, sin_credito: true }).eq('id', id);
+      const codeRes = coCli ? await supabase.from('clients').delete().eq('codigo', coCli) : { error };
+      if (codeRes?.error) {
+        // Si tiene facturas o documentos en cuentas por cobrar con FK, aplicar soft delete
+        await supabase.from('clients').update({ inactivo: true, sin_credito: true }).eq('id', targetId);
+      }
     }
+
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'DELETE',
+      key: targetId
+    });
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
-    try {
-      await supabase.from('clients').update({ inactivo: true, sin_credito: true }).eq('id', id);
-    } catch (_) {}
+    markSupabaseOffline(err, 'deleteSupabaseClient');
+    enqueueSyncAction('client', 'DELETE', { id: targetId, codigo: coCli });
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'DELETE',
+      key: targetId
+    });
     return true;
   }
 };
@@ -2301,7 +2376,7 @@ export const getSupabaseSales = async () => {
     const mapped = (data || [])
       .map(mapSaleFromDb)
       .filter(s => s && !isCxcEntryDeleted(s, delSet));
-    const reconciled = applyPendingQueueToEntities('sale', mapped);
+    const reconciled = dedupeCanonicalDocs(applyPendingQueueToEntities('sale', mapped));
     try {
       if (typeof localStorage !== 'undefined' && Array.isArray(data) && data.length > 0) {
         localStorage.setItem('sm_sales_v4_fiscal', JSON.stringify(reconciled));
@@ -2546,6 +2621,19 @@ export const processSupabaseSale = async (saleData) => {
     return localSale;
   }
   try {
+    const freshProducts = await getSupabaseProducts().catch(() => getStorageProducts());
+    const stockCheck = validateWarehouseStockForDocument({
+      ...saleData,
+      items: saleData.items || [],
+      products: freshProducts
+    });
+    if (!stockCheck.isValid) {
+      const validationErr = new Error(stockCheck.message);
+      validationErr.isValidationError = true;
+      validationErr.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+      throw validationErr;
+    }
+
     const config = await getSupabaseConfig();
     const { data: dbSales, error: countErr } = await withTimeout(
       supabase.from('sales').select('id,numero_doc,tipo_doc')
@@ -2568,13 +2656,22 @@ export const processSupabaseSale = async (saleData) => {
     const docPrefix = effectiveTipoDoc === 'NOTA_CREDITO' ? 'NC' : (effectiveTipoDoc === 'NOTA_DEBITO' ? 'ND' : (effectiveTipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
 
     let resolvedNumeroDoc = saleData.numeroDoc;
-    if (!resolvedNumeroDoc) {
+    const { data: dbInvoices } = (effectiveTipoDoc !== 'FACTURA' || resolvedNumeroDoc)
+      ? await withTimeout(supabase.from('profit_invoices').select('id,fact_num,factNum,tipo_doc,tipoDoc')).catch(() => ({ data: [] }))
+      : { data: [] };
+
+    const usedCanonKeys = new Set([
+      ...mappedSales.map(s => getCanonicalDocKey(s)).filter(Boolean),
+      ...((dbInvoices || []).map(inv => getCanonicalDocKey(inv)).filter(Boolean))
+    ]);
+
+    if (
+      !resolvedNumeroDoc ||
+      usedCanonKeys.has(getCanonicalDocKey(resolvedNumeroDoc, effectiveTipoDoc))
+    ) {
       if (effectiveTipoDoc === 'FACTURA') {
-        resolvedNumeroDoc = getNextInvoiceCorrelativo(mappedSales);
+        resolvedNumeroDoc = getNextInvoiceCorrelativo(mappedSales, dbInvoices || []);
       } else {
-        const { data: dbInvoices } = await withTimeout(
-          supabase.from('profit_invoices').select('id,fact_num,tipo_doc')
-        ).catch(() => ({ data: [] }));
         resolvedNumeroDoc = getNextNotaEntregaCorrelativo(mappedSales, dbInvoices || [], docPrefix);
       }
     } else if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
@@ -2702,30 +2799,6 @@ export const processSupabaseSale = async (saleData) => {
           .update({ saldo_deudor_usd: newDebit })
           .eq('id', newSale.clienteId);
       }
-
-      // Sincronizar documento en Cuentas por Cobrar (profit_invoices) — Notas de Entrega llegan SIN IVA (0%)
-      await saveSupabaseProfitInvoice({
-        id: newSale.id,
-        factNum: newSale.numeroDoc,
-        tipoDoc: newSale.tipoDoc,
-        fechaEmision: newSale.fechaEmision,
-        fechaVencimiento: newSale.fechaVencimiento,
-        diasCredito: newSale.diasCredito,
-        clienteId: newSale.clienteId,
-        clienteNombre: newSale.clienteNombre,
-        clienteRif: newSale.clienteRif,
-        vendedorId: saleData.vendedorId || 'OF',
-        vendedorNombre: newSale.vendedor,
-        totBrutoUsd: newSale.subtotalUsd,
-        ivaUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? 0 : newSale.ivaUsd,
-        totNetoUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? newSale.subtotalUsd : newSale.totalUsd,
-        abonosUsd: 0,
-        saldoUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? newSale.subtotalUsd : newSale.saldoUsd,
-        tasa: newSale.tasaDolar,
-        items: newSale.items
-      }).catch(e => {
-        console.warn('[processSupabaseSale] Aviso registrando documento en CxC:', e?.message);
-      });
     }
 
     // 3. Save sale
@@ -2744,7 +2817,8 @@ export const processSupabaseSale = async (saleData) => {
     broadcastReconcileChange({
       tableId: 'sales',
       action: 'CREATE',
-      data: mapped
+      key: mapped.id,
+      item: mapped
     });
 
     // Reflejo en tiempo real simultáneo en Supabase (SQL Server: factura & reng_fac)
@@ -2785,6 +2859,9 @@ export const processSupabaseSale = async (saleData) => {
 
     return mapped;
   } catch (err) {
+    if (err?.isValidationError || err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK') {
+      throw err;
+    }
     console.warn("Fallo o indisponibilidad en Supabase procesando venta, ejecutando fallback local:", err);
     markSupabaseOffline(err, 'processSupabaseSale');
     const localSale = saveStorageSale(saleData);
@@ -2925,6 +3002,39 @@ export const getSupabaseOrders = async () => {
 };
 
 export const saveSupabaseOrder = async (orderData) => {
+  const normalizedStatus = String(orderData?.status || '').trim().toUpperCase();
+  const skipStatusCheck = ['FACTURADO', 'ANULADO', 'CADUCADO'].includes(normalizedStatus);
+
+  if (!skipStatusCheck && Array.isArray(orderData?.items) && orderData.items.length > 0) {
+    const freshProducts = isNetworkOnline()
+      ? await getSupabaseProducts().catch(() => getStorageProducts())
+      : getStorageProducts();
+
+    if (Array.isArray(freshProducts) && freshProducts.length > 0) {
+      const stockCheck = validateWarehouseStockForDocument({
+        items: orderData.items,
+        products: freshProducts,
+        tipoDoc: orderData.tipoDoc || orderData.tipo_doc,
+        almacen: orderData.almacen,
+        almacenId: orderData.almacenId || orderData.almacen_id,
+        co_alma: orderData.co_alma,
+        modalidadVenta: orderData.modalidadVenta,
+        numeroDoc: orderData.numeroDoc || orderData.numero_doc,
+        id: orderData.id,
+        pedidoOrigenDoc: orderData.pedidoOrigenDoc,
+        documentoAfectado: orderData.documentoAfectado || orderData.documento_afectado
+      });
+
+      if (!stockCheck.isValid) {
+        const validationErr = new Error(stockCheck.message);
+        validationErr.isValidationError = true;
+        validationErr.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+        validationErr.validation = stockCheck;
+        throw validationErr;
+      }
+    }
+  }
+
   saveStorageOrder(orderData);
 
   // Reflejo simultáneo en tiempo real en Supabase (SQL Server: pedidos & reng_ped)
@@ -4066,6 +4176,16 @@ export const pushClientToSupabase = async (clientData) => {
   return mapClientFromDb(data);
 };
 
+export const deleteSupabaseClientDirect = async (clientId) => {
+  const { error } = await withTimeout(
+    supabase.from('clients').delete().eq('id', clientId),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
 export const pushSupplierToSupabase = async (supplierData) => {
   const payload = mapSupplierToDb(supplierData);
   const { data, error } = await withTimeout(
@@ -4703,15 +4823,33 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
     const delSet = new Set(sanitizeCxcDeletedDocsStorage());
     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
     const customMap = rawCustom ? JSON.parse(rawCustom) : {};
+    const customByCanon = new Map();
+    if (customMap && typeof customMap === 'object') {
+      Object.values(customMap).forEach(doc => {
+        if (!doc) return;
+        const cKey = getCanonicalDocKey(doc);
+        if (!cKey) return;
+        const prevDoc = customByCanon.get(cKey);
+        const prevTs = parseSafeIsoMs(prevDoc?.updated_at || prevDoc?.fechaSincronizacion || prevDoc?.fecha_sincronizacion);
+        const curTs = parseSafeIsoMs(doc.updated_at || doc.fechaSincronizacion || doc.fecha_sincronizacion);
+        if (!prevDoc || curTs >= prevTs) {
+          customByCanon.set(cKey, doc);
+        }
+      });
+    }
 
     const pendingInvIds = new Set();
+    const pendingCanonKeys = new Set();
     getSyncQueue()
       .filter(q => q && (q.entity === 'profit_invoice' || q.entity === 'profit_invoices' || q.entity === 'sale' || q.entity === 'sales') && q.action !== 'DELETE')
       .forEach(q => {
         getScopedCxcDeleteKeys(q.data).forEach(k => pendingInvIds.add(k));
+        const ck = getCanonicalDocKey(q.data);
+        if (ck) pendingCanonKeys.add(ck);
       });
 
     const matchedCustomKeys = new Set();
+    const matchedCanonKeys = new Set();
     const keysToPrune = new Set();
     const result = [];
 
@@ -4722,18 +4860,23 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
       }
       const idKey = String(inv.id || '').trim();
       const numKey = String(inv.factNum ?? inv.fact_num ?? inv.numeroDoc ?? '').trim();
-      const override = (idKey && customMap[idKey]) || (numKey && customMap[numKey]);
+      const invCanon = getCanonicalDocKey(inv);
+      const override = (idKey && customMap[idKey]) || (numKey && customMap[numKey]) || (invCanon && customByCanon.get(invCanon));
       if (override) {
         if (idKey) matchedCustomKeys.add(idKey);
         if (numKey) matchedCustomKeys.add(numKey);
         if (override.id) matchedCustomKeys.add(String(override.id));
         if (override.factNum) matchedCustomKeys.add(String(override.factNum));
+        if (invCanon) matchedCanonKeys.add(invCanon);
+        const ovCanon = getCanonicalDocKey(override);
+        if (ovCanon) matchedCanonKeys.add(ovCanon);
 
         const ovTs = parseSafeIsoMs(override.updated_at || override.fechaSincronizacion || override.fecha_sincronizacion);
         const remTs = parseSafeIsoMs(inv.updated_at || inv.fechaSincronizacion || inv.fecha_sincronizacion);
         const isPending =
           pendingInvIds.has(idKey) ||
           (numKey && pendingInvIds.has(numKey)) ||
+          (invCanon && pendingCanonKeys.has(invCanon)) ||
           Boolean(override._pendingServerSync);
 
         if (!hasRemoteResponse || isPending || ovTs > remTs) {
@@ -4749,19 +4892,25 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
     }
 
     if (customMap && typeof customMap === 'object') {
-      const addedIds = new Set();
+      const addedCanon = new Set();
       Object.entries(customMap).forEach(([k, doc]) => {
         if (!doc) return;
         const dId = String(doc.id || k).trim();
         const dNum = String(doc.factNum ?? doc.fact_num ?? '').trim();
+        const dCanon = getCanonicalDocKey(doc);
         if (isCxcEntryDeleted(doc, delSet)) {
           keysToPrune.add(k);
           return;
         }
-        if (!matchedCustomKeys.has(dId) && (!dNum || !matchedCustomKeys.has(dNum))) {
+        const alreadyMatched =
+          matchedCustomKeys.has(dId) ||
+          (dNum && matchedCustomKeys.has(dNum)) ||
+          (dCanon && matchedCanonKeys.has(dCanon));
+        if (!alreadyMatched) {
           const isPending =
             pendingInvIds.has(dId) ||
             (dNum && pendingInvIds.has(dNum)) ||
+            (dCanon && pendingCanonKeys.has(dCanon)) ||
             Boolean(doc._pendingServerSync);
           if (hasRemoteResponse && !isPending) {
             keysToPrune.add(k);
@@ -4769,9 +4918,9 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
             if (dNum && customMap[dNum]) keysToPrune.add(dNum);
             return;
           }
-          if (!addedIds.has(dId)) {
-            addedIds.add(dId);
-            if (dNum) addedIds.add(dNum);
+          const dedupToken = dCanon || dId || dNum;
+          if (!addedCanon.has(dedupToken)) {
+            addedCanon.add(dedupToken);
             result.unshift(doc);
           }
         }
@@ -4785,7 +4934,7 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
       } catch (_) {}
     }
 
-    return result;
+    return dedupeCanonicalDocs(result);
   } catch (_) {
     return rawList;
   }
@@ -5191,7 +5340,11 @@ export const getSupabaseProfitInvoices = async () => {
     isSupabaseAvailable = true;
     const mapped = (data || []).map(f => {
       const rawId = String(f.id ?? '').trim();
-      const rawFactNum = String(f.fact_num ?? f.factNum ?? rawId).trim();
+      const rawFactNum = (f.factNum !== undefined && f.factNum !== null && String(f.factNum).trim() !== '')
+        ? String(f.factNum).trim()
+        : (f.fact_num !== undefined && f.fact_num !== null && String(f.fact_num).trim() !== ''
+            ? String(f.fact_num).trim()
+            : rawId);
       const isNePrefix =
         rawId.toUpperCase().startsWith('NE-') ||
         rawFactNum.toUpperCase().startsWith('NE-') ||
@@ -5201,7 +5354,7 @@ export const getSupabaseProfitInvoices = async () => {
         : (f.tipo_doc ?? f.tipoDoc ?? 'FACTURA');
       return {
         id: f.id,
-        factNum: f.fact_num ?? f.factNum,
+        factNum: rawFactNum,
         tipoDoc: resolvedTipoDoc,
       fechaEmision: f.fec_emis ?? f.fechaEmision,
       fechaVencimiento: f.fec_venc ?? f.fechaVencimiento,
@@ -5272,8 +5425,37 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
     if (Array.isArray(cleanPayload.items) && cleanPayload.items.length > 0) {
       salesUpdatePayload.items = cleanPayload.items;
     }
+    const isNotaEntrega =
+      String(cleanPayload.tipoDoc || cleanPayload.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+      rawNum.toUpperCase().startsWith('NE-') ||
+      String(id || '').toUpperCase().startsWith('NE-');
+    const cleanDigits = rawNum.replace(/\D/g, '');
+    const unpaddedDigits = cleanDigits ? String(Number(cleanDigits)) : '';
+    const paddedDigits = cleanDigits ? cleanDigits.padStart(6, '0') : '';
+    const docOrCandidates = Array.from(new Set(
+      (isNotaEntrega
+        ? [
+            id && `id.eq.${id}`,
+            rawNum && `id.eq.${rawNum}`,
+            rawNum && `numero_doc.eq.${rawNum}`,
+            paddedDigits && `id.eq.NE-${paddedDigits}`,
+            paddedDigits && `numero_doc.eq.NE-${paddedDigits}`,
+            unpaddedDigits && `numero_doc.eq.NE-${unpaddedDigits}`
+          ]
+        : [
+            id && `id.eq.${id}`,
+            rawNum && `id.eq.${rawNum}`,
+            rawNum && `numero_doc.eq.${rawNum}`,
+            paddedDigits && `id.eq.${paddedDigits}`,
+            paddedDigits && `numero_doc.eq.${paddedDigits}`,
+            paddedDigits && `id.eq.FAC-${paddedDigits}`,
+            unpaddedDigits && `id.eq.${unpaddedDigits}`,
+            unpaddedDigits && `numero_doc.eq.${unpaddedDigits}`
+          ]
+      ).filter(Boolean)
+    )).join(',');
     const updateRes = await withTimeout(
-      supabase.from('sales').update(salesUpdatePayload).or(`id.eq.${id},id.eq.${rawNum},numero_doc.eq.${rawNum}`).select('id'),
+      supabase.from('sales').update(salesUpdatePayload).or(docOrCandidates).select('id'),
       6000
     ).catch(() => null);
 
@@ -5350,11 +5532,14 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
 export const saveSupabaseProfitInvoice = async (docData) => {
   if (!docData) return null;
   const nowIso = new Date().toISOString();
-  const rawNum = String(docData.factNum ?? docData.fact_num ?? docData.numeroDoc ?? docData.id ?? '').trim();
+  const rawNumInput = String(docData.factNum ?? docData.fact_num ?? docData.numeroDoc ?? docData.id ?? '').trim();
   const isNotaEntrega =
     String(docData.tipoDoc || docData.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' ||
-    rawNum.toUpperCase().startsWith('NE-') ||
+    rawNumInput.toUpperCase().startsWith('NE-') ||
     String(docData.id || '').toUpperCase().startsWith('NE-');
+  const bareDigits = rawNumInput.replace(/^(FAC-|FACT-|NE-|doc-)/i, '').trim();
+  const normalizedNum = /^\d+$/.test(bareDigits) && bareDigits.length < 6 ? bareDigits.padStart(6, '0') : bareDigits || rawNumInput;
+  const rawNum = isNotaEntrega && !normalizedNum.toUpperCase().startsWith('NE-') ? normalizedNum : normalizedNum;
   const id = String(
     docData.id ||
     (isNotaEntrega
@@ -5846,10 +6031,47 @@ export const getSupabaseProfitAccountsPayable = async () => {
   }
 };
 
+const PROFIT_CXP_DB_COLUMNS = [
+  'id',
+  'tipo_doc',
+  'tipoDoc',
+  'nro_doc',
+  'nroDoc',
+  'co_prov',
+  'coProv',
+  'prov_nombre',
+  'provNombre',
+  'prov_rif',
+  'provRif',
+  'fec_emis',
+  'fechaEmision',
+  'fec_venc',
+  'fechaVencimiento',
+  'monto_net_usd',
+  'montoNetUsd',
+  'monto_net_bs',
+  'montoNetBs',
+  'saldo_usd',
+  'saldoUsd',
+  'saldo_bs',
+  'saldoBs',
+  'tasa',
+  'moneda',
+  'anulado',
+  'fecha_sincronizacion',
+  'fechaSincronizacion'
+];
+
 export const pushProfitAccountsPayableToSupabase = async (payable) => {
   if (!payable) return null;
+  const dbPayload = {};
+  for (const col of PROFIT_CXP_DB_COLUMNS) {
+    if (payable[col] !== undefined) {
+      dbPayload[col] = payable[col];
+    }
+  }
   const { error } = await withTimeout(
-    supabase.from('profit_accounts_payable').upsert(payable, { onConflict: 'id' }),
+    supabase.from('profit_accounts_payable').upsert(dbPayload, { onConflict: 'id' }),
     8000
   );
   if (error) throw error;

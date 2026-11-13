@@ -13,7 +13,11 @@ import {
   generarReporteX,
   ejecutarCierreZ,
   formatFiscalTicketText,
-  calculateFiscalHashSha256
+  calculateFiscalHashSha256,
+  getCanonicalDocKey,
+  dedupeCanonicalDocs,
+  getNextInvoiceCorrelativo,
+  getNextNotaEntregaCorrelativo
 } from '../services/fiscalService.js';
 import { formatBs, formatUsd } from '../services/formatService.js';
 
@@ -353,6 +357,51 @@ assert.match(ticketText, /REPORTE Z N°:\s+00000002/);
 assert.match(ticketText, /GRAN TOTAL/);
 assert.match(ticketText, /SHA-256/);
 console.log('  ✓ Generación de Ticket Térmico 80mm verificada.');
+
+// 14. Clave canónica, deduplicación de documentos y correlativos anti-colisión
+console.log('14. Verificando clave canónica, deduplicación y correlativos...');
+assert.strictEqual(getCanonicalDocKey({ id: '000003', factNum: '000003', tipoDoc: 'FACTURA' }), 'FAC:3');
+assert.strictEqual(getCanonicalDocKey({ id: 'FAC-3', factNum: '3', tipoDoc: 'FACTURA' }), 'FAC:3');
+assert.strictEqual(getCanonicalDocKey({ id: 'NE-002227', numeroDoc: 'NE-002227', tipoDoc: 'NOTA_ENTREGA' }), 'NE:2227');
+assert.strictEqual(getCanonicalDocKey({ id: '002227', factNum: '002227', tipoDoc: 'NOTA_ENTREGA' }), 'NE:2227');
+
+const dedupedSample = dedupeCanonicalDocs([
+  { id: '000003', factNum: '000003', tipoDoc: 'FACTURA', vendedorId: 'OF', items: [], updated_at: '2026-11-12T19:24:39.222Z' },
+  { id: 'FAC-3', factNum: '3', tipoDoc: 'FACTURA', vendedorId: 'CM', items: [{ codigo: '100403', cantidad: 2 }], updated_at: '2026-11-12T20:10:23.977Z' },
+  { id: 'NE-002227', factNum: '002227', tipoDoc: 'NOTA_ENTREGA', items: [{ codigo: '100102', cantidad: 1 }] }
+]);
+assert.strictEqual(dedupedSample.length, 2, 'Debe colapsar variantes de 000003 y conservar la NE 002227');
+const merged003 = dedupedSample.find(d => getCanonicalDocKey(d) === 'FAC:3');
+assert.strictEqual(merged003.vendedorId, 'CM');
+assert.strictEqual(merged003.items.length, 1);
+
+const prevLocalStorage = globalThis.localStorage;
+const memStore = new Map();
+if (typeof prevLocalStorage === 'undefined') {
+  globalThis.localStorage = {
+    getItem: (k) => (memStore.has(k) ? memStore.get(k) : null),
+    setItem: (k, v) => memStore.set(k, String(v)),
+    removeItem: (k) => memStore.delete(k)
+  };
+}
+try {
+  const nextFac = getNextInvoiceCorrelativo(
+    [{ id: '000002', numeroDoc: '000002', tipoDoc: 'FACTURA' }],
+    [{ id: '000003', factNum: '000003', tipoDoc: 'FACTURA' }, { id: '000583', factNum: '000583', tipoDoc: 'FACTURA' }]
+  );
+  assert.strictEqual(nextFac, '000004', 'Debe avanzar sobre la serie actual (<400) evitando colisión con extraDocs');
+
+  const nextNe = getNextNotaEntregaCorrelativo(
+    [{ id: 'NE-002227', numeroDoc: 'NE-002227', tipoDoc: 'NOTA_ENTREGA' }],
+    [{ id: 'NE-002228', factNum: '002228', tipoDoc: 'NOTA_ENTREGA' }]
+  );
+  assert.strictEqual(nextNe, 'NE-002229', 'Debe avanzar correlativo NE evitando colisión con sales + invoices');
+} finally {
+  if (typeof prevLocalStorage === 'undefined') {
+    delete globalThis.localStorage;
+  }
+}
+console.log('  ✓ Clave canónica, deduplicación y correlativos anti-colisión verificados.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS PRUEBAS UNITARIAS FISCALES PASARON EXITOSAMENTE (100% OK) ---');

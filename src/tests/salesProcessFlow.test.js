@@ -1,11 +1,20 @@
 import assert from 'node:assert';
 import {
   getProductWarehouseStocks,
+  validateWarehouseStockForDocument,
   formatUsd,
   formatBs,
   resolveProductUnit,
   resolveProductLitersPerUnit
 } from '../services/formatService.js';
+import {
+  saveSale as saveStorageSale,
+  saveOrder as saveStorageOrder,
+  getOrders as getStorageOrders,
+  getProducts as getStorageProducts,
+  saveProduct as saveStorageProduct,
+  getSales as getStorageSales
+} from '../services/storageService.js';
 import {
   resolveUnitPrice,
   lineSubtotal,
@@ -430,6 +439,229 @@ const sweepResult = await checkAndExpireOverdueOrders(testOrdersForSweep);
 assert.strictEqual(sweepResult.length, 1, 'Debe expirar exactamente 1 orden mayor a 72h');
 assert.strictEqual(sweepResult[0].id, 'PED-FF-OLD', 'La orden expirada debe ser PED-FF-OLD');
 console.log('  ✓ Rutina de expiración automática de 72 horas y liberación ATP 100% OK.');
+
+// -----------------------------------------------------------------------------
+// 9. VALIDACIÓN ESTRICTA DE STOCK > 0 POR ALMACÉN AL EMITIR FACTURA O NOTA DE ENTREGA
+// -----------------------------------------------------------------------------
+console.log('9. Verificando Bloqueo de Emisión cuando algún SKU tiene Stock 0 en su Almacén...');
+
+const skuOnlyAlm02 = {
+  id: 'TEST-SKU-ALM02',
+  codigo: 'SKU-ONLY-02',
+  descripcion: 'Aceite Prueba Solo Almacén 02',
+  stock: 10,
+  stockAlmacen01: 0,
+  stock_almacen_01: 0,
+  stockAlmacen02: 10,
+  stock_almacen_02: 10,
+  precioUsdMayor: 40,
+  precioUsdDetal: 50,
+  litrosPorUnidad: 12,
+  unidad: 'Caja'
+};
+
+const skuOnlyAlm01 = {
+  id: 'TEST-SKU-ALM01',
+  codigo: 'SKU-ONLY-01',
+  descripcion: 'Aceite Prueba Solo Almacén 01',
+  stock: 10,
+  stockAlmacen01: 10,
+  stock_almacen_01: 10,
+  stockAlmacen02: 0,
+  stock_almacen_02: 0,
+  precioUsdMayor: 40,
+  precioUsdDetal: 50,
+  litrosPorUnidad: 12,
+  unidad: 'Caja'
+};
+
+const validationProducts = [skuOnlyAlm02, skuOnlyAlm01];
+
+// 9.1 Factura (Alm 01) con producto que tiene 0 en Alm 01 (aunque tenga 10 en Alm 02) -> BLOQUEADO
+const factZeroCheck = validateWarehouseStockForDocument({
+  tipoDoc: 'FACTURA',
+  products: validationProducts,
+  items: [
+    { articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1 },
+    { articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1 }
+  ]
+});
+assert.strictEqual(factZeroCheck.isValid, false, 'Factura con SKU en 0 en Almacén 01 debe bloquearse');
+assert.strictEqual(factZeroCheck.warehouseCode, '01');
+assert.strictEqual(factZeroCheck.zeroStockItems.length, 1);
+assert.strictEqual(factZeroCheck.zeroStockItems[0].codigo, 'SKU-ONLY-02');
+
+// 9.2 Nota de Entrega (Alm 02) con producto que tiene 0 en Alm 02 (aunque tenga 10 en Alm 01) -> BLOQUEADO
+const neZeroCheck = validateWarehouseStockForDocument({
+  tipoDoc: 'NOTA_ENTREGA',
+  products: validationProducts,
+  items: [
+    { articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1 },
+    { articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1 }
+  ]
+});
+assert.strictEqual(neZeroCheck.isValid, false, 'Nota de Entrega con SKU en 0 en Almacén 02 debe bloquearse');
+assert.strictEqual(neZeroCheck.warehouseCode, '02');
+assert.strictEqual(neZeroCheck.zeroStockItems.length, 1);
+assert.strictEqual(neZeroCheck.zeroStockItems[0].codigo, 'SKU-ONLY-01');
+
+// 9.3 Factura con SKU > 0 en Alm 01 -> PERMITIDO
+const factOkCheck = validateWarehouseStockForDocument({
+  tipoDoc: 'FACTURA',
+  products: validationProducts,
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 2 }]
+});
+assert.strictEqual(factOkCheck.isValid, true, 'Factura con stock > 0 en Alm 01 debe permitirse');
+
+// 9.4 Nota de Entrega con SKU > 0 en Alm 02 -> PERMITIDO
+const neOkCheck = validateWarehouseStockForDocument({
+  tipoDoc: 'NOTA_ENTREGA',
+  products: validationProducts,
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 2 }]
+});
+assert.strictEqual(neOkCheck.isValid, true, 'Nota de Entrega con stock > 0 en Alm 02 debe permitirse');
+
+// 9.5 Cantidad en 0 -> BLOQUEADO
+const zeroQtyCheck = validateWarehouseStockForDocument({
+  tipoDoc: 'FACTURA',
+  products: validationProducts,
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 0 }]
+});
+assert.strictEqual(zeroQtyCheck.isValid, false, 'Producto cargado con cantidad 0 debe bloquearse');
+assert.strictEqual(zeroQtyCheck.invalidQtyItems.length, 1);
+
+// 9.6 Cotización y Nota de Crédito -> NO bloqueadas por esta regla
+const quoteCheck = validateWarehouseStockForDocument({
+  tipoDoc: 'COTIZACION',
+  products: validationProducts,
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1 }]
+});
+assert.strictEqual(quoteCheck.isValid, true, 'Cotización no debe bloquearse');
+
+// 9.7 Persistencia storageService.saveSale rechaza y NO descuenta ni registra documento si stock es 0
+saveStorageProduct(skuOnlyAlm02);
+saveStorageProduct(skuOnlyAlm01);
+const salesCountBefore = getStorageSales().length;
+
+assert.throws(
+  () => saveStorageSale({
+    tipoDoc: 'FACTURA',
+    items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40 }]
+  }),
+  (err) => err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK',
+  'saveSale debe rechazar Factura cuando el SKU tiene 0 en Almacén 01'
+);
+
+assert.throws(
+  () => saveStorageSale({
+    tipoDoc: 'NOTA_ENTREGA',
+    items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 40 }]
+  }),
+  (err) => err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK',
+  'saveSale debe rechazar Nota de Entrega cuando el SKU tiene 0 en Almacén 02'
+);
+
+assert.strictEqual(getStorageSales().length, salesCountBefore, 'No debe haberse guardado ninguna venta bloqueada');
+
+// 9.8 Persistencia storageService.saveSale permite emitir cuando el almacén destino tiene stock > 0
+const savedFactOk = saveStorageSale({
+  tipoDoc: 'FACTURA',
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 3, precioUsd: 40, litrosPorUnidad: 12 }]
+});
+assert.ok(savedFactOk?.numeroDoc, 'Factura con stock > 0 en Alm 01 debe emitirse correctamente');
+const prodAfterFact = getStorageProducts().find(p => p.id === 'TEST-SKU-ALM01');
+assert.strictEqual(getProductWarehouseStocks(prodAfterFact).stock01, 7, 'Almacén 01 debe descontar de 10 a 7');
+
+const savedNeOk = saveStorageSale({
+  tipoDoc: 'NOTA_ENTREGA',
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 4, precioUsd: 40, litrosPorUnidad: 12 }]
+});
+assert.ok(savedNeOk?.numeroDoc, 'Nota de Entrega con stock > 0 en Alm 02 debe emitirse correctamente');
+const prodAfterNe = getStorageProducts().find(p => p.id === 'TEST-SKU-ALM02');
+assert.strictEqual(getProductWarehouseStocks(prodAfterNe).stock02, 6, 'Almacén 02 debe descontar de 10 a 6');
+
+// 9.9 Bloqueo en storageService.saveOrder para pedidos de vendedores (Alm 01 y Alm 02)
+const ordersCountBefore = getStorageOrders().length;
+
+assert.throws(
+  () => saveStorageOrder({
+    id: 'PED-FF-BLOCK-01',
+    numeroDoc: 'PED-FF-BLOCK-01',
+    tipoDoc: 'FACTURA',
+    modalidadVenta: 'PREVENTA',
+    status: 'APROBADO',
+    items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40 }]
+  }),
+  (err) => err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK' && err?.isValidationError === true,
+  'saveOrder debe rechazar pedido Fiscal (Alm 01) cuando el SKU tiene 0 en Almacén 01'
+);
+
+assert.throws(
+  () => saveStorageOrder({
+    id: 'PED-NE-BLOCK-02',
+    numeroDoc: 'PED-NE-BLOCK-02',
+    tipoDoc: 'NOTA_ENTREGA',
+    modalidadVenta: 'OFICINA',
+    status: 'PENDIENTE',
+    items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 40 }]
+  }),
+  (err) => err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK' && err?.isValidationError === true,
+  'saveOrder debe rechazar pedido Nota de Entrega (Alm 02) cuando el SKU tiene 0 en Almacén 02'
+);
+
+assert.throws(
+  () => saveStorageOrder({
+    id: 'PED-FF-RET-03',
+    numeroDoc: 'PED-FF-RET-03',
+    tipoDoc: 'ORDEN_COMPRA',
+    almacen: '01',
+    status: 'RETENIDO_CREDITO',
+    items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 2, precioUsd: 40 }]
+  }),
+  (err) => err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK',
+  'saveOrder debe rechazar pedido retenido por crédito con SKU en 0 en Almacén 01'
+);
+
+assert.strictEqual(getStorageOrders().length, ordersCountBefore, 'No debe persistirse ningún pedido bloqueado por existencia 0');
+
+// 9.10 saveOrder permite emitir pedido cuando el almacén destino tiene stock > 0
+saveStorageOrder({
+  id: 'PED-FF-OK-01',
+  numeroDoc: 'PED-FF-OK-01',
+  tipoDoc: 'FACTURA',
+  modalidadVenta: 'PREVENTA',
+  status: 'APROBADO',
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 2, precioUsd: 40 }]
+});
+saveStorageOrder({
+  id: 'PED-NE-OK-02',
+  numeroDoc: 'PED-NE-OK-02',
+  tipoDoc: 'NOTA_ENTREGA',
+  modalidadVenta: 'OFICINA',
+  status: 'PENDIENTE',
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 2, precioUsd: 40 }]
+});
+assert.strictEqual(getStorageOrders().length, ordersCountBefore + 2, 'Pedidos con existencia > 0 en su almacén deben guardarse');
+
+// 9.11 Transiciones finales de estado (FACTURADO / ANULADO / CADUCADO) no deben bloquearse aunque stock llegue a 0
+assert.doesNotThrow(() => {
+  saveStorageOrder({
+    id: 'PED-FF-POST-ZERO',
+    numeroDoc: 'PED-FF-POST-ZERO',
+    tipoDoc: 'FACTURA',
+    status: 'FACTURADO',
+    items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40 }]
+  });
+  saveStorageOrder({
+    id: 'PED-FF-ANUL-ZERO',
+    numeroDoc: 'PED-FF-ANUL-ZERO',
+    tipoDoc: 'FACTURA',
+    status: 'ANULADO',
+    items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40 }]
+  });
+}, 'Actualizaciones de estado FACTURADO/ANULADO deben permitirse aunque el stock actual del SKU sea 0');
+
+console.log('  ✓ Bloqueo estricto de Factura (Alm 01), Nota de Entrega (Alm 02) y Pedidos con stock 0 100% OK.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS ETAPAS DEL FLUJO DE VENTA Y MEJORAS 1 & 2 AL 100% ---');

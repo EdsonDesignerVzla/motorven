@@ -923,3 +923,69 @@ export function isMasterAdmin(userOrRole) {
   return false;
 }
 
+/**
+ * Indica si el usuario puede aprobar solicitudes de nuevos clientes o registrarlos directamente en oficina.
+ * Autorizados:
+ * - Caja Principal (Vanesa Sánchez, rol CAJA / username 'caja')
+ * - Cobranzas (Rosibel Briceño, rol COBRANZA / username 'rosibelcxc' — excluye 'rosibelventas')
+ * - Supervisor Comercial de Ventas (Yheyson Calderón, username 'ventas' / co_ven 'YC')
+ * - Tecnología & Informática (Manuel Rosales, rol TI / username 'manuel')
+ * - Administrador Master (Edson Designer), Gerencia y Administración
+ */
+export function canApproveClients(userOrRole) {
+  if (!userOrRole) return false;
+  const role = typeof userOrRole === 'object' ? userOrRole?.rol : userOrRole;
+  const username = String(typeof userOrRole === 'object' ? (userOrRole?.username || '') : '').trim().toLowerCase();
+  const nombre = String(typeof userOrRole === 'object' ? (userOrRole?.nombre || userOrRole?.name || '') : '').trim().toLowerCase();
+  const coVen = String(typeof userOrRole === 'object' ? (userOrRole?.co_ven || userOrRole?.coVen || '') : '').trim().toUpperCase();
+  const r = normalizeRole(role);
+
+  if (
+    r === 'ADMINISTRADOR MASTER' ||
+    r === 'TECNOLOGÍA & INFORMÁTICA' ||
+    r === 'GERENCIA' ||
+    r === 'ADMINISTRACIÓN' ||
+    r === 'CAJA' ||
+    r === 'COBRANZA'
+  ) {
+    return true;
+  }
+
+  // Usuarios específicos autorizados (Edson, Manuel, Vanessa, Rosibel en cobranzas, Yheyson Calderón)
+  if (
+    username === 'edson designer' ||
+    username === 'manuel' ||
+    username === 'caja' ||
+    username === 'rosibelcxc' ||
+    username === 'ventas' ||
+    coVen === 'YC' ||
+    nombre.includes('yheyson')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Normaliza el estado de aprobación de un cliente ('PENDIENTE' | 'APROBADO' | 'RECHAZADO').
+ * Los clientes históricos sin campo explícito se consideran 'APROBADO'.
+ */
+export function getClientApprovalStatus(client) {
+  if (!client) return 'APROBADO';
+  const raw = String(client.estadoAprobacion || client.estado_aprobacion || '').trim().toUpperCase();
+  if (raw === 'PENDIENTE' || raw === 'RECHAZADO' || raw === 'APROBADO') {
+    return raw;
+  }
+  return 'APROBADO';
+}
+
+/**
+ * Indica si el cliente ya fue aprobado y está habilitado para pedidos/facturación.
+ */
+export function isClientApproved(client) {
+  if (!client) return false;
+  return getClientApprovalStatus(client) === 'APROBADO';
+}
+
+

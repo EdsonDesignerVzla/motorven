@@ -217,5 +217,211 @@ export const getProductWarehouseStocks = (product) => {
   return { stock01: s01, stock02: s02, total: rawTotal };
 };
 
+/**
+ * Determina el almacén destino ('01' Factura Fiscal o '02' Nota de Entrega)
+ * y si el documento requiere validar existencias > 0 antes de emitirse.
+ */
+export const resolveDocumentWarehouseTarget = (docOrParams = {}) => {
+  const rawTipo = String(docOrParams.tipoDoc || docOrParams.tipo_doc || '').toUpperCase().trim();
+  const numDoc = String(docOrParams.numeroDoc || docOrParams.numero_doc || docOrParams.id || '').toUpperCase().trim();
+  const originDoc = String(docOrParams.pedidoOrigenDoc || '').toUpperCase().trim();
+  const alm = String(docOrParams.almacen || docOrParams.almacenId || docOrParams.almacen_id || docOrParams.co_alma || '').trim();
+  const mod = String(docOrParams.modalidadVenta || '').toUpperCase().trim();
+
+  if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'NOTA_DEBITO' || rawTipo === 'COTIZACION') {
+    const isNeAffected = rawTipo === 'NOTA_CREDITO' && String(docOrParams.documentoAfectado || docOrParams.documento_afectado || '').toUpperCase().startsWith('NE');
+    return {
+      requiresPositiveStock: false,
+      effectiveTipoDoc: rawTipo,
+      warehouseCode: isNeAffected ? '02' : '01',
+      warehouseLabel: isNeAffected ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'
+    };
+  }
+
+  const isExplicitFactura = rawTipo === 'FACTURA' && alm !== '02' && !numDoc.startsWith('NE-') && !originDoc.startsWith('PED-NE');
+  const isNotaEntrega =
+    !isExplicitFactura && (
+      rawTipo === 'NOTA_ENTREGA' ||
+      alm === '02' ||
+      numDoc.startsWith('NE-') ||
+      originDoc.startsWith('PED-NE') ||
+      mod === 'OFICINA'
+    );
+
+  return {
+    requiresPositiveStock: true,
+    effectiveTipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+    warehouseCode: isNotaEntrega ? '02' : '01',
+    warehouseLabel: isNotaEntrega ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'
+  };
+};
+
+const findProductForWarehouseCheck = (item, products) => {
+  if (!item || typeof item !== 'object') return null;
+  const key = String(item.articuloId || item.id || item.codigo || item.co_art || item.product?.id || item.product?.codigo || '').trim();
+  const codeKey = String(item.codigo || item.co_art || item.product?.codigo || '').trim();
+
+  if (Array.isArray(products) && products.length > 0) {
+    const exact = products.find((p) => {
+      if (!p) return false;
+      const pId = String(p.id || '').trim();
+      const pCode = String(p.codigo || '').trim();
+      const pCoArt = String(p.co_art || '').trim();
+      return (
+        (key && (pId === key || pCode === key || pCoArt === key)) ||
+        (codeKey && (pCode === codeKey || pCoArt === codeKey || pId === codeKey))
+      );
+    });
+    if (exact) return exact;
+
+    const keyUpper = key.toUpperCase();
+    const codeUpper = codeKey.toUpperCase();
+    const ci = products.find((p) => {
+      if (!p) return false;
+      const pId = String(p.id || '').trim().toUpperCase();
+      const pCode = String(p.codigo || '').trim().toUpperCase();
+      const pCoArt = String(p.co_art || '').trim().toUpperCase();
+      return (
+        (keyUpper && (pId === keyUpper || pCode === keyUpper || pCoArt === keyUpper)) ||
+        (codeUpper && (pCode === codeUpper || pCoArt === codeUpper || pId === codeUpper))
+      );
+    });
+    return ci || null;
+  }
+
+  return item.product && typeof item.product === 'object' ? item.product : null;
+};
+
+/**
+ * Valida que al emitir una Factura Fiscal (Alm 01) o Nota de Entrega (Alm 02),
+ * todos los productos / SKU cargados tengan existencia > 0 en su almacén correspondiente
+ * y cantidad solicitada > 0.
+ */
+export const validateWarehouseStockForDocument = ({
+  items = [],
+  products = [],
+  tipoDoc,
+  tipo_doc,
+  almacen,
+  almacenId,
+  almacen_id,
+  co_alma,
+  modalidadVenta,
+  numeroDoc,
+  numero_doc,
+  id,
+  pedidoOrigenDoc,
+  documentoAfectado,
+  documento_afectado
+} = {}) => {
+  const target = resolveDocumentWarehouseTarget({
+    tipoDoc,
+    tipo_doc,
+    almacen,
+    almacenId,
+    almacen_id,
+    co_alma,
+    modalidadVenta,
+    numeroDoc,
+    numero_doc,
+    id,
+    pedidoOrigenDoc,
+    documentoAfectado,
+    documento_afectado
+  });
+
+  if (!target.requiresPositiveStock) {
+    return {
+      isValid: true,
+      ...target,
+      zeroStockItems: [],
+      invalidQtyItems: [],
+      message: ''
+    };
+  }
+
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    return {
+      isValid: false,
+      ...target,
+      zeroStockItems: [],
+      invalidQtyItems: [],
+      message: 'Debe cargar al menos un producto/SKU con existencia mayor a 0.'
+    };
+  }
+
+  const zeroStockItems = [];
+  const invalidQtyItems = [];
+
+  for (const item of list) {
+    if (!item) continue;
+    const key = String(item.articuloId || item.id || item.codigo || item.co_art || item.product?.id || item.product?.codigo || '').trim();
+    const codigo = String(item.codigo || item.co_art || item.product?.codigo || key || 'SIN-CODIGO').trim();
+    const matchedProd = findProductForWarehouseCheck(item, products);
+    const descripcion = String(
+      matchedProd?.descripcion ||
+      item.descripcion ||
+      item.articuloDescripcion ||
+      item.nombre ||
+      item.product?.descripcion ||
+      codigo
+    ).trim();
+    const requestedQty = Number(item.cantidad ?? item.qty ?? 0);
+
+    const hasCatalogOrInlineProduct = Boolean(matchedProd) || (Array.isArray(products) && products.length > 0);
+    const stockAvailable = matchedProd
+      ? Number(target.warehouseCode === '02' ? getProductWarehouseStocks(matchedProd).stock02 : getProductWarehouseStocks(matchedProd).stock01) || 0
+      : (hasCatalogOrInlineProduct ? 0 : null);
+
+    if (stockAvailable !== null && !(stockAvailable > 0)) {
+      zeroStockItems.push({
+        articuloId: matchedProd?.id || key || codigo,
+        codigo: matchedProd?.codigo || codigo,
+        descripcion,
+        stock: stockAvailable,
+        requestedQty,
+        warehouseCode: target.warehouseCode,
+        warehouseLabel: target.warehouseLabel
+      });
+    }
+
+    if (!(requestedQty > 0)) {
+      invalidQtyItems.push({
+        articuloId: matchedProd?.id || key || codigo,
+        codigo: matchedProd?.codigo || codigo,
+        descripcion,
+        stock: stockAvailable ?? 0,
+        requestedQty,
+        warehouseCode: target.warehouseCode,
+        warehouseLabel: target.warehouseLabel
+      });
+    }
+  }
+
+  const docLabel = target.effectiveTipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal';
+  let message = '';
+  if (zeroStockItems.length > 0) {
+    const skuList = zeroStockItems
+      .map(i => `${i.codigo}${i.descripcion && i.descripcion !== i.codigo ? ` (${i.descripcion})` : ''}`)
+      .join(', ');
+    message = `No se permite emitir la ${docLabel}: hay ${zeroStockItems.length} producto(s)/SKU con stock en 0 en ${target.warehouseLabel}: ${skuList}.`;
+  } else if (invalidQtyItems.length > 0) {
+    const skuList = invalidQtyItems
+      .map(i => `${i.codigo}${i.descripcion && i.descripcion !== i.codigo ? ` (${i.descripcion})` : ''}`)
+      .join(', ');
+    message = `No se permite emitir la ${docLabel}: hay ${invalidQtyItems.length} producto(s)/SKU con cantidad en 0: ${skuList}.`;
+  }
+
+  return {
+    isValid: zeroStockItems.length === 0 && invalidQtyItems.length === 0,
+    ...target,
+    zeroStockItems,
+    invalidQtyItems,
+    message
+  };
+};
+
+
 
 

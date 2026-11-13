@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { formatBs, formatUsd, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -53,7 +53,7 @@ function splitInvoiceItemsIntoPages(items, maxPerFirstPage = 5) {
   return pages;
 }
 
-export default function SalesInvoiceModal({ sale, config = {}, currentUser = null, products = null, onClose, onNewSale }) {
+export default function SalesInvoiceModal({ sale, config = {}, currentUser = null, products = null, clients = null, client = null, onClose, onNewSale }) {
   const [copied, setCopied] = useState(false);
   const [paperWidth, setPaperWidth] = useState('80mm'); // '80mm' | '58mm'
   const [viewMode, setViewMode] = useState('CARTA'); // 'TICKET' | 'CARTA'
@@ -61,6 +61,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   const [activePage, setActivePage] = useState('ALL'); // 'ALL' | 0 | 1...
 
   if (!sale) return null;
+
+  const resolvedClientInfo = resolveDocumentClientInfo(sale, client, clients);
 
   const safeConfig = config || {};
   const tasaBcv = Number(sale.tasaDolar || safeConfig.tasaDolar) || 827.73;
@@ -109,10 +111,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   const handlePrint = () => {
     if (viewMode === 'CARTA') {
       if (isNe) {
-        generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products, autoPrint: true });
+        generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products, clients, client, autoPrint: true });
         return;
       }
-      generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
+      generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, clients, client, autoPrint: true });
       return;
     }
 
@@ -268,7 +270,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
         sale,
         config: safeConfig,
         currentUser,
-        products
+        products,
+        clients,
+        client,
+        autoPrint: true
       });
       return;
     }
@@ -276,7 +281,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
       sales: [sale],
       config: safeConfig,
       currentUser,
-      tipoDoc: docTitle
+      tipoDoc: docTitle,
+      clients,
+      client,
+      autoPrint: true
     });
   };
 
@@ -284,7 +292,9 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     generateWarehouseDispatchGuidePDF({
       sale,
       config: safeConfig,
-      currentUser
+      currentUser,
+      clients,
+      client
     });
   };
 
@@ -305,9 +315,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
   const totalLitrosDoc = resolvedDocItems.reduce((acc, it) => acc + Number(it.volumenTotal || 0), 0);
   const totalBultosDoc = resolvedDocItems.reduce((acc, it) => acc + Number(it.cantidad || 1), 0);
-  const qrMatrix = isNe
-    ? buildQRCodeMatrix(`MOTORVEN|${neCorrelativoDisplay}|RIF:${sale.clienteRif || ''}|F:${fechaStr}|USD:${Number(sale.totalUsd || 0).toFixed(2)}|BS:${invoiceTotalBs.toFixed(2)}`)
-    : null;
+  const qrMatrix = buildQRCodeMatrix(getStaticBankAccountsQRPayload(safeConfig));
 
   const getItemsSubtotal = (itemsList) => {
     return (itemsList || []).reduce((acc, it) => acc + (it.subtotalUsd || (it.cantidad * it.precioUsd)), 0);
@@ -657,9 +665,9 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 className="btn btn-secondary btn-sm"
                 onClick={() => {
                   if (isNe) {
-                    generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products });
+                    generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products, clients, client });
                   } else {
-                    generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser });
+                    generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, clients, client });
                   }
                 }}
                 style={{
@@ -781,7 +789,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 <div style={{ borderBottom: '1px dotted #9ca3af', margin: '4px 0' }} />
                 <div>CLIENTE: <strong>{sale.clienteNombre}</strong></div>
                 <div>RIF/CI: <strong>{sale.clienteRif}</strong></div>
-                <div style={{ fontSize: '0.68rem', color: '#4b5563' }}>DIREC: {sale.clienteDireccion || 'Barquisimeto, Edo. Lara'}</div>
+                <div style={{ fontSize: '0.68rem', color: '#4b5563' }}>DIREC: {resolvedClientInfo.direccion || 'No registrada'}</div>
               </div>
 
               <div style={{ borderBottom: '1px dashed #000', margin: '6px 0' }} />
@@ -1023,7 +1031,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>RIF / C.I.:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.clienteRif}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Dirección Entrega:</span>
-                                    <strong style={{ color: '#0f172a' }}>{sale.clienteDireccion || 'Calle 48 con Av. Pedro León Torres, Barquisimeto'}</strong>
+                                    <strong style={{ color: '#0f172a' }}>{resolvedClientInfo.direccion || 'No registrada'}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Condición • Venc.:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.condicionPago || 'CONTADO'} • Vence: {fechaVencStr} ({diasCreditoDoc}d)</strong>
                                   </div>
@@ -1056,7 +1064,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                           )}
 
                           {/* Tabla de Renglones de Nota de Entrega */}
-                          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.72rem' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.8rem' }}>
                             <thead>
                               <tr style={{ background: '#0b1e36', color: '#ffffff', textAlign: 'left' }}>
                                 <th style={{ padding: '6px 6px', width: '28px', textAlign: 'center' }}>#</th>
@@ -1163,21 +1171,21 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                           {/* Franja Inferior: QR a la izquierda + numeración 1/2 a la derecha */}
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderTop: '1px solid #cbd5e1', paddingTop: '8px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                              {/* Código QR Matricial SVG */}
+                              {/* Código QR Estático Cuentas Bancarias SVG */}
                               <div style={{ border: '1px solid #0b1e36', borderRadius: '4px', padding: '3px', background: '#ffffff', textAlign: 'center' }}>
                                 {qrMatrix && (
                                   <svg width="62" height="62" viewBox={`0 0 ${qrMatrix.length} ${qrMatrix.length}`} shapeRendering="crispEdges">
                                     {qrMatrix.map((row, rIdx) =>
                                       row.map((cell, cIdx) =>
-                                        cell === 1 ? (
+                                        cell ? (
                                           <rect key={`${rIdx}-${cIdx}`} x={cIdx} y={rIdx} width={1} height={1} fill="#0b1e36" />
                                         ) : null
                                       )
                                     )}
                                   </svg>
                                 )}
-                                <div style={{ fontSize: '0.52rem', fontWeight: 900, color: '#0b1e36', lineHeight: 1, marginTop: '1px' }}>
-                                  QR VERIF.
+                                <div style={{ fontSize: '0.46rem', fontWeight: 900, color: '#0b1e36', lineHeight: 1.05, marginTop: '2px' }}>
+                                  CUENTAS BANCARIAS
                                 </div>
                               </div>
                               <div style={{ fontSize: '0.62rem', color: '#475569', maxWidth: '410px', lineHeight: '1.3' }}>
@@ -1286,7 +1294,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                   <strong>RIF / C.I.:</strong> <code>{sale.clienteRif}</code>
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '2px' }}>
-                                  Domicilio Fiscal: {sale.clienteDireccion || 'Calle 48 con Pedro León Torres, Barquisimeto'}
+                                  Domicilio Fiscal: {resolvedClientInfo.direccion || 'No registrada'}
                                 </div>
                               </div>
 
@@ -1335,7 +1343,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                         )}
 
                         {/* 2. TABLA DE RENGLONES FACTURADOS */}
-                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.74rem' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.82rem' }}>
                           <thead>
                             <tr style={{ background: '#002b7a', color: '#ffffff', textAlign: 'left' }}>
                               <th style={{ padding: '6px 8px', width: '35px', textAlign: 'center' }}>#</th>
@@ -1402,13 +1410,31 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                       {/* PARTE INFERIOR: Totales Fiscales y Firma en la última hoja, o pie formal */}
                       <div style={{ marginTop: 'auto', paddingTop: '0.4rem' }}>
                         {isLastPage ? (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 1.25fr', gap: '0.85rem', alignItems: 'end', marginBottom: '0.45rem' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '0.92fr auto 1.25fr', gap: '0.65rem', alignItems: 'end', marginBottom: '0.45rem' }}>
                             {/* Cajetín de Firma y Sello */}
                             <div>
-                              <div style={{ border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '0.65rem 0.85rem', background: '#fafafa', textAlign: 'center' }}>
+                              <div style={{ border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '0.65rem 0.75rem', background: '#fafafa', textAlign: 'center' }}>
                                 <div style={{ borderBottom: '1px solid #94a3b8', width: '80%', margin: '0.85rem auto 4px auto' }} />
                                 <div style={{ fontWeight: 700, fontSize: '0.72rem', color: '#0f172a' }}>Firma y Sello de Recepción</div>
-                                <div style={{ fontSize: '0.64rem', color: '#64748b' }}>C.I. / RIF del Receptor • Fecha: ____/____/________</div>
+                                <div style={{ fontSize: '0.62rem', color: '#64748b' }}>C.I. / RIF del Receptor • Fecha: ____/____/________</div>
+                              </div>
+                            </div>
+
+                            {/* Código QR Estático Cuentas Bancarias SVG */}
+                            <div style={{ border: '1px solid #0b1e36', borderRadius: '4px', padding: '4px', background: '#ffffff', textAlign: 'center' }}>
+                              {qrMatrix && (
+                                <svg width="64" height="64" viewBox={`0 0 ${qrMatrix.length} ${qrMatrix.length}`} shapeRendering="crispEdges">
+                                  {qrMatrix.map((row, rIdx) =>
+                                    row.map((cell, cIdx) =>
+                                      cell ? (
+                                        <rect key={`${rIdx}-${cIdx}`} x={cIdx} y={rIdx} width={1} height={1} fill="#0b1e36" />
+                                      ) : null
+                                    )
+                                  )}
+                                </svg>
+                              )}
+                              <div style={{ fontSize: '0.46rem', fontWeight: 900, color: '#0b1e36', lineHeight: 1.05, marginTop: '2px' }}>
+                                CUENTAS BANCARIAS
                               </div>
                             </div>
 

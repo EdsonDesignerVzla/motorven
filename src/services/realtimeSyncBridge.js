@@ -473,7 +473,7 @@ export const broadcastReconcileChange = (payload) => {
       action: payload.action || 'RECONCILE',
       eventType: payload.action === 'DELETE' ? 'DELETE' : 'UPDATE',
       key: payload.key || null,
-      item: payload.item || null,
+      item: payload.item || payload.data || null,
       clientId: CLIENT_ID
     });
     const headers = {
