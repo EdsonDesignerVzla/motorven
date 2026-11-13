@@ -58,6 +58,8 @@ export default function InventoryView({
   onSyncProfit,
   onSaveProduct,
   onDeleteProduct,
+  onSaveTransfer,
+  onSaveAdjustment,
   globalSearch,
   currentUser,
   warehouses = [],
@@ -2241,6 +2243,8 @@ export default function InventoryView({
         config={config}
         currentUser={currentUser}
         onSyncProfit={onSyncProfit}
+        onSaveTransfer={onSaveTransfer}
+        onSaveAdjustment={onSaveAdjustment}
       />
 
       {/* Modal de Matriz de Reorden Inteligente & Pronóstico de Quiebre */}

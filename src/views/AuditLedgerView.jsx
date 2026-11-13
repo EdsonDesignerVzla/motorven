@@ -2,23 +2,38 @@ import React, { useState, useMemo } from 'react';
 import {
   ShieldCheck,
   FileText,
+  DollarSign,
+  Calendar,
+  User,
+  CheckCircle2,
+  AlertTriangle,
+  Building2,
   Printer,
+  Tag,
   Search,
+  Filter,
   Download,
   RefreshCw,
   Clock,
+  Layers,
+  BarChart3,
   Scale,
   Eye,
   FileSpreadsheet,
+  Zap,
   ArrowUpRight,
   ArrowDownRight,
   BookOpen,
-  Layers,
-  BarChart3,
-  CheckCircle2,
-  AlertTriangle
+  TrendingUp
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
+import {
+  CHART_OF_ACCOUNTS,
+  generateAccountingEntries,
+  buildTrialBalance,
+  buildGeneralLedger,
+  buildFinancialStatements
+} from '../services/accountingService';
 import AccountingEntryModal from '../components/AccountingEntryModal';
 import MotorvenLogo from '../components/MotorvenLogo';
 import {
@@ -27,13 +42,6 @@ import {
   generateGeneralLedgerPDF,
   generateFinancialStatementsPDF
 } from '../services/pdfReportService';
-import { PLAN_DE_CUENTAS_MOTORVEN } from '../data/planDeCuentasMotorven';
-import {
-  buildAccountingEntries,
-  computeTrialBalance,
-  computeGeneralLedger,
-  computeFinancialStatements
-} from '../services/accountingService';
 
 export default function AuditLedgerView({
   profitInvoices = [],
@@ -45,24 +53,22 @@ export default function AuditLedgerView({
   cashDesks = [],
   profitAuditTrails = [],
   cashMovements = [],
-  _usersList = [],
+  usersList = [],
   config,
   onSyncProfit,
   currentUser
 }) {
-  const [activeSubTab, setActiveSubTab] = useState('diario'); // 'diario' | 'plan' | 'mayor' | 'balance' | 'estados' | 'audit' | 'export'
+  const [activeSubTab, setActiveSubTab] = useState('diario'); // 'diario' | 'mayor' | 'balance' | 'estados' | 'plan' | 'audit' | 'export'
   const [searchFilter, setSearchFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [syncing, setSyncing] = useState(false);
 
-  // Plan de Cuentas Filter States
+  // Plan de Cuentas & Mayor General Filter States
   const [planSearch, setPlanSearch] = useState('');
-  const [planGroupFilter, setPlanGroupFilter] = useState('ALL');
-  const [planImputableOnly, setPlanImputableOnly] = useState(false);
-
-  // Mayor General State
-  const [selectedMayorAccount, setSelectedMayorAccount] = useState('');
+  const [planGrupoFilter, setPlanGrupoFilter] = useState('ALL');
+  const [planOnlyImputable, setPlanOnlyImputable] = useState(false);
+  const [selectedMayorCode, setSelectedMayorCode] = useState('');
 
   // Forensic Audit Filter States
   const [auditSearch, setAuditSearch] = useState('');
@@ -72,7 +78,7 @@ export default function AuditLedgerView({
   const [selectedAuditTrail, setSelectedAuditTrail] = useState(null);
 
   const tasa = config?.tasaDolar || 827.73;
-  const desksList = (profitCashDesks && profitCashDesks.length > 0) ? profitCashDesks : cashDesks;
+  const resolvedDesks = profitCashDesks && profitCashDesks.length > 0 ? profitCashDesks : cashDesks;
 
   // Helper to parse forensic field diffs from Supabase pistas.campos
   const parseForensicDiffs = (camposText) => {
@@ -153,26 +159,24 @@ export default function AuditLedgerView({
   }, [profitAuditTrails]);
 
 
-  // Generador automatizado de asientos contables a partir de las transacciones operacionales
-  // Basado estrictamente en el Plan de Cuentas Oficial de Pro Motorven C.A. (RIF J-50780548-4 / BA VEN-NIF 2)
+  // Motor Contable Oficial (Asientos de Ventas, Cobranzas, Compras, Pagos y Caja Chica)
   const accountingEntries = useMemo(() => {
-    return buildAccountingEntries({
+    return generateAccountingEntries({
       profitInvoices,
       profitCollections,
       profitPurchases,
       profitSupplierPayments,
       cashMovements,
       profitBankAccounts,
-      desksList,
+      desksList: resolvedDesks,
       tasa
     });
-  }, [profitInvoices, profitCollections, profitPurchases, profitSupplierPayments, cashMovements, profitBankAccounts, desksList, tasa]);
+  }, [profitInvoices, profitCollections, profitPurchases, profitSupplierPayments, cashMovements, profitBankAccounts, resolvedDesks, tasa]);
 
   // Log de Auditoría Operacional (Timeline de eventos con trazabilidad de usuarios)
   const auditLogs = useMemo(() => {
     const logs = [];
 
-    // Facturas
     profitInvoices.forEach((fac) => {
       logs.push({
         id: `log-fac-${fac.factNum || fac.id}`,
@@ -182,12 +186,11 @@ export default function AuditLedgerView({
         titulo: `Emisión de Factura #${fac.factNum || fac.id}`,
         usuario: fac.coVen || fac.co_us_in || 'SISTEMA_VENTAS',
         descripcion: `Cliente: ${fac.clienteNombre || fac.cli_des || 'Cliente'} • Monto: ${formatUsd(fac.totNetoUsd)} (${formatBs(fac.totNetoBs)})`,
-        estado: (fac.anulado || fac.anulada) ? 'ANULADA' : fac.saldoBs > 1 ? 'PENDIENTE' : 'COBRADA',
+        estado: fac.anulado || fac.anulada ? 'ANULADA' : fac.saldoBs > 1 ? 'PENDIENTE' : 'COBRADA',
         anulada: Boolean(fac.anulado || fac.anulada)
       });
     });
 
-    // Cobros
     profitCollections.forEach((cob) => {
       logs.push({
         id: `log-cob-${cob.cobNum || cob.id}`,
@@ -197,12 +200,11 @@ export default function AuditLedgerView({
         titulo: `Cobro Recibido #${cob.cobNum || cob.id}`,
         usuario: cob.coVen || cob.co_us_in || 'SISTEMA_CAJA',
         descripcion: `Cliente: ${cob.clienteNombre || 'Cliente'} • Monto: ${formatUsd(cob.montoUsd)} (${formatBs(cob.montoBs)})`,
-        estado: (cob.anulado || cob.anulada) ? 'ANULADO' : 'CONCILIADO',
+        estado: cob.anulado || cob.anulada ? 'ANULADO' : 'CONCILIADO',
         anulada: Boolean(cob.anulado || cob.anulada)
       });
     });
 
-    // Compras
     profitPurchases.forEach((pur) => {
       logs.push({
         id: `log-pur-${pur.factNum || pur.id}`,
@@ -212,12 +214,11 @@ export default function AuditLedgerView({
         titulo: `Recepción de Compra #${pur.factNum || pur.id}`,
         usuario: pur.co_us_in || 'DEPARTAMENTO_COMPRAS',
         descripcion: `Proveedor: ${pur.provNombre || 'Proveedor'} • Total: ${formatUsd(pur.totNetoUsd)}`,
-        estado: (pur.anulado || pur.anulada) ? 'ANULADA' : pur.estado || 'REGISTRADA',
+        estado: pur.anulado || pur.anulada ? 'ANULADA' : pur.estado || 'REGISTRADA',
         anulada: Boolean(pur.anulado || pur.anulada)
       });
     });
 
-    // Pagos
     profitSupplierPayments.forEach((pay) => {
       logs.push({
         id: `log-pay-${pay.pagoNum || pay.id}`,
@@ -227,12 +228,11 @@ export default function AuditLedgerView({
         titulo: `Pago a Proveedor #${pay.pagoNum || pay.id}`,
         usuario: pay.co_us_in || 'ADMINISTRACION_PAGOS',
         descripcion: `Proveedor: ${pay.provNombre || 'Proveedor'} • Monto: ${formatUsd(pay.montoUsd)}`,
-        estado: (pay.anulado || pay.anulada) ? 'ANULADO' : 'EMITIDO',
+        estado: pay.anulado || pay.anulada ? 'ANULADO' : 'EMITIDO',
         anulada: Boolean(pay.anulado || pay.anulada)
       });
     });
 
-    // Caja Chica
     cashMovements.forEach((mov, idx) => {
       const isEgreso = (mov.tipo || 'EGRESO').toUpperCase() === 'EGRESO';
       logs.push({
@@ -251,30 +251,17 @@ export default function AuditLedgerView({
     return logs.sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
   }, [profitInvoices, profitCollections, profitPurchases, profitSupplierPayments, cashMovements, tasa]);
 
-  // Balance de Comprobación (Sumas y Saldos por Cuenta)
-  const trialBalance = useMemo(() => {
-    return computeTrialBalance(accountingEntries);
-  }, [accountingEntries]);
-
-  // Libro Mayor General (Movimientos cronológicos con saldo acumulado por cuenta)
-  const generalLedger = useMemo(() => {
-    return computeGeneralLedger(accountingEntries);
-  }, [accountingEntries]);
-
-  // Cuenta activa en la vista del Mayor General
+  const trialBalance = useMemo(() => buildTrialBalance(accountingEntries), [accountingEntries]);
+  const generalLedger = useMemo(() => buildGeneralLedger(accountingEntries), [accountingEntries]);
   const activeMayorAccount = useMemo(() => {
     const accounts = generalLedger.accounts || [];
     if (accounts.length === 0) return null;
-    if (selectedMayorAccount && generalLedger.accountsByCode[selectedMayorAccount]) {
-      return generalLedger.accountsByCode[selectedMayorAccount];
+    if (selectedMayorCode && generalLedger.accountsByCode[selectedMayorCode]) {
+      return generalLedger.accountsByCode[selectedMayorCode];
     }
     return accounts.find(a => a.codigo === '1.01.03.001') || accounts[0];
-  }, [generalLedger, selectedMayorAccount]);
-
-  // Estados Financieros Básicos (Estado de Resultados + Balance General BA VEN-NIF 2)
-  const financialStatements = useMemo(() => {
-    return computeFinancialStatements(trialBalance);
-  }, [trialBalance]);
+  }, [generalLedger, selectedMayorCode]);
+  const financialStatements = useMemo(() => buildFinancialStatements(trialBalance), [trialBalance]);
 
   // Filtrado de Asientos Contables
   const filteredEntries = useMemo(() => {
@@ -297,24 +284,23 @@ export default function AuditLedgerView({
     return list;
   }, [accountingEntries, searchFilter, typeFilter]);
 
-  // Filtrado del Plan de Cuentas Oficial Motorven
-  const filteredPlanCuentas = useMemo(() => {
-    return PLAN_DE_CUENTAS_MOTORVEN.filter(c => {
-      if (planGroupFilter !== 'ALL' && c.grupo !== planGroupFilter) return false;
-      if (planImputableOnly && !c.imputable) return false;
+  const filteredPlanAccounts = useMemo(() => {
+    return CHART_OF_ACCOUNTS.filter((acc) => {
+      if (planGrupoFilter !== 'ALL' && acc.grupo !== planGrupoFilter) return false;
+      if (planOnlyImputable && !acc.imputable) return false;
       if (planSearch.trim()) {
         const q = planSearch.toLowerCase();
-        const matchesCode = c.codigo.toLowerCase().includes(q);
-        const matchesName = c.nombre.toLowerCase().includes(q);
-        const matchesSub = (c.subgrupo || '').toLowerCase().includes(q);
-        return matchesCode || matchesName || matchesSub;
+        return (
+          acc.codigo.toLowerCase().includes(q) ||
+          acc.nombre.toLowerCase().includes(q) ||
+          (acc.subgrupo || '').toLowerCase().includes(q)
+        );
       }
       return true;
     });
-  }, [planGroupFilter, planImputableOnly, planSearch]);
+  }, [planGrupoFilter, planOnlyImputable, planSearch]);
 
-  // Mapa de saldos actuales por cuenta para consulta rápida en el catálogo
-  const accountBalancesMap = useMemo(() => {
+  const accountBalanceMap = useMemo(() => {
     const map = {};
     (trialBalance.accounts || []).forEach(a => {
       map[a.codigo] = a;
@@ -322,9 +308,9 @@ export default function AuditLedgerView({
     return map;
   }, [trialBalance]);
 
-  // Exportar Libro Diario / Balance / Plan de Cuentas a CSV
+  // Exportar Libro Diario / Balance / Mayor / Estados / Plan a CSV
   const handleExportCsv = (type) => {
-    let rows = [];
+    const rows = [];
     let filename = 'libro_diario_motorven.csv';
 
     if (type === 'diario') {
@@ -364,23 +350,14 @@ export default function AuditLedgerView({
     } else if (type === 'plan') {
       filename = `plan_de_cuentas_motorven_${new Date().toISOString().slice(0, 10)}.csv`;
       rows.push(['Codigo', 'Nombre Cuenta', 'Nivel', 'Naturaleza', 'Imputable', 'Grupo', 'Subgrupo']);
-      PLAN_DE_CUENTAS_MOTORVEN.forEach(c => {
-        rows.push([
-          `"${c.codigo}"`,
-          `"${c.nombre}"`,
-          c.nivel,
-          c.naturaleza,
-          c.imputable ? 'SI' : 'NO',
-          c.grupo,
-          `"${c.subgrupo || ''}"`
-        ]);
+      CHART_OF_ACCOUNTS.forEach(a => {
+        rows.push([`"${a.codigo}"`, `"${a.nombre}"`, a.nivel, a.naturaleza, a.imputable ? 'SI' : 'NO', a.grupo, `"${a.subgrupo || ''}"`]);
       });
     } else if (type === 'mayor') {
-      const targetAcc = activeMayorAccount;
-      filename = `mayor_general_${targetAcc ? targetAcc.codigo.replace(/\./g, '_') : 'motorven'}_${new Date().toISOString().slice(0, 10)}.csv`;
+      const target = activeMayorAccount;
+      filename = `mayor_general_${target ? target.codigo.replace(/\./g, '_') : 'motorven'}_${new Date().toISOString().slice(0, 10)}.csv`;
       rows.push(['Codigo', 'Cuenta', 'Fecha', 'Asiento', 'Referencia', 'Concepto', 'Debe USD', 'Haber USD', 'Saldo Acumulado USD']);
-      const list = targetAcc ? [targetAcc] : generalLedger.accounts;
-      list.forEach(acc => {
+      (target ? [target] : generalLedger.accounts).forEach(acc => {
         acc.movements.forEach(m => {
           rows.push([
             acc.codigo,
@@ -397,16 +374,16 @@ export default function AuditLedgerView({
       });
     } else if (type === 'estados') {
       filename = `estados_financieros_motorven_${new Date().toISOString().slice(0, 10)}.csv`;
-      const { estadoResultados, balanceGeneral } = financialStatements;
+      const { estadoResultados: er, balanceGeneral: bg } = financialStatements;
       rows.push(['Estado', 'Grupo', 'Codigo', 'Cuenta', 'Saldo USD', 'Saldo Bs']);
-      estadoResultados.ingresos.forEach(a => rows.push(['ESTADO RESULTADOS', 'INGRESOS', a.codigo, `"${a.nombre}"`, a.saldoUsd.toFixed(2), a.saldoBs.toFixed(2)]));
-      estadoResultados.costos.forEach(a => rows.push(['ESTADO RESULTADOS', 'COSTOS', a.codigo, `"${a.nombre}"`, a.saldoUsd.toFixed(2), a.saldoBs.toFixed(2)]));
-      estadoResultados.egresos.forEach(a => rows.push(['ESTADO RESULTADOS', 'EGRESOS', a.codigo, `"${a.nombre}"`, a.saldoUsd.toFixed(2), a.saldoBs.toFixed(2)]));
-      rows.push(['ESTADO RESULTADOS', 'RESULTADO EJERCICIO', estadoResultados.cuentaResultadoCodigo, `"${estadoResultados.cuentaResultadoNombre}"`, estadoResultados.resultadoEjercicioUsd.toFixed(2), estadoResultados.resultadoEjercicioBs.toFixed(2)]);
-      balanceGeneral.activo.forEach(a => rows.push(['BALANCE GENERAL', 'ACTIVO', a.codigo, `"${a.nombre}"`, a.saldoUsd.toFixed(2), a.saldoBs.toFixed(2)]));
-      balanceGeneral.pasivo.forEach(a => rows.push(['BALANCE GENERAL', 'PASIVO', a.codigo, `"${a.nombre}"`, a.saldoUsd.toFixed(2), a.saldoBs.toFixed(2)]));
-      balanceGeneral.patrimonio.forEach(a => rows.push(['BALANCE GENERAL', 'PATRIMONIO', a.codigo, `"${a.nombre}"`, a.saldoUsd.toFixed(2), a.saldoBs.toFixed(2)]));
-      rows.push(['BALANCE GENERAL', 'PATRIMONIO', estadoResultados.cuentaResultadoCodigo, `"${estadoResultados.cuentaResultadoNombre}"`, balanceGeneral.resultadoEjercicioUsd.toFixed(2), balanceGeneral.resultadoEjercicioBs.toFixed(2)]);
+      er.ingresos.forEach(i => rows.push(['ESTADO RESULTADOS', 'INGRESOS', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
+      er.costos.forEach(i => rows.push(['ESTADO RESULTADOS', 'COSTOS', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
+      er.egresos.forEach(i => rows.push(['ESTADO RESULTADOS', 'EGRESOS', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
+      rows.push(['ESTADO RESULTADOS', 'RESULTADO EJERCICIO', er.cuentaResultadoCodigo, `"${er.cuentaResultadoNombre}"`, er.resultadoEjercicioUsd.toFixed(2), er.resultadoEjercicioBs.toFixed(2)]);
+      bg.activo.forEach(i => rows.push(['BALANCE GENERAL', 'ACTIVO', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
+      bg.pasivo.forEach(i => rows.push(['BALANCE GENERAL', 'PASIVO', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
+      bg.patrimonio.forEach(i => rows.push(['BALANCE GENERAL', 'PATRIMONIO', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
+      rows.push(['BALANCE GENERAL', 'PATRIMONIO', er.cuentaResultadoCodigo, `"${er.cuentaResultadoNombre}"`, bg.resultadoEjercicioUsd.toFixed(2), bg.resultadoEjercicioBs.toFixed(2)]);
     }
 
     const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + rows.map(e => e.join(';')).join('\n');
@@ -558,7 +535,7 @@ export default function AuditLedgerView({
           className={`btn ${activeSubTab === 'mayor' ? 'btn-primary' : 'btn-secondary'}`}
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
         >
-          <Layers size={15} />
+          <BookOpen size={15} />
           <span>Mayor General ({generalLedger.accounts.length})</span>
         </button>
 
@@ -576,8 +553,8 @@ export default function AuditLedgerView({
           className={`btn ${activeSubTab === 'estados' ? 'btn-primary' : 'btn-secondary'}`}
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
         >
-          <BarChart3 size={15} />
-          <span>Estados Financieros</span>
+          <TrendingUp size={15} />
+          <span>Estados Financieros (BA VEN-NIF 2)</span>
         </button>
 
         <button
@@ -585,8 +562,8 @@ export default function AuditLedgerView({
           className={`btn ${activeSubTab === 'plan' ? 'btn-primary' : 'btn-secondary'}`}
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
         >
-          <BookOpen size={15} />
-          <span>Plan de Cuentas ({PLAN_DE_CUENTAS_MOTORVEN.length})</span>
+          <Layers size={15} />
+          <span>Plan de Cuentas ({CHART_OF_ACCOUNTS.length})</span>
         </button>
 
         <button
@@ -637,7 +614,6 @@ export default function AuditLedgerView({
                 <option value="COBRO">Cobranzas Recaudadas</option>
                 <option value="COMPRA">Compras de Mercancía</option>
                 <option value="PAGO_PROVEEDOR">Pagos a Proveedores</option>
-                <option value="CAJA_CHICA">Caja Chica (Egresos/Ingresos)</option>
               </select>
             </div>
 
@@ -679,8 +655,8 @@ export default function AuditLedgerView({
                       fontWeight: 700,
                       padding: '0.15rem 0.5rem',
                       borderRadius: '6px',
-                      background: entry.tipoOperacion === 'VENTA' ? 'rgba(59, 130, 246, 0.15)' : entry.tipoOperacion === 'COBRO' ? 'rgba(16, 185, 129, 0.15)' : entry.tipoOperacion === 'COMPRA' ? 'rgba(245, 158, 11, 0.15)' : entry.tipoOperacion === 'CAJA_CHICA' ? 'rgba(236, 72, 153, 0.15)' : 'rgba(124, 58, 237, 0.15)',
-                      color: entry.tipoOperacion === 'VENTA' ? '#3b82f6' : entry.tipoOperacion === 'COBRO' ? '#10b981' : entry.tipoOperacion === 'COMPRA' ? '#f59e0b' : entry.tipoOperacion === 'CAJA_CHICA' ? '#ec4899' : '#c084fc',
+                      background: entry.tipoOperacion === 'VENTA' ? 'rgba(59, 130, 246, 0.15)' : entry.tipoOperacion === 'COBRO' ? 'rgba(16, 185, 129, 0.15)' : entry.tipoOperacion === 'COMPRA' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(124, 58, 237, 0.15)',
+                      color: entry.tipoOperacion === 'VENTA' ? '#3b82f6' : entry.tipoOperacion === 'COBRO' ? '#10b981' : entry.tipoOperacion === 'COMPRA' ? '#f59e0b' : '#c084fc',
                       border: '1px solid var(--border-glass)'
                     }}>
                       {entry.tipoOperacion}
@@ -752,259 +728,6 @@ export default function AuditLedgerView({
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* SUB-TAB 2: PLAN DE CUENTAS OFICIAL (PRO MOTORVEN C.A. RIF J-50780548-4) */}
-      {activeSubTab === 'plan' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {/* Institutional Header Banner */}
-          <div className="card" style={{ padding: '1.25rem', margin: 0, background: 'var(--bg-surface)', borderLeft: '4px solid var(--motorven-red)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 800, padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'var(--motorven-red)', color: '#fff' }}>
-                    CATÁLOGO INSTITUCIONAL
-                  </span>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    RIF: <strong>J-50780548-4</strong> • Centro Costos: <strong>001</strong>
-                  </span>
-                  <span style={{ fontSize: '0.8rem', color: '#10b981', fontWeight: 700 }}>
-                    Norma: BA VEN-NIF 2
-                  </span>
-                </div>
-                <h3 style={{ margin: '0.5rem 0 0.2rem 0', fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                  Plan de Cuentas Oficial — Pro Motorven C.A.
-                </h3>
-                <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  Estructura jerárquica de 4 niveles para registro de transacciones comerciales, retenciones SENIAT y tesorería multi-moneda.
-                </p>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <button
-                  onClick={() => handleExportCsv('plan')}
-                  className="btn btn-secondary btn-sm"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
-                >
-                  <Download size={14} />
-                  <span>Exportar Plan CSV</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Quick Filter Pills by Accounting Group */}
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border-glass)' }}>
-              {[
-                { key: 'ALL', label: 'Todos los Grupos', count: PLAN_DE_CUENTAS_MOTORVEN.length },
-                { key: 'ACTIVO', label: '1. Activos', count: PLAN_DE_CUENTAS_MOTORVEN.filter(c => c.grupo === 'ACTIVO').length, color: '#10b981' },
-                { key: 'PASIVO', label: '2. Pasivos', count: PLAN_DE_CUENTAS_MOTORVEN.filter(c => c.grupo === 'PASIVO').length, color: '#ef4444' },
-                { key: 'PATRIMONIO', label: '3. Patrimonio', count: PLAN_DE_CUENTAS_MOTORVEN.filter(c => c.grupo === 'PATRIMONIO').length, color: '#f59e0b' },
-                { key: 'INGRESOS', label: '4. Ingresos', count: PLAN_DE_CUENTAS_MOTORVEN.filter(c => c.grupo === 'INGRESOS').length, color: '#3b82f6' },
-                { key: 'COSTOS', label: '5. Costos', count: PLAN_DE_CUENTAS_MOTORVEN.filter(c => c.grupo === 'COSTOS').length, color: '#8b5cf6' },
-                { key: 'EGRESOS', label: '6. Egresos', count: PLAN_DE_CUENTAS_MOTORVEN.filter(c => c.grupo === 'EGRESOS').length, color: '#ec4899' }
-              ].map(grp => (
-                <button
-                  key={grp.key}
-                  type="button"
-                  onClick={() => setPlanGroupFilter(grp.key)}
-                  style={{
-                    padding: '0.3rem 0.75rem',
-                    borderRadius: '20px',
-                    fontSize: '0.78rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    background: planGroupFilter === grp.key ? 'var(--accent-primary)' : 'var(--bg-glass-accent)',
-                    color: planGroupFilter === grp.key ? '#fff' : 'var(--text-secondary)',
-                    border: planGroupFilter === grp.key ? '1px solid var(--accent-primary)' : '1px solid var(--border-glass)'
-                  }}
-                >
-                  {grp.label} ({grp.count})
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Search & Toggle Bar */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div className="search-wrapper" style={{ minWidth: '280px', flex: 1 }}>
-              <Search size={15} />
-              <input
-                type="text"
-                placeholder="Buscar por código de cuenta o nombre (ej. 1.01.01.001, Banco, Inventario, Retención)..."
-                value={planSearch}
-                onChange={(e) => setPlanSearch(e.target.value)}
-                className="input-field"
-                style={{ width: '100%', height: '38px', fontSize: '0.85rem' }}
-              />
-            </div>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.82rem', color: 'var(--text-secondary)', userSelect: 'none' }}>
-              <input
-                type="checkbox"
-                checked={planImputableOnly}
-                onChange={(e) => setPlanImputableOnly(e.target.checked)}
-                style={{ width: '16px', height: '16px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-              />
-              <span>Solo Cuentas Imputables (Nivel 4 / Registros Operativos)</span>
-            </label>
-
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              Mostrando <strong>{filteredPlanCuentas.length}</strong> de <strong>{PLAN_DE_CUENTAS_MOTORVEN.length}</strong> cuentas
-            </span>
-          </div>
-
-          {/* Chart of Accounts Master Table */}
-          <div className="card" style={{ padding: 0, overflow: 'hidden', margin: 0, background: 'var(--bg-surface)' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-glass-accent)', color: 'var(--text-muted)', textAlign: 'left' }}>
-                    <th style={{ padding: '0.75rem 1rem', width: '140px' }}>Código</th>
-                    <th style={{ padding: '0.75rem' }}>Descripción / Nombre de Cuenta</th>
-                    <th style={{ padding: '0.75rem', textAlign: 'center', width: '80px' }}>Nivel</th>
-                    <th style={{ padding: '0.75rem', textAlign: 'center', width: '100px' }}>Naturaleza</th>
-                    <th style={{ padding: '0.75rem', textAlign: 'center', width: '110px' }}>Imputable</th>
-                    <th style={{ padding: '0.75rem', width: '130px' }}>Subgrupo</th>
-                    <th style={{ padding: '0.75rem 1rem', textAlign: 'right', width: '140px' }}>Saldo Período</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPlanCuentas.map((cuenta) => {
-                    const balance = accountBalancesMap[cuenta.codigo];
-                    const isNivel1 = cuenta.nivel === 1;
-                    const isNivel2 = cuenta.nivel === 2;
-                    const isNivel3 = cuenta.nivel === 3;
-                    const isNivel4 = cuenta.nivel === 4;
-
-                    const paddingLeft = isNivel1 ? '0rem' : isNivel2 ? '1rem' : isNivel3 ? '2rem' : '3.25rem';
-
-                    const rowBg = isNivel1
-                      ? 'rgba(255, 255, 255, 0.04)'
-                      : isNivel2
-                      ? 'rgba(255, 255, 255, 0.015)'
-                      : 'transparent';
-
-                    return (
-                      <tr
-                        key={cuenta.codigo}
-                        style={{
-                          borderBottom: '1px solid var(--border-glass)',
-                          background: rowBg,
-                          transition: 'background-color 0.15s'
-                        }}
-                      >
-                        {/* Code */}
-                        <td style={{
-                          padding: '0.65rem 1rem',
-                          fontWeight: isNivel1 ? 900 : isNivel2 ? 800 : isNivel3 ? 700 : 600,
-                          color: isNivel1 ? 'var(--motorven-red)' : isNivel4 ? 'var(--accent-primary)' : 'var(--text-primary)',
-                          fontFamily: 'monospace',
-                          fontSize: isNivel1 ? '0.9rem' : '0.82rem'
-                        }}>
-                          {cuenta.codigo}
-                        </td>
-
-                        {/* Description / Tree Indented */}
-                        <td style={{
-                          padding: '0.65rem',
-                          paddingLeft: `calc(0.65rem + ${paddingLeft})`,
-                          fontWeight: isNivel1 ? 900 : isNivel2 ? 700 : isNivel3 ? 600 : 400,
-                          color: isNivel1 ? 'var(--text-heading)' : isNivel4 ? 'var(--text-primary)' : 'var(--text-secondary)',
-                          fontSize: isNivel1 ? '0.92rem' : isNivel2 ? '0.86rem' : '0.82rem'
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            {isNivel4 && (
-                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>↳</span>
-                            )}
-                            <span>{cuenta.nombre}</span>
-                          </div>
-                        </td>
-
-                        {/* Level */}
-                        <td style={{ padding: '0.65rem', textAlign: 'center' }}>
-                          <span style={{
-                            fontSize: '0.72rem',
-                            fontWeight: 700,
-                            padding: '0.15rem 0.45rem',
-                            borderRadius: '4px',
-                            background: isNivel1 ? 'rgba(239, 68, 68, 0.15)' : isNivel2 ? 'rgba(59, 130, 246, 0.15)' : isNivel3 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-                            color: isNivel1 ? '#ef4444' : isNivel2 ? '#3b82f6' : isNivel3 ? '#f59e0b' : '#10b981'
-                          }}>
-                            Nivel {cuenta.nivel}
-                          </span>
-                        </td>
-
-                        {/* Nature */}
-                        <td style={{ padding: '0.65rem', textAlign: 'center' }}>
-                          <span style={{
-                            fontSize: '0.72rem',
-                            fontWeight: 700,
-                            color: cuenta.naturaleza === 'DEUDORA' ? '#10b981' : '#3b82f6'
-                          }}>
-                            {cuenta.naturaleza}
-                          </span>
-                        </td>
-
-                        {/* Imputable */}
-                        <td style={{ padding: '0.65rem', textAlign: 'center' }}>
-                          {cuenta.imputable ? (
-                            <span style={{
-                              fontSize: '0.7rem',
-                              fontWeight: 700,
-                              padding: '0.15rem 0.5rem',
-                              borderRadius: '6px',
-                              background: 'rgba(16, 185, 129, 0.15)',
-                              color: '#10b981',
-                              border: '1px solid rgba(16, 185, 129, 0.3)'
-                            }}>
-                              ✓ Imputable
-                            </span>
-                          ) : (
-                            <span style={{
-                              fontSize: '0.7rem',
-                              fontWeight: 500,
-                              padding: '0.15rem 0.5rem',
-                              borderRadius: '6px',
-                              background: 'rgba(255, 255, 255, 0.05)',
-                              color: 'var(--text-muted)'
-                            }}>
-                              Mayor
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Subgroup */}
-                        <td style={{ padding: '0.65rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          {cuenta.subgrupo || '—'}
-                        </td>
-
-                        {/* Period Balance */}
-                        <td style={{ padding: '0.65rem 1rem', textAlign: 'right', fontWeight: 700 }}>
-                          {balance ? (
-                            balance.saldoDeudorUsd > 0 ? (
-                              <span style={{ color: '#10b981' }} title="Saldo Deudor">
-                                {formatUsd(balance.saldoDeudorUsd)} D
-                              </span>
-                            ) : balance.saldoAcreedorUsd > 0 ? (
-                              <span style={{ color: '#3b82f6' }} title="Saldo Acreedor">
-                                {formatUsd(balance.saldoAcreedorUsd)} H
-                              </span>
-                            ) : (
-                              <span style={{ color: 'var(--text-muted)' }}>$ 0.00</span>
-                            )
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)' }}>—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       )}
@@ -1342,7 +1065,7 @@ export default function AuditLedgerView({
         </div>
       )}
 
-      {/* SUB-TAB: LIBRO MAYOR GENERAL */}
+      {/* SUB-TAB: MAYOR GENERAL ANALÍTICO */}
       {activeSubTab === 'mayor' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div className="card" style={{ padding: '1rem 1.25rem', margin: 0, background: 'var(--bg-surface)', borderLeft: '4px solid #3b82f6' }}>
@@ -1353,7 +1076,7 @@ export default function AuditLedgerView({
                 </label>
                 <select
                   value={activeMayorAccount?.codigo || ''}
-                  onChange={(e) => setSelectedMayorAccount(e.target.value)}
+                  onChange={(e) => setSelectedMayorCode(e.target.value)}
                   className="input-field filter-select"
                   style={{ width: '100%', height: '40px', fontSize: '0.88rem', fontWeight: 700 }}
                 >
@@ -1364,7 +1087,6 @@ export default function AuditLedgerView({
                   ))}
                 </select>
               </div>
-
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
                 <button
                   onClick={() => handleExportCsv('mayor')}
@@ -1396,11 +1118,15 @@ export default function AuditLedgerView({
                 </div>
                 <div>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>TOTAL CARGOS (DEBE)</span>
-                  <strong style={{ fontSize: '0.95rem', color: '#10b981' }}>{formatUsd(activeMayorAccount.totalDebeUsd)}</strong>
+                  <strong style={{ fontSize: '0.95rem', color: '#10b981' }}>
+                    {formatUsd(activeMayorAccount.totalDebeUsd)}
+                  </strong>
                 </div>
                 <div>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>TOTAL ABONOS (HABER)</span>
-                  <strong style={{ fontSize: '0.95rem', color: '#3b82f6' }}>{formatUsd(activeMayorAccount.totalHaberUsd)}</strong>
+                  <strong style={{ fontSize: '0.95rem', color: '#3b82f6' }}>
+                    {formatUsd(activeMayorAccount.totalHaberUsd)}
+                  </strong>
                 </div>
                 <div>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>SALDO FINAL ACUMULADO</span>
@@ -1427,8 +1153,8 @@ export default function AuditLedgerView({
                     </tr>
                   </thead>
                   <tbody>
-                    {activeMayorAccount.movements.slice(-200).map((mov, idx) => (
-                      <tr key={idx} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                    {activeMayorAccount.movements.slice(-200).map((mov, mIdx) => (
+                      <tr key={mIdx} style={{ borderBottom: '1px solid var(--border-glass)' }}>
                         <td style={{ padding: '0.55rem 1rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                           {mov.fecha ? new Date(mov.fecha).toLocaleDateString('es-VE') : 'N/A'}
                         </td>
@@ -1454,7 +1180,7 @@ export default function AuditLedgerView({
               </div>
               {activeMayorAccount.movements.length > 200 && (
                 <div style={{ padding: '0.65rem 1rem', fontSize: '0.75rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-glass)' }}>
-                  Mostrando los últimos 200 movimientos cronológicos de {activeMayorAccount.movements.length}. Use "Exportar Mayor CSV" para descargar el histórico completo.
+                  Mostrando los últimos 200 movimientos cronológicos de {activeMayorAccount.movements.length}. Use &quot;Exportar Mayor CSV&quot; para descargar el histórico completo.
                 </div>
               )}
             </div>
@@ -1462,7 +1188,7 @@ export default function AuditLedgerView({
         </div>
       )}
 
-      {/* SUB-TAB 3: BALANCE DE COMPROBACIÓN */}
+      {/* SUB-TAB: BALANCE DE COMPROBACIÓN */}
       {activeSubTab === 'balance' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div className="card" style={{ padding: 0, overflow: 'hidden', margin: 0, background: 'var(--bg-surface)' }}>
@@ -1528,7 +1254,10 @@ export default function AuditLedgerView({
                   {trialBalance.accounts.map((acc) => (
                     <tr
                       key={acc.codigo}
-                      onClick={() => { setSelectedMayorAccount(acc.codigo); setActiveSubTab('mayor'); }}
+                      onClick={() => {
+                        setSelectedMayorCode(acc.codigo);
+                        setActiveSubTab('mayor');
+                      }}
                       style={{ borderBottom: '1px solid var(--border-glass)', cursor: 'pointer' }}
                       title="Clic para inspeccionar movimientos en el Libro Mayor General"
                     >
@@ -1583,7 +1312,6 @@ export default function AuditLedgerView({
         const { estadoResultados, balanceGeneral } = financialStatements;
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {/* Banner de Verificación de Ecuación Patrimonial */}
             <div className="card" style={{
               padding: '1rem 1.25rem',
               margin: 0,
@@ -1597,11 +1325,9 @@ export default function AuditLedgerView({
             }}>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                  {balanceGeneral.ecuacionCuadrada ? (
-                    <CheckCircle2 size={18} color="#10b981" />
-                  ) : (
-                    <AlertTriangle size={18} color="#ef4444" />
-                  )}
+                  {balanceGeneral.ecuacionCuadrada
+                    ? <CheckCircle2 size={18} color="#10b981" />
+                    : <AlertTriangle size={18} color="#ef4444" />}
                   <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
                     Ecuación Patrimonial BA VEN-NIF 2: Activo = Pasivo + Patrimonio + Resultado
                   </span>
@@ -1631,9 +1357,8 @@ export default function AuditLedgerView({
               </div>
             </div>
 
-            {/* Grid de Estado de Resultados y Balance General */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.25rem', alignItems: 'start' }}>
-              {/* 1. ESTADO DE RESULTADOS */}
+              {/* Estado de Resultados Integral */}
               <div className="card" style={{ padding: 0, overflow: 'hidden', margin: 0, background: 'var(--bg-surface)' }}>
                 <div style={{ padding: '0.9rem 1.15rem', borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-glass-accent)' }}>
                   <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
@@ -1643,19 +1368,17 @@ export default function AuditLedgerView({
                     Grupos 4 (Ingresos), 5 (Costos) y 6 (Egresos Operativos)
                   </p>
                 </div>
-
                 <div style={{ padding: '1rem 1.15rem', display: 'flex', flexDirection: 'column', gap: '0.9rem', fontSize: '0.84rem' }}>
-                  {/* Ingresos */}
                   <div>
                     <div style={{ fontWeight: 800, color: '#3b82f6', marginBottom: '0.4rem', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                       4. Ingresos Operacionales y Otros
                     </div>
                     {estadoResultados.ingresos.length === 0 ? (
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin movimientos registrados.</div>
-                    ) : estadoResultados.ingresos.map((acc) => (
-                      <div key={acc.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
-                        <span><strong style={{ color: 'var(--accent-primary)' }}>{acc.codigo}</strong> {acc.nombre}</span>
-                        <span style={{ fontWeight: 600 }}>{formatUsd(acc.saldoUsd)}</span>
+                    ) : estadoResultados.ingresos.map((item) => (
+                      <div key={item.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
+                        <span><strong style={{ color: 'var(--accent-primary)' }}>{item.codigo}</strong> {item.nombre}</span>
+                        <span style={{ fontWeight: 600 }}>{formatUsd(item.saldoUsd)}</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.4rem', fontWeight: 800, color: 'var(--text-primary)' }}>
@@ -1664,17 +1387,16 @@ export default function AuditLedgerView({
                     </div>
                   </div>
 
-                  {/* Costos */}
                   <div>
                     <div style={{ fontWeight: 800, color: '#8b5cf6', marginBottom: '0.4rem', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                       5. Costos de Ventas y Servicios
                     </div>
                     {estadoResultados.costos.length === 0 ? (
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin costos registrados en el período.</div>
-                    ) : estadoResultados.costos.map((acc) => (
-                      <div key={acc.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
-                        <span><strong style={{ color: 'var(--accent-primary)' }}>{acc.codigo}</strong> {acc.nombre}</span>
-                        <span style={{ fontWeight: 600 }}>({formatUsd(acc.saldoUsd)})</span>
+                    ) : estadoResultados.costos.map((item) => (
+                      <div key={item.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
+                        <span><strong style={{ color: 'var(--accent-primary)' }}>{item.codigo}</strong> {item.nombre}</span>
+                        <span style={{ fontWeight: 600 }}>({formatUsd(item.saldoUsd)})</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.4rem', fontWeight: 800, color: 'var(--text-primary)', borderTop: '1px solid var(--border-glass)' }}>
@@ -1683,17 +1405,16 @@ export default function AuditLedgerView({
                     </div>
                   </div>
 
-                  {/* Egresos */}
                   <div>
                     <div style={{ fontWeight: 800, color: '#ec4899', marginBottom: '0.4rem', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                       6. Gastos Operativos / Egresos
                     </div>
                     {estadoResultados.egresos.length === 0 ? (
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin egresos operativos en el período.</div>
-                    ) : estadoResultados.egresos.map((acc) => (
-                      <div key={acc.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
-                        <span><strong style={{ color: 'var(--accent-primary)' }}>{acc.codigo}</strong> {acc.nombre}</span>
-                        <span style={{ fontWeight: 600 }}>({formatUsd(acc.saldoUsd)})</span>
+                    ) : estadoResultados.egresos.map((item) => (
+                      <div key={item.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
+                        <span><strong style={{ color: 'var(--accent-primary)' }}>{item.codigo}</strong> {item.nombre}</span>
+                        <span style={{ fontWeight: 600 }}>({formatUsd(item.saldoUsd)})</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.4rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
@@ -1702,7 +1423,6 @@ export default function AuditLedgerView({
                     </div>
                   </div>
 
-                  {/* Resultado Final */}
                   <div style={{
                     padding: '0.75rem',
                     borderRadius: '8px',
@@ -1722,7 +1442,7 @@ export default function AuditLedgerView({
                 </div>
               </div>
 
-              {/* 2. BALANCE GENERAL */}
+              {/* Balance General */}
               <div className="card" style={{ padding: 0, overflow: 'hidden', margin: 0, background: 'var(--bg-surface)' }}>
                 <div style={{ padding: '0.9rem 1.15rem', borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-glass-accent)' }}>
                   <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
@@ -1732,17 +1452,15 @@ export default function AuditLedgerView({
                     Grupos 1 (Activo), 2 (Pasivo) y 3 (Patrimonio)
                   </p>
                 </div>
-
                 <div style={{ padding: '1rem 1.15rem', display: 'flex', flexDirection: 'column', gap: '0.9rem', fontSize: '0.84rem' }}>
-                  {/* Activo */}
                   <div>
                     <div style={{ fontWeight: 800, color: '#10b981', marginBottom: '0.4rem', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                       1. Activo
                     </div>
-                    {balanceGeneral.activo.map((acc) => (
-                      <div key={acc.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
-                        <span><strong style={{ color: 'var(--accent-primary)' }}>{acc.codigo}</strong> {acc.nombre}</span>
-                        <span style={{ fontWeight: 600 }}>{formatUsd(acc.saldoUsd)}</span>
+                    {balanceGeneral.activo.map((item) => (
+                      <div key={item.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
+                        <span><strong style={{ color: 'var(--accent-primary)' }}>{item.codigo}</strong> {item.nombre}</span>
+                        <span style={{ fontWeight: 600 }}>{formatUsd(item.saldoUsd)}</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.5rem', fontWeight: 800, color: '#10b981', fontSize: '0.92rem' }}>
@@ -1751,15 +1469,14 @@ export default function AuditLedgerView({
                     </div>
                   </div>
 
-                  {/* Pasivo */}
                   <div>
                     <div style={{ fontWeight: 800, color: '#ef4444', marginBottom: '0.4rem', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                       2. Pasivo
                     </div>
-                    {balanceGeneral.pasivo.map((acc) => (
-                      <div key={acc.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
-                        <span><strong style={{ color: 'var(--accent-primary)' }}>{acc.codigo}</strong> {acc.nombre}</span>
-                        <span style={{ fontWeight: 600 }}>{formatUsd(acc.saldoUsd)}</span>
+                    {balanceGeneral.pasivo.map((item) => (
+                      <div key={item.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
+                        <span><strong style={{ color: 'var(--accent-primary)' }}>{item.codigo}</strong> {item.nombre}</span>
+                        <span style={{ fontWeight: 600 }}>{formatUsd(item.saldoUsd)}</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.4rem', fontWeight: 800, color: 'var(--text-primary)' }}>
@@ -1768,15 +1485,14 @@ export default function AuditLedgerView({
                     </div>
                   </div>
 
-                  {/* Patrimonio */}
                   <div>
                     <div style={{ fontWeight: 800, color: '#f59e0b', marginBottom: '0.4rem', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                       3. Patrimonio Neto
                     </div>
-                    {balanceGeneral.patrimonio.map((acc) => (
-                      <div key={acc.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
-                        <span><strong style={{ color: 'var(--accent-primary)' }}>{acc.codigo}</strong> {acc.nombre}</span>
-                        <span style={{ fontWeight: 600 }}>{formatUsd(acc.saldoUsd)}</span>
+                    {balanceGeneral.patrimonio.map((item) => (
+                      <div key={item.codigo} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
+                        <span><strong style={{ color: 'var(--accent-primary)' }}>{item.codigo}</strong> {item.nombre}</span>
+                        <span style={{ fontWeight: 600 }}>{formatUsd(item.saldoUsd)}</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border-glass)' }}>
@@ -1789,7 +1505,6 @@ export default function AuditLedgerView({
                     </div>
                   </div>
 
-                  {/* Total Pasivo + Patrimonio */}
                   <div style={{
                     padding: '0.75rem',
                     borderRadius: '8px',
@@ -1810,6 +1525,221 @@ export default function AuditLedgerView({
           </div>
         );
       })()}
+
+      {/* SUB-TAB: PLAN DE CUENTAS OFICIAL */}
+      {activeSubTab === 'plan' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div className="card" style={{ padding: '1rem 1.25rem', margin: 0, background: 'var(--bg-surface)', borderLeft: '4px solid var(--motorven-red)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 800, padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'var(--motorven-red)', color: '#fff' }}>
+                    CATÁLOGO INSTITUCIONAL
+                  </span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    RIF: <strong>J-50780548-4</strong> • Centro Costos: <strong>001</strong>
+                  </span>
+                  <span style={{ fontSize: '0.8rem', color: '#10b981', fontWeight: 700 }}>
+                    Norma: BA VEN-NIF 2
+                  </span>
+                </div>
+                <h3 style={{ margin: '0.5rem 0 0.2rem 0', fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  Plan de Cuentas Oficial — Pro Motorven C.A.
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Estructura jerárquica de 4 niveles para registro de transacciones comerciales, retenciones SENIAT y tesorería multi-moneda.
+                </p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button
+                  onClick={() => handleExportCsv('plan')}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+                >
+                  <Download size={14} />
+                  <span>Exportar Plan CSV</span>
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border-glass)' }}>
+              {[
+                { key: 'ALL', label: 'Todos los Grupos', count: CHART_OF_ACCOUNTS.length },
+                { key: 'ACTIVO', label: '1. Activos', count: CHART_OF_ACCOUNTS.filter(a => a.grupo === 'ACTIVO').length },
+                { key: 'PASIVO', label: '2. Pasivos', count: CHART_OF_ACCOUNTS.filter(a => a.grupo === 'PASIVO').length },
+                { key: 'PATRIMONIO', label: '3. Patrimonio', count: CHART_OF_ACCOUNTS.filter(a => a.grupo === 'PATRIMONIO').length },
+                { key: 'INGRESOS', label: '4. Ingresos', count: CHART_OF_ACCOUNTS.filter(a => a.grupo === 'INGRESOS').length },
+                { key: 'COSTOS', label: '5. Costos', count: CHART_OF_ACCOUNTS.filter(a => a.grupo === 'COSTOS').length },
+                { key: 'EGRESOS', label: '6. Egresos', count: CHART_OF_ACCOUNTS.filter(a => a.grupo === 'EGRESOS').length }
+              ].map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  onClick={() => setPlanGrupoFilter(g.key)}
+                  style={{
+                    padding: '0.3rem 0.75rem',
+                    borderRadius: '20px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    background: planGrupoFilter === g.key ? 'var(--accent-primary)' : 'var(--bg-glass-accent)',
+                    color: planGrupoFilter === g.key ? '#fff' : 'var(--text-secondary)',
+                    border: planGrupoFilter === g.key ? '1px solid var(--accent-primary)' : '1px solid var(--border-glass)'
+                  }}
+                >
+                  {g.label} ({g.count})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div className="search-wrapper" style={{ minWidth: '280px', flex: 1 }}>
+              <Search size={15} />
+              <input
+                type="text"
+                placeholder="Buscar por código de cuenta o nombre (ej. 1.01.01.001, Banco, Inventario, Retención)..."
+                value={planSearch}
+                onChange={(e) => setPlanSearch(e.target.value)}
+                className="input-field"
+                style={{ width: '100%', height: '38px', fontSize: '0.85rem' }}
+              />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.82rem', color: 'var(--text-secondary)', userSelect: 'none' }}>
+              <input
+                type="checkbox"
+                checked={planOnlyImputable}
+                onChange={(e) => setPlanOnlyImputable(e.target.checked)}
+                style={{ width: '16px', height: '16px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+              />
+              <span>Solo Cuentas Imputables (Nivel 4 / Registros Operativos)</span>
+            </label>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Mostrando <strong>{filteredPlanAccounts.length}</strong> de <strong>{CHART_OF_ACCOUNTS.length}</strong> cuentas
+            </span>
+          </div>
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden', margin: 0, background: 'var(--bg-surface)' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-glass-accent)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                    <th style={{ padding: '0.75rem 1rem', width: '140px' }}>Código</th>
+                    <th style={{ padding: '0.75rem' }}>Descripción / Nombre de Cuenta</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'center', width: '80px' }}>Nivel</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'center', width: '100px' }}>Naturaleza</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'center', width: '110px' }}>Imputable</th>
+                    <th style={{ padding: '0.75rem', width: '130px' }}>Subgrupo</th>
+                    <th style={{ padding: '0.75rem 1rem', textAlign: 'right', width: '140px' }}>Saldo Período</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPlanAccounts.map((acc) => {
+                    const bal = accountBalanceMap[acc.codigo];
+                    const n1 = acc.nivel === 1;
+                    const n2 = acc.nivel === 2;
+                    const n3 = acc.nivel === 3;
+                    const n4 = acc.nivel === 4;
+                    const indent = n1 ? '0rem' : n2 ? '1rem' : n3 ? '2rem' : '3.25rem';
+                    return (
+                      <tr
+                        key={acc.codigo}
+                        style={{
+                          borderBottom: '1px solid var(--border-glass)',
+                          background: n1 ? 'rgba(255, 255, 255, 0.04)' : n2 ? 'rgba(255, 255, 255, 0.015)' : 'transparent',
+                          transition: 'background-color 0.15s'
+                        }}
+                      >
+                        <td style={{
+                          padding: '0.65rem 1rem',
+                          fontWeight: n1 ? 900 : n2 ? 800 : n3 ? 700 : 600,
+                          color: n1 ? 'var(--motorven-red)' : n4 ? 'var(--accent-primary)' : 'var(--text-primary)',
+                          fontFamily: 'monospace',
+                          fontSize: n1 ? '0.9rem' : '0.82rem'
+                        }}>
+                          {acc.codigo}
+                        </td>
+                        <td style={{
+                          padding: '0.65rem',
+                          paddingLeft: `calc(0.65rem + ${indent})`,
+                          fontWeight: n1 ? 900 : n2 ? 700 : n3 ? 600 : 400,
+                          color: n1 ? 'var(--text-heading)' : n4 ? 'var(--text-primary)' : 'var(--text-secondary)',
+                          fontSize: n1 ? '0.92rem' : n2 ? '0.86rem' : '0.82rem'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            {n4 && <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>↳</span>}
+                            <span>{acc.nombre}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.65rem', textAlign: 'center' }}>
+                          <span style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            padding: '0.15rem 0.45rem',
+                            borderRadius: '4px',
+                            background: n1 ? 'rgba(239, 68, 68, 0.15)' : n2 ? 'rgba(59, 130, 246, 0.15)' : n3 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                            color: n1 ? '#ef4444' : n2 ? '#3b82f6' : n3 ? '#f59e0b' : '#10b981'
+                          }}>
+                            Nivel {acc.nivel}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.65rem', textAlign: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: acc.naturaleza === 'DEUDORA' ? '#10b981' : '#3b82f6' }}>
+                            {acc.naturaleza}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.65rem', textAlign: 'center' }}>
+                          {acc.imputable ? (
+                            <span style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              padding: '0.15rem 0.5rem',
+                              borderRadius: '6px',
+                              background: 'rgba(16, 185, 129, 0.15)',
+                              color: '#10b981',
+                              border: '1px solid rgba(16, 185, 129, 0.3)'
+                            }}>
+                              ✓ Imputable
+                            </span>
+                          ) : (
+                            <span style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 500,
+                              padding: '0.15rem 0.5rem',
+                              borderRadius: '6px',
+                              background: 'rgba(255, 255, 255, 0.05)',
+                              color: 'var(--text-muted)'
+                            }}>
+                              Mayor
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.65rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          {acc.subgrupo || '—'}
+                        </td>
+                        <td style={{ padding: '0.65rem 1rem', textAlign: 'right', fontWeight: 700 }}>
+                          {bal ? (
+                            bal.saldoDeudorUsd > 0 ? (
+                              <span style={{ color: '#10b981' }} title="Saldo Deudor">{formatUsd(bal.saldoDeudorUsd)} D</span>
+                            ) : bal.saldoAcreedorUsd > 0 ? (
+                              <span style={{ color: '#3b82f6' }} title="Saldo Acreedor">{formatUsd(bal.saldoAcreedorUsd)} H</span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)' }}>$ 0.00</span>
+                            )
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SUB-TAB 4: EXPORTACIÓN CONTABLE OFICIAL */}
       {activeSubTab === 'export' && (

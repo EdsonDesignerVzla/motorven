@@ -38,7 +38,14 @@ import IslrWithholdingModal from '../components/IslrWithholdingModal';
 import SmartReorderMatrixModal from '../components/SmartReorderMatrixModal';
 import { Sliders, Printer } from 'lucide-react';
 import { isMasterOrGerencia } from '../services/authService';
-import { generatePurchasesPDF } from '../services/pdfReportService';
+import {
+  generatePurchasesPDF,
+  generatePurchaseRequisitionPDF,
+  generatePurchaseOrderPDF,
+  generateGoodsReceiptPDF,
+  generatePaymentOrderPDF,
+  generateSeniatRetentionVoucherPDF
+} from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 export default function PurchasesView({
@@ -48,6 +55,13 @@ export default function PurchasesView({
   config,
   onSaveProduct,
   onRegisterPurchase,
+  purchaseRequisitions = [],
+  purchaseOrders = [],
+  goodsReceiptNotes = [],
+  onSaveRequisition,
+  onSavePurchaseOrder,
+  onSaveGoodsReceipt,
+  onSavePaymentOrder,
   currentUser,
   profitSuppliers = [],
   profitPurchases = [],
@@ -71,6 +85,39 @@ export default function PurchasesView({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('TODOS');
   const [syncing, setSyncing] = useState(false);
+
+  // Estados para Requisiciones (REQ), Órdenes de Compra (OC), Recepciones (REC) y Órdenes de Pago (OP)
+  const [reqSku, setReqSku] = useState('');
+  const [reqQty, setReqQty] = useState(10);
+  const [reqDept, setReqDept] = useState('Almacén / Ventas');
+  const [reqPriority, setReqPriority] = useState('NORMAL');
+  const [reqReason, setReqReason] = useState('Reposición de stock crítico');
+
+  const [poSupplierCode, setPoSupplierCode] = useState('');
+  const [poSku, setPoSku] = useState('');
+  const [poQty, setPoQty] = useState(10);
+  const [poUnitCostUsd, setPoUnitCostUsd] = useState(25);
+  const [poPaymentTerm, setPoPaymentTerm] = useState('Contado / 15 días');
+  const [poNotes, setPoNotes] = useState('');
+  const [poReqRef, setPoReqRef] = useState('');
+
+  const [recOrderNum, setRecOrderNum] = useState('');
+  const [recInvoiceNum, setRecInvoiceNum] = useState('');
+  const [recSupplierName, setRecSupplierName] = useState('');
+  const [recSku, setRecSku] = useState('');
+  const [recExpectedQty, setRecExpectedQty] = useState(10);
+  const [recReceivedQty, setRecReceivedQty] = useState(10);
+  const [recDamagedQty, setRecDamagedQty] = useState(0);
+  const [recWarehouse, setRecWarehouse] = useState('01');
+  const [recNotes, setRecNotes] = useState('');
+
+  const [showNewOpForm, setShowNewOpForm] = useState(false);
+  const [opBeneficiary, setOpBeneficiary] = useState('');
+  const [opAmountBs, setOpAmountBs] = useState('');
+  const [opRetBs, setOpRetBs] = useState('0');
+  const [opFormaPag, setOpFormaPag] = useState('TRANSFERENCIA');
+  const [opMotivo, setOpMotivo] = useState('');
+  const [opCuenta, setOpCuenta] = useState('');
 
   // Form states for SENIAT purchase entry
   const [selectedSupplier, setSelectedSupplier] = useState(suppliers[0] || null);
@@ -704,6 +751,66 @@ export default function PurchasesView({
         </button>
 
         <button
+          onClick={() => { setActiveSubTab('requisiciones'); setStatusFilter('TODOS'); }}
+          className={`tab-btn ${activeSubTab === 'requisiciones' ? 'active' : ''}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0.65rem 1.05rem',
+            background: activeSubTab === 'requisiciones' ? 'var(--motorven-navy)' : 'transparent',
+            color: activeSubTab === 'requisiciones' ? '#ffffff' : 'var(--text-muted)',
+            border: 'none',
+            borderRadius: '8px 8px 0 0',
+            fontWeight: 700,
+            fontSize: '0.82rem',
+            cursor: 'pointer'
+          }}
+        >
+          <FileText size={15} /> Requisiciones ({purchaseRequisitions.length})
+        </button>
+
+        <button
+          onClick={() => { setActiveSubTab('ordenes_compra'); setStatusFilter('TODOS'); }}
+          className={`tab-btn ${activeSubTab === 'ordenes_compra' ? 'active' : ''}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0.65rem 1.05rem',
+            background: activeSubTab === 'ordenes_compra' ? 'var(--motorven-navy)' : 'transparent',
+            color: activeSubTab === 'ordenes_compra' ? '#ffffff' : 'var(--text-muted)',
+            border: 'none',
+            borderRadius: '8px 8px 0 0',
+            fontWeight: 700,
+            fontSize: '0.82rem',
+            cursor: 'pointer'
+          }}
+        >
+          <ShoppingBag size={15} /> Órdenes de Compra ({purchaseOrders.length})
+        </button>
+
+        <button
+          onClick={() => { setActiveSubTab('recepciones'); setStatusFilter('TODOS'); }}
+          className={`tab-btn ${activeSubTab === 'recepciones' ? 'active' : ''}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0.65rem 1.05rem',
+            background: activeSubTab === 'recepciones' ? 'var(--motorven-navy)' : 'transparent',
+            color: activeSubTab === 'recepciones' ? '#ffffff' : 'var(--text-muted)',
+            border: 'none',
+            borderRadius: '8px 8px 0 0',
+            fontWeight: 700,
+            fontSize: '0.82rem',
+            cursor: 'pointer'
+          }}
+        >
+          <Warehouse size={15} /> Recepciones ({goodsReceiptNotes.length})
+        </button>
+
+        <button
           onClick={() => { setActiveSubTab('registro_seniat'); setStatusFilter('TODOS'); }}
           className={`tab-btn ${activeSubTab === 'registro_seniat' ? 'active' : ''}`}
           style={{
@@ -1108,64 +1215,536 @@ export default function PurchasesView({
 
       {/* 4b. SUB-TAB: ÓRDENES DE PAGO PROFIT */}
       {activeSubTab === 'ordenes_pago' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--border-glass)', borderRadius: '14px' }}>
-          <div className="table-container">
-            <table className="custom-table" style={{ fontSize: '0.82rem', width: '100%' }}>
-              <thead>
-                <tr>
-                  <th>N° ORDEN</th>
-                  <th>FECHA</th>
-                  <th>BENEFICIARIO</th>
-                  <th>CONCEPTO / MOTIVO</th>
-                  <th>FORMA DE PAGO</th>
-                  <th style={{ textAlign: 'right' }}>MONTO</th>
-                  <th style={{ textAlign: 'right' }}>RETENCIÓN</th>
-                  <th style={{ textAlign: 'center' }}>ESTADO</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPaymentOrders.length > 0 ? (
-                  filteredPaymentOrders.map((o) => (
-                    <tr key={o.id || o.ordNum}>
-                      <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>
-                        #{o.ordNum}
-                      </td>
-                      <td>{o.fecha ? new Date(o.fecha).toLocaleDateString('es-VE') : '-'}</td>
-                      <td>
-                        <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{o.benDes || o.benNombre || 'Beneficiario'}</div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cód: {o.codBen}</div>
-                      </td>
-                      <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '280px' }}>
-                        {o.descrip || o.motivo || 'Orden de pago emitida'}
-                      </td>
-                      <td>
-                        <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
-                          {o.formaPag || 'TRANSFERENCIA'}
-                        </span>
-                        {o.codCta && <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Cta: {o.codCta}</div>}
-                      </td>
-                      <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
-                        {formatBs(o.monto)}
-                      </td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
-                        {formatBs(o.montoRet)}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span className={`badge ${o.anulada ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.68rem' }}>
-                          {o.anulada ? 'ANULADA' : 'EMITIDA'}
-                        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+              Emisión, autorización y comprobante PDF institucional de Órdenes de Pago.
+            </span>
+            {onSavePaymentOrder && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => setShowNewOpForm((v) => !v)}
+                style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+              >
+                <Plus size={14} /> {showNewOpForm ? 'Cerrar Formulario' : 'Nueva Orden de Pago'}
+              </button>
+            )}
+          </div>
+
+          {showNewOpForm && onSavePaymentOrder && (
+            <form
+              className="card"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!opBeneficiary.trim() || Number(opAmountBs) <= 0) return;
+                const saved = await onSavePaymentOrder({
+                  benDes: opBeneficiary.trim(),
+                  codBen: opBeneficiary.trim().slice(0, 8).toUpperCase(),
+                  descrip: opMotivo.trim() || 'Pago autorizado de obligaciones / servicios',
+                  monto: Number(opAmountBs || 0),
+                  montoRet: Number(opRetBs || 0),
+                  formaPag: opFormaPag,
+                  codCta: opCuenta.trim(),
+                  tasa: Number(config?.tasaDolar || 1),
+                  moneda: 'BS'
+                });
+                setShowNewOpForm(false);
+                setOpBeneficiary('');
+                setOpAmountBs('');
+                setOpRetBs('0');
+                setOpMotivo('');
+                setOpCuenta('');
+                generatePaymentOrderPDF({ paymentOrder: saved, config, currentUser });
+              }}
+              style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '0.75rem', alignItems: 'end', borderRadius: '14px' }}
+            >
+              <div>
+                <label className="form-label">Beneficiario</label>
+                <input type="text" className="input-field" value={opBeneficiary} onChange={(e) => setOpBeneficiary(e.target.value)} required placeholder="Nombre / Razón social" list="op-ben-list" />
+                <datalist id="op-ben-list">
+                  {[...(profitBeneficiaries || []), ...(profitSuppliers || [])].slice(0, 80).map((b, i) => (
+                    <option key={b.id || i} value={b.benDes || b.provDes || b.nombre || ''} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label className="form-label">Monto Total (Bs.)</label>
+                <input type="number" step="0.01" min="0.01" className="input-field" value={opAmountBs} onChange={(e) => setOpAmountBs(e.target.value)} required placeholder="0.00" />
+              </div>
+              <div>
+                <label className="form-label">Retención (Bs.)</label>
+                <input type="number" step="0.01" min="0" className="input-field" value={opRetBs} onChange={(e) => setOpRetBs(e.target.value)} />
+              </div>
+              <div>
+                <label className="form-label">Forma de Pago / Cuenta</label>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <select className="input-field" value={opFormaPag} onChange={(e) => setOpFormaPag(e.target.value)} style={{ flex: 1 }}>
+                    <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                    <option value="ZELLE">ZELLE</option>
+                    <option value="EFECTIVO USD">EFECTIVO USD</option>
+                    <option value="CHEQUE">CHEQUE</option>
+                  </select>
+                  <input type="text" className="input-field" value={opCuenta} onChange={(e) => setOpCuenta(e.target.value)} placeholder="Cuenta" style={{ width: '90px' }} />
+                </div>
+              </div>
+              <div>
+                <label className="form-label">Concepto / Motivo</label>
+                <input type="text" className="input-field" value={opMotivo} onChange={(e) => setOpMotivo(e.target.value)} placeholder="Factura / Servicio" />
+              </div>
+              <div>
+                <button type="submit" className="btn btn-primary" style={{ width: '100%', fontWeight: 700 }}>
+                  Emitir & PDF
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--border-glass)', borderRadius: '14px' }}>
+            <div className="table-container">
+              <table className="custom-table" style={{ fontSize: '0.82rem', width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>N° ORDEN</th>
+                    <th>FECHA</th>
+                    <th>BENEFICIARIO</th>
+                    <th>CONCEPTO / MOTIVO</th>
+                    <th>FORMA DE PAGO</th>
+                    <th style={{ textAlign: 'right' }}>MONTO</th>
+                    <th style={{ textAlign: 'right' }}>RETENCIÓN</th>
+                    <th style={{ textAlign: 'center' }}>ESTADO / PDF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPaymentOrders.length > 0 ? (
+                    filteredPaymentOrders.map((o) => (
+                      <tr key={o.id || o.ordNum}>
+                        <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>
+                          #{o.ordNum}
+                        </td>
+                        <td>{o.fecha ? new Date(o.fecha).toLocaleDateString('es-VE') : '-'}</td>
+                        <td>
+                          <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{o.benDes || o.benNombre || 'Beneficiario'}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cód: {o.codBen}</div>
+                        </td>
+                        <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '280px' }}>
+                          {o.descrip || o.motivo || 'Orden de pago emitida'}
+                        </td>
+                        <td>
+                          <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
+                            {o.formaPag || 'TRANSFERENCIA'}
+                          </span>
+                          {o.codCta && <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Cta: {o.codCta}</div>}
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
+                          {formatBs(o.monto)}
+                        </td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
+                          {formatBs(o.montoRet)}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <span className={`badge ${o.anulada ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.68rem' }}>
+                              {o.anulada ? 'ANULADA' : 'EMITIDA'}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '2px 7px', fontSize: '0.7rem' }}
+                              onClick={() => generatePaymentOrderPDF({ paymentOrder: o, config, currentUser })}
+                              title="Imprimir Orden de Pago oficial PDF"
+                            >
+                              <Printer size={12} /> PDF
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="8" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                        No hay órdenes de pago registradas.
                       </td>
                     </tr>
-                  ))
-                ) : (
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4d. SUB-TAB: REQUISICIONES INTERNAS DE COMPRA (REQ) */}
+      {activeSubTab === 'requisiciones' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <form
+            className="card"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!onSaveRequisition || !reqSku || Number(reqQty) <= 0) return;
+              const prod = products.find(p => String(p.codigo || p.id) === reqSku) || {};
+              const estCost = Number(prod.costoUnitarioUsd || prod.costoUsd || prod.precioUsd || 0);
+              const saved = await onSaveRequisition({
+                solicitante: currentUser?.nombre || currentUser?.username || 'Gerencia',
+                departamento: reqDept,
+                prioridad: reqPriority,
+                estado: 'APROBADA',
+                observaciones: reqReason,
+                items: [{
+                  codigo: prod.codigo || reqSku,
+                  descripcion: prod.descripcion || reqSku,
+                  cantidad: Number(reqQty || 1),
+                  unidad: prod.unidad || 'Caja',
+                  costoEstimadoUsd: estCost
+                }]
+              });
+              generatePurchaseRequisitionPDF({ requisition: saved, config, currentUser });
+            }}
+            style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '0.75rem', alignItems: 'end', borderRadius: '14px' }}
+          >
+            <div>
+              <label className="form-label">Artículo / SKU Solicitado</label>
+              <select className="input-field" value={reqSku} onChange={(e) => setReqSku(e.target.value)} required>
+                <option value="">-- Seleccionar producto --</option>
+                {products.map((p) => (
+                  <option key={p.id || p.codigo} value={p.codigo || p.id}>
+                    {p.codigo} - {p.descripcion} (Stock: {p.stock || 0})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="form-label">Cantidad</label>
+              <input type="number" min="1" step="1" className="input-field" value={reqQty} onChange={(e) => setReqQty(e.target.value)} required />
+            </div>
+            <div>
+              <label className="form-label">Departamento / Prioridad</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <input type="text" className="input-field" value={reqDept} onChange={(e) => setReqDept(e.target.value)} style={{ flex: 1 }} />
+                <select className="input-field" value={reqPriority} onChange={(e) => setReqPriority(e.target.value)} style={{ width: '95px' }}>
+                  <option value="NORMAL">Normal</option>
+                  <option value="URGENTE">Urgente</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="form-label">Justificación</label>
+              <input type="text" className="input-field" value={reqReason} onChange={(e) => setReqReason(e.target.value)} />
+            </div>
+            <div>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', fontWeight: 700 }}>
+                Crear Requisición & PDF
+              </button>
+            </div>
+          </form>
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '14px' }}>
+            <div className="table-container">
+              <table className="custom-table" style={{ fontSize: '0.82rem', width: '100%' }}>
+                <thead>
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
-                      No hay órdenes de pago registradas.
-                    </td>
+                    <th>N° REQ</th>
+                    <th>FECHA</th>
+                    <th>DEPARTAMENTO</th>
+                    <th>SOLICITANTE</th>
+                    <th>ARTÍCULOS</th>
+                    <th>PRIORIDAD</th>
+                    <th style={{ textAlign: 'center' }}>ACCIONES</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {purchaseRequisitions.length > 0 ? purchaseRequisitions.map((r) => (
+                    <tr key={r.id || r.numeroDoc}>
+                      <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>{r.numeroDoc}</td>
+                      <td>{r.fecha ? new Date(r.fecha).toLocaleDateString('es-VE') : '-'}</td>
+                      <td>{r.departamento}</td>
+                      <td>{r.solicitante}</td>
+                      <td>{(r.items || []).map(it => `${it.codigo} (${it.cantidad})`).join(', ')}</td>
+                      <td><span className={`badge ${r.prioridad === 'URGENTE' ? 'badge-danger' : 'badge-info'}`}>{r.prioridad || 'NORMAL'}</span></td>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'inline-flex', gap: '6px' }}>
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => generatePurchaseRequisitionPDF({ requisition: r, config, currentUser })}>
+                            <Printer size={12} /> PDF
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => {
+                              const first = r.items?.[0];
+                              if (first) {
+                                setPoSku(first.codigo || '');
+                                setPoQty(first.cantidad || 1);
+                                setPoUnitCostUsd(first.costoEstimadoUsd || 25);
+                              }
+                              setPoReqRef(r.numeroDoc || '');
+                              setActiveSubTab('ordenes_compra');
+                            }}
+                          >
+                            Generar OC ➔
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No hay requisiciones registradas aún.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4e. SUB-TAB: ÓRDENES DE COMPRA A PROVEEDORES (OC) */}
+      {activeSubTab === 'ordenes_compra' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <form
+            className="card"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!onSavePurchaseOrder || !poSku || Number(poQty) <= 0) return;
+              const supList = profitSuppliers.length > 0 ? profitSuppliers : suppliers;
+              const sup = supList.find(s => String(s.coProv || s.id || s.rif) === poSupplierCode) || supList[0] || {};
+              const prod = products.find(p => String(p.codigo || p.id) === poSku) || {};
+              const qty = Number(poQty || 1);
+              const cost = Number(poUnitCostUsd || 0);
+              const subUsd = Number((qty * cost).toFixed(2));
+              const ivaUsd = Number((subUsd * 0.16).toFixed(2));
+              const totUsd = Number((subUsd + ivaUsd).toFixed(2));
+              const saved = await onSavePurchaseOrder({
+                proveedorCodigo: sup.coProv || sup.id || '',
+                proveedorNombre: sup.provDes || sup.nombre || 'Proveedor',
+                proveedorRif: sup.rif || 'N/A',
+                condicionPago: poPaymentTerm,
+                requisicionOrigen: poReqRef,
+                observaciones: poNotes,
+                subtotalUsd: subUsd,
+                ivaUsd,
+                totalUsd: totUsd,
+                tasaDolar: Number(config?.tasaDolar || 1),
+                estado: 'EMITIDA',
+                items: [{
+                  codigo: prod.codigo || poSku,
+                  descripcion: prod.descripcion || poSku,
+                  cantidad: qty,
+                  unidad: prod.unidad || 'Caja',
+                  costoUnitUsd: cost,
+                  totalUsd: subUsd
+                }]
+              });
+              setPoReqRef('');
+              generatePurchaseOrderPDF({ order: saved, supplier: sup, config, currentUser });
+            }}
+            style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: '0.75rem', alignItems: 'end', borderRadius: '14px' }}
+          >
+            <div>
+              <label className="form-label">Proveedor</label>
+              <select className="input-field" value={poSupplierCode} onChange={(e) => setPoSupplierCode(e.target.value)}>
+                <option value="">-- Seleccionar proveedor --</option>
+                {(profitSuppliers.length > 0 ? profitSuppliers : suppliers).map((s) => (
+                  <option key={s.id || s.coProv} value={String(s.coProv || s.id || s.rif)}>
+                    {s.provDes || s.nombre} ({s.rif})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="form-label">Producto / SKU</label>
+              <select className="input-field" value={poSku} onChange={(e) => setPoSku(e.target.value)} required>
+                <option value="">-- Seleccionar artículo --</option>
+                {products.map((p) => (
+                  <option key={p.id || p.codigo} value={p.codigo || p.id}>{p.codigo} - {p.descripcion}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="form-label">Cant. / Costo Unit ($)</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <input type="number" min="1" className="input-field" value={poQty} onChange={(e) => setPoQty(e.target.value)} required style={{ width: '75px' }} />
+                <input type="number" min="0.01" step="0.01" className="input-field" value={poUnitCostUsd} onChange={(e) => setPoUnitCostUsd(e.target.value)} required style={{ flex: 1 }} />
+              </div>
+            </div>
+            <div>
+              <label className="form-label">Condición / Req Ref</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <input type="text" className="input-field" value={poPaymentTerm} onChange={(e) => setPoPaymentTerm(e.target.value)} style={{ flex: 1 }} />
+                <input type="text" className="input-field" value={poReqRef} onChange={(e) => setPoReqRef(e.target.value)} placeholder="REQ-..." style={{ width: '85px' }} />
+              </div>
+            </div>
+            <div>
+              <label className="form-label">Observaciones</label>
+              <input type="text" className="input-field" value={poNotes} onChange={(e) => setPoNotes(e.target.value)} placeholder="Entrega en planta" />
+            </div>
+            <div>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', fontWeight: 700 }}>
+                Emitir OC & PDF
+              </button>
+            </div>
+          </form>
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '14px' }}>
+            <div className="table-container">
+              <table className="custom-table" style={{ fontSize: '0.82rem', width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>N° OC</th>
+                    <th>FECHA</th>
+                    <th>PROVEEDOR</th>
+                    <th>ARTÍCULOS</th>
+                    <th style={{ textAlign: 'right' }}>TOTAL ($)</th>
+                    <th style={{ textAlign: 'center' }}>ACCIONES</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {purchaseOrders.length > 0 ? purchaseOrders.map((po) => (
+                    <tr key={po.id || po.numeroDoc}>
+                      <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>{po.numeroDoc}</td>
+                      <td>{po.fecha ? new Date(po.fecha).toLocaleDateString('es-VE') : '-'}</td>
+                      <td>{po.proveedorNombre} <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{po.proveedorRif}</div></td>
+                      <td>{(po.items || []).map(it => `${it.codigo} x${it.cantidad}`).join(', ')}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800 }}>{formatUsd(po.totalUsd)}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'inline-flex', gap: '6px' }}>
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => generatePurchaseOrderPDF({ order: po, config, currentUser })}>
+                            <Printer size={12} /> OC PDF
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => {
+                              const first = po.items?.[0];
+                              setRecOrderNum(po.numeroDoc || '');
+                              setRecSupplierName(po.proveedorNombre || '');
+                              if (first) {
+                                setRecSku(first.codigo || '');
+                                setRecExpectedQty(first.cantidad || 1);
+                                setRecReceivedQty(first.cantidad || 1);
+                              }
+                              setActiveSubTab('recepciones');
+                            }}
+                          >
+                            Registrar Recepción ➔
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No hay órdenes de compra emitidas aún.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4f. SUB-TAB: NOTAS DE RECEPCIÓN DE MERCANCÍA (REC) */}
+      {activeSubTab === 'recepciones' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <form
+            className="card"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!onSaveGoodsReceipt || !recSku || Number(recReceivedQty) < 0) return;
+              const prod = products.find(p => String(p.codigo || p.id) === recSku) || {};
+              const saved = await onSaveGoodsReceipt({
+                ordenCompraRef: recOrderNum.trim(),
+                nroFactura: recInvoiceNum.trim(),
+                proveedorNombre: recSupplierName.trim() || 'Proveedor General',
+                almacen: recWarehouse,
+                observaciones: recNotes.trim(),
+                applyStock: true,
+                items: [{
+                  codigo: prod.codigo || recSku,
+                  descripcion: prod.descripcion || recSku,
+                  cantidadEsperada: Number(recExpectedQty || 0),
+                  cantidadRecibida: Number(recReceivedQty || 0),
+                  cantidadDanada: Number(recDamagedQty || 0),
+                  unidad: prod.unidad || 'Caja'
+                }]
+              });
+              generateGoodsReceiptPDF({ receipt: saved, config, currentUser });
+            }}
+            style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: '0.75rem', alignItems: 'end', borderRadius: '14px' }}
+          >
+            <div>
+              <label className="form-label">OC / Factura Prov.</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <input type="text" className="input-field" value={recOrderNum} onChange={(e) => setRecOrderNum(e.target.value)} placeholder="OC-..." style={{ width: '50%' }} />
+                <input type="text" className="input-field" value={recInvoiceNum} onChange={(e) => setRecInvoiceNum(e.target.value)} placeholder="FAC-..." style={{ width: '50%' }} />
+              </div>
+            </div>
+            <div>
+              <label className="form-label">Proveedor</label>
+              <input type="text" className="input-field" value={recSupplierName} onChange={(e) => setRecSupplierName(e.target.value)} placeholder="Nombre proveedor" />
+            </div>
+            <div>
+              <label className="form-label">Artículo Recibido</label>
+              <select className="input-field" value={recSku} onChange={(e) => setRecSku(e.target.value)} required>
+                <option value="">-- Seleccionar SKU --</option>
+                {products.map((p) => (
+                  <option key={p.id || p.codigo} value={p.codigo || p.id}>{p.codigo} - {p.descripcion}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="form-label">Esp. / Rec. / Dañ.</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <input type="number" min="0" className="input-field" value={recExpectedQty} onChange={(e) => setRecExpectedQty(e.target.value)} title="Esperado" style={{ width: '33%' }} />
+                <input type="number" min="0" className="input-field" value={recReceivedQty} onChange={(e) => setRecReceivedQty(e.target.value)} required title="Recibido conforme" style={{ width: '34%' }} />
+                <input type="number" min="0" className="input-field" value={recDamagedQty} onChange={(e) => setRecDamagedQty(e.target.value)} title="Dañado" style={{ width: '33%' }} />
+              </div>
+            </div>
+            <div>
+              <label className="form-label">Almacén / Notas</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <select className="input-field" value={recWarehouse} onChange={(e) => setRecWarehouse(e.target.value)} style={{ width: '85px' }}>
+                  <option value="01">Alm 01</option>
+                  <option value="02">Alm 02</option>
+                </select>
+                <input type="text" className="input-field" value={recNotes} onChange={(e) => setRecNotes(e.target.value)} placeholder="Notas" style={{ flex: 1 }} />
+              </div>
+            </div>
+            <div>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', fontWeight: 700 }}>
+                Recibir Stock & PDF
+              </button>
+            </div>
+          </form>
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '14px' }}>
+            <div className="table-container">
+              <table className="custom-table" style={{ fontSize: '0.82rem', width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>N° RECEPCIÓN</th>
+                    <th>FECHA</th>
+                    <th>PROVEEDOR / REF</th>
+                    <th>ALMACÉN</th>
+                    <th>RENGLONES</th>
+                    <th style={{ textAlign: 'center' }}>PDF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {goodsReceiptNotes.length > 0 ? goodsReceiptNotes.map((rec) => (
+                    <tr key={rec.id || rec.numeroDoc}>
+                      <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-emerald)' }}>{rec.not_num || rec.numeroDoc}</td>
+                      <td>{rec.fec_emis ? new Date(rec.fec_emis).toLocaleDateString('es-VE') : '-'}</td>
+                      <td>{rec.prov_des || rec.proveedorNombre} <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Fact: {rec.nro_fact || rec.ordenCompraRef || 'S/N'}</div></td>
+                      <td><span className="badge badge-info">Alm {rec.almacen || '01'}</span></td>
+                      <td>{rec.items?.length ? rec.items.map(it => `${it.codigo} (+${it.cantidadRecibida})`).join(', ') : `${rec.items_count || 1} items`}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => generateGoodsReceiptPDF({ receipt: rec, config, currentUser })}>
+                          <Printer size={12} /> Recepción PDF
+                        </button>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No hay notas de recepción registradas.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -1561,7 +2140,7 @@ export default function PurchasesView({
                     <th>Total ($ / Bs)</th>
                     <th>Ret. IVA 75% (Bs.)</th>
                     <th>Ret. ISLR 2% (Bs.)</th>
-                    <th>N° Comprobante Ret. IVA</th>
+                    <th>N° Comprobante Ret. IVA / PDF</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1591,9 +2170,20 @@ export default function PurchasesView({
                         <span className="badge badge-info">{formatBs(rec.retencionIslrBs || (rec.retencionIslrUsd * config.tasaDolar))}</span>
                       </td>
                       <td>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--neon-cyan)' }}>
-                          {rec.numeroComprobanteRetencionIva || '20260700000001'}
-                        </span>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--neon-cyan)' }}>
+                            {rec.numeroComprobanteRetencionIva || '20260700000001'}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '2px 6px', fontSize: '0.68rem' }}
+                            onClick={() => generateSeniatRetentionVoucherPDF({ type: 'IVA', record: rec, config, currentUser })}
+                            title="Descargar Comprobante de Retención IVA SENIAT en PDF"
+                          >
+                            <Printer size={11} /> IVA PDF
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

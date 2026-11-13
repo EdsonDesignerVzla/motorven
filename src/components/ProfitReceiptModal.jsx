@@ -13,16 +13,15 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
-import { generateCashflowPDF } from '../services/pdfReportService';
+import { generateCollectionReceiptPDF } from '../services/pdfReportService';
 
 export default function ProfitReceiptModal({ receipt, onClose, config = {}, currentUser = null, tasaBcv = 827.73 }) {
   if (!receipt) return null;
 
   const handlePrint = () => {
-    generateCashflowPDF({
-      bankAccounts: [],
-      cashDesks: [],
-      cashMovements: [receipt],
+    generateCollectionReceiptPDF({
+      receipt,
+      allocations: receipt.documentosAfectados || [],
       config: { ...config, tasaDolar: tasaBcv },
       currentUser
     });

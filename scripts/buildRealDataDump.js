@@ -176,7 +176,7 @@ db.profit_warehouses = [
     des_alma: 'ALMACÉN CENTRAL / BÓVEDA',
     coAlm: '02',
     co_alm: '02',
-    desAlm: 'ALMACÉN PRINCIPAL / MOSTRADOR' === 'ALMACÉN CENTRAL / BÓVEDA' ? '' : 'ALMACÉN CENTRAL / BÓVEDA',
+    desAlm: 'ALMACÉN CENTRAL / BÓVEDA',
     des_alm: 'ALMACÉN CENTRAL / BÓVEDA',
     campo1: 'Custodia de Tambores y Paletas',
     campo2: '',

@@ -29,8 +29,8 @@ const cloudflaredCandidates = [
 ];
 
 const PORT = Number(process.env.SUPABASE_LOCAL_PORT || 54321);
-const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
-const OFFICIAL_TUNNEL_TOKEN = 'eyJhIjoiMTg5ODZkNGMxYjI3YmZmZmI3ZWVhMGE1N2UwZTc4ZGEiLCJ0IjoiZTJkZWEyNDQtODNjYi00MzI1LTljYzAtZWUzNDc4NzE0YTc2IiwicyI6Ik1HTTNNamMzTm1RdFkyVmtNQzAwTWpOaUxUbGhNREl0WldRME5EWXpNalUyTURSaCJ9';
+const OFFICIAL_BACKEND_URL = process.env.OFFICIAL_BACKEND_URL || 'https://api.signummotorven.com';
+const OFFICIAL_TUNNEL_TOKEN = process.env.CLOUDFLARE_TUNNEL_TOKEN || '';
 
 let currentCfProcess = null;
 let consecutiveHealthFailures = 0;
@@ -149,6 +149,10 @@ function killStaleTryCloudflareTunnels() {
 }
 
 function startOfficialPersistentTunnel() {
+  if (!OFFICIAL_TUNNEL_TOKEN) {
+    console.error('❌ [2/2] CLOUDFLARE_TUNNEL_TOKEN no está configurado en el entorno. Define la variable para iniciar el túnel.');
+    return;
+  }
   console.log(`🌐 [2/2] Conectando Túnel Oficial Permanente (${OFFICIAL_BACKEND_URL})...`);
 
   saveLocalBackendUrlFiles();

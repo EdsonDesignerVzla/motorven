@@ -48,6 +48,7 @@ import CreditScoreEngineModal from '../components/CreditScoreEngineModal';
 import { generateCashflowPDF, generateAccountsReceivablePDF, generateBankAccountsPDF } from '../services/pdfReportService';
 
 export default function CashflowView({
+  products = [],
   cashMovements = [],
   clients = [],
   suppliers = [],

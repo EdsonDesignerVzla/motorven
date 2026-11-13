@@ -22,23 +22,66 @@ import {
   Info
 } from 'lucide-react';
 import { formatBs } from '../services/formatService';
-import { generateSalesPOSPDF } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateCreditDebitNotePDF } from '../services/pdfReportService';
+import { Plus } from 'lucide-react';
 
 export default function CustomerReturnsModal({
   isOpen,
   onClose,
   profitReturns = [],
+  clients = [],
+  products = [],
+  sales = [],
+  profitInvoices = [],
   config = {},
   currentUser = null,
-  onSyncProfit
+  onSyncProfit,
+  onSaveCustomerReturn
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReturn, setSelectedReturn] = useState(null);
   const [filterSeller, setFilterSeller] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL'); // 'ALL' | 'WITH_NC' | 'WITHOUT_NC'
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [savingReturn, setSavingReturn] = useState(false);
+  const [retClientCode, setRetClientCode] = useState('');
+  const [retFactNum, setRetFactNum] = useState('');
+  const [retProductCode, setRetProductCode] = useState('');
+  const [retQty, setRetQty] = useState(1);
+  const [retReason, setRetReason] = useState('Devolución de mercancía / Garantía');
+  const [retWarehouse, setRetWarehouse] = useState('01');
+  const [retReenterStock, setRetReenterStock] = useState(true);
 
   const tasaDolar = Number(config?.tasaDolar || 1);
+
+  const buildNcDocForReturn = (ret) => {
+    const items = (ret?.renglones || []).map(it => ({
+      codigo: it.co_art || it.codigo,
+      descripcion: it.art_des || it.co_art || 'Artículo devuelto',
+      unidad: it.uni_venta || 'Caja',
+      cantidad: Number(it.total_art || it.cantidad || 1),
+      precioUnitUsd: Number(it.prec_vta || 0),
+      totalUsd: Number(it.reng_neto || (Number(it.total_art || 1) * Number(it.prec_vta || 0)))
+    }));
+    const totNeto = Number(ret?.totNeto || items.reduce((s, x) => s + x.totalUsd, 0) || 0);
+    const subtotal = Number(ret?.totBruto || totNeto);
+    const iva = Number(ret?.iva || 0);
+    return {
+      tipoDoc: 'NOTA_CREDITO',
+      numeroDoc: ret?.ncNum ? `NC-${ret.ncNum}` : `NC-${String(ret?.factNum || '000000').replace(/^NC-/i, '')}`,
+      documentoAfectado: ret?.factNum || ret?.renglones?.[0]?.fact_origen || 'S/N',
+      fecha: ret?.fecEmis || new Date().toISOString(),
+      clienteNombre: ret?.cliDes || ret?.coCli || 'Cliente',
+      clienteRif: ret?.rif || ret?.coCli || 'N/A',
+      tasaDolar: Number(ret?.tasa || tasaDolar || 1),
+      subtotalUsd: subtotal,
+      ivaUsd: iva,
+      totalUsd: totNeto,
+      observaciones: ret?.descrip || 'Devolución de mercancía',
+      items
+    };
+  };
 
   // Listado de vendedores únicos para el filtro
   const uniqueSellers = useMemo(() => {
@@ -160,7 +203,18 @@ export default function CustomerReturnsModal({
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {onSaveCustomerReturn && (
+              <button
+                onClick={() => setShowCreateForm((v) => !v)}
+                className="btn btn-primary btn-sm"
+                style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                title="Registrar nueva devolución y generar Nota de Crédito"
+              >
+                <Plus size={14} /> {showCreateForm ? 'Cerrar Formulario' : 'Nueva Devolución / NC'}
+              </button>
+            )}
+
             <button
               onClick={handleTriggerSync}
               disabled={isSyncing}
@@ -188,6 +242,130 @@ export default function CustomerReturnsModal({
             </button>
           </div>
         </div>
+
+        {/* Formulario Rápido Nueva Devolución / Nota de Crédito */}
+        {showCreateForm && onSaveCustomerReturn && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!retClientCode || !retProductCode || Number(retQty) <= 0) return;
+              const cli = clients.find(c => String(c.id || c.coCli || c.rif) === retClientCode) || clients[0] || {};
+              const prod = products.find(p => String(p.codigo || p.id) === retProductCode) || {};
+              const unitUsd = Number(prod.precioUsd || prod.precVta1 || 0);
+              const qty = Number(retQty || 1);
+              const subUsd = Number((unitUsd * qty).toFixed(2));
+              const ivaUsd = Number((subUsd * 0.16).toFixed(2));
+              const totUsd = Number((subUsd + ivaUsd).toFixed(2));
+              const ncCode = `NC-${Date.now().toString().slice(-6)}`;
+              setSavingReturn(true);
+              try {
+                const saved = await onSaveCustomerReturn({
+                  factNum: retFactNum.trim() || 'DIRECTA',
+                  ncNum: ncCode,
+                  coCli: cli.coCli || cli.id || 'CLI-GEN',
+                  cliDes: cli.cliDes || cli.nombre || 'Cliente General',
+                  rif: cli.rif || 'N/A',
+                  descrip: retReason.trim() || 'Devolución de mercancía',
+                  totBruto: subUsd,
+                  iva: ivaUsd,
+                  totNeto: totUsd,
+                  tasa: tasaDolar,
+                  moneda: 'USD',
+                  almacen: retWarehouse,
+                  reenterStock: retReenterStock,
+                  renglones: [
+                    {
+                      co_art: prod.codigo || retProductCode,
+                      art_des: prod.descripcion || retProductCode,
+                      total_art: qty,
+                      uni_venta: prod.unidad || 'Caja',
+                      prec_vta: unitUsd,
+                      reng_neto: subUsd,
+                      fact_origen: retFactNum.trim() || ''
+                    }
+                  ]
+                });
+                setSelectedReturn(saved);
+                setShowCreateForm(false);
+                generateCreditDebitNotePDF({ docData: buildNcDocForReturn(saved), config, currentUser });
+              } finally {
+                setSavingReturn(false);
+              }
+            }}
+            style={{
+              padding: '1rem 1.5rem',
+              background: 'var(--bg-card-glass)',
+              borderBottom: '1px solid var(--border-glass)',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+              gap: '0.65rem',
+              alignItems: 'end'
+            }}
+          >
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px' }}>Cliente</label>
+              <select className="input-field" value={retClientCode} onChange={(e) => setRetClientCode(e.target.value)} required style={{ width: '100%', padding: '0.45rem', fontSize: '0.8rem' }}>
+                <option value="">-- Seleccionar cliente --</option>
+                {clients.slice(0, 250).map((c) => (
+                  <option key={c.id || c.coCli} value={String(c.id || c.coCli || c.rif)}>
+                    {c.nombre || c.cliDes} ({c.rif || c.coCli})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px' }}>Factura Afectada</label>
+              <input
+                type="text"
+                className="input-field"
+                value={retFactNum}
+                onChange={(e) => setRetFactNum(e.target.value)}
+                placeholder="Ej. FAC-000124"
+                list="return-invoices-list"
+                style={{ width: '100%', padding: '0.45rem', fontSize: '0.8rem' }}
+              />
+              <datalist id="return-invoices-list">
+                {[...(sales || []), ...(profitInvoices || [])].slice(0, 60).map((s, idx) => (
+                  <option key={s.id || idx} value={s.numeroDoc || s.factNum || ''} />
+                ))}
+              </datalist>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px' }}>Producto Devuelto</label>
+              <select className="input-field" value={retProductCode} onChange={(e) => setRetProductCode(e.target.value)} required style={{ width: '100%', padding: '0.45rem', fontSize: '0.8rem' }}>
+                <option value="">-- Seleccionar SKU --</option>
+                {products.map((p) => (
+                  <option key={p.id || p.codigo} value={p.codigo || p.id}>
+                    {p.codigo} - {p.descripcion}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px' }}>Cantidad / Alm.</label>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <input type="number" min="1" step="1" className="input-field" value={retQty} onChange={(e) => setRetQty(e.target.value)} required style={{ width: '75px', padding: '0.45rem', fontSize: '0.8rem' }} />
+                <select className="input-field" value={retWarehouse} onChange={(e) => setRetWarehouse(e.target.value)} style={{ flex: 1, padding: '0.45rem', fontSize: '0.8rem' }}>
+                  <option value="01">Alm 01</option>
+                  <option value="02">Alm 02</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '3px' }}>Motivo / Reingreso</label>
+              <input type="text" className="input-field" value={retReason} onChange={(e) => setRetReason(e.target.value)} style={{ width: '100%', padding: '0.45rem', fontSize: '0.8rem' }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={retReenterStock} onChange={(e) => setRetReenterStock(e.target.checked)} />
+                Reingresar al stock físico
+              </label>
+            </div>
+            <div>
+              <button type="submit" disabled={savingReturn} className="btn btn-primary btn-sm" style={{ width: '100%', fontWeight: 700, padding: '0.55rem' }}>
+                {savingReturn ? 'Emitiendo...' : 'Registrar & Emitir NC PDF'}
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Tarjetas KPI de Resumen */}
         <div className="returns-kpi-bar">
@@ -415,16 +593,29 @@ export default function CustomerReturnsModal({
                             </div>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedReturn(ret);
-                              }}
-                              className="btn btn-sm btn-secondary"
-                              style={{ padding: '3px 8px', fontSize: '0.725rem', color: 'var(--neon-cyan)' }}
-                            >
-                              Ver Detalle
-                            </button>
+                            <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  generateCreditDebitNotePDF({ docData: buildNcDocForReturn(ret), config, currentUser });
+                                }}
+                                className="btn btn-sm btn-secondary"
+                                style={{ padding: '3px 7px', fontSize: '0.7rem', color: '#c084fc' }}
+                                title="Generar e imprimir Nota de Crédito oficial tamaño Carta"
+                              >
+                                <Printer size={12} /> NC PDF
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedReturn(ret);
+                                }}
+                                className="btn btn-sm btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.725rem', color: 'var(--neon-cyan)' }}
+                              >
+                                Ver Detalle
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

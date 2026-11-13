@@ -431,6 +431,63 @@ function ensureNetworkRealtimeStarted() {
   }
 }
 
+const recentLocalMutations = new Map();
+const SELF_ECHO_WINDOW_MS = 4000;
+
+const collectMutationKeys = (tableId, key, item) => {
+  const t = String(tableId || '').trim().toLowerCase();
+  if (!t) return [];
+  const rawKeys = [
+    key,
+    item?.id,
+    item?.codigo,
+    item?.numeroDoc,
+    item?.numero_doc,
+    item?.factNum,
+    item?.fact_num,
+    item?.nroDoc,
+    item?.nro_doc,
+    item?.coVen,
+    item?.co_ven
+  ];
+  const out = [];
+  for (const rk of rawKeys) {
+    if (rk === undefined || rk === null) continue;
+    const s = String(rk).trim().toUpperCase();
+    if (s) out.push(`${t}:${s}`);
+  }
+  return out;
+};
+
+export const getRealtimeClientId = () => CLIENT_ID;
+
+export const markLocalMutation = (tableId, key, item = null) => {
+  const now = Date.now();
+  const expiresAt = now + SELF_ECHO_WINDOW_MS;
+  for (const compositeKey of collectMutationKeys(tableId, key, item)) {
+    recentLocalMutations.set(compositeKey, expiresAt);
+  }
+  if (recentLocalMutations.size > 300) {
+    for (const [k, exp] of recentLocalMutations.entries()) {
+      if (exp < now) recentLocalMutations.delete(k);
+    }
+  }
+};
+
+export const isRecentSelfMutation = (evt) => {
+  if (!evt) return false;
+  if (evt.clientId && evt.clientId === CLIENT_ID) return true;
+  if (evt.clientId && evt.clientId !== CLIENT_ID) return false;
+  // Evento SSE/polling sin clientId (ej. /rest/v1/*): comparar contra mutaciones recientes propias
+  const now = Date.now();
+  const keys = collectMutationKeys(evt.tableId || evt.table, evt.key, evt.item || evt.new);
+  for (const compositeKey of keys) {
+    const exp = recentLocalMutations.get(compositeKey);
+    if (exp && exp >= now) return true;
+  }
+  return false;
+};
+
 /**
  * Emite un evento de reconciliación hacia toda la aplicación:
  * misma pestaña, otras pestañas del navegador y todos los dispositivos conectados en red.
@@ -441,6 +498,8 @@ export const broadcastReconcileChange = (payload) => {
     clientId: CLIENT_ID,
     timestamp: Date.now()
   };
+
+  markLocalMutation(payload.tableId || payload.table, payload.key, payload.item);
 
   // 1. Notificar a otras pestañas del mismo navegador mediante BroadcastChannel
   if (broadcastChannel) {
@@ -500,23 +559,31 @@ export const broadcastReconcileChange = (payload) => {
 /**
  * Suscribe un callback a cualquier evento de reconciliación en tiempo real
  * @param {Function} callback - ({ tableId, table, action, eventType, key, item, allTableData, timestamp }) => void
+ * @param {{ ignoreSelfEvents?: boolean }} options
  * @returns {Function} Función para cancelar la suscripción
  */
-export const subscribeToRealtimeSync = (callback) => {
+export const subscribeToRealtimeSync = (callback, { ignoreSelfEvents = false } = {}) => {
   if (typeof window === 'undefined' || typeof callback !== 'function') return () => {};
 
-  activeSubscribers.add(callback);
+  const wrappedCallback = ignoreSelfEvents
+    ? (evt) => {
+        if (!evt || isRecentSelfMutation(evt)) return;
+        callback(evt);
+      }
+    : callback;
+
+  activeSubscribers.add(wrappedCallback);
   ensureNetworkRealtimeStarted();
 
   const handleCustomEvent = (event) => {
     if (event.detail) {
-      callback(event.detail);
+      wrappedCallback(event.detail);
     }
   };
 
   const handleBroadcastMessage = (event) => {
     if (event.data && event.data.clientId !== CLIENT_ID) {
-      callback(event.data);
+      wrappedCallback(event.data);
     }
   };
 
@@ -592,7 +659,7 @@ export const subscribeToRealtimeSync = (callback) => {
   }
 
   return () => {
-    activeSubscribers.delete(callback);
+    activeSubscribers.delete(wrappedCallback);
     window.removeEventListener(CUSTOM_EVENT_NAME, handleCustomEvent);
     window.removeEventListener('storage', handleStorageEvent);
     if (broadcastChannel) {

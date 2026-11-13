@@ -256,7 +256,9 @@ export const resolveDocumentWarehouseTarget = (docOrParams = {}) => {
   };
 };
 
-const findProductForWarehouseCheck = (item, products) => {
+export const resolveDocumentWarehouseRule = resolveDocumentWarehouseTarget;
+
+export const findProductMatchForLineItem = (item, products) => {
   if (!item || typeof item !== 'object') return null;
   const key = String(item.articuloId || item.id || item.codigo || item.co_art || item.product?.id || item.product?.codigo || '').trim();
   const codeKey = String(item.codigo || item.co_art || item.product?.codigo || '').trim();
@@ -358,7 +360,7 @@ export const validateWarehouseStockForDocument = ({
     if (!item) continue;
     const key = String(item.articuloId || item.id || item.codigo || item.co_art || item.product?.id || item.product?.codigo || '').trim();
     const codigo = String(item.codigo || item.co_art || item.product?.codigo || key || 'SIN-CODIGO').trim();
-    const matchedProd = findProductForWarehouseCheck(item, products);
+    const matchedProd = findProductMatchForLineItem(item, products);
     const descripcion = String(
       matchedProd?.descripcion ||
       item.descripcion ||
@@ -422,6 +424,6 @@ export const validateWarehouseStockForDocument = ({
   };
 };
 
-
+export const validateDocumentPositiveStock = validateWarehouseStockForDocument;
 
 

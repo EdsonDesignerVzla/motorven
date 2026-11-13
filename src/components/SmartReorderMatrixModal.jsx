@@ -274,8 +274,11 @@ export default function SmartReorderMatrixModal({
   };
 
   const handlePrint = () => {
+    const criticalProducts = reorderMatrixData.filter(
+      item => item.urgencia === 'CRITICO' || item.urgencia === 'REORDEN'
+    );
     generateInventoryPDF({
-      products: criticalProducts?.length > 0 ? criticalProducts : products,
+      products: criticalProducts.length > 0 ? criticalProducts : (reorderMatrixData.length > 0 ? reorderMatrixData : products),
       config,
       currentUser
     });

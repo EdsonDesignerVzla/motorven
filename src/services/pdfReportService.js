@@ -16,7 +16,7 @@ import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { getProductRetailPrice } from './pricingService.js';
 import { REAL_PRODUCTS, REAL_CLIENTS, REAL_PROFIT_BANK_ACCOUNTS } from '../data/supabaseRealData.js';
-import { computeTrialBalance, computeGeneralLedger, computeFinancialStatements } from './accountingService.js';
+import { buildTrialBalance, buildGeneralLedger, buildFinancialStatements } from './accountingService.js';
 import { SYSTEM_METADATA, MODULES_DOCUMENTATION, WORKFLOWS_STEP_BY_STEP } from '../data/appDocumentationData.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
@@ -1228,283 +1228,6 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Documentos_CxC_${docTypeArg}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
-  return base.doc;
-}
-
-// =========================================================================
-// 3B. REPORTE CONSOLIDADO CxC (FACTURAS FISCALES + NOTAS DE ENTREGA)
-// =========================================================================
-export function generateConsolidatedCxcPDF({
-  docs = [],
-  clientRows = [],
-  totals = null,
-  visibleTotals = null,
-  tasaBcv = 1,
-  viewMode = 'DOCS',
-  filters = {},
-  config = {},
-  currentUser = null
-} = {}) {
-  const safeDocs = Array.isArray(docs) ? docs : [];
-  const safeClientRows = Array.isArray(clientRows) ? clientRows : [];
-  const tasa = Number(tasaBcv) || Number(config?.tasaDolar) || 451.51;
-  const isClientView = viewMode === 'CLIENTES';
-
-  const deriveDocBucketTotals = (filterFn) => {
-    const subset = filterFn ? safeDocs.filter(filterFn) : safeDocs;
-    return subset.reduce(
-      (acc, d) => {
-        const m = Number(d.montoFacturaUsd ?? d.totalFacturaUsd ?? 0);
-        const a = Number(d.abonosUsd ?? d.montoPagadoUsd ?? 0);
-        const r = Number(d.restanteUsd ?? d.saldoPendienteUsd ?? d.saldoUsd ?? 0);
-        const isVenc = d.estado === 'VENCIDA' || Number(d.diasVencidos ?? 0) > 0;
-        acc.count += 1;
-        acc.monto += m;
-        acc.abonos += a;
-        acc.restante += r;
-        if (isVenc) {
-          acc.vencido += r;
-          acc.vencidas += 1;
-        }
-        return acc;
-      },
-      { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
-    );
-  };
-
-  const facStats = totals?.fac || deriveDocBucketTotals((d) => d.tipoDoc !== 'NOTA_ENTREGA');
-  const neStats = totals?.ne || deriveDocBucketTotals((d) => d.tipoDoc === 'NOTA_ENTREGA');
-  const allStats = totals?.all || {
-    count: facStats.count + neStats.count,
-    monto: facStats.monto + neStats.monto,
-    abonos: facStats.abonos + neStats.abonos,
-    restante: facStats.restante + neStats.restante,
-    vencido: facStats.vencido + neStats.vencido,
-    vencidas: facStats.vencidas + neStats.vencidas
-  };
-
-  const visStats = visibleTotals || (isClientView
-    ? safeClientRows.reduce(
-        (acc, r) => {
-          acc.count += Number(r.fac?.count || 0) + Number(r.ne?.count || 0);
-          acc.monto += Number(r.totalMonto || 0);
-          acc.abonos += Number(r.totalAbonos || 0);
-          acc.restante += Number(r.totalRestante || 0);
-          return acc;
-        },
-        { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
-      )
-    : deriveDocBucketTotals(null));
-
-  const base = createBaseReport({
-    title: isClientView
-      ? 'REPORTE CONSOLIDADO CXC POR CLIENTE (FACTURAS + NOTAS)'
-      : 'REPORTE CONSOLIDADO CXC — FACTURAS FISCALES + NOTAS DE ENTREGA',
-    subtitle: isClientView
-      ? 'Cartera Consolidada Agrupada por Cliente • Facturas Fiscales SENIAT + Notas de Entrega Sumadas'
-      : 'Cartera Total Sumada de Ambos Tipos de Documento • Trazabilidad Integral de Cobros',
-    moduleCode: 'CXC-CON',
-    currentUser,
-    config,
-    orientation: 'landscape',
-    rateValue: tasa
-  });
-
-  const cards = [
-    {
-      label: 'Facturas Fiscales',
-      value: formatUsd(facStats.restante),
-      subtext: `${facStats.count} docs • Mto: ${formatUsd(facStats.monto)}`,
-      color: COLORS.navy
-    },
-    {
-      label: 'Notas de Entrega',
-      value: formatUsd(neStats.restante),
-      subtext: `${neStats.count} docs • Mto: ${formatUsd(neStats.monto)}`,
-      color: COLORS.amber
-    },
-    {
-      label: 'Total Consolidado',
-      value: formatUsd(allStats.restante),
-      subtext: `${allStats.count} docs • ${formatBs(allStats.restante * tasa)}`,
-      color: COLORS.emerald
-    },
-    {
-      label: isClientView ? 'Clientes en Tabla' : 'Docs en Tabla',
-      value: isClientView ? `${safeClientRows.length} Clientes` : `${safeDocs.length} Documentos`,
-      subtext: `Restante visible: ${formatUsd(visStats.restante)}`,
-      color: COLORS.cyan
-    }
-  ];
-
-  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
-
-  const filterParts = [
-    `Vista: ${isClientView ? 'Por Cliente (Agrupado)' : 'Por Documento'}`,
-    `Tipo: ${filters?.typeLabel || 'Ambos (FAC + NE)'}`,
-    `Estado: ${filters?.statusLabel || 'Cartera activa'}`,
-    `Vendedor: ${filters?.sellerLabel || 'Todos los vendedores'}`
-  ];
-  if (filters?.searchTerm) {
-    filterParts.push(`Búsqueda: "${String(filters.searchTerm).trim()}"`);
-  }
-
-  currentY = addAnalyticalBox(
-    base.doc,
-    currentY,
-    'DESGLOSE CONSOLIDADO Y FILTROS APLICADOS',
-    `${filterParts.join(' | ')}\nFacturas Fiscales (${facStats.count}): Monto ${formatUsd(facStats.monto)}, Abonos ${formatUsd(facStats.abonos)}, Restante ${formatUsd(facStats.restante)} • Notas de Entrega (${neStats.count}): Monto ${formatUsd(neStats.monto)}, Abonos ${formatUsd(neStats.abonos)}, Restante ${formatUsd(neStats.restante)} • Vencido Total: ${formatUsd(allStats.vencido)} (${allStats.vencidas} docs).`,
-    base.tableWidth,
-    base.startX
-  );
-
-  const formatDateCell = (d) => {
-    if (!d) return '—';
-    const date = d instanceof Date ? d : new Date(d);
-    if (isNaN(date.getTime())) return String(d).slice(0, 10);
-    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
-  };
-
-  if (isClientView) {
-    const cliFacCount = safeClientRows.reduce((s, r) => s + Number(r.fac?.count || 0), 0);
-    const cliFacRest = safeClientRows.reduce((s, r) => s + Number(r.fac?.restante || 0), 0);
-    const cliNeCount = safeClientRows.reduce((s, r) => s + Number(r.ne?.count || 0), 0);
-    const cliNeRest = safeClientRows.reduce((s, r) => s + Number(r.ne?.restante || 0), 0);
-
-    const clientBody = safeClientRows.map((row) => [
-      String(row.cliente || 'Cliente Comercial'),
-      String(row.rif || 'N/A'),
-      String(row.fac?.count || 0),
-      formatUsd(row.fac?.restante || 0),
-      String(row.ne?.count || 0),
-      formatUsd(row.ne?.restante || 0),
-      formatUsd(row.totalMonto || 0),
-      formatUsd(row.totalAbonos || 0),
-      formatUsd(row.totalRestante || 0),
-      formatBs(Number(row.totalRestante || 0) * tasa),
-      String(Number(row.maxDias || 0))
-    ]);
-
-    autoTable(base.doc, {
-      startY: currentY,
-      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
-      tableWidth: base.tableWidth,
-      head: [['CLIENTE', 'RIF', 'N° FAC.', 'SALDO FACTURAS', 'N° NOTAS', 'SALDO NOTAS', 'MONTO TOTAL', 'ABONOS', 'SALDO TOTAL ($)', 'SALDO TOTAL (BS.)', 'MÁX. DÍAS']],
-      body: clientBody.length > 0 ? clientBody : [['No hay clientes que coincidan con los filtros.', '-', '0', '$ 0.00', '0', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00', 'Bs. 0,00', '0']],
-      foot: [[
-        { content: `TOTAL (${safeClientRows.length} clientes)`, colSpan: 2, styles: { halign: 'left' } },
-        String(cliFacCount),
-        formatUsd(cliFacRest),
-        String(cliNeCount),
-        formatUsd(cliNeRest),
-        formatUsd(visStats.monto),
-        formatUsd(visStats.abonos),
-        formatUsd(visStats.restante),
-        formatBs(visStats.restante * tasa),
-        ''
-      ]],
-      showFoot: 'lastPage',
-      theme: 'grid',
-      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
-      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
-      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
-      alternateRowStyles: { fillColor: COLORS.lightBg },
-      columnStyles: {
-        0: { cellWidth: 48.4, fontStyle: 'bold' },
-        1: { cellWidth: 20, halign: 'center' },
-        2: { cellWidth: 11, halign: 'right', textColor: COLORS.navy, fontStyle: 'bold' },
-        3: { cellWidth: 23, halign: 'right', textColor: COLORS.navy },
-        4: { cellWidth: 11, halign: 'right', textColor: COLORS.amber, fontStyle: 'bold' },
-        5: { cellWidth: 23, halign: 'right', textColor: COLORS.amber },
-        6: { cellWidth: 23, halign: 'right' },
-        7: { cellWidth: 21, halign: 'right', textColor: COLORS.emerald },
-        8: { cellWidth: 23, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
-        9: { cellWidth: 28, halign: 'right', textColor: COLORS.slate },
-        10: { cellWidth: 12, halign: 'right', fontStyle: 'bold' }
-      }
-    });
-  } else {
-    const docBody = safeDocs.map((d) => {
-      const isNota = d.tipoDoc === 'NOTA_ENTREGA';
-      const estadoLabel = d.estado === 'VENCIDA' ? 'VENCIDA' : d.estado === 'PAGADA' ? 'SOLVENTE' : 'AL DÍA';
-      const rawNum = String(d.factura || d.factNum || d.nroDoc || d.id || '0000');
-      const docNumLabel = rawNum.startsWith('#') ? rawNum : `#${rawNum}`;
-      return [
-        isNota ? 'NOTA ENT.' : 'FACTURA',
-        docNumLabel,
-        String(d.cliente || d.clienteNombre || 'Cliente Comercial'),
-        String(d.rif || d.clienteRif || 'N/A'),
-        String(d.vendedorId || d.vendedor || 'OF'),
-        formatDateCell(d.fechaEmision || d.fechaEmisionIso),
-        formatDateCell(d.fechaVencimiento || d.fechaVencimientoIso),
-        String(Number(d.diasVencidos ?? 0)),
-        formatUsd(d.montoFacturaUsd ?? 0),
-        formatUsd(d.abonosUsd ?? 0),
-        formatUsd(d.restanteUsd ?? 0),
-        estadoLabel
-      ];
-    });
-
-    autoTable(base.doc, {
-      startY: currentY,
-      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
-      tableWidth: base.tableWidth,
-      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'VEND.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
-      body: docBody.length > 0 ? docBody : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
-      foot: [[
-        { content: `TOTAL (${safeDocs.length} documentos)`, colSpan: 8, styles: { halign: 'left' } },
-        formatUsd(visStats.monto),
-        formatUsd(visStats.abonos),
-        formatUsd(visStats.restante),
-        ''
-      ]],
-      showFoot: 'lastPage',
-      theme: 'grid',
-      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
-      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
-      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
-      alternateRowStyles: { fillColor: COLORS.lightBg },
-      columnStyles: {
-        0: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
-        1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
-        2: { cellWidth: 52.4 },
-        3: { cellWidth: 21, halign: 'center' },
-        4: { cellWidth: 13, halign: 'center' },
-        5: { cellWidth: 17, halign: 'center' },
-        6: { cellWidth: 17, halign: 'center' },
-        7: { cellWidth: 11, halign: 'right', fontStyle: 'bold' },
-        8: { cellWidth: 19, halign: 'right' },
-        9: { cellWidth: 19, halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold' },
-        10: { cellWidth: 19, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
-        11: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }
-      },
-      didParseCell: (data) => {
-        if (data.section === 'body') {
-          if (data.column.index === 0) {
-            const isNota = String(data.cell.raw || '').includes('NOTA');
-            data.cell.styles.textColor = isNota ? COLORS.amber : COLORS.cyan;
-          } else if (data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
-            data.cell.text = ''; // Vector badge drawn in didDrawCell
-          }
-        }
-      },
-      didDrawCell: (data) => {
-        if (data.section === 'body' && data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
-          drawStatusBadge(base.doc, data.cell, data.cell.raw);
-        }
-      }
-    });
-  }
-
-  const finalY = base.doc.lastAutoTable?.finalY || currentY;
-  addGrandTotalBox(base.doc, finalY + 3.5, [
-    { label: 'MONTO EN TABLA (FAC + NE)', value: formatUsd(visStats.monto), subtext: `Abonos: ${formatUsd(visStats.abonos)}`, color: COLORS.navy },
-    { label: 'SALDO RESTANTE EN TABLA', value: formatUsd(visStats.restante), subtext: isClientView ? `${safeClientRows.length} clientes • ${visStats.count} docs` : `${safeDocs.length} documentos`, color: visStats.restante > 0 ? COLORS.red : COLORS.emerald },
-    { label: 'EQUIVALENTE EN BOLÍVARES', value: formatBs(visStats.restante * tasa), subtext: `Tasa BCV: ${formatBs(tasa)}`, color: COLORS.emerald }
-  ], base.tableWidth, base.startX);
-
-  const viewSuffix = isClientView ? 'Por_Cliente' : 'Documentos';
-  finalizeAndSave(base.doc, `Reporte_CxC_Consolidado_${viewSuffix}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
   return base.doc;
 }
 
@@ -5965,7 +5688,10 @@ export function generateCashflowPDF({ bankAccounts = [], cashDesks = [], cashMov
   return base.doc;
 }
 
-const ACCOUNTING_TABLE_THEME = {
+// =========================================================================
+// 12. REPORTE DE AUDITORÍA & SUITE CONTABLE BA VEN-NIF 2 (CARTA VERTICAL)
+// =========================================================================
+const ACCOUNTING_TABLE_BASE = {
   theme: 'grid',
   headStyles: {
     fillColor: COLORS.navy,
@@ -5984,23 +5710,20 @@ const ACCOUNTING_TABLE_THEME = {
   }
 };
 
-/**
- * Formatea una fila de Balance / Estado Financiero marcando encabezados de grupo y totales.
- */
-function styleStatementRowCell(data) {
+function styleAccountingStatementCell(data) {
   if (data.section !== 'body') return;
-  const rowMeta = data.row?.raw?.__meta;
-  if (!rowMeta) return;
-  if (rowMeta === 'group') {
+  const meta = data.row?.raw?.__meta;
+  if (!meta) return;
+  if (meta === 'group') {
     data.cell.styles.fillColor = [226, 232, 240];
     data.cell.styles.textColor = COLORS.navy;
     data.cell.styles.fontStyle = 'bold';
     data.cell.styles.fontSize = 6.5;
-  } else if (rowMeta === 'subtotal') {
+  } else if (meta === 'subtotal') {
     data.cell.styles.fillColor = [241, 245, 249];
     data.cell.styles.textColor = COLORS.dark;
     data.cell.styles.fontStyle = 'bold';
-  } else if (rowMeta === 'total') {
+  } else if (meta === 'total') {
     data.cell.styles.fillColor = COLORS.navy;
     data.cell.styles.textColor = [255, 255, 255];
     data.cell.styles.fontStyle = 'bold';
@@ -6008,19 +5731,10 @@ function styleStatementRowCell(data) {
   }
 }
 
-/**
- * 12A. BALANCE DE COMPROBACIÓN DE SUMAS Y SALDOS EN PDF (CARTA VERTICAL)
- */
-export function generateTrialBalancePDF({
-  trialBalance = null,
-  entries = [],
-  config = {},
-  currentUser = null
-} = {}) {
-  const tb = trialBalance || computeTrialBalance(entries);
+export function generateTrialBalancePDF({ trialBalance = null, entries = [], config = {}, currentUser = null } = {}) {
+  const tb = trialBalance || buildTrialBalance(entries);
   const accounts = tb?.accounts || [];
   const tasa = Number(config?.tasaDolar || 827.73);
-
   const base = createBaseReport({
     title: 'BALANCE DE COMPROBACIÓN DE SUMAS Y SALDOS',
     subtitle: 'Plan Oficial de Cuentas Pro Motorven C.A. • Verificación de Partida Doble (Debe = Haber)',
@@ -6033,18 +5747,12 @@ export function generateTrialBalancePDF({
     { label: 'Cuentas Activas', value: `${accounts.length} Cuentas`, subtext: 'Plan Pro Motorven', color: COLORS.navy },
     { label: 'Sumas Debe / Haber', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: `Haber: ${formatUsd(tb.totalSumasHaberUsd || 0)}`, color: COLORS.cyan },
     { label: 'Saldos Deudor / Acreedor', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: `Acreedor: ${formatUsd(tb.totalSaldosAcreedorUsd || 0)}`, color: COLORS.emerald },
-    {
-      label: 'Estatus Equilibrio',
-      value: tb.isBalanced ? 'CUADRADO' : 'CON DESCUADRE',
-      subtext: tb.isBalanced ? 'Debe = Haber (VEN-NIF)' : 'Revisar diferencias',
-      color: tb.isBalanced ? COLORS.emerald : COLORS.red
-    }
+    { label: 'Estatus Equilibrio', value: tb.isBalanced ? 'CUADRADO' : 'CON DESCUADRE', subtext: tb.isBalanced ? 'Debe = Haber (VEN-NIF)' : 'Revisar diferencias', color: tb.isBalanced ? COLORS.emerald : COLORS.red }
   ];
 
-  const currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
-
-  const bodyRows = accounts.length > 0
-    ? accounts.map((acc) => [
+  const startY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  const body = accounts.length > 0
+    ? accounts.map(acc => [
         acc.codigo,
         acc.nombre,
         acc.grupo || '-',
@@ -6056,13 +5764,13 @@ export function generateTrialBalancePDF({
     : [['-', 'Sin movimientos registrados en el período', '-', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00']];
 
   autoTable(base.doc, {
-    ...ACCOUNTING_TABLE_THEME,
-    startY: currentY,
+    ...ACCOUNTING_TABLE_BASE,
+    startY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
     showFoot: 'lastPage',
     head: [['CÓDIGO', 'DENOMINACIÓN DE LA CUENTA', 'GRUPO', 'SUMAS DEBE', 'SUMAS HABER', 'SALDO DEUDOR', 'SALDO ACREEDOR']],
-    body: bodyRows,
+    body,
     foot: [[
       'TOTALES',
       `${accounts.length} cuentas imputadas (Tasa BCV: Bs. ${tasa.toFixed(2)})`,
@@ -6072,13 +5780,7 @@ export function generateTrialBalancePDF({
       formatUsd(tb.totalSaldosDeudorUsd || 0),
       formatUsd(tb.totalSaldosAcreedorUsd || 0)
     ]],
-    footStyles: {
-      fillColor: COLORS.navy,
-      textColor: [255, 255, 255],
-      fontSize: 6.4,
-      fontStyle: 'bold',
-      cellPadding: 1.7
-    },
+    footStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.4, fontStyle: 'bold', cellPadding: 1.7 },
     columnStyles: {
       0: { fontStyle: 'bold', cellWidth: 22 },
       1: { cellWidth: 47.9 },
@@ -6090,37 +5792,26 @@ export function generateTrialBalancePDF({
     }
   });
 
-  const finalY = base.doc.lastAutoTable?.finalY || currentY;
-  const grandEndY = addGrandTotalBox(base.doc, finalY + 3, [
-    { label: 'TOTAL SUMAS DEBE', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: formatBs((tb.totalSumasDebeUsd || 0) * tasa), color: COLORS.navy },
-    { label: 'TOTAL SUMAS HABER', value: formatUsd(tb.totalSumasHaberUsd || 0), subtext: formatBs((tb.totalSumasHaberUsd || 0) * tasa), color: COLORS.cyan },
-    { label: 'SALDO DEUDOR = ACREEDOR', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: tb.isBalanced ? 'Cuadre Exacto $0.00' : 'Verificar Cuadre', color: tb.isBalanced ? COLORS.emerald : COLORS.red }
-  ], base.tableWidth, base.startX);
-
-  addSignatures(
+  const afterY = base.doc.lastAutoTable?.finalY || startY;
+  const totalBoxY = addGrandTotalBox(
     base.doc,
-    grandEndY + 4,
-    ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'],
+    afterY + 3,
+    [
+      { label: 'TOTAL SUMAS DEBE', value: formatUsd(tb.totalSumasDebeUsd || 0), subtext: formatBs((tb.totalSumasDebeUsd || 0) * tasa), color: COLORS.navy },
+      { label: 'TOTAL SUMAS HABER', value: formatUsd(tb.totalSumasHaberUsd || 0), subtext: formatBs((tb.totalSumasHaberUsd || 0) * tasa), color: COLORS.cyan },
+      { label: 'SALDO DEUDOR = ACREEDOR', value: formatUsd(tb.totalSaldosDeudorUsd || 0), subtext: tb.isBalanced ? 'Cuadre Exacto $0.00' : 'Verificar Cuadre', color: tb.isBalanced ? COLORS.emerald : COLORS.red }
+    ],
     base.tableWidth,
     base.startX
   );
-
+  addSignatures(base.doc, totalBoxY + 4, ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'], base.tableWidth, base.startX);
   finalizeAndSave(base.doc, `Balance_Comprobacion_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
   return base.doc;
 }
 
-/**
- * 12B. LIBRO MAYOR GENERAL ANALÍTICO POR CUENTA EN PDF (CARTA VERTICAL)
- */
-export function generateGeneralLedgerPDF({
-  account = null,
-  generalLedger = null,
-  entries = [],
-  config = {},
-  currentUser = null
-} = {}) {
-  const ledger = generalLedger || computeGeneralLedger(entries);
-  const targetAccount = account || ledger?.accounts?.[0] || {
+export function generateGeneralLedgerPDF({ account = null, generalLedger = null, entries = [], config = {}, currentUser = null } = {}) {
+  const gl = generalLedger || buildGeneralLedger(entries);
+  const targetAcc = account || gl?.accounts?.[0] || {
     codigo: '-',
     nombre: 'Sin cuenta seleccionada',
     grupo: '-',
@@ -6130,27 +5821,22 @@ export function generateGeneralLedgerPDF({
     saldoFinalUsd: 0,
     movements: []
   };
-  const movements = targetAccount.movements || [];
+  const movements = targetAcc.movements || [];
   const tasa = Number(config?.tasaDolar || 827.73);
 
   const base = createBaseReport({
     title: 'LIBRO MAYOR GENERAL ANALÍTICO POR CUENTA',
-    subtitle: `Cuenta ${targetAccount.codigo} — ${targetAccount.nombre} • Registro Cronológico de Partida Doble`,
+    subtitle: `Cuenta ${targetAcc.codigo} — ${targetAcc.nombre} • Registro Cronológico de Partida Doble`,
     moduleCode: 'MAY',
     currentUser,
     config
   });
 
   const cards = [
-    { label: 'Cuenta Contable', value: String(targetAccount.codigo), subtext: `${targetAccount.naturaleza || 'DEUDORA'} • ${targetAccount.grupo || '-'}`, color: COLORS.navy },
-    { label: 'Total Cargos (Debe)', value: formatUsd(targetAccount.totalDebeUsd || 0), subtext: `${movements.length} movimientos`, color: COLORS.emerald },
-    { label: 'Total Abonos (Haber)', value: formatUsd(targetAccount.totalHaberUsd || 0), subtext: formatBs((targetAccount.totalHaberUsd || 0) * tasa), color: COLORS.cyan },
-    {
-      label: 'Saldo Final Acumulado',
-      value: formatUsd(targetAccount.saldoFinalUsd || 0),
-      subtext: formatBs((targetAccount.saldoFinalUsd || 0) * tasa),
-      color: (targetAccount.saldoFinalUsd || 0) >= 0 ? COLORS.navy : COLORS.red
-    }
+    { label: 'Cuenta Contable', value: String(targetAcc.codigo), subtext: `${targetAcc.naturaleza || 'DEUDORA'} • ${targetAcc.grupo || '-'}`, color: COLORS.navy },
+    { label: 'Total Cargos (Debe)', value: formatUsd(targetAcc.totalDebeUsd || 0), subtext: `${movements.length} movimientos`, color: COLORS.emerald },
+    { label: 'Total Abonos (Haber)', value: formatUsd(targetAcc.totalHaberUsd || 0), subtext: formatBs((targetAcc.totalHaberUsd || 0) * tasa), color: COLORS.cyan },
+    { label: 'Saldo Final Acumulado', value: formatUsd(targetAcc.saldoFinalUsd || 0), subtext: formatBs((targetAcc.saldoFinalUsd || 0) * tasa), color: (targetAcc.saldoFinalUsd || 0) >= 0 ? COLORS.navy : COLORS.red }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
@@ -6158,13 +5844,13 @@ export function generateGeneralLedgerPDF({
     base.doc,
     currentY,
     'FICHA DE CUENTA CONTABLE EN MAYOR',
-    `Código Institucional: ${targetAccount.codigo} | Denominación: ${targetAccount.nombre} | Grupo: ${targetAccount.grupo || '-'} | Naturaleza: ${targetAccount.naturaleza || 'DEUDORA'} | Movimientos Cronológicos: ${movements.length}`,
+    `Código Institucional: ${targetAcc.codigo} | Denominación: ${targetAcc.nombre} | Grupo: ${targetAcc.grupo || '-'} | Naturaleza: ${targetAcc.naturaleza || 'DEUDORA'} | Movimientos Cronológicos: ${movements.length}`,
     base.tableWidth,
     base.startX
   );
 
-  const bodyRows = movements.length > 0
-    ? movements.map((m) => [
+  const body = movements.length > 0
+    ? movements.map(m => [
         m.fecha ? String(m.fecha).slice(0, 10) : '-',
         String(m.asientoNum || '-'),
         String(m.documentoReferencia || '-'),
@@ -6176,29 +5862,23 @@ export function generateGeneralLedgerPDF({
     : [['-', '-', '-', 'Sin movimientos cronológicos para esta cuenta', '$ 0.00', '$ 0.00', '$ 0.00']];
 
   autoTable(base.doc, {
-    ...ACCOUNTING_TABLE_THEME,
+    ...ACCOUNTING_TABLE_BASE,
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
     showFoot: 'lastPage',
     head: [['FECHA', 'ASIENTO', 'REFERENCIA', 'CONCEPTO / GLOSA CONTABLE', 'DEBE USD', 'HABER USD', 'SALDO ACUM.']],
-    body: bodyRows,
+    body,
     foot: [[
       'TOTALES',
       `${movements.length} movs`,
-      targetAccount.codigo,
+      targetAcc.codigo,
       'Totales Acumulados de la Cuenta',
-      formatUsd(targetAccount.totalDebeUsd || 0),
-      formatUsd(targetAccount.totalHaberUsd || 0),
-      formatUsd(targetAccount.saldoFinalUsd || 0)
+      formatUsd(targetAcc.totalDebeUsd || 0),
+      formatUsd(targetAcc.totalHaberUsd || 0),
+      formatUsd(targetAcc.saldoFinalUsd || 0)
     ]],
-    footStyles: {
-      fillColor: COLORS.navy,
-      textColor: [255, 255, 255],
-      fontSize: 6.4,
-      fontStyle: 'bold',
-      cellPadding: 1.7
-    },
+    footStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 6.4, fontStyle: 'bold', cellPadding: 1.7 },
     columnStyles: {
       0: { halign: 'center', cellWidth: 18 },
       1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
@@ -6210,32 +5890,15 @@ export function generateGeneralLedgerPDF({
     }
   });
 
-  const finalY = base.doc.lastAutoTable?.finalY || currentY;
-  addSignatures(
-    base.doc,
-    finalY + 5,
-    ['Elaborado por (Contabilidad)', 'Revisado por (Auditoría Interna)', 'Aprobado por (Gerencia)'],
-    base.tableWidth,
-    base.startX
-  );
-
-  const safeCode = String(targetAccount.codigo || 'General').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const afterY = base.doc.lastAutoTable?.finalY || currentY;
+  addSignatures(base.doc, afterY + 5, ['Elaborado por (Contabilidad)', 'Revisado por (Auditoría Interna)', 'Aprobado por (Gerencia)'], base.tableWidth, base.startX);
+  const safeCode = String(targetAcc.codigo || 'General').replace(/[^a-zA-Z0-9_-]/g, '_');
   finalizeAndSave(base.doc, `Libro_Mayor_${safeCode}_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
   return base.doc;
 }
 
-/**
- * 12C. ESTADOS FINANCIEROS BÁSICOS BA VEN-NIF 2 EN PDF (CARTA VERTICAL)
- * Incluye Estado de Resultados Integral + Estado de Situación Financiera (Balance General).
- */
-export function generateFinancialStatementsPDF({
-  financialStatements = null,
-  trialBalance = null,
-  entries = [],
-  config = {},
-  currentUser = null
-} = {}) {
-  const fsData = financialStatements || computeFinancialStatements(trialBalance || computeTrialBalance(entries));
+export function generateFinancialStatementsPDF({ financialStatements = null, trialBalance = null, entries = [], config = {}, currentUser = null } = {}) {
+  const fsData = financialStatements || buildFinancialStatements(trialBalance || buildTrialBalance(entries));
   const er = fsData?.estadoResultados || {
     ingresos: [],
     costos: [],
@@ -6271,13 +5934,8 @@ export function generateFinancialStatementsPDF({
     ecuacionCuadrada: true
   };
   const tasa = Number(config?.tasaDolar || 827.73);
-  const toStatementRow = (codigo, concepto, usd, bs, meta = null) => {
-    const row = [
-      codigo,
-      concepto,
-      formatUsd(usd || 0),
-      formatBs(bs != null ? bs : (Number(usd || 0) * tasa))
-    ];
+  const makeRow = (code, label, usd, bs, meta = null) => {
+    const row = [code, label, formatUsd(usd || 0), formatBs(bs ?? Number(usd || 0) * tasa)];
     if (meta) row.__meta = meta;
     return row;
   };
@@ -6292,24 +5950,12 @@ export function generateFinancialStatementsPDF({
 
   const cards = [
     { label: 'Ingresos Netos', value: formatUsd(er.totalIngresosUsd), subtext: `Utilidad Bruta: ${formatUsd(er.utilidadBrutaUsd)}`, color: COLORS.cyan },
-    {
-      label: 'Resultado del Ejercicio',
-      value: formatUsd(er.resultadoEjercicioUsd),
-      subtext: `${er.cuentaResultadoCodigo} • ${er.cuentaResultadoNombre}`,
-      color: er.resultadoEjercicioUsd >= 0 ? COLORS.emerald : COLORS.red
-    },
+    { label: 'Resultado del Ejercicio', value: formatUsd(er.resultadoEjercicioUsd), subtext: `${er.cuentaResultadoCodigo} • ${er.cuentaResultadoNombre}`, color: er.resultadoEjercicioUsd >= 0 ? COLORS.emerald : COLORS.red },
     { label: 'Total Activo', value: formatUsd(bg.totalActivoUsd), subtext: `Pasivo + Patr.: ${formatUsd(bg.totalPasivoYPatrimonioUsd)}`, color: COLORS.navy },
-    {
-      label: 'Ecuación Patrimonial',
-      value: bg.ecuacionCuadrada ? 'CUADRADA' : 'DESCUADRE',
-      subtext: `Diferencia: ${formatUsd(bg.diferenciaEcuacionUsd)}`,
-      color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red
-    }
+    { label: 'Ecuación Patrimonial', value: bg.ecuacionCuadrada ? 'CUADRADA' : 'DESCUADRE', subtext: `Diferencia: ${formatUsd(bg.diferenciaEcuacionUsd)}`, color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
-
-  // 1. Estado de Resultados Integral
   currentY = addSectionHeader(
     base.doc,
     currentY,
@@ -6319,53 +5965,36 @@ export function generateFinancialStatementsPDF({
     base.startX
   );
 
-  const erRows = [
-    toStatementRow('4', '4. INGRESOS OPERACIONALES Y OTROS', er.totalIngresosUsd, er.totalIngresosBs, 'group'),
-    ...(er.ingresos.length > 0
-      ? er.ingresos.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
-      : [toStatementRow('-', 'Sin ingresos registrados en el período', 0, 0)]),
-    toStatementRow('', 'TOTAL INGRESOS NETOS', er.totalIngresosUsd, er.totalIngresosBs, 'subtotal'),
-
-    toStatementRow('5', '5. COSTOS DE VENTAS Y SERVICIOS', er.totalCostosUsd, er.totalCostosBs, 'group'),
-    ...(er.costos.length > 0
-      ? er.costos.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
-      : [toStatementRow('-', 'Sin costos registrados en el período', 0, 0)]),
-    toStatementRow('', 'UTILIDAD BRUTA EN VENTAS', er.utilidadBrutaUsd, er.utilidadBrutaBs, 'subtotal'),
-
-    toStatementRow('6', '6. GASTOS OPERATIVOS / EGRESOS', er.totalEgresosUsd, er.totalEgresosBs, 'group'),
-    ...(er.egresos.length > 0
-      ? er.egresos.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
-      : [toStatementRow('-', 'Sin egresos operativos registrados en el período', 0, 0)]),
-    toStatementRow('', 'TOTAL GASTOS OPERATIVOS', er.totalEgresosUsd, er.totalEgresosBs, 'subtotal'),
-
-    toStatementRow(
-      er.cuentaResultadoCodigo,
-      `RESULTADO DEL EJERCICIO (${er.cuentaResultadoNombre.toUpperCase()})`,
-      er.resultadoEjercicioUsd,
-      er.resultadoEjercicioBs,
-      'total'
-    )
+  const erBody = [
+    makeRow('4', '4. INGRESOS OPERACIONALES Y OTROS', er.totalIngresosUsd, er.totalIngresosBs, 'group'),
+    ...(er.ingresos.length > 0 ? er.ingresos.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin ingresos registrados en el período', 0, 0)]),
+    makeRow('', 'TOTAL INGRESOS NETOS', er.totalIngresosUsd, er.totalIngresosBs, 'subtotal'),
+    makeRow('5', '5. COSTOS DE VENTAS Y SERVICIOS', er.totalCostosUsd, er.totalCostosBs, 'group'),
+    ...(er.costos.length > 0 ? er.costos.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin costos registrados en el período', 0, 0)]),
+    makeRow('', 'UTILIDAD BRUTA EN VENTAS', er.utilidadBrutaUsd, er.utilidadBrutaBs, 'subtotal'),
+    makeRow('6', '6. GASTOS OPERATIVOS / EGRESOS', er.totalEgresosUsd, er.totalEgresosBs, 'group'),
+    ...(er.egresos.length > 0 ? er.egresos.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin egresos operativos registrados en el período', 0, 0)]),
+    makeRow('', 'TOTAL GASTOS OPERATIVOS', er.totalEgresosUsd, er.totalEgresosBs, 'subtotal'),
+    makeRow(er.cuentaResultadoCodigo, `RESULTADO DEL EJERCICIO (${er.cuentaResultadoNombre.toUpperCase()})`, er.resultadoEjercicioUsd, er.resultadoEjercicioBs, 'total')
   ];
 
   autoTable(base.doc, {
-    ...ACCOUNTING_TABLE_THEME,
+    ...ACCOUNTING_TABLE_BASE,
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
     head: [['CÓDIGO', 'CUENTA / CONCEPTO DEL RESULTADO', 'MONTO USD', 'MONTO BS.']],
-    body: erRows,
+    body: erBody,
     columnStyles: {
       0: { fontStyle: 'bold', cellWidth: 26 },
       1: { cellWidth: 89.9 },
       2: { halign: 'right', cellWidth: 30 },
       3: { halign: 'right', cellWidth: 34 }
     },
-    didParseCell: styleStatementRowCell
+    didParseCell: styleAccountingStatementCell
   });
 
   currentY = (base.doc.lastAutoTable?.finalY || currentY) + 4;
-
-  // 2. Balance General (Estado de Situación Financiera)
   currentY = addSectionHeader(
     base.doc,
     currentY,
@@ -6375,65 +6004,53 @@ export function generateFinancialStatementsPDF({
     base.startX
   );
 
-  const bgRows = [
-    toStatementRow('1', '1. ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'group'),
-    ...(bg.activo.length > 0
-      ? bg.activo.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
-      : [toStatementRow('-', 'Sin cuentas de activo con movimiento', 0, 0)]),
-    toStatementRow('', 'TOTAL ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'total'),
-
-    toStatementRow('2', '2. PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'group'),
-    ...(bg.pasivo.length > 0
-      ? bg.pasivo.map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs))
-      : [toStatementRow('-', 'Sin cuentas de pasivo con movimiento', 0, 0)]),
-    toStatementRow('', 'TOTAL PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'subtotal'),
-
-    toStatementRow('3', '3. PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'group'),
-    ...(bg.patrimonio || []).map((a) => toStatementRow(a.codigo, a.nombre, a.saldoUsd, a.saldoBs)),
-    toStatementRow(er.cuentaResultadoCodigo, er.cuentaResultadoNombre, bg.resultadoEjercicioUsd, bg.resultadoEjercicioBs),
-    toStatementRow('', 'TOTAL PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'subtotal'),
-
-    toStatementRow('', 'TOTAL PASIVO + PATRIMONIO', bg.totalPasivoYPatrimonioUsd, bg.totalPasivoYPatrimonioBs, 'total')
+  const bgBody = [
+    makeRow('1', '1. ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'group'),
+    ...(bg.activo.length > 0 ? bg.activo.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin cuentas de activo con movimiento', 0, 0)]),
+    makeRow('', 'TOTAL ACTIVO', bg.totalActivoUsd, bg.totalActivoBs, 'total'),
+    makeRow('2', '2. PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'group'),
+    ...(bg.pasivo.length > 0 ? bg.pasivo.map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)) : [makeRow('-', 'Sin cuentas de pasivo con movimiento', 0, 0)]),
+    makeRow('', 'TOTAL PASIVO', bg.totalPasivoUsd, bg.totalPasivoBs, 'subtotal'),
+    makeRow('3', '3. PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'group'),
+    ...(bg.patrimonio || []).map(i => makeRow(i.codigo, i.nombre, i.saldoUsd, i.saldoBs)),
+    makeRow(er.cuentaResultadoCodigo, er.cuentaResultadoNombre, bg.resultadoEjercicioUsd, bg.resultadoEjercicioBs),
+    makeRow('', 'TOTAL PATRIMONIO NETO', bg.totalPatrimonioUsd, bg.totalPatrimonioBs, 'subtotal'),
+    makeRow('', 'TOTAL PASIVO + PATRIMONIO', bg.totalPasivoYPatrimonioUsd, bg.totalPasivoYPatrimonioBs, 'total')
   ];
 
   autoTable(base.doc, {
-    ...ACCOUNTING_TABLE_THEME,
+    ...ACCOUNTING_TABLE_BASE,
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
     head: [['CÓDIGO', 'CUENTA / RUBRO DE SITUACIÓN FINANCIERA', 'MONTO USD', 'MONTO BS.']],
-    body: bgRows,
+    body: bgBody,
     columnStyles: {
       0: { fontStyle: 'bold', cellWidth: 26 },
       1: { cellWidth: 89.9 },
       2: { halign: 'right', cellWidth: 30 },
       3: { halign: 'right', cellWidth: 34 }
     },
-    didParseCell: styleStatementRowCell
+    didParseCell: styleAccountingStatementCell
   });
 
-  const finalY = base.doc.lastAutoTable?.finalY || currentY;
-  const grandEndY = addGrandTotalBox(base.doc, finalY + 3, [
-    { label: 'TOTAL ACTIVO', value: formatUsd(bg.totalActivoUsd), subtext: formatBs(bg.totalActivoBs || bg.totalActivoUsd * tasa), color: COLORS.navy },
-    { label: 'PASIVO + PATRIMONIO', value: formatUsd(bg.totalPasivoYPatrimonioUsd), subtext: formatBs(bg.totalPasivoYPatrimonioBs || bg.totalPasivoYPatrimonioUsd * tasa), color: COLORS.cyan },
-    { label: 'DIFERENCIA ECUACIÓN', value: formatUsd(bg.diferenciaEcuacionUsd), subtext: bg.ecuacionCuadrada ? 'BA VEN-NIF 2 Cuadrado' : 'Descuadre detectado', color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red }
-  ], base.tableWidth, base.startX);
-
-  addSignatures(
+  const afterBgY = base.doc.lastAutoTable?.finalY || currentY;
+  const totalBoxY = addGrandTotalBox(
     base.doc,
-    grandEndY + 4,
-    ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'],
+    afterBgY + 3,
+    [
+      { label: 'TOTAL ACTIVO', value: formatUsd(bg.totalActivoUsd), subtext: formatBs(bg.totalActivoBs || bg.totalActivoUsd * tasa), color: COLORS.navy },
+      { label: 'PASIVO + PATRIMONIO', value: formatUsd(bg.totalPasivoYPatrimonioUsd), subtext: formatBs(bg.totalPasivoYPatrimonioBs || bg.totalPasivoYPatrimonioUsd * tasa), color: COLORS.cyan },
+      { label: 'DIFERENCIA ECUACIÓN', value: formatUsd(bg.diferenciaEcuacionUsd), subtext: bg.ecuacionCuadrada ? 'BA VEN-NIF 2 Cuadrado' : 'Descuadre detectado', color: bg.ecuacionCuadrada ? COLORS.emerald : COLORS.red }
+    ],
     base.tableWidth,
     base.startX
   );
-
+  addSignatures(base.doc, totalBoxY + 4, ['Elaborado por (Contabilidad)', 'Revisado por (Contador Público)', 'Aprobado por (Gerencia General)'], base.tableWidth, base.startX);
   finalizeAndSave(base.doc, `Estados_Financieros_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
   return base.doc;
 }
 
-// =========================================================================
-// 12. REPORTE DE AUDITORÍA & LIBRO CONTABLE DIGITAL (CARTA VERTICAL)
-// =========================================================================
 export function generateAuditLedgerPDF({
   entries = [],
   auditLogs = [],
@@ -6471,7 +6088,7 @@ export function generateAuditLedgerPDF({
     { label: 'Motor Trazabilidad', value: 'SHA-256', subtext: 'Inmutable', color: COLORS.amber }
   ];
 
-  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  const currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
   if (isDiario) {
     const tableData = [];
@@ -6563,6 +6180,265 @@ export function generateAuditLedgerPDF({
   }
 
   finalizeAndSave(base.doc, `Reporte_Auditoria_Contable_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 12B. REPORTE CONSOLIDADO DE CUENTAS POR COBRAR (FACTURAS + NOTAS)
+// =========================================================================
+export function generateConsolidatedCxcPDF({
+  docs = [],
+  clientRows = [],
+  totals = null,
+  visibleTotals = null,
+  tasaBcv = 1,
+  viewMode = 'DOCS',
+  filters = {},
+  config = {},
+  currentUser = null
+} = {}) {
+  const docList = Array.isArray(docs) ? docs : [];
+  const clientList = Array.isArray(clientRows) ? clientRows : [];
+  const rate = Number(tasaBcv) || Number(config?.tasaDolar) || 451.51;
+  const isClientsView = viewMode === 'CLIENTES';
+
+  const aggregateDocs = (predicate) => (predicate ? docList.filter(predicate) : docList).reduce(
+    (acc, item) => {
+      const monto = Number(item.montoFacturaUsd ?? item.totalFacturaUsd ?? 0);
+      const abonos = Number(item.abonosUsd ?? item.montoPagadoUsd ?? 0);
+      const restante = Number(item.restanteUsd ?? item.saldoPendienteUsd ?? item.saldoUsd ?? 0);
+      const isOverdue = item.estado === 'VENCIDA' || Number(item.diasVencidos ?? 0) > 0;
+      acc.count += 1;
+      acc.monto += monto;
+      acc.abonos += abonos;
+      acc.restante += restante;
+      if (isOverdue) {
+        acc.vencido += restante;
+        acc.vencidas += 1;
+      }
+      return acc;
+    },
+    { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+  );
+
+  const facTotals = totals?.fac || aggregateDocs(d => d.tipoDoc !== 'NOTA_ENTREGA');
+  const neTotals = totals?.ne || aggregateDocs(d => d.tipoDoc === 'NOTA_ENTREGA');
+  const allTotals = totals?.all || {
+    count: facTotals.count + neTotals.count,
+    monto: facTotals.monto + neTotals.monto,
+    abonos: facTotals.abonos + neTotals.abonos,
+    restante: facTotals.restante + neTotals.restante,
+    vencido: facTotals.vencido + neTotals.vencido,
+    vencidas: facTotals.vencidas + neTotals.vencidas
+  };
+
+  const visibleSummary = visibleTotals || (isClientsView
+    ? clientList.reduce(
+        (acc, c) => {
+          acc.count += Number(c.fac?.count || 0) + Number(c.ne?.count || 0);
+          acc.monto += Number(c.totalMonto || 0);
+          acc.abonos += Number(c.totalAbonos || 0);
+          acc.restante += Number(c.totalRestante || 0);
+          return acc;
+        },
+        { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+      )
+    : aggregateDocs(null));
+
+  const base = createBaseReport({
+    title: isClientsView
+      ? 'REPORTE CONSOLIDADO CXC POR CLIENTE (FACTURAS + NOTAS)'
+      : 'REPORTE CONSOLIDADO CXC — FACTURAS FISCALES + NOTAS DE ENTREGA',
+    subtitle: isClientsView
+      ? 'Cartera Consolidada Agrupada por Cliente • Facturas Fiscales SENIAT + Notas de Entrega Sumadas'
+      : 'Cartera Total Sumada de Ambos Tipos de Documento • Trazabilidad Integral de Cobros',
+    moduleCode: 'CXC-CON',
+    currentUser,
+    config,
+    orientation: 'landscape',
+    rateValue: rate
+  });
+
+  const cards = [
+    { label: 'Facturas Fiscales', value: formatUsd(facTotals.restante), subtext: `${facTotals.count} docs • Mto: ${formatUsd(facTotals.monto)}`, color: COLORS.navy },
+    { label: 'Notas de Entrega', value: formatUsd(neTotals.restante), subtext: `${neTotals.count} docs • Mto: ${formatUsd(neTotals.monto)}`, color: COLORS.amber },
+    { label: 'Total Consolidado', value: formatUsd(allTotals.restante), subtext: `${allTotals.count} docs • ${formatBs(allTotals.restante * rate)}`, color: COLORS.emerald },
+    { label: isClientsView ? 'Clientes en Tabla' : 'Docs en Tabla', value: isClientsView ? `${clientList.length} Clientes` : `${docList.length} Documentos`, subtext: `Restante visible: ${formatUsd(visibleSummary.restante)}`, color: COLORS.cyan }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+  const filterParts = [
+    `Vista: ${isClientsView ? 'Por Cliente (Agrupado)' : 'Por Documento'}`,
+    `Tipo: ${filters?.typeLabel || 'Ambos (FAC + NE)'}`,
+    `Estado: ${filters?.statusLabel || 'Cartera activa'}`,
+    `Vendedor: ${filters?.sellerLabel || 'Todos los vendedores'}`
+  ];
+  if (filters?.searchTerm) {
+    filterParts.push(`Búsqueda: "${String(filters.searchTerm).trim()}"`);
+  }
+
+  currentY = addAnalyticalBox(
+    base.doc,
+    currentY,
+    'DESGLOSE CONSOLIDADO Y FILTROS APLICADOS',
+    `${filterParts.join(' | ')}\nFacturas Fiscales (${facTotals.count}): Monto ${formatUsd(facTotals.monto)}, Abonos ${formatUsd(facTotals.abonos)}, Restante ${formatUsd(facTotals.restante)} • Notas de Entrega (${neTotals.count}): Monto ${formatUsd(neTotals.monto)}, Abonos ${formatUsd(neTotals.abonos)}, Restante ${formatUsd(neTotals.restante)} • Vencido Total: ${formatUsd(allTotals.vencido)} (${allTotals.vencidas} docs).`,
+    base.tableWidth,
+    base.startX
+  );
+
+  const fmtShortDate = (raw) => {
+    if (!raw) return '—';
+    const dt = raw instanceof Date ? raw : new Date(raw);
+    if (isNaN(dt.getTime())) return String(raw).slice(0, 10);
+    return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
+  };
+
+  if (isClientsView) {
+    const sumFacCount = clientList.reduce((acc, c) => acc + Number(c.fac?.count || 0), 0);
+    const sumFacRestante = clientList.reduce((acc, c) => acc + Number(c.fac?.restante || 0), 0);
+    const sumNeCount = clientList.reduce((acc, c) => acc + Number(c.ne?.count || 0), 0);
+    const sumNeRestante = clientList.reduce((acc, c) => acc + Number(c.ne?.restante || 0), 0);
+
+    const body = clientList.map(c => [
+      String(c.cliente || 'Cliente Comercial'),
+      String(c.rif || 'N/A'),
+      String(c.fac?.count || 0),
+      formatUsd(c.fac?.restante || 0),
+      String(c.ne?.count || 0),
+      formatUsd(c.ne?.restante || 0),
+      formatUsd(c.totalMonto || 0),
+      formatUsd(c.totalAbonos || 0),
+      formatUsd(c.totalRestante || 0),
+      formatBs(Number(c.totalRestante || 0) * rate),
+      String(Number(c.maxDias || 0))
+    ]);
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['CLIENTE', 'RIF', 'N° FAC.', 'SALDO FACTURAS', 'N° NOTAS', 'SALDO NOTAS', 'MONTO TOTAL', 'ABONOS', 'SALDO TOTAL ($)', 'SALDO TOTAL (BS.)', 'MÁX. DÍAS']],
+      body: body.length > 0 ? body : [['No hay clientes que coincidan con los filtros.', '-', '0', '$ 0.00', '0', '$ 0.00', '$ 0.00', '$ 0.00', '$ 0.00', 'Bs. 0,00', '0']],
+      foot: [[
+        { content: `TOTAL (${clientList.length} clientes)`, colSpan: 2, styles: { halign: 'left' } },
+        String(sumFacCount),
+        formatUsd(sumFacRestante),
+        String(sumNeCount),
+        formatUsd(sumNeRestante),
+        formatUsd(visibleSummary.monto),
+        formatUsd(visibleSummary.abonos),
+        formatUsd(visibleSummary.restante),
+        formatBs(visibleSummary.restante * rate),
+        ''
+      ]],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
+      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { cellWidth: 48.4, fontStyle: 'bold' },
+        1: { cellWidth: 20, halign: 'center' },
+        2: { cellWidth: 11, halign: 'right', textColor: COLORS.navy, fontStyle: 'bold' },
+        3: { cellWidth: 23, halign: 'right', textColor: COLORS.navy },
+        4: { cellWidth: 11, halign: 'right', textColor: COLORS.amber, fontStyle: 'bold' },
+        5: { cellWidth: 23, halign: 'right', textColor: COLORS.amber },
+        6: { cellWidth: 23, halign: 'right' },
+        7: { cellWidth: 21, halign: 'right', textColor: COLORS.emerald },
+        8: { cellWidth: 23, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        9: { cellWidth: 28, halign: 'right', textColor: COLORS.slate },
+        10: { cellWidth: 12, halign: 'right', fontStyle: 'bold' }
+      }
+    });
+  } else {
+    const body = docList.map(d => {
+      const isNe = d.tipoDoc === 'NOTA_ENTREGA';
+      const statusLabel = d.estado === 'VENCIDA' ? 'VENCIDA' : (d.estado === 'PAGADA' ? 'SOLVENTE' : 'AL DÍA');
+      const rawDocNum = String(d.factura || d.factNum || d.nroDoc || d.id || '0000');
+      const formattedDocNum = rawDocNum.startsWith('#') ? rawDocNum : `#${rawDocNum}`;
+      return [
+        isNe ? 'NOTA ENT.' : 'FACTURA',
+        formattedDocNum,
+        String(d.cliente || d.clienteNombre || 'Cliente Comercial'),
+        String(d.rif || d.clienteRif || 'N/A'),
+        String(d.vendedorId || d.vendedor || 'OF'),
+        fmtShortDate(d.fechaEmision || d.fechaEmisionIso),
+        fmtShortDate(d.fechaVencimiento || d.fechaVencimientoIso),
+        String(Number(d.diasVencidos ?? 0)),
+        formatUsd(d.montoFacturaUsd ?? 0),
+        formatUsd(d.abonosUsd ?? 0),
+        formatUsd(d.restanteUsd ?? 0),
+        statusLabel
+      ];
+    });
+
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'VEND.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
+      body: body.length > 0 ? body : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
+      foot: [[
+        { content: `TOTAL (${docList.length} documentos)`, colSpan: 8, styles: { halign: 'left' } },
+        formatUsd(visibleSummary.monto),
+        formatUsd(visibleSummary.abonos),
+        formatUsd(visibleSummary.restante),
+        ''
+      ]],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4, valign: 'middle' },
+      footStyles: { fillColor: [226, 232, 240], textColor: COLORS.dark, fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.4 },
+      styles: { fontSize: 5.7, cellPadding: 1.25, textColor: COLORS.dark, valign: 'middle' },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 52.4 },
+        3: { cellWidth: 21, halign: 'center' },
+        4: { cellWidth: 13, halign: 'center' },
+        5: { cellWidth: 17, halign: 'center' },
+        6: { cellWidth: 17, halign: 'center' },
+        7: { cellWidth: 11, halign: 'right', fontStyle: 'bold' },
+        8: { cellWidth: 19, halign: 'right' },
+        9: { cellWidth: 19, halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold' },
+        10: { cellWidth: 19, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        11: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body') {
+          if (data.column.index === 0) {
+            const isNota = String(data.cell.raw || '').includes('NOTA');
+            data.cell.styles.textColor = isNota ? COLORS.amber : COLORS.cyan;
+          } else if (data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+            data.cell.text = '';
+          }
+        }
+      },
+      didDrawCell: (data) => {
+        if (data.section === 'body' && data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+          drawStatusBadge(base.doc, data.cell, data.cell.raw);
+        }
+      }
+    });
+  }
+
+  const afterTableY = base.doc.lastAutoTable?.finalY || currentY;
+  addGrandTotalBox(
+    base.doc,
+    afterTableY + 3.5,
+    [
+      { label: 'MONTO EN TABLA (FAC + NE)', value: formatUsd(visibleSummary.monto), subtext: `Abonos: ${formatUsd(visibleSummary.abonos)}`, color: COLORS.navy },
+      { label: 'SALDO RESTANTE EN TABLA', value: formatUsd(visibleSummary.restante), subtext: isClientsView ? `${clientList.length} clientes • ${visibleSummary.count} docs` : `${docList.length} documentos`, color: visibleSummary.restante > 0 ? COLORS.red : COLORS.emerald },
+      { label: 'EQUIVALENTE EN BOLÍVARES', value: formatBs(visibleSummary.restante * rate), subtext: `Tasa BCV: ${formatBs(rate)}`, color: COLORS.emerald }
+    ],
+    base.tableWidth,
+    base.startX
+  );
+
+  const fileSuffix = isClientsView ? 'Por_Cliente' : 'Documentos';
+  finalizeAndSave(base.doc, `Reporte_CxC_Consolidado_${fileSuffix}_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
   return base.doc;
 }
 
@@ -7696,6 +7572,1398 @@ export function generateWhatsAppCollectionPDF({
 
   return base.doc;
 }
+
+// =========================================================================
+// HELPERS INTERNOS COMPARTIDOS PARA FORMATOS CORPORATIVOS Y FISCALES
+// =========================================================================
+function formatDateVe(rawDate) {
+  if (!rawDate) return new Date().toLocaleDateString('es-VE');
+  try {
+    const d = new Date(rawDate);
+    if (!isNaN(d.getTime())) return d.toLocaleDateString('es-VE');
+  } catch (_) {}
+  return String(rawDate).slice(0, 10);
+}
+
+function renderTwoColMetaCard(doc, startX, startY, tableWidth, leftBlock = {}, rightBlock = {}) {
+  const leftLines = (leftBlock.lines || []).filter(Boolean);
+  const rightLines = (rightBlock.lines || []).filter(Boolean);
+  const maxLines = Math.max(leftLines.length, rightLines.length, 2);
+  const boxH = 8.5 + maxLines * 4.0;
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
+  if (startY + boxH > safeBottomY) {
+    doc.addPage();
+    startY = continuationTopY;
+  }
+
+  doc.setFillColor(...COLORS.lightBg);
+  doc.setDrawColor(...COLORS.border);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(startX, startY, tableWidth, boxH, 1.5, 1.5, 'FD');
+
+  const midX = startX + tableWidth * 0.54;
+  doc.setDrawColor(...COLORS.border);
+  doc.line(midX - 3, startY + 2, midX - 3, startY + boxH - 2);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.2);
+  doc.setTextColor(...COLORS.navy);
+  doc.text(String(leftBlock.title || 'DATOS DEL TERCERO').toUpperCase(), startX + 3, startY + 4.8);
+  doc.text(String(rightBlock.title || 'METADATOS DEL DOCUMENTO').toUpperCase(), midX, startY + 4.8);
+
+  const maxLeftW = midX - startX - 7;
+  const maxRightW = startX + tableWidth - midX - 3;
+
+  leftLines.forEach((line, i) => {
+    const isStrong = i === 0;
+    doc.setFont('helvetica', isStrong ? 'bold' : 'normal');
+    doc.setFontSize(isStrong ? 7.4 : 6.4);
+    doc.setTextColor(...(isStrong ? COLORS.dark : COLORS.slate));
+    const txt = doc.splitTextToSize(String(line), maxLeftW)[0] || '';
+    doc.text(txt, startX + 3, startY + 9.0 + i * 4.0);
+  });
+
+  rightLines.forEach((line, i) => {
+    const isStrong = i === 0;
+    doc.setFont('helvetica', isStrong ? 'bold' : 'normal');
+    doc.setFontSize(isStrong ? 7.0 : 6.4);
+    doc.setTextColor(...(isStrong ? COLORS.navy : COLORS.slate));
+    const txt = doc.splitTextToSize(String(line), maxRightW)[0] || '';
+    doc.text(txt, midX, startY + 9.0 + i * 4.0);
+  });
+
+  return startY + boxH + 3;
+}
+
+function placeTotalsAndSignatures(doc, currentY, totalItems = [], roles = [], tableWidth = 179.9, startX = 18) {
+  const { footerY, continuationTopY } = getPageLayoutMetrics(doc);
+  const sigH = 19;
+  const sigAnchoredTop = footerY - 3 - sigH;
+  let drawY = currentY + 3;
+
+  if (Array.isArray(totalItems) && totalItems.length > 0) {
+    const boxH = 13.5;
+    if (drawY + boxH > sigAnchoredTop - 2) {
+      doc.addPage();
+      drawY = continuationTopY;
+    }
+    drawY = addGrandTotalBox(doc, drawY, totalItems, tableWidth, startX);
+  }
+
+  if (Array.isArray(roles) && roles.length > 0) {
+    addSignatures(doc, drawY + 2, roles, tableWidth, startX);
+  }
+}
+
+// =========================================================================
+// 22. COTIZACIÓN / PRESUPUESTO COMERCIAL FORMAL (SIN COMPROMETER STOCK)
+// =========================================================================
+export function generateQuotationPDF({ quotation = {}, config = {}, currentUser = null }) {
+  const tasa = Number(quotation.tasaDolar || config?.tasaDolar) || 827.73;
+  const docNum = String(quotation.numeroDoc || quotation.id || makeCorrelative('COT')).trim();
+  const vigenciaDias = Number(quotation.vigenciaDias || 5);
+  const items = Array.isArray(quotation.items) ? quotation.items : [];
+
+  const base = createBaseReport({
+    title: `COTIZACIÓN / PRESUPUESTO COMERCIAL N° ${docNum}`,
+    subtitle: `Oferta Formal de Precios y Condiciones • Válida por ${vigenciaDias} días • No Válida como Factura`,
+    moduleCode: 'COT',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'IDENTIFICACIÓN DEL CLIENTE & CONDICIONES COMERCIALES',
+    'Presupuesto referencial sin reserva ni descuento de inventario hasta aprobación',
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'DATOS DEL CLIENTE SOLICITANTE',
+      lines: [
+        quotation.clienteNombre || 'CLIENTE POR DEFINIR',
+        `RIF / C.I.: ${quotation.clienteRif || 'N/A'}`,
+        `Dirección: ${quotation.clienteDireccion || quotation.direccion || 'Venezuela'}`,
+        `Vendedor / Asesor: ${quotation.vendedor || 'Oficina Central'}`
+      ]
+    },
+    {
+      title: 'PARÁMETROS DE LA OFERTA',
+      lines: [
+        `Cotización N°: ${docNum}`,
+        `Fecha Emisión: ${formatDateVe(quotation.fechaEmision || quotation.fecha)}`,
+        `Vigencia Oferta: ${vigenciaDias} días calendario • Condición: ${quotation.condicionPago || 'CONTADO'}`,
+        `Moneda Base: USD / Ref. BCV Bs. ${tasa.toFixed(2)}`
+      ]
+    }
+  );
+
+  const body = items.map((it, idx) => {
+    const cant = Number(it.cantidad || 1);
+    const pUnit = Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
+    const subUsd = Number(it.subtotalUsd ?? it.totalUsd ?? cant * pUnit);
+    return [
+      String(idx + 1),
+      String(it.codigo || it.articuloId || 'N/A'),
+      String(it.descripcion || it.articuloDescripcion || 'Lubricante').slice(0, 44),
+      resolveProductUnit(it, 'Caja'),
+      String(cant),
+      formatUsd(pUnit),
+      formatUsd(subUsd),
+      formatBs(subUsd * tasa)
+    ];
+  });
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'CÓDIGO', 'DESCRIPCIÓN DEL PRODUCTO', 'UNIDAD', 'CANT.', 'P. UNIT ($)', 'SUBTOTAL ($)', 'SUBTOTAL (BS.)']],
+    body: body.length > 0 ? body : [['—', '—', 'Sin renglones cargados en esta cotización', '—', '0', '$ 0.00', '$ 0.00', 'Bs. 0,00']],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
+      2: { cellWidth: 56 },
+      3: { halign: 'center', cellWidth: 16 },
+      4: { halign: 'center', cellWidth: 12, fontStyle: 'bold' },
+      5: { halign: 'right', cellWidth: 20 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 22 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 27.9 }
+    }
+  });
+
+  const subUsd = Number(quotation.subtotalUsd ?? items.reduce((s, it) => s + Number(it.subtotalUsd ?? it.totalUsd ?? (Number(it.cantidad || 1) * Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0))), 0));
+  const ivaUsd = Number(quotation.ivaUsd ?? (subUsd * 0.16));
+  const totUsd = Number(quotation.totalUsd ?? (subUsd + ivaUsd));
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'SUBTOTAL BASE ($)', value: formatUsd(subUsd), subtext: formatBs(subUsd * tasa), color: COLORS.navy },
+      { label: 'IVA ESTIMADO (16%)', value: formatUsd(ivaUsd), subtext: formatBs(ivaUsd * tasa), color: COLORS.slate },
+      { label: 'TOTAL PRESUPUESTADO', value: formatUsd(totUsd), subtext: formatBs(totUsd * tasa), color: COLORS.emerald }
+    ],
+    ['ASESOR COMERCIAL EMISOR', 'GERENCIA DE VENTAS / APROBACIÓN', 'ACEPTACIÓN DEL CLIENTE'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Cotizacion_${docNum}.pdf`, currentUser, {
+    legalFooter: 'PRESUPUESTO COMERCIAL • Sujeto a disponibilidad de inventario al momento de confirmar pedido • Válido Carta.'
+  });
+  return base.doc;
+}
+
+// =========================================================================
+// 23. NOTA DE CRÉDITO / NOTA DE DÉBITO FISCAL CARTA SENIAT
+// =========================================================================
+export function generateCreditDebitNotePDF({ docData = {}, config = {}, currentUser = null }) {
+  const tasa = Number(docData.tasaDolar || docData.tasa || config?.tasaDolar) || 827.73;
+  const tipoRaw = String(docData.tipoDoc || docData.tipo_doc || 'NOTA_CREDITO').toUpperCase();
+  const isDebito = tipoRaw === 'NOTA_DEBITO' || tipoRaw === 'ND' || tipoRaw === 'N/DB';
+  const docLabel = isDebito ? 'NOTA DE DÉBITO FISCAL' : 'NOTA DE CRÉDITO FISCAL';
+  const docNum = String(docData.numeroDoc || docData.ncNum || docData.ndNum || docData.id || makeCorrelative(isDebito ? 'ND' : 'NC')).trim();
+  const docAfectado = String(docData.documentoAfectado || docData.factNum || docData.facturaAfectada || 'N/A').trim();
+  const items = Array.isArray(docData.items) ? docData.items : (Array.isArray(docData.renglones) ? docData.renglones : []);
+
+  const base = createBaseReport({
+    title: `${docLabel} N° ${docNum}`,
+    subtitle: `Documento de Ajuste Tributario SENIAT • Afecta Documento Fiscal N° ${docAfectado}`,
+    moduleCode: isDebito ? 'NDB' : 'NCR',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    `DATOS FISCALES Y REFERENCIA DE ${docLabel}`,
+    isDebito
+      ? 'Incremento de base imponible / recargo sobre factura fiscal previamente emitida'
+      : 'Disminución de base imponible / devolución de mercancía sobre factura fiscal emitida',
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'SUJETO / ADQUIRENTE',
+      lines: [
+        docData.clienteNombre || docData.cliDes || 'CLIENTE GENERAL',
+        `RIF / C.I.: ${docData.clienteRif || docData.rif || 'V-00000000-0'}`,
+        `Domicilio Fiscal: ${docData.clienteDireccion || docData.direccion || 'Venezuela'}`,
+        `Motivo del Ajuste: ${docData.motivo || docData.descrip || (isDebito ? 'Ajuste / Cargo adicional autorizado' : 'Devolución de mercancía / Rebaja comercial')}`
+      ]
+    },
+    {
+      title: 'CONTROL TRIBUTARIO SENIAT',
+      lines: [
+        `${docLabel} N°: ${docNum}`,
+        `N° de Control: ${docData.numeroControl || '00-000000'} • Fecha: ${formatDateVe(docData.fechaEmision || docData.fecEmis || docData.fecha)}`,
+        `Factura / Doc. Afectado: #${docAfectado}`,
+        `Condición: ${docData.condicionPago || 'AJUSTE FISCAL'} • Tasa BCV: Bs. ${tasa.toFixed(2)}`
+      ]
+    }
+  );
+
+  const rows = items.map((it, idx) => {
+    const cant = Number(it.cantidad || it.totalArt || 1);
+    const precio = Number(it.precioUsd ?? it.precioUnitarioUsd ?? it.precVta ?? 0);
+    const subUsd = Number(it.subtotalUsd ?? it.totalUsd ?? cant * precio);
+    return [
+      String(idx + 1),
+      String(it.codigo || it.coArt || it.articuloId || 'S/C'),
+      String(it.descripcion || it.articuloDescripcion || it.artDes || docData.motivo || 'Ajuste Fiscal').slice(0, 46),
+      String(cant),
+      formatUsd(precio),
+      it.tipoAlicuota || '16%',
+      formatUsd(subUsd),
+      formatBs(subUsd * tasa)
+    ];
+  });
+
+  const totNetoUsd = Number(docData.totalUsd ?? docData.totNeto ?? docData.totNetoUsd ?? items.reduce((s, it) => s + Number(it.subtotalUsd ?? it.totalUsd ?? (Number(it.cantidad || 1) * Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0))), 0));
+  const baseImpUsd = Number(docData.subtotalUsd ?? docData.totBruto ?? docData.baseGeneralUsd ?? (totNetoUsd / 1.16));
+  const ivaUsd = Number(docData.ivaUsd ?? docData.iva ?? (totNetoUsd - baseImpUsd));
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'CÓDIGO', 'CONCEPTO / ARTÍCULO AFECTADO', 'CANT.', 'P. UNIT ($)', 'ALÍC.', 'MONTO ($)', 'MONTO (BS.)']],
+    body: rows.length > 0 ? rows : [['1', docAfectado, String(docData.motivo || docData.descrip || `Ajuste financiero sobre documento #${docAfectado}`).slice(0, 46), '1', formatUsd(baseImpUsd), '16%', formatUsd(baseImpUsd), formatBs(baseImpUsd * tasa)]],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 20, fontStyle: 'bold' },
+      2: { cellWidth: 58 },
+      3: { halign: 'center', cellWidth: 12 },
+      4: { halign: 'right', cellWidth: 19 },
+      5: { halign: 'center', cellWidth: 12 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: isDebito ? COLORS.red : COLORS.emerald, cellWidth: 22 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 28.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'BASE IMPONIBLE AJUSTADA', value: formatUsd(baseImpUsd), subtext: formatBs(baseImpUsd * tasa), color: COLORS.navy },
+      { label: isDebito ? 'DÉBITO FISCAL IVA (16%)' : 'CRÉDITO FISCAL IVA (16%)', value: formatUsd(ivaUsd), subtext: formatBs(ivaUsd * tasa), color: COLORS.slate },
+      { label: `TOTAL ${isDebito ? 'NOTA DE DÉBITO' : 'NOTA DE CRÉDITO'}`, value: formatUsd(totNetoUsd), subtext: formatBs(totNetoUsd * tasa), color: isDebito ? COLORS.red : COLORS.emerald }
+    ],
+    ['EMITIDO POR (ADMINISTRACIÓN)', 'AUTORIZADO POR GERENCIA', 'RECIBIDO CONFORME (CLIENTE)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `${isDebito ? 'Nota_Debito' : 'Nota_Credito'}_${docNum}_SENIAT.pdf`, currentUser, {
+    legalFooter: `${docLabel} • Documento vinculado a Factura #${docAfectado} conforme a Providencia SENIAT SNAT/2011/00071.`
+  });
+  return base.doc;
+}
+
+// =========================================================================
+// 24. NOTA DE TRASLADO ENTRE ALMACENES / COMPROBANTE DE AJUSTE O MERMA
+// =========================================================================
+export function generateWarehouseTransferOrAdjustmentPDF({ record = {}, mode = 'TRANSFER', config = {}, currentUser = null }) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const isTransfer = String(mode).toUpperCase() === 'TRANSFER';
+  const docNum = String(record.trasNum || record.ajueNum || record.id || makeCorrelative(isTransfer ? 'TRAS' : 'AJU')).trim();
+  const renglones = Array.isArray(record.renglones) ? record.renglones : (Array.isArray(record.items) ? record.items : []);
+
+  const base = createBaseReport({
+    title: isTransfer ? `NOTA DE TRASLADO ENTRE ALMACENES N° ${docNum}` : `COMPROBANTE DE AJUSTE / MERMA DE INVENTARIO N° ${docNum}`,
+    subtitle: isTransfer
+      ? `Movimiento Físico Interno • Origen Alm. ${record.almOrig || '01'} -> Destino Alm. ${record.almDest || '02'}`
+      : 'Validación Auditada de Entradas, Salidas o Mermas Físicas de Stock',
+    moduleCode: isTransfer ? 'TRAS' : 'AJUS',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    isTransfer ? 'TRAZABILIDAD DEL TRASLADO LOGÍSTICO' : 'DETALLE Y JUSTIFICACIÓN DEL AJUSTE',
+    `Motivo registrado: ${record.motivo || 'Operación regular de almacén'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: isTransfer ? 'RUTA DE ALMACENES' : 'ALCANCE DEL AJUSTE',
+      lines: isTransfer
+        ? [
+            `Almacén Origen: ${record.almOrig || '01'} -> Almacén Destino: ${record.almDest || '02'}`,
+            `Estado Confirmación: ${record.confirma ? 'CONFIRMADO EN DESTINO' : 'EN TRÁNSITO / PENDIENTE'}`,
+            `Motivo: ${record.motivo || 'Reposición entre almacenes'}`
+          ]
+        : [
+            `Almacén Afectado: ${record.almacen || record.coAlma || '01 / General'}`,
+            `Tipo de Operación: ${record.tipoAjuste || 'AJUSTE DE INVENTARIO / MERMA'}`,
+            `Motivo: ${record.motivo || 'Ajuste auditado de existencias'}`
+          ]
+    },
+    {
+      title: 'REGISTRO DE CONTROL',
+      lines: [
+        `Documento N°: ${docNum}`,
+        `Fecha Operación: ${formatDateVe(record.fecha)}`,
+        `Operador / Usuario: ${record.coUsIn || currentUser?.nombre || 'Almacenista'}`,
+        `Total Renglones: ${renglones.length}`
+      ]
+    }
+  );
+
+  let totalUnidades = 0;
+  let totalCostoUsd = 0;
+  const rows = renglones.map((r, idx) => {
+    const qty = Number(r.total_art ?? r.cantidad ?? r.totalArt ?? 0);
+    const cost = Number(r.cost_unit_om ?? r.costoUsd ?? r.costUnit ?? 0);
+    const tipoStr = isTransfer ? 'TRASLADO' : (r.tipo_trans === 'E' || r.tipoTrans === 'E' ? 'ENTRADA (+)' : 'SALIDA / MERMA (-)');
+    totalUnidades += qty;
+    totalCostoUsd += qty * cost;
+    return [
+      String(idx + 1),
+      String(r.co_art || r.codigo || r.articuloId || 'S/C'),
+      String(r.art_des || r.descripcion || 'Artículo').slice(0, 48),
+      tipoStr,
+      String(qty),
+      formatUsd(cost),
+      formatUsd(qty * cost)
+    ];
+  });
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'CÓDIGO SKU', 'DESCRIPCIÓN DEL LUBRICANTE', 'TIPO MOV.', 'CANTIDAD', 'COSTO UNIT ($)', 'VALOR TOTAL ($)']],
+    body: rows.length > 0 ? rows : [['—', '—', 'Sin renglones asociados', '—', '0', '$ 0.00', '$ 0.00']],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 22, fontStyle: 'bold' },
+      2: { cellWidth: 64 },
+      3: { halign: 'center', cellWidth: 28, fontStyle: 'bold' },
+      4: { halign: 'center', cellWidth: 16, fontStyle: 'bold' },
+      5: { halign: 'right', cellWidth: 20 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 21.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'TOTAL ARTÍCULOS MOVILIZADOS', value: `${totalUnidades} Unds.`, subtext: `${renglones.length} SKUs distintos`, color: COLORS.navy },
+      { label: 'VALORIZACIÓN AL COSTO ($)', value: formatUsd(totalCostoUsd), subtext: formatBs(totalCostoUsd * tasa), color: COLORS.emerald }
+    ],
+    isTransfer
+      ? ['ALMACÉN ORIGEN (ENTREGA)', 'TRANSPORTE INTERNO', 'ALMACÉN DESTINO (RECIBE)']
+      : ['ALMACENISTA / SOLICITANTE', 'AUDITORÍA DE INVENTARIO', 'GERENCIA GENERAL'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `${isTransfer ? 'Traslado_Almacen' : 'Ajuste_Inventario'}_${docNum}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 25. REQUISICIÓN INTERNA DE COMPRA
+// =========================================================================
+export function generatePurchaseRequisitionPDF({ requisition = {}, config = {}, currentUser = null }) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const reqNum = String(requisition.numeroDoc || requisition.id || makeCorrelative('REQ')).trim();
+  const items = Array.isArray(requisition.items) ? requisition.items : [];
+
+  const base = createBaseReport({
+    title: `REQUISICIÓN INTERNA DE COMPRA N° ${reqNum}`,
+    subtitle: 'Solicitud Formal de Reposición de Stock o Insumos para Aprobación de Compras',
+    moduleCode: 'REQ',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'SOLICITUD DEPARTAMENTAL DE ABASTECIMIENTO',
+    `Prioridad: ${requisition.prioridad || 'NORMAL'} • Estado: ${requisition.status || 'PENDIENTE'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'ORIGEN DE LA SOLICITUD',
+      lines: [
+        `Departamento: ${requisition.departamento || 'ALMACÉN Y LOGÍSTICA'}`,
+        `Solicitado por: ${requisition.solicitante || currentUser?.nombre || 'Coordinador de Inventario'}`,
+        `Almacén Destino: ${requisition.almacen || '01 - Principal / 02 - Central'}`,
+        `Justificación: ${requisition.justificacion || 'Reposición por punto de reorden mínimo'}`
+      ]
+    },
+    {
+      title: 'CONTROL DE REQUISICIÓN',
+      lines: [
+        `Requisición N°: ${reqNum}`,
+        `Fecha Emisión: ${formatDateVe(requisition.fechaEmision || requisition.fecha)}`,
+        `Fecha Requerida: ${formatDateVe(requisition.fechaRequerida || requisition.fecha)}`,
+        `Prioridad: ${requisition.prioridad || 'NORMAL'} • Estado: ${requisition.status || 'PENDIENTE'}`
+      ]
+    }
+  );
+
+  let totEstUsd = 0;
+  let totUnits = 0;
+  const body = items.map((it, idx) => {
+    const qty = Number(it.cantidad || 1);
+    const cost = Number(it.costoEstimadoUsd ?? it.costoUsd ?? 0);
+    const lineUsd = qty * cost;
+    totUnits += qty;
+    totEstUsd += lineUsd;
+    return [
+      String(idx + 1),
+      String(it.codigo || it.articuloId || 'S/C'),
+      String(it.descripcion || 'Artículo / Insumo').slice(0, 48),
+      String(it.stockActual ?? '0'),
+      String(qty),
+      formatUsd(cost),
+      formatUsd(lineUsd)
+    ];
+  });
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'CÓDIGO', 'DESCRIPCIÓN DEL ARTÍCULO / INSUMO', 'STOCK ACT.', 'CANT. REQ.', 'COSTO EST. ($)', 'SUBTOTAL EST. ($)']],
+    body: body.length > 0 ? body : [['—', '—', 'Sin ítems en requisición', '0', '0', '$ 0.00', '$ 0.00']],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 22, fontStyle: 'bold' },
+      2: { cellWidth: 68 },
+      3: { halign: 'center', cellWidth: 18 },
+      4: { halign: 'center', cellWidth: 18, fontStyle: 'bold', textColor: COLORS.navy },
+      5: { halign: 'right', cellWidth: 21 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'TOTAL UNIDADES SOLICITADAS', value: `${totUnits} Unds.`, subtext: `${items.length} ítems`, color: COLORS.navy },
+      { label: 'PRESUPUESTO ESTIMADO ($)', value: formatUsd(totEstUsd), subtext: formatBs(totEstUsd * tasa), color: COLORS.emerald }
+    ],
+    ['SOLICITANTE DE ÁREA', 'JEFE DE ALMACÉN / LOGÍSTICA', 'APROBACIÓN COMPRAS / GERENCIA'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Requisicion_Compra_${reqNum}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 26. ORDEN DE COMPRA OFICIAL A PROVEEDOR (OC)
+// =========================================================================
+export function generatePurchaseOrderPDF({ order = {}, supplier = {}, config = {}, currentUser = null }) {
+  const tasa = Number(order.tasaDolar || config?.tasaDolar) || 827.73;
+  const ocNum = String(order.numeroDoc || order.ocNum || order.id || makeCorrelative('OC')).trim();
+  const items = Array.isArray(order.items) ? order.items : [];
+
+  const base = createBaseReport({
+    title: `ORDEN DE COMPRA A PROVEEDOR N° ${ocNum}`,
+    subtitle: 'Compromiso Oficial de Adquisición de Lubricantes e Insumos Corporativos',
+    moduleCode: 'OC',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'PROVEEDOR ADJUDICADO & CONDICIONES DE ENTREGA',
+    `Estado: ${order.status || 'EMITIDA'} • Almacén Receptor: ${order.almacenDestino || '01 - Principal'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'DATOS DEL PROVEEDOR',
+      lines: [
+        order.proveedorNombre || supplier?.provDes || supplier?.nombre || 'PROVEEDOR REGISTRADO',
+        `RIF: ${order.proveedorRif || supplier?.rif || 'J-00000000-0'}`,
+        `Dirección: ${supplier?.direccion || 'Venezuela'}`,
+        `Contacto / Teléfono: ${supplier?.telefonos || supplier?.telefono || 'N/A'}`
+      ]
+    },
+    {
+      title: 'ESPECIFICACIONES DE COMPRA',
+      lines: [
+        `Orden de Compra N°: ${ocNum}`,
+        `Fecha Emisión: ${formatDateVe(order.fechaEmision || order.fecha)} • Entrega Esp.: ${formatDateVe(order.fechaEntrega || order.fecha)}`,
+        `Condición de Pago: ${order.condicionPago || 'CRÉDITO 15 DÍAS'}`,
+        `Ref. Requisición: ${order.requisicionRef || 'Directa'}`
+      ]
+    }
+  );
+
+  const body = items.map((it, idx) => {
+    const qty = Number(it.cantidad || 1);
+    const cost = Number(it.costoUsd ?? it.costoUnitarioUsd ?? 0);
+    const subUsd = qty * cost;
+    return [
+      String(idx + 1),
+      String(it.codigo || it.articuloId || 'S/C'),
+      String(it.descripcion || 'Lubricante').slice(0, 44),
+      resolveProductUnit(it, 'Caja'),
+      String(qty),
+      formatUsd(cost),
+      formatUsd(subUsd),
+      formatBs(subUsd * tasa)
+    ];
+  });
+
+  const subUsd = Number(order.subtotalUsd ?? items.reduce((s, it) => s + (Number(it.cantidad || 1) * Number(it.costoUsd ?? it.costoUnitarioUsd ?? 0)), 0));
+  const ivaUsd = Number(order.ivaUsd ?? (order.aplicaIva === false ? 0 : subUsd * 0.16));
+  const totUsd = Number(order.totalUsd ?? (subUsd + ivaUsd));
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'CÓDIGO', 'DESCRIPCIÓN DEL ARTÍCULO', 'UNIDAD', 'CANT.', 'COSTO ($)', 'SUBTOTAL ($)', 'SUBTOTAL (BS.)']],
+    body: body.length > 0 ? body : [['—', '—', 'Sin renglones en orden de compra', '—', '0', '$ 0.00', '$ 0.00', 'Bs. 0,00']],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
+      2: { cellWidth: 56 },
+      3: { halign: 'center', cellWidth: 16 },
+      4: { halign: 'center', cellWidth: 12, fontStyle: 'bold' },
+      5: { halign: 'right', cellWidth: 20 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 22 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 27.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'SUBTOTAL NETO COMPRA', value: formatUsd(subUsd), subtext: formatBs(subUsd * tasa), color: COLORS.navy },
+      { label: 'IVA ESTIMADO (16%)', value: formatUsd(ivaUsd), subtext: formatBs(ivaUsd * tasa), color: COLORS.slate },
+      { label: 'TOTAL ORDEN DE COMPRA', value: formatUsd(totUsd), subtext: formatBs(totUsd * tasa), color: COLORS.emerald }
+    ],
+    ['DEPARTAMENTO DE COMPRAS', 'GERENCIA GENERAL / FINANZAS', 'ACEPTACIÓN DEL PROVEEDOR'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Orden_Compra_${ocNum}.pdf`, currentUser, {
+    legalFooter: 'ORDEN DE COMPRA OFICIAL • Indicar este número en su Factura y Nota de Entrega al despachar al almacén.'
+  });
+  return base.doc;
+}
+
+// =========================================================================
+// 27. NOTA DE RECEPCIÓN DE MERCANCÍA EN ALMACÉN
+// =========================================================================
+export function generateGoodsReceiptPDF({ receipt = {}, purchaseOrder = null, supplier = null, config = {}, currentUser = null }) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const recNum = String(receipt.numeroDoc || receipt.not_num || receipt.id || makeCorrelative('REC')).trim();
+  const items = Array.isArray(receipt.items) ? receipt.items : [];
+
+  const base = createBaseReport({
+    title: `NOTA DE RECEPCIÓN DE MERCANCÍA N° ${recNum}`,
+    subtitle: 'Acta de Verificación Física y Conformidad de Entrada a Almacén',
+    moduleCode: 'REC',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'INSPECCIÓN DE RECEPCIÓN DE PROVEEDOR',
+    `Almacén Receptor: ${receipt.almacen || '01 - Principal'} • Ref. Orden de Compra / Factura: ${receipt.nro_fact || receipt.nroFactura || purchaseOrder?.numeroDoc || 'N/A'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'PROVEEDOR QUE ENTREGA',
+      lines: [
+        receipt.prov_des || receipt.proveedorNombre || supplier?.provDes || 'PROVEEDOR REGISTRADO',
+        `RIF / Cód.: ${receipt.co_prov || receipt.proveedorRif || supplier?.rif || 'N/A'}`,
+        `Factura / Guía Remisión: ${receipt.nro_fact || receipt.nroFactura || 'S/N'}`,
+        `Observaciones: ${receipt.observaciones || 'Envases, sellos y precintos verificados físicamente'}`
+      ]
+    },
+    {
+      title: 'DATOS DE RECEPCIÓN',
+      lines: [
+        `Recepción N°: ${recNum}`,
+        `Fecha Ingreso: ${formatDateVe(receipt.fec_emis || receipt.fecha)}`,
+        `Almacén Destino: ${receipt.almacen || '01 - Almacén Principal'}`,
+        `Orden Compra Ref.: ${receipt.ordenCompraRef || purchaseOrder?.numeroDoc || 'Compra Directa'}`
+      ]
+    }
+  );
+
+  let totEsp = 0;
+  let totRec = 0;
+  let totDan = 0;
+  const body = items.map((it, idx) => {
+    const esp = Number(it.cantidadEsperada ?? it.cantidad ?? 0);
+    const rec = Number(it.cantidadRecibida ?? it.cantidad ?? 0);
+    const dan = Number(it.cantidadDanada ?? 0);
+    totEsp += esp;
+    totRec += rec;
+    totDan += dan;
+    const estado = dan > 0 ? 'CON NOVEDAD' : (rec < esp ? 'INCOMPLETO' : 'CONFORME');
+    return [
+      String(idx + 1),
+      String(it.codigo || it.articuloId || 'S/C'),
+      String(it.descripcion || 'Producto recibido').slice(0, 48),
+      String(esp),
+      String(rec),
+      String(dan),
+      estado
+    ];
+  });
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'CÓDIGO SKU', 'DESCRIPCIÓN DE LA MERCANCÍA', 'ESPERADO', 'RECIBIDO', 'DAÑADO/FALT.', 'CONFORMIDAD']],
+    body: body.length > 0 ? body : [['1', '—', `Recepción consolidada (${receipt.items_count || 1} bulto/s) - Doc. ${receipt.nro_fact || recNum}`, String(receipt.items_count || 1), String(receipt.items_count || 1), '0', 'CONFORME']],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 22, fontStyle: 'bold' },
+      2: { cellWidth: 68 },
+      3: { halign: 'center', cellWidth: 19 },
+      4: { halign: 'center', cellWidth: 19, fontStyle: 'bold', textColor: COLORS.emerald },
+      5: { halign: 'center', cellWidth: 20, fontStyle: 'bold', textColor: COLORS.red },
+      6: { halign: 'center', cellWidth: 23.9 }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 6) data.cell.text = '';
+    },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.column.index === 6) drawStatusBadge(base.doc, data.cell, data.cell.raw);
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'UNIDADES ESPERADAS', value: `${totEsp || receipt.items_count || 1}`, subtext: 'Según OC / Factura', color: COLORS.navy },
+      { label: 'UNIDADES RECIBIDAS CONFORME', value: `${totRec || receipt.items_count || 1}`, subtext: 'Ingresadas a Inventario', color: COLORS.emerald },
+      { label: 'UNIDADES CON NOVEDAD / DAÑO', value: `${totDan}`, subtext: totDan > 0 ? 'Requiere Reclamo / NC' : 'Sin novedades', color: totDan > 0 ? COLORS.red : COLORS.slate }
+    ],
+    ['ALMACENISTA RECEPTOR', 'CHOFER / TRANSPORTISTA PROVEEDOR', 'CONTROL DE CALIDAD / COMPRAS'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Nota_Recepcion_${recNum}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 28. ORDEN DE PAGO INDIVIDUAL CON RETENCIONES Y FIRMAS
+// =========================================================================
+export function generatePaymentOrderPDF({ paymentOrder = {}, config = {}, currentUser = null }) {
+  const tasa = Number(paymentOrder.tasa || config?.tasaDolar) || 827.73;
+  const ordNum = String(paymentOrder.ordNum || paymentOrder.id || makeCorrelative('OP')).trim();
+  const moneda = String(paymentOrder.moneda || 'BS').toUpperCase();
+  const montoRaw = Number(paymentOrder.monto || 0);
+  const retRaw = Number(paymentOrder.montoRet || 0);
+  const netoRaw = Math.max(0, montoRaw - retRaw);
+  const montoBs = moneda === 'USD' ? montoRaw * tasa : montoRaw;
+  const retBs = moneda === 'USD' ? retRaw * tasa : retRaw;
+  const netoBs = moneda === 'USD' ? netoRaw * tasa : netoRaw;
+  const netoUsd = tasa > 0 ? netoBs / tasa : 0;
+
+  const base = createBaseReport({
+    title: `ORDEN DE PAGO ADMINISTRATIVA N° ${ordNum}`,
+    subtitle: 'Autorización Oficial de Desembolso Bancario / Tesorería Corporativa',
+    moduleCode: 'OP',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'BENEFICIARIO Y SOPORTE DEL DESEMBOLSO',
+    `Estado: ${paymentOrder.anulada ? 'ANULADA' : 'EMITIDA / AUTORIZADA'} • Forma de Pago: ${paymentOrder.formaPag || 'TRANSFERENCIA'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'BENEFICIARIO DEL PAGO',
+      lines: [
+        paymentOrder.benDes || paymentOrder.benNombre || 'BENEFICIARIO GENERAL',
+        `Código / RIF: ${paymentOrder.codBen || paymentOrder.rif || 'N/A'}`,
+        `Concepto: ${paymentOrder.descrip || paymentOrder.motivo || 'Cancelación de obligación autorizada'}`,
+        `Factura / Soporte: ${paymentOrder.nroDocSoporte || paymentOrder.cheNum || 'Ver anexo'}`
+      ]
+    },
+    {
+      title: 'DATOS DE TESORERÍA',
+      lines: [
+        `Orden de Pago N°: ${ordNum}`,
+        `Fecha Emisión: ${formatDateVe(paymentOrder.fecha)}`,
+        `Cuenta / Caja Origen: ${paymentOrder.codCta || 'Cuenta Principal'} • Ref/Cheque: ${paymentOrder.cheNum || 'Transferencia'}`,
+        `Moneda Orig.: ${moneda} • Tasa BCV: Bs. ${tasa.toFixed(2)}`
+      ]
+    }
+  );
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CONCEPTO / DESCRIPCIÓN DEL GASTO O PAGO', 'MONTO BRUTO (BS.)', 'RETENCIÓN IVA/ISLR (BS.)', 'NETO A PAGAR (BS.)', 'EQUIV. ($ USD)']],
+    body: [[
+      String(paymentOrder.descrip || paymentOrder.motivo || 'Desembolso autorizado por gerencia'),
+      formatBs(montoBs),
+      formatBs(retBs),
+      formatBs(netoBs),
+      formatUsd(netoUsd)
+    ]],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.6, halign: 'center' },
+    styles: { fontSize: 6.0, cellPadding: 2.0, textColor: COLORS.dark, valign: 'middle' },
+    columnStyles: {
+      0: { cellWidth: 74 },
+      1: { halign: 'right', cellWidth: 26 },
+      2: { halign: 'right', textColor: COLORS.red, cellWidth: 27 },
+      3: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 28 },
+      4: { halign: 'right', fontStyle: 'bold', textColor: COLORS.emerald, cellWidth: 24.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'MONTO BRUTO APROBADO', value: formatBs(montoBs), subtext: `Retención: ${formatBs(retBs)}`, color: COLORS.navy },
+      { label: 'NETO A DESEMBOLSAR (BS.)', value: formatBs(netoBs), subtext: `Equivalente: ${formatUsd(netoUsd)}`, color: COLORS.emerald }
+    ],
+    ['ELABORADO (COMPRAS / ADMIN.)', 'AUTORIZADO (GERENCIA / FINANZAS)', 'RECIBIDO CONFORME (C.I. / FIRMA)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Orden_Pago_${ordNum}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 29. RECIBO OFICIAL DE COBRO / ABONO A CUENTAS POR COBRAR (CxC)
+// =========================================================================
+export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], config = {}, currentUser = null }) {
+  const tasa = Number(receipt.tasa || receipt.tasaBcv || config?.tasaDolar) || 827.73;
+  const cobNum = String(receipt.cobNum || receipt.reciboNum || receipt.id || makeCorrelative('REC-COB')).trim();
+  const totalUsd = Number(receipt.montoUsd ?? receipt.monto ?? 0);
+  const totalBs = Number(receipt.montoBs ?? (totalUsd * tasa));
+  const list = Array.isArray(allocations) && allocations.length > 0
+    ? allocations
+    : (Array.isArray(receipt.detalles) && receipt.detalles.length > 0
+      ? receipt.detalles
+      : [{ factNum: receipt.factNum || receipt.nroDoc || 'ABONO A CUENTA', tipoDoc: 'DOCUMENTO', saldoAnteriorUsd: totalUsd, abonoUsd: totalUsd, saldoRestanteUsd: Number(receipt.saldoRestanteUsd || 0) }]);
+
+  const base = createBaseReport({
+    title: `RECIBO OFICIAL DE COBRO N° ${cobNum}`,
+    subtitle: 'Comprobante de Pago / Abono Aplicado a Cuentas por Cobrar de Clientes',
+    moduleCode: 'COB',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'CONSTANCIA DE RECAUDACIÓN',
+    `Método / Cuenta: ${receipt.formaPago || receipt.metodo || 'Transferencia'} • Ref.: ${receipt.referencia || receipt.ref || 'N/A'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'RECIBIMOS DEL CLIENTE',
+      lines: [
+        receipt.clienteNombre || receipt.cliDes || 'CLIENTE GENERAL',
+        `RIF / C.I.: ${receipt.clienteRif || receipt.rif || 'N/A'}`,
+        `Observaciones: ${receipt.concepto || receipt.descrip || 'Abono aplicado a facturas vigentes en cartera'}`
+      ]
+    },
+    {
+      title: 'DETALLES DEL INSTRUMENTO DE PAGO',
+      lines: [
+        `Recibo N°: ${cobNum}`,
+        `Fecha de Cobro: ${formatDateVe(receipt.fecha || receipt.fechaCobro)}`,
+        `Cuenta / Caja Receptora: ${receipt.cuentaNombre || receipt.formaPago || 'Caja / Banco'}`,
+        `Referencia Bancaria: ${receipt.referencia || 'Directo'}`
+      ]
+    }
+  );
+
+  const body = list.map((d, idx) => {
+    const abUsd = Number(d.abonoUsd ?? d.montoUsd ?? totalUsd);
+    const antUsd = Number(d.saldoAnteriorUsd ?? abUsd);
+    const restUsd = Number(d.saldoRestanteUsd ?? Math.max(0, antUsd - abUsd));
+    return [
+      String(idx + 1),
+      String(d.factNum || d.numeroDoc || 'DOC'),
+      String(d.tipoDoc || 'FACTURA'),
+      formatUsd(antUsd),
+      formatUsd(abUsd),
+      formatBs(abUsd * tasa),
+      formatUsd(restUsd)
+    ];
+  });
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['#', 'N° DOCUMENTO', 'TIPO', 'SALDO ANTERIOR ($)', 'ABONO RECIBIDO ($)', 'EQUIV. ABONO (BS.)', 'SALDO RESTANTE ($)']],
+    body,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.7, cellPadding: 1.5, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 28, fontStyle: 'bold', textColor: COLORS.navy },
+      2: { halign: 'center', cellWidth: 24 },
+      3: { halign: 'right', cellWidth: 28 },
+      4: { halign: 'right', fontStyle: 'bold', textColor: COLORS.emerald, cellWidth: 29 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 34 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.red, cellWidth: 28.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'TOTAL RECIBIDO EN DIVISAS', value: formatUsd(totalUsd), subtext: `Tasa BCV: Bs. ${tasa.toFixed(2)}`, color: COLORS.emerald },
+      { label: 'TOTAL RECIBIDO EN BOLÍVARES', value: formatBs(totalBs), subtext: `Ref. ${receipt.referencia || cobNum}`, color: COLORS.navy }
+    ],
+    ['DEPARTAMENTO DE COBRANZAS / CAJA', 'RECIBIDO CONFORME (CLIENTE)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Recibo_Cobro_${cobNum}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 30. COMPROBANTE DE EGRESO / VALE DE CAJA CHICA
+// =========================================================================
+export function generateExpenseVoucherPDF({ movement = {}, config = {}, currentUser = null }) {
+  const tasa = Number(movement.tasa || config?.tasaDolar) || 827.73;
+  const valeNum = String(movement.id || movement.nroVale || makeCorrelative('VAL')).trim();
+  const isIngreso = String(movement.tipo || 'EGRESO').toUpperCase() === 'INGRESO';
+  const montoUsd = Number(movement.montoUsd || 0);
+  const montoBs = Number(movement.montoBs || montoUsd * tasa);
+
+  const base = createBaseReport({
+    title: `${isIngreso ? 'COMPROBANTE DE INGRESO / REPOSICIÓN' : 'COMPROBANTE DE EGRESO / VALE DE CAJA'} N° ${valeNum}`,
+    subtitle: 'Soporte Interno de Movimientos de Caja Chica, Viáticos y Bancos',
+    moduleCode: 'CAJ',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'SOPORTE DE TESORERÍA Y CAJA CHICA',
+    `Operación: ${isIngreso ? 'INGRESO / REPOSICIÓN DE FONDO' : 'EGRESO / PAGO DE CAJA'} • Método: ${movement.metodo || 'EFECTIVO'}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'BENEFICIARIO / CONCEPTO',
+      lines: [
+        `Beneficiario / Responsable: ${movement.beneficiario || movement.usuario || currentUser?.nombre || 'Operador Autorizado'}`,
+        `Concepto Detallado: ${movement.concepto || 'Gasto operativo / Reposición de caja'}`,
+        `Origen / Cuenta: ${movement.cuenta || movement.caja || movement.metodo || 'Caja Principal'}`
+      ]
+    },
+    {
+      title: 'CONTROL DE VALE',
+      lines: [
+        `Comprobante N°: ${valeNum}`,
+        `Fecha: ${formatDateVe(movement.fecha)}`,
+        `Registrado por: ${movement.usuario || currentUser?.nombre || 'Cajera / Admin.'}`,
+        `Referencia: ${movement.referencia || 'Caja Chica'}`
+      ]
+    }
+  );
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['TIPO', 'CONCEPTO / JUSTIFICACIÓN DEL MOVIMIENTO', 'MÉTODO / CAJA', 'MONTO ($ USD)', 'MONTO (BS.)']],
+    body: [[
+      isIngreso ? 'INGRESO' : 'EGRESO',
+      String(movement.concepto || 'Movimiento de caja'),
+      String(movement.metodo || 'EFECTIVO'),
+      formatUsd(montoUsd),
+      formatBs(montoBs)
+    ]],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.6, halign: 'center' },
+    styles: { fontSize: 6.0, cellPadding: 2.0, textColor: COLORS.dark, valign: 'middle' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 20, fontStyle: 'bold', textColor: isIngreso ? COLORS.emerald : COLORS.red },
+      1: { cellWidth: 82 },
+      2: { halign: 'center', cellWidth: 28 },
+      3: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 24 },
+      4: { halign: 'right', fontStyle: 'bold', cellWidth: 25.9 }
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: isIngreso ? 'TOTAL INGRESO ($)' : 'TOTAL DESEMBOLSADO ($)', value: formatUsd(montoUsd), subtext: `Tasa BCV: Bs. ${tasa.toFixed(2)}`, color: isIngreso ? COLORS.emerald : COLORS.red },
+      { label: 'EQUIVALENTE EN BOLÍVARES', value: formatBs(montoBs), subtext: `Comprobante ${valeNum}`, color: COLORS.navy }
+    ],
+    ['ELABORADO POR CAJA', 'AUTORIZADO POR GERENCIA', 'RECIBIDO CONFORME (C.I. / FIRMA)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Comprobante_Caja_${valeNum}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 31. ESTADO DE CUENTA INDIVIDUAL POR CLIENTE (CxC) O PROVEEDOR (CxP)
+// =========================================================================
+export function generateThirdPartyStatementPDF({ entity = {}, entityType = 'CLIENT', documents = [], config = {}, currentUser = null }) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const isClient = String(entityType).toUpperCase() !== 'SUPPLIER';
+  const name = entity.nombre || entity.provDes || entity.clienteNombre || entity.provNombre || (isClient ? 'Cliente' : 'Proveedor');
+  const rif = entity.rif || entity.clienteRif || entity.provRif || entity.coCli || entity.coProv || 'N/A';
+
+  let totalFacturadoUsd = 0;
+  let totalAbonadoUsd = 0;
+  let totalSaldoUsd = 0;
+  let totalVencidoUsd = 0;
+
+  const rows = (documents || []).map((d) => {
+    const tot = Number(d.totNetoUsd ?? d.totalUsd ?? d.montoUsd ?? d.saldoUsd ?? 0);
+    const saldo = Number(d.saldoUsd ?? 0);
+    const abonos = Number(d.abonosUsd ?? Math.max(0, tot - saldo));
+    const isVenc = Boolean(d.isVencida || d.isVencido || Number(d.diasMora || 0) > 0) && saldo > 0.01;
+    totalFacturadoUsd += tot;
+    totalAbonadoUsd += abonos;
+    totalSaldoUsd += saldo;
+    if (isVenc) totalVencidoUsd += saldo;
+
+    return [
+      String(d.factNum || d.nroDoc || d.numeroDoc || d.id || 'DOC'),
+      String(d.tipoDoc || 'FACTURA'),
+      formatDateVe(d.fechaEmision || d.fecEmis || d.fecha),
+      formatDateVe(d.fechaVencimiento || d.fecVenc),
+      formatUsd(tot),
+      formatUsd(abonos),
+      formatUsd(saldo),
+      saldo <= 0.01 ? 'PAGADO' : (isVenc ? 'VENCIDO' : 'VIGENTE')
+    ];
+  });
+
+  const base = createBaseReport({
+    title: `ESTADO DE CUENTA INDIVIDUAL DE ${isClient ? 'CLIENTE (CxC)' : 'PROVEEDOR (CxP)'}`,
+    subtitle: `Conciliación Cronológica de Documentos, Abonos y Saldo Pendiente • ${name}`,
+    moduleCode: isClient ? 'ECC' : 'ECP',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: isClient ? 'DATOS DEL CLIENTE' : 'DATOS DEL PROVEEDOR',
+      lines: [
+        name,
+        `RIF / C.I.: ${rif}`,
+        `Dirección: ${entity.direccion || 'Venezuela'}`,
+        `Teléfono: ${entity.telefono || entity.telefonos || 'N/A'}`
+      ]
+    },
+    {
+      title: 'RESUMEN DE POSICIÓN FINANCIERA',
+      lines: [
+        `Saldo Deudor Actual: ${formatUsd(totalSaldoUsd)} (${formatBs(totalSaldoUsd * tasa)})`,
+        `Saldo Vencido Exigible: ${formatUsd(totalVencidoUsd)}`,
+        `Documentos Evaluados: ${rows.length}`,
+        `Corte de Conciliación: ${formatDateVe(new Date())}`
+      ]
+    }
+  );
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['N° DOC.', 'TIPO', 'EMISIÓN', 'VENCIMIENTO', 'CARGO ($)', 'ABONOS ($)', 'SALDO ($)', 'ESTADO']],
+    body: rows.length > 0 ? rows : [['—', '—', '—', '—', '$ 0.00', '$ 0.00', '$ 0.00', 'SOLVENTE']],
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.8, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.5, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 24, fontStyle: 'bold', textColor: COLORS.navy },
+      1: { halign: 'center', cellWidth: 22 },
+      2: { halign: 'center', cellWidth: 20 },
+      3: { halign: 'center', cellWidth: 20 },
+      4: { halign: 'right', cellWidth: 23 },
+      5: { halign: 'right', textColor: COLORS.emerald, cellWidth: 23 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.red, cellWidth: 24 },
+      7: { halign: 'center', cellWidth: 23.9 }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 7) data.cell.text = '';
+    },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.column.index === 7) drawStatusBadge(base.doc, data.cell, data.cell.raw);
+    }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: 'TOTAL FACTURADO', value: formatUsd(totalFacturadoUsd), subtext: formatBs(totalFacturadoUsd * tasa), color: COLORS.navy },
+      { label: 'TOTAL ABONADO', value: formatUsd(totalAbonadoUsd), subtext: formatBs(totalAbonadoUsd * tasa), color: COLORS.emerald },
+      { label: 'SALDO NETO PENDIENTE', value: formatUsd(totalSaldoUsd), subtext: `Vencido: ${formatUsd(totalVencidoUsd)}`, color: totalSaldoUsd > 0 ? COLORS.red : COLORS.emerald }
+    ],
+    [isClient ? 'DEPARTAMENTO DE COBRANZAS' : 'CUENTAS POR PAGAR', 'CONFORMIDAD CLIENTE / PROVEEDOR'],
+    base.tableWidth,
+    base.startX
+  );
+
+  const safeEntitySlug = String(rif || name).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 24);
+  finalizeAndSave(base.doc, `Estado_Cuenta_${safeEntitySlug}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 32. COMPROBANTE INDIVIDUAL DE RETENCIÓN IVA / ISLR SENIAT (14 DÍGITOS)
+// =========================================================================
+export function generateSeniatRetentionVoucherPDF({
+  type = 'IVA',
+  record = {},
+  supplier = {},
+  config = {},
+  currentUser = null
+}) {
+  const isIslr = String(type).toUpperCase() === 'ISLR';
+  const tasa = Number(record.tasaCambio || record.tasaDolar || config?.tasaDolar) || 827.73;
+  const voucherNum = String(
+    record.nroComprobante ||
+    record.numeroComprobanteRetencionIva ||
+    record.comprobanteRetencionIva ||
+    record.numeroComprobanteRetencionIslr ||
+    `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}00000001`
+  ).trim();
+  const periodoFiscal = String(record.periodoFiscal || `${voucherNum.slice(0, 4)}-${voucherNum.slice(4, 6)}`).trim();
+  const fechaEmis = formatDateVe(record.fechaEmision || record.fecha || new Date());
+
+  const provNombre = record.proveedorNombre || record.proveedor || supplier?.provDes || supplier?.nombre || 'PROVEEDOR SUJETO RETENIDO';
+  const provRif = record.proveedorRif || record.rif || supplier?.rif || 'J-00000000-0';
+  const provDir = record.proveedorDireccion || supplier?.direccion || 'Venezuela';
+
+  const docFactura = String(record.nroFacturaAfectada || record.numeroFactura || record.factNum || 'S/N');
+  const docControl = String(record.nroControl || record.numeroControl || '00-000000');
+
+  const totalCompraBs = Number(record.montoTotalBs ?? ((Number(record.montoTotalFactura || record.totalUsd || 0)) * (record.moneda === 'BS' ? 1 : tasa)));
+  const baseImpBs = Number(record.baseImponibleBs ?? ((Number(record.baseImponible || record.subtotalUsd || 0)) * (record.moneda === 'BS' ? 1 : tasa)));
+  const ivaCausadoBs = isIslr ? 0 : Number(record.ivaBs ?? (baseImpBs * 0.16));
+  const pctRet = Number(isIslr ? (record.porcentajeRetencion || 2) : (record.porcentajeRetencionIva || 75));
+  const sustraendoBs = Number(record.sustraendo || 0);
+  const retenidoBs = isIslr
+    ? Number(record.montoRetenido ?? Math.max(0, (baseImpBs * pctRet) / 100 - sustraendoBs))
+    : Number(record.retencionIvaBs ?? ((ivaCausadoBs * pctRet) / 100));
+
+  const base = createBaseReport({
+    title: isIslr
+      ? `COMPROBANTE DE RETENCIÓN DE I.S.L.R. N° ${voucherNum}`
+      : `COMPROBANTE DE RETENCIÓN DE I.V.A. N° ${voucherNum}`,
+    subtitle: isIslr
+      ? 'Decreto N° 1.808 en Materia de Retenciones del Impuesto Sobre la Renta • SENIAT Venezuela'
+      : 'Providencia Administrativa SNAT/2015/0049 • Artículo 11 • Agente de Retención IVA',
+    moduleCode: isIslr ? 'RISLR' : 'RIVA',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'DATOS DEL AGENTE DE RETENCIÓN (EMPRESA)',
+      lines: [
+        config?.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.',
+        `RIF Agente: ${config?.rif || 'J-30401927-4'}`,
+        `Domicilio Fiscal: ${config?.direccion || 'Barquisimeto / Caracas, Venezuela'}`,
+        `N° Comprobante: ${voucherNum} • Período: ${periodoFiscal}`
+      ]
+    },
+    {
+      title: 'DATOS DEL SUJETO RETENIDO (PROVEEDOR)',
+      lines: [
+        provNombre,
+        `RIF / C.I. Proveedor: ${provRif}`,
+        `Dirección: ${provDir}`,
+        `Fecha Emisión Comprobante: ${fechaEmis}`
+      ]
+    }
+  );
+
+  const headCols = isIslr
+    ? [['FECHA DOC.', 'N° FACTURA', 'N° CONTROL', 'CONCEPTO ISLR', 'BASE IMP. (BS.)', '% RET.', 'SUSTRAENDO', 'ISLR RETENIDO (BS.)']]
+    : [['OP.', 'FECHA DOC.', 'N° FACTURA', 'N° CONTROL', 'COMPRA + IVA (BS.)', 'BASE IMP. (BS.)', 'IVA 16% (BS.)', '% RET.', 'IVA RETENIDO (BS.)']];
+
+  const bodyRow = isIslr
+    ? [[
+        fechaEmis,
+        docFactura,
+        docControl,
+        String(record.conceptoDescripcion || record.codigoConceptoIslr || 'Honorarios / Servicios').slice(0, 34),
+        formatBs(baseImpBs),
+        `${pctRet}%`,
+        formatBs(sustraendoBs),
+        formatBs(retenidoBs)
+      ]]
+    : [[
+        '1',
+        fechaEmis,
+        docFactura,
+        docControl,
+        formatBs(totalCompraBs || baseImpBs + ivaCausadoBs),
+        formatBs(baseImpBs),
+        formatBs(ivaCausadoBs),
+        `${pctRet}%`,
+        formatBs(retenidoBs)
+      ]];
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: headCols,
+    body: bodyRow,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.5, fontStyle: 'bold', cellPadding: 1.5, halign: 'center' },
+    styles: { fontSize: 5.6, cellPadding: 1.6, textColor: COLORS.dark, valign: 'middle', halign: 'right' },
+    columnStyles: isIslr
+      ? {
+          0: { halign: 'center', cellWidth: 18 },
+          1: { halign: 'center', cellWidth: 20, fontStyle: 'bold' },
+          2: { halign: 'center', cellWidth: 22 },
+          3: { halign: 'left', cellWidth: 42 },
+          4: { cellWidth: 23 },
+          5: { halign: 'center', cellWidth: 12 },
+          6: { cellWidth: 18 },
+          7: { fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 24.9 }
+        }
+      : {
+          0: { halign: 'center', cellWidth: 8 },
+          1: { halign: 'center', cellWidth: 18 },
+          2: { halign: 'center', cellWidth: 20, fontStyle: 'bold' },
+          3: { halign: 'center', cellWidth: 22 },
+          4: { cellWidth: 25 },
+          5: { cellWidth: 25 },
+          6: { cellWidth: 23 },
+          7: { halign: 'center', cellWidth: 12 },
+          8: { fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 26.9 }
+        }
+  });
+
+  placeTotalsAndSignatures(
+    base.doc,
+    base.doc.lastAutoTable?.finalY || y,
+    [
+      { label: isIslr ? 'BASE SUJETA A ISLR' : 'IVA CAUSADO EN FACTURA', value: formatBs(isIslr ? baseImpBs : ivaCausadoBs), subtext: `Tasa ref.: Bs. ${tasa.toFixed(2)}`, color: COLORS.navy },
+      { label: isIslr ? 'TOTAL ISLR RETENIDO' : 'TOTAL IVA RETENIDO AL PROVEEDOR', value: formatBs(retenidoBs), subtext: `Comprobante N° ${voucherNum}`, color: COLORS.emerald }
+    ],
+    ['FIRMA Y SELLO AGENTE DE RETENCIÓN', 'FIRMA Y SELLO SUJETO RETENIDO (PROVEEDOR)'],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Comprobante_Retencion_${isIslr ? 'ISLR' : 'IVA'}_${voucherNum}.pdf`, currentUser, {
+    legalFooter: isIslr
+      ? 'Comprobante de Retención ISLR emitido conforme al Art. 24 del Decreto 1.808 (SENIAT Venezuela).'
+      : 'Art. 11 Prov. SNAT/2015/0049: Este comprobante debe entregarse al proveedor dentro de los 2 días hábiles siguientes al período.'
+  });
+  return base.doc;
+}
+
+/**
+ * Genera el archivo TXT tabulado estándar para declaración masiva de Retenciones IVA en Portal SENIAT
+ */
+export function generateSeniatRetentionTxt({ purchases = [], config = {}, periodoFiscal = null }) {
+  const agentRif = String(config?.rif || 'J304019274').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const period = periodoFiscal || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  const rows = (purchases || [])
+    .filter(p => Number(p.retencionIvaBs || 0) > 0)
+    .map(p => {
+      const provRif = String(p.proveedorRif || p.rif || 'J000000000').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      const fec = String(p.fecha || new Date().toISOString()).slice(0, 10);
+      const tipoOp = 'C';
+      const tipoDoc = p.tipoDoc === 'NOTA_CREDITO' ? '03' : (p.tipoDoc === 'NOTA_DEBITO' ? '02' : '01');
+      const nroFact = String(p.numeroFactura || p.factNum || '0').trim();
+      const nroCtrl = String(p.numeroControl || '00-000000').trim();
+      const tasa = Number(p.tasaDolar || config?.tasaDolar || 1);
+      const totBs = Number(p.totalBs ?? ((Number(p.totalUsd || 0)) * tasa)).toFixed(2);
+      const baseBs = Number(p.baseGeneralBs ?? ((Number(p.subtotalUsd || 0)) * tasa)).toFixed(2);
+      const retBs = Number(p.retencionIvaBs || 0).toFixed(2);
+      const docAfec = String(p.documentoAfectado || '0').trim();
+      const comp = String(p.numeroComprobanteRetencionIva || `${period}00000001`).trim();
+      const exentoBs = Number(p.baseExentaBs || 0).toFixed(2);
+      const alicuota = '16.00';
+      const nroExp = '0';
+      return [agentRif, period, fec, tipoOp, tipoDoc, provRif, nroFact, nroCtrl, totBs, baseBs, retBs, docAfec, comp, exentoBs, alicuota, nroExp].join('\t');
+    });
+
+  const content = rows.join('\n');
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SENIAT_RETENCIONES_IVA_${period}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 300);
+  }
+  return content;
+}
+
 
 
 

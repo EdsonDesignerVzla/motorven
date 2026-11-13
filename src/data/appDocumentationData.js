@@ -17,13 +17,14 @@ export const SYSTEM_METADATA = {
     "Plan de Cuentas Oficial Pro Motorven C.A. integrado al 100%: catálogo jerárquico de 156 cuentas en 6 grupos (Activo, Pasivo, Patrimonio, Ingresos, Costos, Egresos) con 99 cuentas imputables.",
     "Motor Contable Automático de Partida Doble (accountingService.js): asientos balanceados en tiempo real (Debe === Haber) para Ventas, Cobranzas, Compras SENIAT, Pagos a Proveedores y Caja Chica.",
     "Ciclo Contable Completo en Auditoría & Contable: Libro Diario, Libro Mayor General Analítico con naturaleza deudora/acreedora, Balance de Comprobación de Sumas y Saldos y Estados Financieros Básicos BA VEN-NIF 2 (Estado de Resultados Integral y Balance General con ecuación patrimonial cuadrada).",
-    "Impresión Formal en PDF para Contabilidad: generadores dedicados tamaño Carta con firmas oficiales para Balance de Comprobación, Mayor General por cuenta y Estados Financieros BA VEN-NIF 2.",
-    "Cuentas por Cobrar (CxC) Unificado con Registro de Cobros Parte A: separación Facturas Fiscales (Almacén 01) vs. Notas de Entrega (Almacén 02), actualización simultánea de documento, recibo COB-XXXXXX, Banco/Caja receptora, saldo del cliente y asiento contable.",
+    "Impresión Formal en PDF para Contabilidad & CxC Consolidado: generadores dedicados tamaño Carta con firmas oficiales para Balance de Comprobación, Mayor General por cuenta, Estados Financieros BA VEN-NIF 2 y CxC Consolidado (FAC + NE).",
+    "Cuentas por Cobrar (CxC) Unificado con Vista Consolidada (FAC + NE) y Registro de Cobros Parte A: separación Facturas Fiscales (Almacén 01) vs. Notas de Entrega (Almacén 02), actualización simultánea de documento, recibo COB-XXXXXX, Banco/Caja receptora, saldo del cliente y asiento contable.",
     "Integración Compras ➔ Retenciones SENIAT ➔ Cuentas por Pagar (CxP): cálculo automático de IVA, Retención de IVA (comprobante 14 dígitos), Retención de ISLR y Neto a Pagar, con tramos de mora, Notas de Crédito y Parte A de pagos a proveedores.",
     "Mapeo Inteligente de Proveedores y Tesorería: clasificación contable automática para Keyton (2.02.02.002), Kontigo (2.02.02.003) y Proveedores Comerciales (2.02.02.001), así como Cajas (1.01.01.001/.002/.004) y 10 Cuentas Bancarias (1.01.02.001-.008).",
-    "Preventa Móvil y Flujo Comercial con Reserva ATP de 72 Horas: fórmula D = max(0, Stock Físico - Comprometido 72h - En Carrito), expiración automática de reservas vencidas y bloqueo estricto con stock 0 en Almacén 01 / Almacén 02.",
-    "Alta y Aprobación de Clientes con Validación SENIAT Módulo 11: flujo controlado PENDIENTE ➔ APROBADO/RECHAZADO en Preventa, Ventas POS y CxC.",
-    "Respaldo Automático y Despliegue Blindado: script de backup completo (npm run backup -> supabase/backups/) y despliegue automatizado verificado hacia signummotorven.com."
+    "Preventa Móvil y Flujo Comercial con Reserva ATP de 72 Horas: fórmula D = max(0, Stock Físico - Comprometido 72h - En Carrito), expiración automática de reservas vencidas, carrito optimizado de envío directo a Flujo Comercial, directorio 'Mis Clientes' con alertas ≤3 días por vencer y bloqueo estricto con stock 0 en Almacén 01 / Almacén 02.",
+    "Alta y Aprobación de Clientes con Validación SENIAT Módulo 11 y Prefijo J/V/E/G/P: flujo controlado PENDIENTE ➔ APROBADO/RECHAZADO en Preventa Móvil (SOLICITUD_CLIENTE), Ventas POS, Directorio y Flujo Comercial.",
+    "Batería Homologada de Reportes Oficiales en PDF sin solapamientos ni desbordes: paginación 1/N estandarizada en Inventario, Compras (REQ-OC-REC), Devoluciones, Traslados, Ajustes, OP, Libro de Ventas y Contabilidad.",
+    "Respaldo Automático y Despliegue Blindado: script de backup completo (npm run backup -> supabase/backups/), despliegue automatizado verificado hacia signummotorven.com y sincronización bidireccional Supabase PostgreSQL ↔ Profit Plus GRUMOTOR."
   ]
 };
 

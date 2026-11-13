@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { formatBs, formatUsd, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, generateCreditDebitNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -71,16 +71,17 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
   const isNc = sale.tipoDoc === 'NOTA_CREDITO';
   const isNd = sale.tipoDoc === 'NOTA_DEBITO';
+  const isCot = sale.tipoDoc === 'COTIZACION' || String(sale.numeroDoc || '').toUpperCase().startsWith('COT');
   const isNe =
     sale.tipoDoc === 'NOTA_ENTREGA' ||
     sale.tipo_doc === 'NOTA_ENTREGA' ||
     String(sale.numeroDoc || sale.nroFactura || sale.factNum || '').toUpperCase().startsWith('NE');
-  const isFacturaOrNotaEntrega = isNe || (!isNc && !isNd && sale.tipoDoc !== 'COTIZACION');
+  const isFacturaOrNotaEntrega = isNe || (!isNc && !isNd && !isCot);
   const invoiceTotalBs = Number(sale.totalBs) || (Number(sale.totalUsd || 0) * tasaBcv);
 
   const docTitle = isNc
     ? 'NOTA DE CRÉDITO'
-    : (isNd ? 'NOTA DE DÉBITO' : (isNe ? 'NOTA DE ENTREGA' : 'FACTURA FISCAL'));
+    : (isNd ? 'NOTA DE DÉBITO' : (isCot ? 'COTIZACIÓN COMERCIAL' : (isNe ? 'NOTA DE ENTREGA' : 'FACTURA FISCAL')));
 
   const handleCopyText = async () => {
     try {
@@ -112,6 +113,14 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     if (viewMode === 'CARTA') {
       if (isNe) {
         generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products, clients, client, autoPrint: true });
+        return;
+      }
+      if (isCot) {
+        generateQuotationPDF({ quotation: sale, config: safeConfig, currentUser });
+        return;
+      }
+      if (isNc || isNd) {
+        generateCreditDebitNotePDF({ docData: sale, config: safeConfig, currentUser });
         return;
       }
       generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, clients, client, autoPrint: true });
@@ -666,6 +675,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 onClick={() => {
                   if (isNe) {
                     generateDeliveryNotePDF({ sale, config: safeConfig, currentUser, products, clients, client });
+                  } else if (isCot) {
+                    generateQuotationPDF({ quotation: sale, config: safeConfig, currentUser });
+                  } else if (isNc || isNd) {
+                    generateCreditDebitNotePDF({ docData: sale, config: safeConfig, currentUser });
                   } else {
                     generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, clients, client });
                   }
@@ -681,9 +694,9 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                   alignItems: 'center',
                   gap: '4px'
                 }}
-                title={isNe ? "Descargar Nota de Entrega oficial tamaño Carta con desbordamiento y numeración" : "Descargar PDF oficial SENIAT con márgenes de 4.5 cm y correlativo de 6 dígitos"}
+                title={isNe ? "Descargar Nota de Entrega oficial tamaño Carta con desbordamiento y numeración" : "Descargar PDF oficial tamaño Carta"}
               >
-                <Download size={13} /> {isNe ? 'Nota de Entrega PDF' : 'PDF Carta'}
+                <Download size={13} /> {isNe ? 'Nota de Entrega PDF' : (isCot ? 'Cotización PDF' : (isNc ? 'Nota Crédito PDF' : (isNd ? 'Nota Débito PDF' : 'PDF Carta')))}
               </button>
             )}
             <button

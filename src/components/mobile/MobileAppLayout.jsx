@@ -30,16 +30,28 @@ import { formatBs } from '../../services/formatService';
 export default function MobileAppLayout({
   products = [],
   clients = [],
+  suppliers = [],
+  purchases = [],
+  cashMovements = [],
+  fiscalClosures = [],
   orders = [],
   sales = [],
   profitInvoices = [],
   profitCollections = [],
   profitBankAccounts = [],
+  profitCashDesks = [],
   profitAccountsPayable = [],
   profitSupplierPayments = [],
   profitPurchases = [],
+  profitSuppliers = [],
+  profitIslrConcepts = [],
+  profitBeneficiaries = [],
+  profitPaymentOrders = [],
+  profitIslrWithholdings = [],
+  profitReturns = [],
   profitSellers = [],
   profitZones = [],
+  usersList = [],
   config = {},
   currentUser,
   theme,
@@ -48,10 +60,18 @@ export default function MobileAppLayout({
   onSaveOrder,
   onProceedToPOS,
   onProcessSale,
+  onSaveConfig,
+  onSaveProduct,
   onSaveClient,
   onDeleteClient,
   onApproveClient,
   onRejectClient,
+  onRegisterPurchase,
+  onAddCashMovement,
+  onExecuteCierreZ,
+  onOpenOrdersSalesModal,
+  onUsersUpdated,
+  onUpdateCurrentUser,
   onSyncProfit,
   onLogout
 }) {
@@ -230,55 +250,101 @@ export default function MobileAppLayout({
             <SalesPOSView
               products={products}
               clients={clients}
+              orders={orders}
               sales={sales}
               profitInvoices={profitInvoices}
               profitSellers={profitSellers}
               profitZones={profitZones}
+              profitReturns={profitReturns}
+              profitCollections={profitCollections}
               config={config}
               currentUser={currentUser}
               onSaveClient={onSaveClient}
               onDeleteClient={onDeleteClient}
               onApproveClient={onApproveClient}
               onRejectClient={onRejectClient}
-              onProcessSale={onProcessSale}
               onSyncProfit={onSyncProfit}
+              onProcessSale={onProcessSale}
+              onOpenOrdersSalesModal={onOpenOrdersSalesModal}
+              currentUser={currentUser}
             />
           )}
 
-          {mobileTab === 'flujo_caja' && (
+          {(mobileTab === 'flujo_caja' || mobileTab === 'cxp') && (
             <CashflowView
-              bankAccounts={profitBankAccounts}
-              config={config}
-              currentUser={currentUser}
+              key={mobileTab}
+              products={products}
+              cashMovements={cashMovements}
               clients={clients}
+              suppliers={suppliers}
+              sales={sales}
+              profitBankAccounts={profitBankAccounts}
+              profitCashDesks={profitCashDesks}
+              profitAccountsPayable={profitAccountsPayable}
+              profitCollections={profitCollections}
+              profitInvoices={profitInvoices}
+              profitSellers={profitSellers}
+              onSyncProfit={onSyncProfit}
+              config={config}
+              onAddCashMovement={onAddCashMovement}
               onSaveClient={onSaveClient}
               onDeleteClient={onDeleteClient}
               onApproveClient={onApproveClient}
               onRejectClient={onRejectClient}
+              currentUser={currentUser}
+              initialTab={mobileTab === 'cxp' ? 'CXP' : 'SPLIT'}
             />
           )}
 
           {mobileTab === 'compras' && (
             <PurchasesView
-              purchases={profitPurchases}
+              products={products}
+              suppliers={suppliers}
+              purchases={purchases}
               config={config}
+              onSaveProduct={onSaveProduct}
+              onRegisterPurchase={onRegisterPurchase}
               currentUser={currentUser}
+              profitSuppliers={profitSuppliers}
+              profitPurchases={profitPurchases}
+              profitAccountsPayable={profitAccountsPayable}
+              profitSupplierPayments={profitSupplierPayments}
+              profitIslrConcepts={profitIslrConcepts}
+              profitBeneficiaries={profitBeneficiaries}
+              profitPaymentOrders={profitPaymentOrders}
+              profitIslrWithholdings={profitIslrWithholdings}
+              profitInvoices={profitInvoices}
+              sales={sales}
+              onSyncProfit={onSyncProfit}
             />
           )}
 
           {mobileTab === 'seniat' && (
             <TaxReportsView
               sales={sales}
+              purchases={purchases}
+              suppliers={suppliers}
+              fiscalClosures={fiscalClosures}
+              onExecuteCierreZ={onExecuteCierreZ}
               profitInvoices={profitInvoices}
-              purchases={profitPurchases}
+              profitIslrConcepts={profitIslrConcepts}
+              profitBeneficiaries={profitBeneficiaries}
+              profitPaymentOrders={profitPaymentOrders}
+              profitIslrWithholdings={profitIslrWithholdings}
+              profitAccountsPayable={profitAccountsPayable}
+              profitPurchases={profitPurchases}
               config={config}
               currentUser={currentUser}
+              onSyncProfit={onSyncProfit}
             />
           )}
 
           {mobileTab === 'usuarios' && (
             <UsersManagementView
               currentUser={currentUser}
+              usersList={usersList}
+              onUsersUpdated={onUsersUpdated}
+              onUpdateCurrentUser={onUpdateCurrentUser}
               config={config}
             />
           )}
@@ -371,7 +437,12 @@ export default function MobileAppLayout({
       {/* Modal de Configuración si se abre desde el menú */}
       {showConfigModal && (
         <AppConfigModal
+          isOpen={showConfigModal}
           config={config}
+          onSaveConfig={onSaveConfig}
+          currentUser={currentUser}
+          products={products}
+          clients={clients}
           onClose={() => setShowConfigModal(false)}
         />
       )}

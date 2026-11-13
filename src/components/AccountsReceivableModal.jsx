@@ -18,7 +18,7 @@ import {
     isCxcEntryDeleted,
     sanitizeCxcDeletedDocsStorage
 } from '../services/supabaseService';
-import { generateAccountsReceivablePDF, generateDeliveryNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
+import { generateAccountsReceivablePDF, generateDeliveryNotePDF, generateCollectionReceiptPDF, generateThirdPartyStatementPDF, generateCreditDebitNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import { CxcConsolidatedModal } from './CxcConsolidatedModal';
 import ClientRegistrationModal from './ClientRegistrationModal';
@@ -235,7 +235,7 @@ export function AccountsReceivableModal({
         // Fallback silencioso
     }
 
-    // Selector superior entre Facturas Fiscales y Notas de Entrega
+    // Selector superior entre Facturas Fiscales, Notas de Entrega y Consolidado
     const [activeDocType, setActiveDocType] = useState('FACTURA'); // 'FACTURA' | 'NOTA_ENTREGA'
 
     // Modal consolidado: Facturas Fiscales + Notas de Entrega sumadas
@@ -1251,7 +1251,29 @@ export function AccountsReceivableModal({
                 : `Cobro registrado en #${factKey}: Abono ${formatUsd(effectiveAbonoUsd)} (${formatBs(effectiveAbonoBs)}) → Nuevo Total Abonos: ${formatUsd(nuevoAbonosUsd)} | Restante: ${formatUsd(nuevoRestanteUsd)}`;
             setCobroFeedback({
                 type: 'success',
-                message: successMsg
+                message: successMsg,
+                receipt: {
+                  cobNum: `REC-${Date.now().toString().slice(-6)}`,
+                  fecha: cobroFecha,
+                  cliDes: selectedCobroDoc.cliente,
+                  coCli: selectedCobroDoc.clienteId,
+                  rif: selectedCobroDoc.rif || '',
+                  tasa: tasaNum,
+                  montoUsd: effectiveAbonoUsd,
+                  montoBs: effectiveAbonoBs,
+                  formaPago: cuentaObj.accountType === 'CAJA' ? 'EFECTIVO' : 'TRANSFERENCIA',
+                  referencia: cobroReferencia.trim(),
+                  cuentaDestino: cuentaObj.nombre,
+                  descrip: `Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${factKey}`
+                },
+                allocations: [
+                  {
+                    tipoDoc: selectedCobroDoc.tipoDoc || 'FACT',
+                    numDoc: factKey,
+                    montoCobrado: effectiveAbonoBs,
+                    montoCobradoUsd: effectiveAbonoUsd
+                  }
+                ]
             });
             notify.success(successMsg);
 
@@ -1860,7 +1882,6 @@ export function AccountsReceivableModal({
                                 {docTypeCounts.notasEntrega}
                             </span>
                         </button>
-
                         <button
                             type="button"
                             onClick={() => setIsConsolidatedOpen(true)}
@@ -2008,6 +2029,31 @@ export function AccountsReceivableModal({
                     >
                         <Printer size={16} color="#ffffff" />
                         <span>Imprimir PDF</span>
+                    </button>
+
+                    {/* Estado de Cuenta Cliente PDF */}
+                    <button
+                        type="button"
+                        onClick={() => generateThirdPartyStatementPDF({
+                            entity: {
+                                nombre: selectedClient === 'ALL' ? 'Clientes Filtrados (Estado de Cuenta General)' : (filteredInvoices[0]?.cliente || selectedClient),
+                                rif: selectedClient !== 'ALL' ? (filteredInvoices[0]?.rif || '') : ''
+                            },
+                            entityType: 'CLIENT',
+                            documents: filteredInvoices.map(inv => ({
+                                ...inv,
+                                numeroDoc: inv.factNum,
+                                totalUsd: inv.montoFacturaUsd
+                            })),
+                            config,
+                            currentUser
+                        })}
+                        className="btn btn-secondary"
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.55rem 0.9rem', fontSize: '0.82rem' }}
+                        title="Descargar Estado de Cuenta de Cliente(s) en formato Carta PDF"
+                    >
+                        <FileText size={15} />
+                        <span className="hide-on-mobile">Estado de Cuenta</span>
                     </button>
 
                     {/* Exportar Excel / CSV */}
@@ -2478,13 +2524,31 @@ export function AccountsReceivableModal({
                                 {cobroFeedback.type === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
                                 <span>{cobroFeedback.message}</span>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => setCobroFeedback(null)}
-                                style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
-                            >
-                                <X size={14} />
-                            </button>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                {cobroFeedback.receipt && (
+                                    <button
+                                        type="button"
+                                        onClick={() => generateCollectionReceiptPDF({
+                                            receipt: cobroFeedback.receipt,
+                                            allocations: cobroFeedback.allocations || [],
+                                            config,
+                                            currentUser
+                                        })}
+                                        className="btn btn-sm btn-print-report"
+                                        style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                        title="Descargar Recibo Oficial de Cobro en PDF"
+                                    >
+                                        <Printer size={12} color="#ffffff" /> Recibo PDF
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => setCobroFeedback(null)}
+                                    style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                                >
+                                    <X size={14} />
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -3104,6 +3168,41 @@ export function AccountsReceivableModal({
                                                         >
                                                             <Eye size={14} />
                                                         </button>
+
+                                                        {(inv.tipoDoc === 'NOTA_CREDITO' || inv.tipoDoc === 'NOTA_DEBITO') && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => generateCreditDebitNotePDF({
+                                                                    docData: {
+                                                                        tipoDoc: inv.tipoDoc,
+                                                                        numeroDoc: inv.factNum,
+                                                                        documentoAfectado: inv.documentoAfectado || inv.nroDocOrigen || 'N/A',
+                                                                        fecha: inv.fechaEmision || inv.fecEmis,
+                                                                        clienteNombre: inv.cliente,
+                                                                        clienteRif: inv.rif || 'N/A',
+                                                                        tasaDolar: tasaBcv,
+                                                                        subtotalUsd: inv.montoFacturaUsd,
+                                                                        ivaUsd: 0,
+                                                                        totalUsd: inv.montoFacturaUsd,
+                                                                        observaciones: inv.observaciones || inv.comentarios || 'Nota fiscal registrada en CxC',
+                                                                        items: inv.items || []
+                                                                    },
+                                                                    config
+                                                                })}
+                                                                className="btn"
+                                                                style={{
+                                                                    padding: '0.35rem 0.55rem',
+                                                                    borderRadius: '7px',
+                                                                    background: 'rgba(168, 85, 247, 0.16)',
+                                                                    color: '#c084fc',
+                                                                    border: '1px solid rgba(168, 85, 247, 0.4)',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                                title={`Imprimir PDF ${inv.tipoDoc === 'NOTA_CREDITO' ? 'Nota de Crédito' : 'Nota de Débito'} (Carta)`}
+                                                            >
+                                                                <Printer size={14} />
+                                                            </button>
+                                                        )}
 
                                                         {inv.tipoDoc === 'NOTA_ENTREGA' && (
                                                             <button

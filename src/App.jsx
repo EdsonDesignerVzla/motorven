@@ -29,6 +29,7 @@ import NotificationsCenterModal from './components/NotificationsCenterModal';
 import ModuleErrorBoundary from './components/ModuleErrorBoundary';
 import signumLogoImg from './assets/logo_signum_transpatente.png';
 import { useNotification } from './context/NotificationContext';
+import { evaluateClientCreditPortfolioSummary } from './services/creditPolicyService';
 import {
   INITIAL_CONFIG,
   INITIAL_PRODUCTS,
@@ -135,6 +136,20 @@ import {
   deleteSupabaseOrder,
   deleteSupabaseSale,
   checkAndExpireOverdueOrders,
+  getSupabasePurchaseRequisitions,
+  saveSupabasePurchaseRequisition,
+  getSupabasePurchaseOrders,
+  saveSupabasePurchaseOrder,
+  getSupabaseGoodsReceiptNotesMerged,
+  saveSupabaseGoodsReceiptNote,
+  getSupabaseProfitPaymentOrdersMerged,
+  saveSupabaseProfitPaymentOrder,
+  saveSupabaseProfitWarehouseTransfer,
+  saveSupabaseProfitInventoryAdjustment,
+  saveSupabaseProfitCustomerReturn,
+  getSupabaseProfitReturnsMerged,
+  getSupabaseProfitInventoryAdjustmentsMerged,
+  getSupabaseProfitWarehouseTransfersMerged,
   saveSupabaseNotification,
   logUserActivity
 } from './services/supabaseService';
@@ -163,7 +178,7 @@ import {
   subscribeToRealtimeChanges,
   triggerProfitSync
 } from './services/profitService';
-import { subscribeToRealtimeSync, broadcastReconcileChange } from './services/realtimeSyncBridge';
+import { subscribeToRealtimeSync, broadcastReconcileChange, getRealtimeClientId } from './services/realtimeSyncBridge';
 import { getCanonicalDocKey } from './services/fiscalService';
 
 
@@ -349,6 +364,9 @@ function MainApp() {
   const [suppliers, setSuppliersState] = useState(() => []);
   const [sales, setSalesState] = useState(() => []);
   const [purchases, setPurchasesState] = useState(() => []);
+  const [purchaseRequisitions, setPurchaseRequisitions] = useState(() => []);
+  const [purchaseOrders, setPurchaseOrders] = useState(() => []);
+  const [goodsReceiptNotes, setGoodsReceiptNotes] = useState(() => []);
   const [cashMovements, setCashMovementsState] = useState(() => []);
   const [fiscalClosures, setFiscalClosures] = useState(() => []);
   const [usersList, setUsersList] = useState(() => getUsersList());
@@ -429,7 +447,8 @@ function MainApp() {
           cfg, prods, clis, ords, bnks, cdesks, cobs, facs, sups, sls, cash, purs, closures, usrs,
           pSups, pPurs, pCxp, pPays, pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers,
           pIslr, pBen, pOrders, pWithholdings, pAuditTrails,
-          pWarehouses, pLines, pCategories, pSublines, pCurrs
+          pWarehouses, pLines, pCategories, pSublines, pCurrs,
+          pReqs, pPOs, pRecs
         ] = await Promise.all([
           getSupabaseConfig(),
           getSupabaseProducts(),
@@ -452,19 +471,22 @@ function MainApp() {
           getSupabaseProfitSellers(),
           getSupabaseProfitZones(),
           getSupabaseProfitTransports(),
-          getSupabaseProfitReturns(),
-          getSupabaseProfitInventoryAdjustments(),
-          getSupabaseProfitWarehouseTransfers(),
+          getSupabaseProfitReturnsMerged(),
+          getSupabaseProfitInventoryAdjustmentsMerged(),
+          getSupabaseProfitWarehouseTransfersMerged(),
           getSupabaseProfitIslrConcepts(),
           getSupabaseProfitBeneficiaries(),
-          getSupabaseProfitPaymentOrders(),
+          getSupabaseProfitPaymentOrdersMerged(),
           getSupabaseProfitIslrWithholdings(),
           getSupabaseProfitAuditTrails(),
           getSupabaseProfitWarehouses(),
           getSupabaseProfitProductLines(),
           getSupabaseProfitProductCategories(),
           getSupabaseProfitProductSublines(),
-          getSupabaseProfitCurrencies()
+          getSupabaseProfitCurrencies(),
+          getSupabasePurchaseRequisitions(),
+          getSupabasePurchaseOrders(),
+          getSupabaseGoodsReceiptNotesMerged()
         ]);
         
         if (isMounted) {
@@ -506,6 +528,9 @@ function MainApp() {
           setSuppliersState(sups || []);
           setSalesState(sls || []);
           setPurchasesState(purs || []);
+          setPurchaseRequisitions(pReqs || []);
+          setPurchaseOrders(pPOs || []);
+          setGoodsReceiptNotes(pRecs || []);
           setCashMovementsState(cash || []);
           setFiscalClosures(closures || []);
           if (usrs && usrs.length > 0) {
@@ -590,15 +615,18 @@ function MainApp() {
 
   // Suscripción en Tiempo Real: Reconciliaciones desde el Comparador (Modal o Nueva Pestaña)
   useEffect(() => {
-    const unsubscribe = subscribeToRealtimeSync(({ tableId, action, key, item, allTableData }) => {
+    const unsubscribe = subscribeToRealtimeSync(({ tableId, action, key, item, allTableData, clientId }) => {
+      const isSelfEvent = clientId === getRealtimeClientId();
       console.log(`[App Realtime Sync] Recibida reconciliación en tabla '${tableId}' (Acción: ${action}, Clave: ${key})`);
 
       if (tableId === 'products') {
         if ((action === 'SYNC_CATALOG_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
           setProductsState(allTableData);
-          try {
-            localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(allTableData));
-          } catch (_) {}
+          if (!isSelfEvent) {
+            try {
+              localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(allTableData));
+            } catch (_) {}
+          }
 
           return;
         }
@@ -606,7 +634,9 @@ function MainApp() {
         if (action === 'DELETE') {
           setProductsState(prev => {
             const next = prev.filter(p => p.codigo !== key && p.id !== key);
-            try { localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next)); } catch (_) {}
+            if (!isSelfEvent) {
+              try { localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next)); } catch (_) {}
+            }
             return next;
           });
 
@@ -623,9 +653,11 @@ function MainApp() {
             } else {
               next = [...prev, item];
             }
-            try {
-              localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next));
-            } catch (_) {}
+            if (!isSelfEvent) {
+              try {
+                localStorage.setItem('sm_products_v4_fiscal', JSON.stringify(next));
+              } catch (_) {}
+            }
             return next;
           });
 
@@ -639,7 +671,9 @@ function MainApp() {
         if (action === 'DELETE') {
           setClientsState(prev => {
             const next = prev.filter(c => c.rif !== key && c.codigo !== key && c.id !== key);
-            try { localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next)); } catch (_) {}
+            if (!isSelfEvent) {
+              try { localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next)); } catch (_) {}
+            }
             return next;
           });
 
@@ -656,9 +690,11 @@ function MainApp() {
             } else {
               next = [...prev, item];
             }
-            try {
-              localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next));
-            } catch (_) {}
+            if (!isSelfEvent) {
+              try {
+                localStorage.setItem('sm_clients_v4_fiscal', JSON.stringify(next));
+              } catch (_) {}
+            }
             return next;
           });
 
@@ -965,11 +1001,14 @@ function MainApp() {
           return;
         }
         if (item) {
-          if (action === 'CREATE') {
+          if (!isSelfEvent && action === 'CREATE' && item.status !== 'FACTURADO') {
             soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
             if (notify?.info) {
+              const isClientReq = String(item.tipoDoc || item.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
               notify.info(
-                `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${Number(item.totalUsd || 0).toFixed(2)})`,
+                isClientReq
+                  ? `🆕 ¡Nueva solicitud de cliente en Flujo Comercial! ${item.clienteNombre || 'Cliente'} (${item.clienteRif || ''}) - Vendedor: ${item.vendedorNombre || item.vendedorId || ''}`
+                  : `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${Number(item.totalUsd || 0).toFixed(2)})`,
                 { duration: 6000 }
               );
             }
@@ -1067,11 +1106,11 @@ function MainApp() {
         }
       } else if (tableId === 'fiscal_closures') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
-          setFiscalClosuresState(allTableData);
+          setFiscalClosures(allTableData);
           return;
         }
         if (item) {
-          setFiscalClosuresState(prev => {
+          setFiscalClosures(prev => {
             const index = prev.findIndex(c => String(c.id) === String(key || item.id));
             if (index >= 0) {
               const next = [...prev];
@@ -1228,7 +1267,7 @@ function MainApp() {
       } else if (tableId === 'transports' && Array.isArray(allTableData)) {
         setProfitTransports(allTableData);
       } else if (tableId === 'customer_returns' && Array.isArray(allTableData)) {
-        setProfitCustomerReturns(allTableData);
+        setProfitReturns(allTableData);
       }
     });
 
@@ -1268,6 +1307,75 @@ function MainApp() {
     };
   }, [config, notify]);
 
+  // Alerta automática diaria cuando falten <= 3 días para el vencimiento de crédito de clientes
+  useEffect(() => {
+    if (!currentUser || !Array.isArray(clients) || clients.length === 0) return;
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const guardKey = `sm_credit_3d_sweep_${todayKey}_${currentUser.id || currentUser.username || 'usr'}`;
+    try {
+      if (sessionStorage.getItem(guardKey)) return;
+    } catch (_) {}
+
+    const timer = setTimeout(async () => {
+      try {
+        const tasa = Number(config?.tasaDolar) || 827.73;
+        const expiringClients = [];
+        for (const cl of clients) {
+          if (!cl || cl.inactivo) continue;
+          const summary = evaluateClientCreditPortfolioSummary({
+            client: cl,
+            profitInvoices,
+            sales,
+            tasaBcv: tasa
+          });
+          if (summary.alerta3Dias) {
+            expiringClients.push({ client: cl, summary });
+          }
+        }
+
+        if (expiringClients.length > 0) {
+          try { sessionStorage.setItem(guardKey, '1'); } catch (_) {}
+          if (notify?.warning) {
+            const topNames = expiringClients
+              .slice(0, 3)
+              .map(({ client, summary }) => `${client.nombre || client.razonSocial} (${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin}d`})`)
+              .join(', ');
+            notify.warning(
+              `⏳ Crédito por vencer (≤ 3 días): ${expiringClients.length} cliente(s) próximo(s) a vencimiento: ${topNames}${expiringClients.length > 3 ? '...' : ''}.`,
+              { duration: 7500 }
+            );
+          }
+          // Registrar en Centro de Notificaciones (idempotente por cliente y fecha)
+          for (const { client, summary } of expiringClients.slice(0, 15)) {
+            const safeClientKey = String(client.id || client.codigo || client.rif || 'cli').replace(/[^a-zA-Z0-9_-]/g, '');
+            await saveSupabaseNotification({
+              id: `notif_cred3d_${todayKey}_${safeClientKey}`,
+              tipo: 'cxc',
+              severidad: summary.diasRestantesMin === 0 ? 'critica' : 'advertencia',
+              modulo: 'cxc',
+              titulo: `Crédito por vencer (${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin} día(s)`}): ${client.nombre || client.rif}`,
+              mensaje: `Al cliente ${client.nombre || ''} (${client.rif || ''}) le falta(n) ${summary.diasRestantesMin} día(s) para finalizar su crédito (${summary.docProximoVencer || 'Documento abierto'}, saldo $${Number(summary.evalPolicy?.saldoDeudorUsd || 0).toFixed(2)}).`,
+              destinatario_rol: 'VENTAS',
+              destinatario_usuario: client.vendedorAsignado || 'ALL',
+              origen: 'MONITOR_CREDITO',
+              metadata: {
+                clienteId: client.id || client.codigo,
+                clienteNombre: client.nombre,
+                diasRestantes: summary.diasRestantesMin,
+                documento: summary.docProximoVencer,
+                vendedorAsignado: client.vendedorAsignado || ''
+              }
+            }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('[Credit 3D Alert] Error verificando créditos por vencer:', err);
+      }
+    }, 3500);
+
+    return () => clearTimeout(timer);
+  }, [currentUser, clients, profitInvoices, sales, config?.tasaDolar, notify]);
+
   // Sincronizar currentUser de forma atómica con usersList y localStorage
   const handleUpdateCurrentUser = (updatedUser) => {
     if (!updatedUser) return;
@@ -1292,6 +1400,28 @@ function MainApp() {
       } catch (_) {}
       return sorted;
     });
+  };
+
+  const handleUsersUpdated = async (savedUser) => {
+    const freshUsers = await getSupabaseUsers();
+    setUsersList(freshUsers);
+    try {
+      localStorage.setItem('signum_users_list', JSON.stringify(freshUsers));
+    } catch (_) {}
+
+    if (savedUser && currentUser && (savedUser.id === currentUser.id || savedUser.username?.toLowerCase() === currentUser.username?.toLowerCase())) {
+      handleUpdateCurrentUser(savedUser);
+    } else if (currentUser) {
+      const matching = freshUsers.find(u => u.id === currentUser.id || u.username?.toLowerCase() === currentUser.username?.toLowerCase());
+      if (matching) {
+        handleUpdateCurrentUser(matching);
+      }
+    }
+
+    try {
+      const freshSellers = await getSupabaseProfitSellers();
+      if (freshSellers && freshSellers.length > 0) setProfitSellers(freshSellers);
+    } catch (_) {}
   };
 
   // Sincronizar currentUser cuando usersList se actualiza desde servidor o almacenamiento
@@ -1976,27 +2106,24 @@ function MainApp() {
   const handleProcessSale = async (saleData) => {
     try {
       const newSale = await processSupabaseSale(saleData);
-      
-      // Refrescar estados dependientes desde la base de datos
-      const [prods, cash, clis, sls, facs] = await Promise.all([
-        getSupabaseProducts(),
-        getSupabaseCashMovements(),
-        getSupabaseClients(),
-        getSupabaseSales(),
-        getSupabaseProfitInvoices()
-      ]);
-      
-      setProductsState(prods);
-      setCashMovementsState(cash);
-      setClientsState(clis);
-      setSalesState(sls);
-      if (Array.isArray(facs) && facs.length > 0) {
-        setProfitInvoices(facs);
+
+      // Asegurar incorporación inmediata de la nueva venta sin re-descargar 5 tablas completas
+      if (newSale && (newSale.id || newSale.numeroDoc)) {
+        setSalesState(prev => {
+          const sKey = String(newSale.numeroDoc || newSale.id || '').trim();
+          const idx = prev.findIndex(s => String(s.id || '').trim() === String(newSale.id || '').trim() || (sKey && String(s.numeroDoc || '').trim() === sKey));
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], ...newSale };
+            return next;
+          }
+          return [newSale, ...prev];
+        });
       }
 
-      // Si la venta se originó de una Nota de Pedido de Preventa, eliminar la orden del pipeline y de la base de datos
+      // Si la venta se originó de una Nota de Pedido de Preventa (y no se pidió conservar como FACTURADO), eliminar la orden
       const originOrderId = saleData.pedidoOrigenId || saleData.pedidoOrigenDoc;
-      if (originOrderId) {
+      if (originOrderId && !saleData.preserveOriginOrderOnSale) {
         try {
           await deleteSupabaseOrder(originOrderId);
           if (saleData.pedidoOrigenDoc && saleData.pedidoOrigenDoc !== originOrderId) {
@@ -2016,7 +2143,7 @@ function MainApp() {
           console.warn('[handleProcessSale] Error eliminando orden origen facturada:', statusErr);
         }
       }
-      
+
       return newSale;
     } catch (err) {
       console.error(err);
@@ -2184,6 +2311,116 @@ function MainApp() {
     }
   };
 
+  // Registrar Traslado entre Almacenes (Alm 01 <-> Alm 02)
+  const handleSaveWarehouseTransfer = async (transferData) => {
+    try {
+      const saved = await saveSupabaseProfitWarehouseTransfer(transferData);
+      setProfitWarehouseTransfers((prev) => [saved, ...(prev || []).filter(t => t.id !== saved.id)]);
+      const updatedProds = await getSupabaseProducts();
+      setProductsState(updatedProds);
+      notify.success(`Traslado ${saved.trasNum || ''} procesado y stock actualizado`);
+      return saved;
+    } catch (err) {
+      console.error('Error al procesar traslado:', err);
+      notify.error('Error al procesar el traslado entre almacenes');
+      throw err;
+    }
+  };
+
+  // Registrar Ajuste / Merma de Inventario
+  const handleSaveInventoryAdjustment = async (adjData) => {
+    try {
+      const saved = await saveSupabaseProfitInventoryAdjustment(adjData);
+      setProfitInventoryAdjustments((prev) => [saved, ...(prev || []).filter(a => a.id !== saved.id)]);
+      const updatedProds = await getSupabaseProducts();
+      setProductsState(updatedProds);
+      notify.success(`Ajuste ${saved.ajueNum || ''} registrado correctamente`);
+      return saved;
+    } catch (err) {
+      console.error('Error al registrar ajuste:', err);
+      notify.error('Error al registrar el ajuste de inventario');
+      throw err;
+    }
+  };
+
+  // Registrar Devolución de Cliente / Nota de Crédito
+  const handleSaveCustomerReturn = async (retData) => {
+    try {
+      const saved = await saveSupabaseProfitCustomerReturn(retData);
+      setProfitReturns((prev) => [saved, ...(prev || []).filter(r => r.id !== saved.id)]);
+      if (retData.reenterStock !== false) {
+        const updatedProds = await getSupabaseProducts();
+        setProductsState(updatedProds);
+      }
+      notify.success(`Devolución / NC ${saved.ncNum || ''} registrada`);
+      return saved;
+    } catch (err) {
+      console.error('Error al registrar devolución:', err);
+      notify.error('Error al registrar la devolución de cliente');
+      throw err;
+    }
+  };
+
+  // Guardar Requisición de Compra (REQ)
+  const handleSavePurchaseRequisition = async (reqData) => {
+    try {
+      const saved = await saveSupabasePurchaseRequisition(reqData);
+      setPurchaseRequisitions((prev) => [saved, ...(prev || []).filter(r => r.id !== saved.id)]);
+      notify.success(`Requisición ${saved.numeroDoc || ''} guardada`);
+      return saved;
+    } catch (err) {
+      console.error('Error guardando requisición:', err);
+      notify.error('Error al guardar la requisición de compra');
+      throw err;
+    }
+  };
+
+  // Guardar Orden de Compra (OC)
+  const handleSavePurchaseOrder = async (poData) => {
+    try {
+      const saved = await saveSupabasePurchaseOrder(poData);
+      setPurchaseOrders((prev) => [saved, ...(prev || []).filter(o => o.id !== saved.id)]);
+      notify.success(`Orden de Compra ${saved.numeroDoc || ''} emitida`);
+      return saved;
+    } catch (err) {
+      console.error('Error guardando orden de compra:', err);
+      notify.error('Error al guardar la orden de compra');
+      throw err;
+    }
+  };
+
+  // Registrar Nota de Recepción de Mercancía (REC)
+  const handleSaveGoodsReceiptNote = async (recData) => {
+    try {
+      const saved = await saveSupabaseGoodsReceiptNote(recData);
+      setGoodsReceiptNotes((prev) => [saved, ...(prev || []).filter(r => r.id !== saved.id)]);
+      if (recData.applyStock !== false) {
+        const updatedProds = await getSupabaseProducts();
+        setProductsState(updatedProds);
+      }
+      notify.success(`Nota de Recepción ${saved.numeroDoc || ''} registrada`);
+      return saved;
+    } catch (err) {
+      console.error('Error guardando recepción:', err);
+      notify.error('Error al registrar la nota de recepción');
+      throw err;
+    }
+  };
+
+  // Guardar Orden de Pago (OP)
+  const handleSavePaymentOrder = async (opData) => {
+    try {
+      const saved = await saveSupabaseProfitPaymentOrder(opData);
+      setProfitPaymentOrders((prev) => [saved, ...(prev || []).filter(o => o.id !== saved.id)]);
+      notify.success(`Orden de Pago ${saved.ordNum || ''} registrada`);
+      return saved;
+    } catch (err) {
+      console.error('Error guardando orden de pago:', err);
+      notify.error('Error al guardar la orden de pago');
+      throw err;
+    }
+  };
+
   // Agregar Movimiento de Caja
   const handleAddCashMovement = async (mov) => {
     try {
@@ -2247,8 +2484,18 @@ function MainApp() {
           return [enrichedSaved, ...prev];
         }
       });
-      soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
-      notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado y enviado a Caja exitosamente`);
+      if (enrichedSaved.status !== 'FACTURADO') {
+        const isClientReq = String(enrichedSaved.tipoDoc || enrichedSaved.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
+        if (isClientReq) {
+          if (enrichedSaved.status === 'PENDIENTE_APROBACION') {
+            soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
+            notify.success(`Solicitud de cliente #${enrichedSaved.numeroDoc || enrichedSaved.id} enviada a Flujo Comercial para aprobación.`);
+          }
+        } else {
+          soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
+          notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado y enviado a Caja exitosamente`);
+        }
+      }
       return enrichedSaved;
     } catch (err) {
       console.error('Error guardando pedido:', err);
@@ -2312,11 +2559,6 @@ function MainApp() {
         const pId = String(p.id || '').trim();
         return !candidateKeys.has(pId) && !candidateKeys.has(pKey);
       }));
-      // Actualizar inventario sincronizado
-      const updatedProducts = await getSupabaseProducts();
-      if (updatedProducts && updatedProducts.length > 0) {
-        setProductsState(updatedProducts);
-      }
       notify.success('Documento eliminado y saldo actualizado con éxito');
       return true;
     } catch (err) {
@@ -2697,16 +2939,28 @@ function MainApp() {
       <MobileAppLayout
         products={products}
         clients={clients}
+        suppliers={suppliers}
+        purchases={purchases}
+        cashMovements={cashMovements}
+        fiscalClosures={fiscalClosures}
         orders={orders}
         sales={sales}
         profitInvoices={profitInvoices}
         profitCollections={profitCollections}
         profitBankAccounts={profitBankAccounts}
+        profitCashDesks={profitCashDesks}
         profitAccountsPayable={profitAccountsPayable}
         profitSupplierPayments={profitSupplierPayments}
         profitPurchases={profitPurchases}
+        profitSuppliers={profitSuppliers}
+        profitIslrConcepts={profitIslrConcepts}
+        profitBeneficiaries={profitBeneficiaries}
+        profitPaymentOrders={profitPaymentOrders}
+        profitIslrWithholdings={profitIslrWithholdings}
+        profitReturns={profitReturns}
         profitSellers={profitSellers}
         profitZones={profitZones}
+        usersList={usersList}
         config={config}
         currentUser={currentUser}
         theme={theme}
@@ -2715,10 +2969,18 @@ function MainApp() {
         onSaveOrder={handleSaveOrder}
         onProceedToPOS={handleProceedToInvoiceFromOrder}
         onProcessSale={handleProcessSale}
+        onSaveConfig={handleSaveConfig}
+        onSaveProduct={handleSaveProduct}
         onSaveClient={handleSaveClient}
         onDeleteClient={handleDeleteClient}
         onApproveClient={handleApproveClient}
         onRejectClient={handleRejectClient}
+        onRegisterPurchase={handleRegisterPurchase}
+        onAddCashMovement={handleAddCashMovement}
+        onExecuteCierreZ={handleExecuteCierreZ}
+        onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
+        onUsersUpdated={handleUsersUpdated}
+        onUpdateCurrentUser={handleUpdateCurrentUser}
         onSyncProfit={handleSyncProfit}
         onLogout={handleLogout}
       />
@@ -2855,6 +3117,7 @@ function MainApp() {
               initialOrder={ordersSalesModalOrder}
               onProceedToPOS={handleProceedToInvoiceFromOrder}
               onSaveCxcDocument={handleSaveCxcDocument}
+              onSaveClient={handleSaveClient}
             />
           )}
 
@@ -2871,6 +3134,8 @@ function MainApp() {
               onSyncProfit={handleSyncProfit}
               onSaveProduct={handleSaveProduct}
               onDeleteProduct={handleDeleteProduct}
+              onSaveTransfer={handleSaveWarehouseTransfer}
+              onSaveAdjustment={handleSaveInventoryAdjustment}
               globalSearch={globalSearch}
               currentUser={currentUser}
               warehouses={profitWarehouses}
@@ -2897,6 +3162,7 @@ function MainApp() {
               onDeleteClient={handleDeleteClient}
               onApproveClient={handleApproveClient}
               onRejectClient={handleRejectClient}
+              onSaveCustomerReturn={handleSaveCustomerReturn}
               onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
               currentUser={currentUser}
               pendingOrderToBill={pendingOrderToBill}
@@ -3059,6 +3325,13 @@ function MainApp() {
               config={config}
               onSaveProduct={handleSaveProduct}
               onRegisterPurchase={handleRegisterPurchase}
+              purchaseRequisitions={purchaseRequisitions}
+              purchaseOrders={purchaseOrders}
+              goodsReceiptNotes={goodsReceiptNotes}
+              onSaveRequisition={handleSavePurchaseRequisition}
+              onSavePurchaseOrder={handleSavePurchaseOrder}
+              onSaveGoodsReceipt={handleSaveGoodsReceiptNote}
+              onSavePaymentOrder={handleSavePaymentOrder}
               currentUser={currentUser}
               profitSuppliers={profitSuppliers}
               profitPurchases={profitPurchases}
@@ -3193,27 +3466,7 @@ function MainApp() {
               usersList={usersList}
               config={config}
               onUpdateCurrentUser={handleUpdateCurrentUser}
-              onUsersUpdated={async (savedUser) => {
-                const freshUsers = await getSupabaseUsers();
-                setUsersList(freshUsers);
-                try {
-                  localStorage.setItem('signum_users_list', JSON.stringify(freshUsers));
-                } catch (_) {}
-
-                if (savedUser && currentUser && (savedUser.id === currentUser.id || savedUser.username?.toLowerCase() === currentUser.username?.toLowerCase())) {
-                  handleUpdateCurrentUser(savedUser);
-                } else if (currentUser) {
-                  const matching = freshUsers.find(u => u.id === currentUser.id || u.username?.toLowerCase() === currentUser.username?.toLowerCase());
-                  if (matching) {
-                    handleUpdateCurrentUser(matching);
-                  }
-                }
-
-                try {
-                  const freshSellers = await getSupabaseProfitSellers();
-                  if (freshSellers && freshSellers.length > 0) setProfitSellers(freshSellers);
-                } catch (_) {}
-              }}
+              onUsersUpdated={handleUsersUpdated}
             />
           )}
 

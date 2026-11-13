@@ -67,6 +67,7 @@ export default function SalesPOSView({
   profitCollections = [],
   onSyncProfit,
   onProcessSale,
+  onSaveCustomerReturn,
   onOpenOrdersSalesModal,
   onSaveClient,
   onDeleteClient,
@@ -2371,9 +2372,14 @@ export default function SalesPOSView({
         isOpen={showReturnsModal}
         onClose={() => setShowReturnsModal(false)}
         profitReturns={profitReturns}
+        clients={clients}
+        products={products}
+        sales={sales}
+        profitInvoices={profitInvoices}
         config={safeConfig}
         currentUser={currentUser}
         onSyncProfit={onSyncProfit}
+        onSaveCustomerReturn={onSaveCustomerReturn}
       />
 
       {/* Modal de Score de Crédito & Validación Pre-Despacho */}

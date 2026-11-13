@@ -15,7 +15,7 @@ import {
   Award,
   Settings
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../../services/formatService';
+import { formatUsd, formatBs, getProductWarehouseStocks, resolveProductLitersPerUnit } from '../../services/formatService';
 import { detectUserDevice } from './deviceDetection';
 
 export default function MobileHomeView({
@@ -44,7 +44,10 @@ export default function MobileHomeView({
   const totalDeudaUsd = clientesConSaldo.reduce((acc, c) => acc + Number(c.saldoUsd || c.saldo_usd || 0), 0);
   const clientesEnMora = clients.filter(c => Number(c.diasMora || c.dias_mora || 0) > 0).length;
 
-  const totalLitrosDisponibles = products.reduce((acc, p) => acc + (Number(p.stockActual || p.stock || 0) * (Number(p.litrosUnidad || 19))), 0);
+  const totalLitrosDisponibles = products.reduce(
+    (acc, p) => acc + (getProductWarehouseStocks(p).total * resolveProductLitersPerUnit(p)),
+    0
+  );
   const totalOrdersCount = orders.length;
   const lastOrder = orders[0] || null;
 

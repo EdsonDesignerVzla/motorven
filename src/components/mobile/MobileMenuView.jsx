@@ -19,6 +19,8 @@ import {
   Receipt
 } from 'lucide-react';
 
+import { isMasterOrGerencia } from '../../services/authService';
+
 export default function MobileMenuView({
   currentUser,
   theme,
@@ -28,7 +30,7 @@ export default function MobileMenuView({
   onSyncProfit,
   onLogout
 }) {
-  const isMaster = currentUser?.rol === 'ADMIN_SISTEMA' || currentUser?.rol === 'MASTER';
+  const isMaster = isMasterOrGerencia(currentUser);
 
   const menuSections = [
     {
@@ -36,7 +38,7 @@ export default function MobileMenuView({
       items: [
         { id: 'ventas', label: 'Ventas & POS Mostrador', icon: ShoppingCart, color: '#10b981' },
         { id: 'pedidos', label: 'Flujo Comercial & Pedidos', icon: Truck, color: '#38bdf8' },
-        { id: 'fuerza_ventas', label: 'Fuerza de Ventas', icon: Users, color: '#a855f7' },
+        { id: 'vendedores', label: 'Fuerza de Ventas', icon: Users, color: '#a855f7' },
         { id: 'rentabilidad', label: 'Rentabilidad & BI', icon: TrendingUp, color: '#f59e0b' }
       ]
     },

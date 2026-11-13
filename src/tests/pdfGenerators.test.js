@@ -60,10 +60,38 @@ import {
   getPageLayoutMetrics,
   resolveDocumentClientInfo,
   getStaticBankAccountsQRPayload,
-  buildQRCodeMatrix
+  buildQRCodeMatrix,
+  generateQuotationPDF,
+  generateCreditDebitNotePDF,
+  generateWarehouseTransferOrAdjustmentPDF,
+  generatePurchaseRequisitionPDF,
+  generatePurchaseOrderPDF,
+  generateGoodsReceiptPDF,
+  generatePaymentOrderPDF,
+  generateCollectionReceiptPDF,
+  generateExpenseVoucherPDF,
+  generateThirdPartyStatementPDF,
+  generateSeniatRetentionVoucherPDF,
+  generateSeniatRetentionTxt
 } from '../services/pdfReportService.js';
 import { REAL_CLIENTS } from '../data/supabaseRealData.js';
-import { computeTrialBalance, computeGeneralLedger, computeFinancialStatements } from '../services/accountingService.js';
+import {
+  CHART_OF_ACCOUNTS,
+  generateAccountingEntries,
+  buildTrialBalance,
+  buildGeneralLedger,
+  buildFinancialStatements,
+  computeTrialBalance,
+  computeGeneralLedger,
+  computeFinancialStatements
+} from '../services/accountingService.js';
+import {
+  applyPersonPrefixToRif,
+  detectPersonPrefix,
+  validateRifOrCedula,
+  countPersonTypes
+} from '../services/fiscalService.js';
+import { validateDocumentPositiveStock } from '../services/formatService.js';
 
 const mockConfig = {
   nombreEmpresa: 'SIGNUM MOTORVEN, C.A.',
@@ -1541,7 +1569,316 @@ async function runPdfTests() {
     }
   });
 
-  // 44. Auditoría Global de Todos los PDF Generados: Cero formato "Página X de Y" y cumplimiento 1/2, 2/2
+  // 44. Formatos Empresariales Faltantes (11 nuevos generadores + TXT SENIAT + anclaje y desbordamiento 1/2, 2/2)
+  testGen('Cotización / Presupuesto Comercial (Carta + Firmas ancladas)', () => {
+    const qDoc = generateQuotationPDF({
+      quotation: {
+        numeroDoc: 'COT-00012',
+        clienteNombre: 'Distribuidora Automotriz Lara C.A.',
+        clienteRif: 'J-40112233-4',
+        vigenciaDias: 7,
+        items: [{ codigo: '000308', descripcion: 'OILSTONE 15W-40 Paila 19L', cantidad: 4, precioUsd: 78 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const { footerY } = getPageLayoutMetrics(qDoc);
+    const sigYs = extractTextYPositionsMm(qDoc, 1, 'Firma y Sello Oficial');
+    if (sigYs.length !== 3 || sigYs.some(y => y < footerY - 10 || y >= footerY)) {
+      throw new Error(`Firmas de Cotización fuera de anclaje (${footerY.toFixed(1)}mm): ${JSON.stringify(sigYs)}`);
+    }
+  });
+
+  testGen('Nota de Crédito y Nota de Débito Fiscal Carta SENIAT', () => {
+    const ncDoc = generateCreditDebitNotePDF({
+      docData: {
+        tipoDoc: 'NOTA_CREDITO',
+        numeroDoc: 'NC-000045',
+        documentoAfectado: '00001012',
+        clienteNombre: 'Lubricantes Valencia S.A.',
+        clienteRif: 'J-30998877-1',
+        motivo: 'Devolución de 2 cajas selladas',
+        items: [{ codigo: '000704', descripcion: 'OILSTONE 20W-50', cantidad: 2, precioUsd: 42 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const ndDoc = generateCreditDebitNotePDF({
+      docData: {
+        tipoDoc: 'NOTA_DEBITO',
+        numeroDoc: 'ND-000018',
+        documentoAfectado: '00001012',
+        clienteNombre: 'Lubricantes Valencia S.A.',
+        motivo: 'Recargo por flete especial acordado',
+        totalUsd: 58
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    if (ncDoc.internal.getNumberOfPages() < 1 || ndDoc.internal.getNumberOfPages() < 1) {
+      throw new Error('NC/ND no generaron páginas válidas');
+    }
+  });
+
+  testGen('Nota de Traslado entre Almacenes y Comprobante de Ajuste/Merma', () => {
+    generateWarehouseTransferOrAdjustmentPDF({
+      mode: 'TRANSFER',
+      record: {
+        trasNum: 'TRAS-005',
+        almOrig: '01',
+        almDest: '02',
+        motivo: 'Reposición almacén de notas de entrega',
+        renglones: [{ co_art: '000308', art_des: 'OILSTONE 15W-40 Paila', total_art: 5, cost_unit_om: 55 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generateWarehouseTransferOrAdjustmentPDF({
+      mode: 'ADJUSTMENT',
+      record: {
+        ajueNum: 'AJU-019',
+        almacen: '01',
+        motivo: 'Merma por envase perforado en transporte',
+        renglones: [{ co_art: '000308', art_des: 'OILSTONE 15W-40 Paila', tipo_trans: 'S', total_art: 1, cost_unit_om: 55 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+  });
+
+  testGen('Requisición de Compra, Orden de Compra (OC) y Nota de Recepción', () => {
+    generatePurchaseRequisitionPDF({
+      requisition: {
+        numeroDoc: 'REQ-001',
+        departamento: 'ALMACÉN CENTRAL',
+        prioridad: 'ALTA',
+        items: [{ codigo: '000308', descripcion: 'OILSTONE 15W-40', stockActual: 4, cantidad: 25, costoEstimadoUsd: 54 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generatePurchaseOrderPDF({
+      order: {
+        numeroDoc: 'OC-00099',
+        proveedorNombre: 'Planta Keystone Lubricantes C.A.',
+        proveedorRif: 'J-31115365-9',
+        items: [{ codigo: '000308', descripcion: 'OILSTONE 15W-40', cantidad: 25, costoUsd: 54 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generateGoodsReceiptPDF({
+      receipt: {
+        numeroDoc: 'REC-0014',
+        proveedorNombre: 'Planta Keystone Lubricantes C.A.',
+        nro_fact: 'FAC-PROV-771',
+        items: [{ codigo: '000308', descripcion: 'OILSTONE 15W-40', cantidadEsperada: 25, cantidadRecibida: 24, cantidadDanada: 1 }]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+  });
+
+  testGen('Orden de Pago, Recibo de Cobro, Vale de Egreso y Estado de Cuenta (c/ desbordamiento 1/2, 2/2)', () => {
+    generatePaymentOrderPDF({
+      paymentOrder: { ordNum: 'OP-1434', benDes: 'Servicios Eléctricos C.A.', codBen: 'J-30111222-3', descrip: 'Pago servicio mensual', monto: 45000, montoRet: 900, tasa: 827.73 },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generateCollectionReceiptPDF({
+      receipt: { cobNum: 'COB-4001', clienteNombre: 'Autocentro Lara', clienteRif: 'J-40012345-6', montoUsd: 350, tasa: 827.73, referencia: 'TRF-998811' },
+      allocations: [{ factNum: 'FAC-1001', tipoDoc: 'FACTURA', saldoAnteriorUsd: 500, abonoUsd: 350, saldoRestanteUsd: 150 }],
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generateExpenseVoucherPDF({
+      movement: { id: 'VAL-088', tipo: 'EGRESO', concepto: 'Viáticos de despacho ruta occidente', metodo: 'EFECTIVO_USD', montoUsd: 65 },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const manyDocs = Array.from({ length: 48 }, (_, i) => ({
+      factNum: `FAC-${5000 + i}`,
+      tipoDoc: 'FACTURA',
+      fechaEmision: '2026-10-01',
+      fechaVencimiento: '2026-10-16',
+      totNetoUsd: 200,
+      abonosUsd: 50,
+      saldoUsd: 150,
+      isVencida: i % 2 === 0
+    }));
+    const ecDoc = generateThirdPartyStatementPDF({
+      entity: { nombre: 'Grupo Automotriz Occidental C.A.', rif: 'J-40987654-3' },
+      entityType: 'CLIENT',
+      documents: manyDocs,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const totalEcP = ecDoc.internal.getNumberOfPages();
+    if (totalEcP < 2) {
+      throw new Error(`Estado de cuenta con 48 documentos debió desbordar a >=2 págs, obtuvo ${totalEcP}`);
+    }
+    const { footerY } = getPageLayoutMetrics(ecDoc);
+    const sigYs = extractTextYPositionsMm(ecDoc, totalEcP, 'Firma y Sello Oficial');
+    if (sigYs.length !== 2 || sigYs.some(y => y < footerY - 10 || y >= footerY)) {
+      throw new Error(`Firmas de Estado de Cuenta fuera de anclaje: ${JSON.stringify(sigYs)}`);
+    }
+  });
+
+  testGen('Comprobantes Individuales Retención IVA / ISLR SENIAT + Archivo TXT', () => {
+    generateSeniatRetentionVoucherPDF({
+      type: 'IVA',
+      record: {
+        numeroComprobanteRetencionIva: '20261100000001',
+        proveedorNombre: 'Planta Keystone Lubricantes',
+        proveedorRif: 'J-31115365-9',
+        numeroFactura: '000841',
+        numeroControl: '00-001122',
+        subtotalUsd: 1000,
+        totalUsd: 1160,
+        porcentajeRetencionIva: 75,
+        retencionIvaBs: 99327.60
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generateSeniatRetentionVoucherPDF({
+      type: 'ISLR',
+      record: {
+        nroComprobante: '20261100000002',
+        proveedorNombre: 'Transporte Pesado Centro C.A.',
+        proveedorRif: 'J-30887766-2',
+        nroFacturaAfectada: '000210',
+        conceptoDescripcion: 'Flete terrestre carga nacional',
+        baseImponible: 120000,
+        porcentajeRetencion: 3,
+        montoRetenido: 3600,
+        moneda: 'BS'
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    const txt = generateSeniatRetentionTxt({
+      purchases: [{ proveedorRif: 'J-31115365-9', numeroFactura: '000841', numeroControl: '00-001122', subtotalUsd: 1000, totalUsd: 1160, retencionIvaBs: 99327.60, numeroComprobanteRetencionIva: '20261100000001' }],
+      config: mockConfig,
+      periodoFiscal: '202611'
+    });
+    if (!txt.includes('\t01\tJ311153659\t000841')) {
+      throw new Error(`Formato TXT SENIAT inesperado: ${txt}`);
+    }
+  });
+
+  // 45. Motor Contable BA VEN-NIF 2 + 4 PDFs Contables y CxC Consolidado
+  const v5AccountingEntries = generateAccountingEntries({
+    profitInvoices: [
+      { factNum: 'F-0001', fechaEmision: '2026-11-05', clienteNombre: 'Taller Caracas C.A.', totNetoUsd: 1160, baseImponibleUsd: 1000, totIvaUsd: 160, saldoBs: 0, co_us_in: 'admin' },
+      { factNum: 'NE-0002', fechaEmision: '2026-11-06', clienteNombre: 'Auto Servicios Valencia', totNetoUsd: 500, saldoBs: 500 * 827.73, co_us_in: 'oficina' }
+    ],
+    profitCollections: [
+      { cobNum: 'COB-001', fechaCobro: '2026-11-05', clienteNombre: 'Taller Caracas C.A.', montoUsd: 1160, banco: 'Banesco', tasa: 827.73 }
+    ],
+    profitPurchases: [
+      { factNum: 'COMP-101', fechaEmision: '2026-11-04', provNombre: 'KEYTON LUBRICANTS C.A.', totNetoUsd: 928, subtotalUsd: 800, ivaUsd: 128 }
+    ],
+    profitSupplierPayments: [
+      { pagoNum: 'PAG-001', fechaPago: '2026-11-07', provNombre: 'KEYTON LUBRICANTS C.A.', montoUsd: 928, cuentaBanco: 'Banesco' }
+    ],
+    cashMovements: [
+      { id: 'MOV-01', fecha: '2026-11-08', tipo: 'EGRESO', concepto: 'Flete encomienda Valencia', montoUsd: 45, usuario: 'admin' }
+    ],
+    tasa: 827.73
+  });
+  const v5TrialBalance = buildTrialBalance(v5AccountingEntries);
+  const v5GeneralLedger = buildGeneralLedger(v5AccountingEntries);
+  const v5Statements = buildFinancialStatements(v5TrialBalance);
+
+  testGen('Contabilidad Automática: Plan 156 cuentas, Partida Doble & BA VEN-NIF 2', () => {
+    const imputables = CHART_OF_ACCOUNTS.filter(c => c.imputable).length;
+    if (CHART_OF_ACCOUNTS.length !== 156 || imputables !== 99) {
+      throw new Error(`Se esperaban 156 cuentas / 99 imputables, obtenido ${CHART_OF_ACCOUNTS.length}/${imputables}`);
+    }
+    if (!v5TrialBalance.isBalanced) {
+      throw new Error(`Balance de comprobación descuadrado: Debe=${v5TrialBalance.totalSumasDebeUsd} Haber=${v5TrialBalance.totalSumasHaberUsd}`);
+    }
+    if (!v5Statements.balanceGeneral.ecuacionCuadrada) {
+      throw new Error(`Ecuación patrimonial BA VEN-NIF 2 descuadrada: diff=${v5Statements.balanceGeneral.diferenciaEcuacionUsd}`);
+    }
+  });
+
+  testGen('PDF Balance de Comprobación de Sumas y Saldos', () => {
+    generateTrialBalancePDF({
+      trialBalance: v5TrialBalance,
+      entries: v5AccountingEntries,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+  });
+
+  testGen('PDF Libro Mayor General Analítico', () => {
+    const acc = v5GeneralLedger.accounts[0];
+    generateGeneralLedgerPDF({
+      account: acc,
+      generalLedger: v5GeneralLedger,
+      entries: v5AccountingEntries,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+  });
+
+  testGen('PDF Estados Financieros Básicos BA VEN-NIF 2', () => {
+    generateFinancialStatementsPDF({
+      financialStatements: v5Statements,
+      trialBalance: v5TrialBalance,
+      entries: v5AccountingEntries,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+  });
+
+  testGen('PDF CxC Consolidado (Facturas Fiscales + Notas de Entrega)', () => {
+    const sampleCxcDocs = [
+      { factura: '000901', tipoDoc: 'FACTURA', cliente: 'Autorepuestos Central C.A.', rif: 'J-30401927-4', vendedorNombre: 'Carlos M.', fechaEmisionIso: '2026-10-15', fechaVencimientoIso: '2026-10-30', montoFacturaUsd: 1200, abonosUsd: 200, restanteUsd: 1000, diasCredito: 15, diasVencidos: 12, estado: 'VENCIDA', isCarteraActiva: true },
+      { factura: 'NE-000150', tipoDoc: 'NOTA_ENTREGA', cliente: 'Distribuidora Los Llanos', rif: 'J-50123456-8', vendedorNombre: 'Andres R.', fechaEmisionIso: '2026-11-08', fechaVencimientoIso: '2026-11-23', montoFacturaUsd: 650, abonosUsd: 0, restanteUsd: 650, diasCredito: 15, diasVencidos: 0, estado: 'POR_VENCER', isCarteraActiva: true }
+    ];
+    generateConsolidatedCxcPDF({
+      docs: sampleCxcDocs,
+      groupByClient: false,
+      tasaBcv: mockConfig.tasaDolar,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    generateConsolidatedCxcPDF({
+      docs: sampleCxcDocs,
+      groupByClient: true,
+      tasaBcv: mockConfig.tasaDolar,
+      config: mockConfig,
+      currentUser: mockUser
+    });
+  });
+
+  testGen('Validación SENIAT Prefijos J/V/E/G/P & Stock Positivo por Almacén', () => {
+    const normRif = applyPersonPrefixToRif('18456789', 'V');
+    if (normRif !== 'V-18456789' || detectPersonPrefix({ rif: normRif }) !== 'V') {
+      throw new Error(`Prefijo SENIAT inesperado: ${normRif}`);
+    }
+    if (!validateRifOrCedula('V-18456789', 'V').isValid) {
+      throw new Error('Debe validar cédula venezolana V-18456789');
+    }
+    const counts = countPersonTypes([{ rif: 'J-12345678-9' }, { rif: 'V-18456789' }]);
+    if (counts.J !== 1 || counts.V !== 1) {
+      throw new Error(`Conteo de tipos de persona incorrecto: ${JSON.stringify(counts)}`);
+    }
+    const stockCheck = validateDocumentPositiveStock({
+      tipoDoc: 'FACTURA',
+      almacen: '01',
+      items: [{ articuloId: 'SKU-ZERO', cantidad: 2 }],
+      products: [{ id: 'SKU-ZERO', codigo: 'SKU-ZERO', descripcion: '20W-50 Test', stockAlmacen01: 0, stockAlmacen02: 10 }]
+    });
+    if (stockCheck.isValid) {
+      throw new Error('Debió bloquear factura con stock 0 en Almacén 01');
+    }
+  });
+
+  // 46. Auditoría Global de Todos los PDF Generados: Cero formato "Página X de Y" y cumplimiento 1/2, 2/2
   testGen('Auditoría Global: Todos los PDF generados cumplen norma 1/2, 2/2 (sin "Página X de Y")', () => {
     const cwdFiles = fs.readdirSync(process.cwd()).filter(f => f.endsWith('.pdf'));
     if (cwdFiles.length < 15) {

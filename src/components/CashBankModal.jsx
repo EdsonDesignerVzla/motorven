@@ -26,7 +26,7 @@ import {
   ArrowRightLeft
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
-import { generateCashflowPDF } from '../services/pdfReportService';
+import { generateCashflowPDF, generateExpenseVoucherPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 // Calcula el siguiente código correlativo CAJA-XX comenzando desde CAJA-01
@@ -2570,6 +2570,7 @@ export default function CashBankModal({
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Usuario</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto USD</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto Bs</th>
+                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center' }}>Vale PDF</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2613,6 +2614,17 @@ export default function CashBankModal({
                             </td>
                             <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)' }}>
                               {formatBs(Number(m.monto_bs || 0))}
+                            </td>
+                            <td style={{ padding: '0.85rem 1rem', textAlign: 'center' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                onClick={() => generateExpenseVoucherPDF({ movement: m, config, currentUser })}
+                                title="Generar Comprobante / Vale de Caja en PDF"
+                              >
+                                <Printer size={12} /> Vale PDF
+                              </button>
                             </td>
                           </tr>
                         );

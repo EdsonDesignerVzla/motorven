@@ -107,6 +107,9 @@ export const validateCedula = (cedula) => {
   return regex.test(clean);
 };
 
+export const PERSON_PREFIXES = ['J', 'V', 'E', 'G', 'P'];
+const CONTRIBUTOR_CODES = PERSON_PREFIXES;
+
 /**
  * Clasificación oficial SENIAT de los 5 tipos de Contribuyentes / Clientes.
  */
@@ -143,8 +146,6 @@ export const SENIAT_CONTRIBUTOR_TYPES = [
   }
 ];
 
-const CONTRIBUTOR_CODES = ['J', 'V', 'E', 'G', 'P'];
-
 /**
  * Resuelve la clasificación SENIAT ('J' | 'V' | 'E' | 'G' | 'P') de un cliente.
  * Prioriza tipoPersona / tipoContribuyente explícito si coincide, luego prefijo del RIF/código, y por último heurística por nombre.
@@ -167,6 +168,8 @@ export const resolveClientContributorType = (client) => {
   return 'V';
 };
 
+export const detectPersonPrefix = resolveClientContributorType;
+
 /**
  * Aplica o sincroniza el prefijo de clasificación SENIAT ('J'|'V'|'E'|'G'|'P') en un campo RIF / Cédula.
  */
@@ -180,6 +183,8 @@ export const applyContributorPrefixToRif = (rawValue, contributorCode) => {
   return body ? `${code}-${body}` : `${code}-`;
 };
 
+export const applyPersonPrefixToRif = applyContributorPrefixToRif;
+
 /**
  * Calcula los totales por cada clasificación SENIAT sobre una lista de clientes.
  */
@@ -192,6 +197,8 @@ export const computeContributorTypeCounts = (clientsList = []) => {
   });
   return counts;
 };
+
+export const countPersonTypes = computeContributorTypeCounts;
 
 /**
  * Valida un documento tributario o cédula según su prefijo y formato SENIAT.
@@ -217,6 +224,8 @@ export const validateDocumentNumber = (rawValue, contributorCode) => {
       : `Verifique formato RIF SENIAT (Ej: ${effectiveCode}-12345678-9)`
   };
 };
+
+export const validateRifOrCedula = validateDocumentNumber;
 
 // ==============================================================================
 // 2. MOTOR DE CÁLCULOS TRIBUTARIOS MULTIMONEDA (IVA MULTI-ALÍCUOTA, IGTF Y RETENCIONES)
