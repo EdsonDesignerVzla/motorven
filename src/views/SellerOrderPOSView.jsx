@@ -107,6 +107,7 @@ export default function SellerOrderPOSView({
   const [cartItems, setCartItems] = useState([]); // [{ product, cantidad, precioUsd, subtotalUsd, litros }]
   const [selectedCategory, setSelectedCategory] = useState('TODOS');
   const [productSearch, setProductSearch] = useState('');
+  const [showOnlyAvailable, setShowOnlyAvailable] = useState(false);
   const [selectedSpecProduct, setSelectedSpecProduct] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
@@ -197,7 +198,7 @@ export default function SellerOrderPOSView({
       }
 
       const alm = String(ord.almacen || ord.almacenId || ord.almacen_id || ord.co_alma || '').trim();
-      const isAlm02 = alm === '02' || ord.tipoDoc === 'NOTA_ENTREGA' || ord.modalidadVenta === 'OFICINA';
+      const isAlm02 = alm === '02' || alm === '2' || ord.tipoDoc === 'NOTA_ENTREGA' || ord.modalidadVenta === 'OFICINA';
       const targetMap = isAlm02 ? map02 : map01;
 
       const items = ord.items || ord.renglones || [];
@@ -219,11 +220,44 @@ export default function SellerOrderPOSView({
   // Consulta de stock comprometido vigente por almacén (01 = Fiscal, 02 = Nota de Entrega)
   const getProductCommittedQty = (p, specificWarehouse = null) => {
     if (!p) return 0;
-    const keyId = p.id;
-    const keyCode = p.codigo;
     const wh = specificWarehouse || (modalidadVenta === 'OFICINA' ? '02' : '01');
     const target = wh === '02' ? committedStockMap.map02 : committedStockMap.map01;
-    return (target[keyId] || 0) + (keyCode && keyCode !== keyId ? (target[keyCode] || 0) : 0);
+    const uniqueKeys = [...new Set([p.id, p.co_art, p.codigo].filter(Boolean))];
+    return uniqueKeys.reduce((acc, k) => acc + (target[k] || 0), 0);
+  };
+
+  // Regla de Disponibilidad ATP unificada para Preventa Móvil (Alm 01 Fiscal / Alm 02 Nota de Entrega)
+  const getProductAvailability = (product, specificWarehouse = null, overrideCartQty = null) => {
+    const wh = specificWarehouse || (modalidadVenta === 'OFICINA' ? '02' : '01');
+    const isNota = wh === '02';
+    const whLabel = isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
+    const whShortLabel = isNota ? 'Alm 02' : 'Alm 01';
+    const wStocks = getProductWarehouseStocks(product);
+    const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
+    const committed = getProductCommittedQty(product, wh);
+    const stockMin = Number(product?.stockMinimo ?? product?.stock_minimo ?? 10);
+    const maxAvailable = Math.max(0, rawStock - committed);
+    const inCartQty = overrideCartQty !== null
+      ? Number(overrideCartQty || 0)
+      : (cartItems.find((it) => it.product?.id === product?.id || it.product?.codigo === product?.codigo)?.cantidad || 0);
+    const disponibleReal = Math.max(0, maxAvailable - inCartQty);
+    const isOutOfStock = maxAvailable <= 0;
+    const isLowStock = !isOutOfStock && maxAvailable <= stockMin;
+    return {
+      isNota,
+      targetWh: wh,
+      whLabel,
+      whShortLabel,
+      wStocks,
+      rawStock,
+      committed,
+      stockMin,
+      maxAvailable,
+      inCartQty,
+      disponibleReal,
+      isOutOfStock,
+      isLowStock
+    };
   };
 
   // Clientes asignados al vendedor o lista completa filtrable
@@ -274,35 +308,60 @@ export default function SellerOrderPOSView({
     });
   }, [products, productSearch, selectedCategory]);
 
-  // Contador de productos con existencia disponible en el almacén activo
+  // Contadores ATP en el almacén activo (Disponibles vs Agotados/Comprometidos)
   const availableCount = useMemo(() => {
     const isNota = modalidadVenta === 'OFICINA';
+    const wh = isNota ? '02' : '01';
     return (filteredProducts || []).filter((p) => {
       const wStocks = getProductWarehouseStocks(p);
       const raw = Number(isNota ? wStocks.stock02 : wStocks.stock01);
-      const committed = getProductCommittedQty(p, isNota ? '02' : '01');
+      const committed = getProductCommittedQty(p, wh);
       return (raw - committed) > 0;
     }).length;
   }, [filteredProducts, modalidadVenta, committedStockMap]);
+  const outOfStockCount = Math.max(0, filteredProducts.length - availableCount);
 
-  // Métodos del carrito
-  const addToCart = (product, addQty = 1) => {
+  const displayedProducts = useMemo(() => {
+    if (!showOnlyAvailable) return filteredProducts;
     const isNota = modalidadVenta === 'OFICINA';
-    const targetWh = isNota ? '02' : '01';
-    const whLabel = isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
-    const wStocks = getProductWarehouseStocks(product);
-    const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
-    const committed = getProductCommittedQty(product, targetWh);
-    const inCartItem = cartItems.find((it) => it.product.id === product.id || it.product.codigo === product.codigo);
-    const currentInCart = inCartItem ? inCartItem.cantidad : 0;
-    const atpLibre = Math.max(0, rawStock - committed - currentInCart);
+    const wh = isNota ? '02' : '01';
+    return (filteredProducts || []).filter((p) => {
+      const wStocks = getProductWarehouseStocks(p);
+      const raw = Number(isNota ? wStocks.stock02 : wStocks.stock01);
+      const committed = getProductCommittedQty(p, wh);
+      return (raw - committed) > 0;
+    });
+  }, [filteredProducts, showOnlyAvailable, modalidadVenta, committedStockMap]);
 
-    if (atpLibre <= 0) {
-      notify.warning(`No hay disponibilidad en ${whLabel} para el artículo ${product.codigo}.`);
+  // Métodos del carrito con Regla de Disponibilidad ATP (Almacén + Reserva 72h)
+  const addToCart = (product, addQty = 1) => {
+    const {
+      isNota,
+      whLabel,
+      rawStock,
+      committed,
+      maxAvailable,
+      inCartQty,
+      disponibleReal
+    } = getProductAvailability(product);
+    const inCartItem = cartItems.find((it) => it.product.id === product.id || it.product.codigo === product.codigo);
+
+    if (disponibleReal <= 0) {
+      if (inCartQty > 0 && maxAvailable > 0) {
+        if (committed > 0) {
+          notify.warning(`Disponibilidad libre alcanzada en ${whLabel} (${maxAvailable} un. disponibles. Físico: ${rawStock}, Comprometido en O.C.: ${committed} con reserva 72h).`);
+        } else {
+          notify.warning(`Stock máximo alcanzado en ${whLabel} (${rawStock} unidades disponibles para este producto).`);
+        }
+      } else if (committed > 0) {
+        notify.warning(`Este lubricante (${product.codigo}) tiene existencia física (${rawStock} un. en ${whLabel}) pero está totalmente comprometido en órdenes vigentes (reserva 72h).`);
+      } else {
+        notify.warning(`Este lubricante (${product.codigo}) no tiene existencia disponible en ${whLabel} actualmente.`);
+      }
       return;
     }
 
-    const qtyToAdd = Math.min(addQty, atpLibre);
+    const qtyToAdd = Math.min(addQty, disponibleReal);
     const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
     const precio = resolveUnitPrice(product, selectedClient, currentChannel);
     if (!(precio > 0)) {
@@ -342,7 +401,7 @@ export default function SellerOrderPOSView({
     }
   };
 
-  // Sincronización automática: si el precio cambia en Inventario o cambia de almacén (Fiscal vs Nota de Entrega), el carrito se ajusta
+  // Sincronización automática: si el precio cambia en Inventario o cambia de almacén (Fiscal vs Nota de Entrega), el carrito se ajusta a la Regla de Disponibilidad
   useEffect(() => {
     setCartItems(prev => {
       let changed = false;
@@ -379,7 +438,7 @@ export default function SellerOrderPOSView({
 
       return changed ? next : prev;
     });
-  }, [products, selectedClient, modalidadVenta]);
+  }, [products, selectedClient, modalidadVenta, committedStockMap]);
 
   const updateCartQty = (productId, newQty) => {
     if (newQty <= 0) {
@@ -390,26 +449,25 @@ export default function SellerOrderPOSView({
     const inCartItem = cartItems.find((it) => it.product.id === productId || it.product.codigo === productId);
     if (!inCartItem) return;
 
-    const product = inCartItem.product;
-    const isNota = modalidadVenta === 'OFICINA';
-    const targetWh = isNota ? '02' : '01';
-    const whLabel = isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)';
-    const wStocks = getProductWarehouseStocks(product);
-    const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
-    const committed = getProductCommittedQty(product, targetWh);
-    const maxAvailable = Math.max(0, rawStock - committed);
+    const freshProduct = (products || []).find(p => p && (p.id === inCartItem.product?.id || p.codigo === inCartItem.product?.codigo)) || inCartItem.product;
+    const { whLabel, rawStock, committed, maxAvailable } = getProductAvailability(freshProduct);
 
     if (newQty > maxAvailable) {
-      notify.warning(`La cantidad solicitada (${newQty}) excede la disponibilidad actual en ${whLabel}.`);
+      if (committed > 0) {
+        notify.warning(`Supera la disponibilidad libre en ${whLabel} (${maxAvailable} un. Físico: ${rawStock}, Comprometido en O.C.: ${committed} con reserva 72h).`);
+      } else {
+        notify.warning(`La cantidad solicitada (${newQty}) excede la disponibilidad actual en ${whLabel} (${maxAvailable} un.).`);
+      }
       return;
     }
 
-    const litrosUnit = resolveProductLitersPerUnit(product);
+    const litrosUnit = resolveProductLitersPerUnit(freshProduct);
     setCartItems(
       cartItems.map((it) => {
         if (it.product.id === productId || it.product.codigo === productId) {
           return {
             ...it,
+            product: freshProduct,
             cantidad: newQty,
             subtotalUsd: lineSubtotal(newQty, it.precioUsd),
             litros: newQty * litrosUnit
@@ -418,6 +476,24 @@ export default function SellerOrderPOSView({
         return it;
       })
     );
+  };
+
+  // Validación estricta ATP previa a emitir pedido o venta directa
+  const validateCartAvailability = () => {
+    const targetWh = modalidadVenta === 'OFICINA' ? '02' : '01';
+    for (const item of cartItems) {
+      const freshProduct = (products || []).find(
+        p => p && (p.id === item.product?.id || p.codigo === item.product?.codigo)
+      ) || item.product;
+      const { whLabel, rawStock, committed, maxAvailable } = getProductAvailability(freshProduct, targetWh);
+      if (item.cantidad > maxAvailable) {
+        notify.warning(
+          `Disponibilidad insuficiente para ${freshProduct?.codigo || freshProduct?.descripcion} en ${whLabel}: solicitado ${item.cantidad}, disponible ATP ${maxAvailable} (Físico: ${rawStock}, Comprometido 72h: ${committed}).`
+        );
+        return false;
+      }
+    }
+    return true;
   };
 
   const removeFromCart = (productId) => {
@@ -497,6 +573,8 @@ export default function SellerOrderPOSView({
       notify.warning('El pedido está vacío. Seleccione al menos un lubricante del catálogo.');
       return;
     }
+
+    if (!validateCartAvailability()) return;
 
     setIsSubmitting(true);
     const isNotaEntrega = modalidadVenta === 'OFICINA';
@@ -597,6 +675,7 @@ export default function SellerOrderPOSView({
       notify.error('Operación retenida por políticas de crédito. Solicite aprobación.');
       return;
     }
+    if (!validateCartAvailability()) return;
 
     const isNotaEntrega = modalidadVenta === 'OFICINA';
     const tipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA';
@@ -1342,6 +1421,46 @@ export default function SellerOrderPOSView({
                 <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.12)', color: 'var(--semaforo-verde)', border: '1px solid rgba(16, 185, 129, 0.35)', fontSize: '0.74rem', fontWeight: 800, padding: '6px 12px', borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                   <Package size={14} /> {availableCount} Disponibles
                 </span>
+                {outOfStockCount > 0 && (
+                  <span
+                    className="badge"
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.14)',
+                      color: '#ef4444',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      fontSize: '0.74rem',
+                      fontWeight: 800,
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px'
+                    }}
+                    title="Artículos sin disponibilidad ATP inmediata en el almacén seleccionado"
+                  >
+                    <AlertTriangle size={14} /> {outOfStockCount} Sin Disp.
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowOnlyAvailable((prev) => !prev)}
+                  className="btn btn-sm"
+                  style={{
+                    background: showOnlyAvailable ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                    color: showOnlyAvailable ? '#34d399' : 'var(--text-muted)',
+                    border: showOnlyAvailable ? '1px solid rgba(16, 185, 129, 0.55)' : '1px solid var(--border-glass)',
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    padding: '6px 10px',
+                    borderRadius: '8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Activa para ocultar productos agotados o totalmente comprometidos en órdenes vigentes (72h)"
+                >
+                  <CheckCircle2 size={13} /> {showOnlyAvailable ? 'Solo Disponibles: ON' : 'Solo Disponibles'}
+                </button>
               </div>
             </div>
 
@@ -1368,32 +1487,48 @@ export default function SellerOrderPOSView({
 
           {/* CUADRÍCULA TÁCTIL DE LUBRICANTES (GRID TIPO POS) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '10px' }}>
-            {filteredProducts.length === 0 ? (
+            {displayedProducts.length === 0 ? (
               <div style={{ gridColumn: '1 / -1', padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                 <Package size={42} style={{ opacity: 0.3, margin: '0 auto 8px' }} />
-                <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>No se encontraron lubricantes</div>
-                <div style={{ fontSize: '0.75rem', marginTop: '2px' }}>Intente con otra viscosidad o categoría.</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>
+                  {showOnlyAvailable ? 'No hay lubricantes con disponibilidad ATP en este filtro' : 'No se encontraron lubricantes'}
+                </div>
+                <div style={{ fontSize: '0.75rem', marginTop: '2px' }}>
+                  {showOnlyAvailable ? 'Desactiva "Solo Disponibles" o cambia de categoría/almacén.' : 'Intente con otra viscosidad o categoría.'}
+                </div>
               </div>
             ) : (
-              filteredProducts.map((p) => {
-                const wStocks = getProductWarehouseStocks(p);
-                const isNota = modalidadVenta === 'OFICINA';
-                const rawStock = Number(isNota ? wStocks.stock02 : wStocks.stock01);
-                const committed = getProductCommittedQty(p, isNota ? '02' : '01');
-                const inCartItem = cartItems.find((it) => it.product.id === p.id || it.product.codigo === p.codigo);
-                const currentInCart = inCartItem ? inCartItem.cantidad : 0;
-                const atpLibre = Math.max(0, rawStock - committed - currentInCart);
-                const isOutOfStock = atpLibre <= 0;
+              displayedProducts.map((p) => {
+                const {
+                  isNota,
+                  rawStock,
+                  committed,
+                  inCartQty: currentInCart,
+                  disponibleReal,
+                  isOutOfStock,
+                  isLowStock
+                } = getProductAvailability(p);
+                const unitLabel = resolveProductUnit(p, 'Caja');
                 const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
                 const precioUsd = resolveUnitPrice(p, selectedClient, currentChannel);
-                const litrosUnit = Number(p.litrosPorUnidad || 0);
+                const litrosUnit = Number(p.litrosPorUnidad || resolveProductLitersPerUnit(p) || 0);
+                const stockConfig = isOutOfStock
+                  ? { label: committed > 0 ? 'Comprometido' : 'Agotado', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.35)', dot: '#ef4444' }
+                  : isLowStock
+                  ? { label: 'Stock Crítico', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.14)', border: 'rgba(245, 158, 11, 0.35)', dot: '#f59e0b' }
+                  : { label: 'Disponible', color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)', border: 'rgba(16, 185, 129, 0.35)', dot: '#10b981' };
 
                 return (
                   <div
                     key={p.id || p.codigo}
                     style={{
                       background: 'var(--bg-card-glass)',
-                      border: currentInCart > 0 ? '1.5px solid var(--neon-cyan)' : '1px solid var(--border-glass)',
+                      border: currentInCart > 0
+                        ? '1.5px solid var(--neon-cyan)'
+                        : isOutOfStock
+                        ? '1px solid rgba(239, 68, 68, 0.35)'
+                        : '1px solid var(--border-glass)',
+                      opacity: isOutOfStock && currentInCart === 0 ? 0.72 : 1,
                       borderRadius: '12px',
                       padding: '10px',
                       display: 'flex',
@@ -1470,20 +1605,91 @@ export default function SellerOrderPOSView({
                         {p.descripcion}
                       </div>
 
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.68rem' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
-                        <span
+                      {/* KPI UNIFICADO DE DISPONIBILIDAD ATP (Alm 01 / Alm 02 - Comprometido 72h - Carrito) */}
+                      <div
+                        style={{
+                          marginTop: '6px',
+                          padding: '6px 8px',
+                          borderRadius: '9px',
+                          background: stockConfig.bg,
+                          border: `1px solid ${stockConfig.border}`,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px 6px' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+                            <span
+                              style={{
+                                width: '7px',
+                                height: '7px',
+                                borderRadius: '50%',
+                                backgroundColor: stockConfig.dot,
+                                boxShadow: `0 0 6px ${stockConfig.dot}`,
+                                flexShrink: 0
+                              }}
+                            />
+                            <span style={{ fontSize: '0.67rem', fontWeight: 800, color: stockConfig.color, textTransform: 'uppercase', letterSpacing: '0.2px', whiteSpace: 'nowrap' }}>
+                              {stockConfig.label}
+                            </span>
+                          </div>
+
+                          <div style={{ textAlign: 'right', display: 'inline-flex', alignItems: 'baseline', gap: '4px', flexShrink: 0, marginLeft: 'auto' }}>
+                            <strong style={{ fontSize: '0.76rem', color: disponibleReal <= 0 ? '#ef4444' : 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>
+                              {disponibleReal} {unitLabel}
+                            </strong>
+                            {litrosUnit > 0 && disponibleReal > 0 && (
+                              <span style={{ fontSize: '0.62rem', color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
+                                ({(disponibleReal * litrosUnit).toLocaleString('es-VE', { maximumFractionDigits: 0 })} L)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div
                           style={{
-                            color: isOutOfStock ? 'var(--motorven-red)' : 'var(--semaforo-verde)',
-                            fontWeight: 800,
-                            display: 'inline-flex',
+                            display: 'flex',
                             alignItems: 'center',
-                            gap: '3px'
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '4px',
+                            borderTop: '1px dashed rgba(255, 255, 255, 0.08)',
+                            paddingTop: '4px',
+                            fontSize: '0.62rem'
                           }}
-                          title={`Disponibilidad en ${isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'}: ${isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : 'Disponible'}`}
                         >
-                          {isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : 'Disponible'}
-                        </span>
+                          <span
+                            style={{
+                              color: isNota ? '#38bdf8' : '#34d399',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              fontWeight: 700
+                            }}
+                            title={`Existencia física en ${isNota ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturación Fiscal)'}`}
+                          >
+                            <Building2 size={10} /> {isNota ? 'Alm 02' : 'Alm 01'}: <strong style={{ color: 'var(--text-primary)' }}>{rawStock}</strong>
+                          </span>
+
+                          {committed > 0 && (
+                            <span
+                              style={{ color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '2px', fontWeight: 600 }}
+                              title="Unidades comprometidas en órdenes vigentes (reserva 72 horas)"
+                            >
+                              <Clock size={10} /> O.C.: <strong>{committed}</strong>
+                            </span>
+                          )}
+
+                          {currentInCart > 0 && (
+                            <span
+                              style={{ color: 'var(--neon-cyan)', display: 'inline-flex', alignItems: 'center', gap: '2px', fontWeight: 700 }}
+                              title="Unidades reservadas en el carrito actual"
+                            >
+                              <ShoppingCart size={10} /> Carrito: <strong>{currentInCart}</strong>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1525,7 +1731,7 @@ export default function SellerOrderPOSView({
 
                         <button
                           type="button"
-                          disabled={isOutOfStock}
+                          disabled={disponibleReal <= 0}
                           onClick={() => addToCart(p, 1)}
                           className="btn btn-primary btn-sm"
                           style={{
@@ -1538,10 +1744,12 @@ export default function SellerOrderPOSView({
                             alignItems: 'center',
                             justifyContent: 'center',
                             gap: '4px',
-                            opacity: isOutOfStock ? 0.4 : 1
+                            opacity: disponibleReal <= 0 ? 0.45 : 1,
+                            cursor: disponibleReal <= 0 ? 'not-allowed' : 'pointer'
                           }}
+                          title={disponibleReal <= 0 ? (isOutOfStock ? stockConfig.label : 'Toda la disponibilidad libre ya está en tu carrito') : `Agregar ${unitLabel} al carrito (${disponibleReal} disponibles)`}
                         >
-                          <Plus size={13} /> {currentInCart === 0 ? 'Añadir' : currentInCart}
+                          <Plus size={13} /> {currentInCart === 0 ? (isOutOfStock ? (committed > 0 ? 'Comprometido' : 'Agotado') : 'Añadir') : currentInCart}
                         </button>
                       </div>
                     </div>
@@ -2231,35 +2439,60 @@ export default function SellerOrderPOSView({
                   </span>
                 </div>
 
-                {/* KPI de Stock en Almacén Activo */}
+                {/* KPI de Disponibilidad ATP en Almacén Activo */}
                 {(() => {
-                  const specStocks = getProductWarehouseStocks(selectedSpecProduct);
-                  const isNota = modalidadVenta === 'OFICINA';
-                  const specRaw = Number(isNota ? specStocks.stock02 : specStocks.stock01);
-                  const specCommitted = getProductCommittedQty(selectedSpecProduct, isNota ? '02' : '01');
-                  const specDisp = Math.max(0, specRaw - specCommitted);
-                  const isZero = specDisp <= 0;
+                  const {
+                    isNota,
+                    wStocks: specStocks,
+                    committed: specCommitted,
+                    disponibleReal: specDisp,
+                    maxAvailable: specMaxAvail,
+                    inCartQty: specInCart
+                  } = getProductAvailability(selectedSpecProduct);
+                  const isZero = specMaxAvail <= 0;
+                  const unitLabel = resolveProductUnit(selectedSpecProduct, 'Caja');
+                  const specLitersPerUnit = resolveProductLitersPerUnit(selectedSpecProduct);
                   return (
                     <div style={{
                       marginTop: '8px',
-                      padding: '7px 10px',
-                      background: isNota ? 'rgba(56, 189, 248, 0.08)' : 'rgba(239, 68, 68, 0.08)',
-                      border: isNota ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+                      padding: '8px 10px',
                       borderRadius: '8px',
+                      background: isZero ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                      border: `1px solid ${isZero ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.35)'}`,
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
+                      flexDirection: 'column',
+                      gap: '4px',
                       fontSize: '0.73rem'
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <Warehouse size={13} color={isNota ? '#38bdf8' : 'var(--motorven-red)'} />
-                        <span style={{ color: 'var(--text-muted)' }}>
-                          {isNota ? 'Alm 02 (Notas de Entrega):' : 'Alm 01 (Facturación Fiscal):'}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Warehouse size={14} color={isZero ? '#ef4444' : '#10b981'} />
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 700 }}>
+                            Disponible ({isNota ? 'Alm 02: N/Entrega' : 'Alm 01: Fiscal'}):
+                          </span>
+                          <strong style={{ color: isZero ? '#ef4444' : '#10b981', fontFamily: 'var(--font-code)', fontSize: '0.8rem' }}>
+                            {isZero ? (specCommitted > 0 ? 'COMPROMETIDO EN O.C.' : 'AGOTADO EN ALMACÉN') : `${specDisp} ${unitLabel}`}
+                          </strong>
+                        </div>
+                        {specLitersPerUnit > 0 && specDisp > 0 && (
+                          <span style={{ fontSize: '0.68rem', color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
+                            {(specDisp * specLitersPerUnit).toFixed(0)} Lts. Libres
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', borderTop: '1px dashed rgba(255, 255, 255, 0.1)', paddingTop: '4px' }}>
+                        <span>
+                          Físico Alm 01 (Fiscal): <strong style={{ color: '#34d399' }}>{specStocks.stock01}</strong> | Alm 02 (N/Entrega): <strong style={{ color: '#38bdf8' }}>{specStocks.stock02}</strong> | Total: <strong>{specStocks.total}</strong>
+                        </span>
+                        <span style={{ display: 'inline-flex', gap: '8px' }}>
+                          {specCommitted > 0 && (
+                            <span style={{ color: '#f59e0b', fontWeight: 600 }}>O.C. 72h: {specCommitted}</span>
+                          )}
+                          {specInCart > 0 && (
+                            <span style={{ color: 'var(--neon-cyan)', fontWeight: 700 }}>Carrito: {specInCart}</span>
+                          )}
                         </span>
                       </div>
-                      <strong style={{ color: isZero ? 'var(--motorven-red)' : 'var(--semaforo-verde)', fontFamily: 'var(--font-code)' }}>
-                        {isZero ? (specCommitted > 0 ? 'COMPROMETIDO' : 'AGOTADO') : 'DISPONIBLE'}
-                      </strong>
                     </div>
                   );
                 })()}
