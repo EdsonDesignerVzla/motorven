@@ -388,3 +388,229 @@ export function getAuthorizedApproverGroups(config) {
     defaultAuthorizer
   };
 }
+
+/**
+ * Determina si un cliente está asignado al vendedor / usuario actual.
+ */
+export function isClientAssignedToSeller(client, currentUser, profitSellers = []) {
+  if (!client || !currentUser) return false;
+  const assignedRaw = String(client.vendedorAsignado || client.vendedor_asignado || '').trim().toUpperCase();
+  if (!assignedRaw) return false;
+
+  const candidateCodes = new Set();
+  [currentUser.co_ven, currentUser.coVen, currentUser.codigoVendedor, currentUser.username, currentUser.nombre]
+    .filter(Boolean)
+    .forEach((v) => candidateCodes.add(String(v).trim().toUpperCase()));
+
+  const userFullName = String(currentUser.nombre || '').trim().toLowerCase();
+  const userName = String(currentUser.username || '').trim().toLowerCase();
+  (profitSellers || []).forEach((s) => {
+    if (!s) return;
+    const sName = String(s.venDes || s.ven_des || s.nombre || '').trim().toLowerCase();
+    const sCode = String(s.coVen || s.co_ven || s.id || '').trim().toUpperCase();
+    if (sCode && ((userFullName && sName.includes(userFullName)) || (userName && sName.includes(userName)) || candidateCodes.has(sCode))) {
+      candidateCodes.add(sCode);
+      if (sName) candidateCodes.add(sName.toUpperCase());
+    }
+  });
+
+  if (candidateCodes.has(assignedRaw)) return true;
+  for (const cand of candidateCodes) {
+    if (cand.length >= 3 && (assignedRaw.includes(cand) || cand.includes(assignedRaw))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Evalúa el estado completo de cartera de un cliente para la vista de Preventa y Notificaciones:
+ * - Mora exacta en días
+ * - Días restantes para el vencimiento más próximo (alerta cuando falten <= 3 días)
+ * - Estado de solvencia / bloqueo / crédito vigente
+ */
+export function evaluateClientCreditPortfolioSummary({
+  client,
+  profitInvoices = [],
+  sales = [],
+  tasaBcv = 1,
+  now = new Date()
+}) {
+  const evalPolicy = evaluateClientCreditPolicy({
+    client,
+    profitInvoices,
+    sales,
+    tasaBcv,
+    montoOrdenUsd: 0
+  });
+
+  if (!client) {
+    return {
+      estadoPortfolio: 'SIN_DATOS',
+      estadoLabel: 'Sin Cliente',
+      badgeTone: 'neutral',
+      diasRestantesMin: null,
+      diasMoraMax: 0,
+      proximaFechaVencimiento: null,
+      docProximoVencer: null,
+      alerta3Dias: false,
+      enMora: false,
+      documentosAbiertos: [],
+      evalPolicy
+    };
+  }
+
+  const diasCreditoCliente = Number(client.diasCredito || client.dias_credito || 15);
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  const openDocs = [...(evalPolicy.facturasPendientes || []), ...(evalPolicy.notasEntregaPendientes || [])];
+  const documentosAbiertos = openDocs.map((doc) => {
+    let expDate = null;
+    if (doc.fechaVencimiento) {
+      const parsed = new Date(doc.fechaVencimiento);
+      if (!Number.isNaN(parsed.getTime())) expDate = parsed;
+    }
+    if (!expDate && doc.fechaEmision) {
+      const em = new Date(doc.fechaEmision);
+      if (!Number.isNaN(em.getTime())) {
+        expDate = new Date(em.getTime() + Math.max(0, diasCreditoCliente) * DAY_MS);
+      }
+    }
+
+    let diasRestantes = null;
+    if (expDate) {
+      const expDayStart = new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate()).getTime();
+      diasRestantes = Math.round((expDayStart - todayStart) / DAY_MS);
+    }
+
+    const montoPendienteUsd = Number(doc.saldoUsd || 0) || (Number(doc.saldoBs || 0) / (tasaBcv || 1));
+    return {
+      ...doc,
+      expDateIso: expDate ? expDate.toISOString() : null,
+      diasRestantes,
+      diasMora: diasRestantes !== null && diasRestantes < 0 ? Math.abs(diasRestantes) : 0,
+      montoPendienteUsd
+    };
+  });
+
+  documentosAbiertos.sort((a, b) => {
+    const da = a.diasRestantes === null ? Number.POSITIVE_INFINITY : a.diasRestantes;
+    const db = b.diasRestantes === null ? Number.POSITIVE_INFINITY : b.diasRestantes;
+    return da - db;
+  });
+
+  const docsConFecha = documentosAbiertos.filter((d) => d.diasRestantes !== null);
+  const docMasUrgente = docsConFecha[0] || documentosAbiertos[0] || null;
+  const diasRestantesMin = docMasUrgente && docMasUrgente.diasRestantes !== null ? docMasUrgente.diasRestantes : null;
+  const diasMoraMax = diasRestantesMin !== null && diasRestantesMin < 0 ? Math.abs(diasRestantesMin) : 0;
+  const enMora = diasMoraMax > 0 || evalPolicy.tieneVencidas;
+  const alerta3Dias = !enMora && diasRestantesMin !== null && diasRestantesMin >= 0 && diasRestantesMin <= 3;
+
+  let estadoPortfolio = 'SOLVENTE';
+  let estadoLabel = 'Solvente (Sin Deuda)';
+  let badgeTone = 'success';
+
+  if (client.inactivo || evalPolicy.bloqueadoPorFicha) {
+    estadoPortfolio = 'BLOQUEADO';
+    estadoLabel = client.inactivo ? 'Cliente Inactivo' : 'Sin Crédito / Bloqueado';
+    badgeTone = 'danger';
+  } else if (enMora) {
+    estadoPortfolio = 'EN_MORA';
+    estadoLabel = diasMoraMax > 0 ? `En Mora (${diasMoraMax} día${diasMoraMax === 1 ? '' : 's'})` : 'En Mora (Vencido)';
+    badgeTone = 'danger';
+  } else if (alerta3Dias) {
+    estadoPortfolio = 'POR_VENCER';
+    estadoLabel = diasRestantesMin === 0 ? 'Vence HOY (0d)' : `Por Vencer (${diasRestantesMin} día${diasRestantesMin === 1 ? '' : 's'})`;
+    badgeTone = 'warning';
+  } else if (documentosAbiertos.length > 0 || evalPolicy.saldoDeudorUsd > 0.05) {
+    estadoPortfolio = 'CREDITO_VIGENTE';
+    estadoLabel = diasRestantesMin !== null ? `Al Día (${diasRestantesMin}d rest.)` : 'Solvente (Saldo Vigente)';
+    badgeTone = 'info';
+  }
+
+  return {
+    estadoPortfolio,
+    estadoLabel,
+    badgeTone,
+    diasRestantesMin,
+    diasMoraMax,
+    proximaFechaVencimiento: docMasUrgente?.expDateIso || null,
+    docProximoVencer: docMasUrgente?.numeroDoc || null,
+    alerta3Dias,
+    enMora,
+    documentosAbiertos,
+    evalPolicy
+  };
+}
+
+const CLIENT_REQUEST_MARKER = '[SOLICITUD_CLIENTE_JSON]';
+
+/**
+ * Empaqueta la metadata extendida de una solicitud de nuevo cliente en comentarios/observaciones
+ * para garantizar persistencia íntegra en Supabase Cloud, servidor local y localStorage.
+ */
+export function encodeClientRequestMetadata(clientReq = {}) {
+  const cleanMeta = {
+    telefono: clientReq.telefono || '',
+    email: clientReq.email || '',
+    ciudad: clientReq.ciudad || '',
+    estado: clientReq.estado || '',
+    responsable: clientReq.responsable || '',
+    tipoCliente: clientReq.tipoCliente || 'Mayorista',
+    esContribuyente: clientReq.esContribuyente !== false,
+    esContribuyenteEspecial: Boolean(clientReq.esContribuyenteEspecial),
+    zonaVenta: clientReq.zonaVenta || '01',
+    zonaNombre: clientReq.zonaNombre || '',
+    vendedorAsignado: clientReq.vendedorAsignado || 'OF',
+    limiteCreditoUsd: Number(clientReq.limiteCreditoUsd || 0),
+    diasCredito: Number(clientReq.diasCredito || 0),
+    notasVendedor: clientReq.notasVendedor || clientReq.observaciones || ''
+  };
+  return `${CLIENT_REQUEST_MARKER}${JSON.stringify(cleanMeta)}`;
+}
+
+/**
+ * Extrae el perfil completo de cliente desde un registro `SOLICITUD_CLIENTE` de la tabla orders.
+ */
+export function decodeClientRequestMetadata(orderRecord = {}) {
+  const rawObs = String(orderRecord.observaciones || orderRecord.comentarios || '');
+  let parsedMeta = {};
+  const markerIdx = rawObs.indexOf(CLIENT_REQUEST_MARKER);
+  if (markerIdx >= 0) {
+    const jsonPart = rawObs.slice(markerIdx + CLIENT_REQUEST_MARKER.length).trim();
+    try {
+      parsedMeta = JSON.parse(jsonPart);
+    } catch (_) {
+      parsedMeta = {};
+    }
+  }
+  return {
+    id: orderRecord.id,
+    solicitudDoc: orderRecord.numeroDoc || orderRecord.numeroPedido || orderRecord.id,
+    fechaSolicitud: orderRecord.fechaEmision || orderRecord.createdAt || '',
+    status: String(orderRecord.status || orderRecord.estado || 'PENDIENTE_APROBACION').toUpperCase(),
+    nombre: orderRecord.clienteNombre || '',
+    rif: orderRecord.clienteRif || '',
+    direccion: orderRecord.direccionEntrega || '',
+    telefono: parsedMeta.telefono || orderRecord.telefono || '',
+    email: parsedMeta.email || orderRecord.email || '',
+    ciudad: parsedMeta.ciudad || '',
+    estado: parsedMeta.estado || '',
+    responsable: parsedMeta.responsable || '',
+    tipoCliente: parsedMeta.tipoCliente || orderRecord.segmento || 'Mayorista',
+    esContribuyente: parsedMeta.esContribuyente !== undefined ? Boolean(parsedMeta.esContribuyente) : true,
+    esContribuyenteEspecial: Boolean(parsedMeta.esContribuyenteEspecial),
+    zonaVenta: parsedMeta.zonaVenta || orderRecord.zonaVenta || '01',
+    zonaNombre: parsedMeta.zonaNombre || orderRecord.zonaVenta || '',
+    vendedorAsignado: parsedMeta.vendedorAsignado || orderRecord.vendedorCoVen || orderRecord.vendedorId || 'OF',
+    vendedorNombre: orderRecord.vendedorNombre || orderRecord.vendedorId || orderRecord.creadoPor || '',
+    limiteCreditoUsd: Number(parsedMeta.limiteCreditoUsd ?? orderRecord.totalUsd ?? orderRecord.totalNetoUsd ?? 0),
+    diasCredito: Number(parsedMeta.diasCredito ?? orderRecord.diasCredito ?? 0),
+    notasVendedor: parsedMeta.notasVendedor || (markerIdx >= 0 ? rawObs.slice(0, markerIdx).trim() : rawObs),
+    aprobadoPor: orderRecord.aprobadoPor || null,
+    fechaAprobacion: orderRecord.fechaAprobacion || null,
+    motivoRechazo: orderRecord.motivoRechazo || null
+  };
+}
+

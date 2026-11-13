@@ -3174,6 +3174,8 @@ export const checkAndExpireOverdueOrders = async (existingOrders = null) => {
 
   for (const ord of ordersList) {
     if (!ord) continue;
+    const tDoc = String(ord.tipoDoc || ord.tipo_doc || '').toUpperCase();
+    if (tDoc === 'SOLICITUD_CLIENTE') continue;
     const st = String(ord.status || '').toUpperCase();
     if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'RETENIDO_CREDITO') continue;
 

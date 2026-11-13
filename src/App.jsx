@@ -29,6 +29,7 @@ import NotificationsCenterModal from './components/NotificationsCenterModal';
 import ModuleErrorBoundary from './components/ModuleErrorBoundary';
 import signumLogoImg from './assets/logo_signum_transpatente.png';
 import { useNotification } from './context/NotificationContext';
+import { evaluateClientCreditPortfolioSummary } from './services/creditPolicyService';
 import {
   INITIAL_CONFIG,
   INITIAL_PRODUCTS,
@@ -148,7 +149,8 @@ import {
   saveSupabaseProfitCustomerReturn,
   getSupabaseProfitReturnsMerged,
   getSupabaseProfitInventoryAdjustmentsMerged,
-  getSupabaseProfitWarehouseTransfersMerged
+  getSupabaseProfitWarehouseTransfersMerged,
+  saveSupabaseNotification
 } from './services/supabaseService';
 import soundFX from './services/soundService';
 import {
@@ -993,8 +995,11 @@ function MainApp() {
           if (!isSelfEvent && action === 'CREATE' && item.status !== 'FACTURADO') {
             soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
             if (notify?.info) {
+              const isClientReq = String(item.tipoDoc || item.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
               notify.info(
-                `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${Number(item.totalUsd || 0).toFixed(2)})`,
+                isClientReq
+                  ? `🆕 ¡Nueva solicitud de cliente en Flujo Comercial! ${item.clienteNombre || 'Cliente'} (${item.clienteRif || ''}) - Vendedor: ${item.vendedorNombre || item.vendedorId || ''}`
+                  : `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${Number(item.totalUsd || 0).toFixed(2)})`,
                 { duration: 6000 }
               );
             }
@@ -1287,6 +1292,75 @@ function MainApp() {
       if (timerId) clearInterval(timerId);
     };
   }, [config, notify]);
+
+  // Alerta automática diaria cuando falten <= 3 días para el vencimiento de crédito de clientes
+  useEffect(() => {
+    if (!currentUser || !Array.isArray(clients) || clients.length === 0) return;
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const guardKey = `sm_credit_3d_sweep_${todayKey}_${currentUser.id || currentUser.username || 'usr'}`;
+    try {
+      if (sessionStorage.getItem(guardKey)) return;
+    } catch (_) {}
+
+    const timer = setTimeout(async () => {
+      try {
+        const tasa = Number(config?.tasaDolar) || 827.73;
+        const expiringClients = [];
+        for (const cl of clients) {
+          if (!cl || cl.inactivo) continue;
+          const summary = evaluateClientCreditPortfolioSummary({
+            client: cl,
+            profitInvoices,
+            sales,
+            tasaBcv: tasa
+          });
+          if (summary.alerta3Dias) {
+            expiringClients.push({ client: cl, summary });
+          }
+        }
+
+        if (expiringClients.length > 0) {
+          try { sessionStorage.setItem(guardKey, '1'); } catch (_) {}
+          if (notify?.warning) {
+            const topNames = expiringClients
+              .slice(0, 3)
+              .map(({ client, summary }) => `${client.nombre || client.razonSocial} (${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin}d`})`)
+              .join(', ');
+            notify.warning(
+              `⏳ Crédito por vencer (≤ 3 días): ${expiringClients.length} cliente(s) próximo(s) a vencimiento: ${topNames}${expiringClients.length > 3 ? '...' : ''}.`,
+              { duration: 7500 }
+            );
+          }
+          // Registrar en Centro de Notificaciones (idempotente por cliente y fecha)
+          for (const { client, summary } of expiringClients.slice(0, 15)) {
+            const safeClientKey = String(client.id || client.codigo || client.rif || 'cli').replace(/[^a-zA-Z0-9_-]/g, '');
+            await saveSupabaseNotification({
+              id: `notif_cred3d_${todayKey}_${safeClientKey}`,
+              tipo: 'cxc',
+              severidad: summary.diasRestantesMin === 0 ? 'critica' : 'advertencia',
+              modulo: 'cxc',
+              titulo: `Crédito por vencer (${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin} día(s)`}): ${client.nombre || client.rif}`,
+              mensaje: `Al cliente ${client.nombre || ''} (${client.rif || ''}) le falta(n) ${summary.diasRestantesMin} día(s) para finalizar su crédito (${summary.docProximoVencer || 'Documento abierto'}, saldo $${Number(summary.evalPolicy?.saldoDeudorUsd || 0).toFixed(2)}).`,
+              destinatario_rol: 'VENTAS',
+              destinatario_usuario: client.vendedorAsignado || 'ALL',
+              origen: 'MONITOR_CREDITO',
+              metadata: {
+                clienteId: client.id || client.codigo,
+                clienteNombre: client.nombre,
+                diasRestantes: summary.diasRestantesMin,
+                documento: summary.docProximoVencer,
+                vendedorAsignado: client.vendedorAsignado || ''
+              }
+            }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('[Credit 3D Alert] Error verificando créditos por vencer:', err);
+      }
+    }, 3500);
+
+    return () => clearTimeout(timer);
+  }, [currentUser, clients, profitInvoices, sales, config?.tasaDolar, notify]);
 
   // Sincronizar currentUser de forma atómica con usersList y localStorage
   const handleUpdateCurrentUser = (updatedUser) => {
@@ -2072,8 +2146,16 @@ function MainApp() {
         }
       });
       if (enrichedSaved.status !== 'FACTURADO') {
-        soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
-        notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado y enviado a Caja exitosamente`);
+        const isClientReq = String(enrichedSaved.tipoDoc || enrichedSaved.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
+        if (isClientReq) {
+          if (enrichedSaved.status === 'PENDIENTE_APROBACION') {
+            soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
+            notify.success(`Solicitud de cliente #${enrichedSaved.numeroDoc || enrichedSaved.id} enviada a Flujo Comercial para aprobación.`);
+          }
+        } else {
+          soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
+          notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado y enviado a Caja exitosamente`);
+        }
       }
       return enrichedSaved;
     } catch (err) {
@@ -2586,6 +2668,7 @@ function MainApp() {
               initialOrder={ordersSalesModalOrder}
               onProceedToPOS={handleProceedToInvoiceFromOrder}
               onSaveCxcDocument={handleSaveCxcDocument}
+              onSaveClient={handleSaveClient}
             />
           )}
 

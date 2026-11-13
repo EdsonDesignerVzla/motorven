@@ -36,7 +36,8 @@ import {
   Eye,
   Hash,
   Check,
-  ArrowUpDown
+  ArrowUpDown,
+  UserPlus
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
@@ -44,7 +45,8 @@ import {
   resolveCreditDaysFromTerm,
   calculateExpirationDate,
   formatDateVe,
-  isCreditPaymentCondition
+  isCreditPaymentCondition,
+  decodeClientRequestMetadata
 } from '../services/creditPolicyService';
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
@@ -64,7 +66,7 @@ import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData
 import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
-import { saveSupabaseProfitInvoice } from '../services/supabaseService';
+import { saveSupabaseProfitInvoice, saveSupabaseNotification } from '../services/supabaseService';
 
 const STATUS_CONFIG = {
   PENDIENTE: {
@@ -159,10 +161,14 @@ export default function OrdersSalesModal({
   initialTab = 'nuevo',
   initialOrder = null,
   onProceedToPOS,
-  onSaveCxcDocument
+  onSaveCxcDocument,
+  onSaveClient
 }) {
   const notify = useNotification();
-  const [activeTab, setActiveTab] = useState(initialTab || 'nuevo'); // 'nuevo' | 'pipeline' | 'facturar' | 'imprimir' | 'metricas'
+  const [activeTab, setActiveTab] = useState(initialTab || 'nuevo'); // 'nuevo' | 'pipeline' | 'facturar' | 'imprimir' | 'metricas' | 'solicitudes_clientes'
+  const [clientReqFilter, setClientReqFilter] = useState('ALL'); // 'ALL' | 'PENDIENTE_APROBACION' | 'APROBADO' | 'RECHAZADO'
+  const [clientReqOverrides, setClientReqOverrides] = useState({});
+  const [rejectReasonByReqId, setRejectReasonByReqId] = useState({});
   const [selectedOrder, setSelectedOrder] = useState(initialOrder || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -378,7 +384,144 @@ export default function OrdersSalesModal({
     setShowInvoiceModal(true);
   };
 
-  const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders]);
+  const rawSafeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders]);
+  const isClientRequestOrder = (o) => Boolean(o && String(o.tipoDoc || o.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE');
+  const safeOrders = useMemo(() => rawSafeOrders.filter((o) => o && !isClientRequestOrder(o)), [rawSafeOrders]);
+  const rawClientRequestOrders = useMemo(() => rawSafeOrders.filter(isClientRequestOrder), [rawSafeOrders]);
+  const clientRequests = useMemo(
+    () =>
+      rawClientRequestOrders
+        .map((o) => ({ raw: o, ...decodeClientRequestMetadata(o) }))
+        .sort((a, b) => String(b.fechaSolicitud || '').localeCompare(String(a.fechaSolicitud || ''))),
+    [rawClientRequestOrders]
+  );
+  const pendingClientRequestsCount = useMemo(
+    () => clientRequests.filter((r) => r.status === 'PENDIENTE_APROBACION').length,
+    [clientRequests]
+  );
+  const filteredClientRequests = useMemo(() => {
+    const term = searchQuery.toLowerCase().trim();
+    return clientRequests.filter((r) => {
+      if (clientReqFilter !== 'ALL' && r.status !== clientReqFilter) return false;
+      if (!term) return true;
+      return [r.nombre, r.rif, r.solicitudDoc, r.vendedorNombre, r.zonaNombre, r.telefono]
+        .some((v) => v && String(v).toLowerCase().includes(term));
+    });
+  }, [clientRequests, clientReqFilter, searchQuery]);
+
+  const handleApproveClientRequest = async (reqItem) => {
+    if (!reqItem || !reqItem.raw) return;
+    const ov = clientReqOverrides[reqItem.id] || {};
+    const finalCodigo = String(ov.codigo || `CLI-${Date.now().toString().slice(-6)}`).trim().toUpperCase();
+    const finalLimite = Number(ov.limiteCreditoUsd ?? reqItem.limiteCreditoUsd ?? 0);
+    const finalDias = Number(ov.diasCredito ?? reqItem.diasCredito ?? 0);
+    const approverName = currentUser?.nombre || currentUser?.username || 'Flujo Comercial / Gerencia';
+    const nowIso = new Date().toISOString();
+
+    const newClientPayload = {
+      id: finalCodigo,
+      codigo: finalCodigo,
+      nombre: reqItem.nombre,
+      rif: String(reqItem.rif || '').trim().toUpperCase(),
+      telefono: reqItem.telefono || '',
+      email: reqItem.email || '',
+      direccion: reqItem.direccion || 'Valencia, Edo. Carabobo',
+      ciudad: reqItem.ciudad || '',
+      estado: reqItem.estado || '',
+      responsable: reqItem.responsable || '',
+      tipoCliente: reqItem.tipoCliente || 'Mayorista',
+      zonaVenta: reqItem.zonaVenta || '01',
+      vendedorAsignado: reqItem.vendedorAsignado || 'OF',
+      limiteCreditoUsd: finalLimite,
+      diasCredito: finalDias,
+      saldoDeudorUsd: 0,
+      esContribuyente: reqItem.esContribuyente !== false,
+      esContribuyenteEspecial: Boolean(reqItem.esContribuyenteEspecial),
+      inactivo: false,
+      sinCredito: finalDias <= 0 && finalLimite <= 0,
+      fechaRegistro: nowIso.slice(0, 10),
+      comentarios: `Aprobado desde Flujo Comercial (${reqItem.solicitudDoc}) por ${approverName}. ${reqItem.notasVendedor || ''}`.trim()
+    };
+
+    setIsSaving(true);
+    try {
+      if (onSaveClient) {
+        await onSaveClient(newClientPayload);
+      }
+      if (onSaveOrder) {
+        await onSaveOrder({
+          ...reqItem.raw,
+          status: 'APROBADO',
+          estado: 'APROBADO',
+          aprobadoPor: approverName,
+          fechaAprobacion: nowIso,
+          diasCredito: finalDias,
+          totalUsd: finalLimite,
+          totalNetoUsd: finalLimite
+        });
+      } else if (onUpdateOrderStatus) {
+        await onUpdateOrderStatus(reqItem.id, 'APROBADO');
+      }
+      await saveSupabaseNotification({
+        id: `notif_cli_ok_${reqItem.id}`,
+        tipo: 'sistema',
+        severidad: 'exito',
+        modulo: 'pedidos',
+        titulo: `Cliente Aprobado: ${reqItem.nombre} (${reqItem.rif})`,
+        mensaje: `${approverName} aprobó la solicitud ${reqItem.solicitudDoc}. El cliente ya está activo en la cartera comercial (Cód: ${finalCodigo}).`,
+        destinatario_rol: 'VENTAS',
+        destinatario_usuario: reqItem.vendedorAsignado || 'ALL',
+        origen: 'FLUJO_COMERCIAL'
+      }).catch(() => {});
+      notify.success(`Cliente "${reqItem.nombre}" aprobado e incorporado a la cartera comercial (Cód: ${finalCodigo}).`);
+    } catch (err) {
+      console.error('Error aprobando solicitud de cliente:', err);
+      notify.error('Error al aprobar el nuevo cliente: ' + (err.message || 'Error de conexión'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRejectClientRequest = async (reqItem) => {
+    if (!reqItem || !reqItem.raw) return;
+    const reason = String(rejectReasonByReqId[reqItem.id] || '').trim() || 'Rechazado por revisión comercial / documentación incompleta.';
+    const reviewerName = currentUser?.nombre || currentUser?.username || 'Flujo Comercial / Gerencia';
+    const nowIso = new Date().toISOString();
+
+    setIsSaving(true);
+    try {
+      if (onSaveOrder) {
+        await onSaveOrder({
+          ...reqItem.raw,
+          status: 'RECHAZADO',
+          estado: 'RECHAZADO',
+          aprobadoPor: reviewerName,
+          fechaAprobacion: nowIso,
+          motivoRechazo: reason
+        });
+      } else if (onUpdateOrderStatus) {
+        await onUpdateOrderStatus(reqItem.id, 'RECHAZADO');
+      }
+      await saveSupabaseNotification({
+        id: `notif_cli_rej_${reqItem.id}`,
+        tipo: 'sistema',
+        severidad: 'advertencia',
+        modulo: 'pedidos',
+        titulo: `Solicitud de Cliente Rechazada: ${reqItem.nombre}`,
+        mensaje: `${reviewerName} rechazó la solicitud ${reqItem.solicitudDoc}. Motivo: ${reason}`,
+        destinatario_rol: 'VENTAS',
+        destinatario_usuario: reqItem.vendedorAsignado || 'ALL',
+        origen: 'FLUJO_COMERCIAL'
+      }).catch(() => {});
+      notify.warning(`Solicitud ${reqItem.solicitudDoc} marcada como RECHAZADA.`);
+    } catch (err) {
+      console.error('Error rechazando solicitud de cliente:', err);
+      notify.error('Error al rechazar la solicitud.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients]);
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
 
@@ -1974,6 +2117,39 @@ export default function OrdersSalesModal({
           >
             <ReceiptText size={15} color={activeTab === 'facturas_list' ? (isDark ? '#22d3ee' : '#0891b2') : 'var(--text-muted)'} />
             <span>7. Listado de Facturas ({allInvoices.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('solicitudes_clientes')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              borderRadius: '8px',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              border: activeTab === 'solicitudes_clientes' ? '1.5px solid #10b981' : '1px solid transparent',
+              background: activeTab === 'solicitudes_clientes' ? (isDark ? 'rgba(16, 185, 129, 0.2)' : '#d1fae5') : 'transparent',
+              color: activeTab === 'solicitudes_clientes' ? (isDark ? '#34d399' : '#047857') : 'var(--text-muted)'
+            }}
+          >
+            <UserPlus size={15} color={activeTab === 'solicitudes_clientes' ? (isDark ? '#34d399' : '#047857') : 'var(--text-muted)'} />
+            <span>8. Solicitudes de Clientes ({pendingClientRequestsCount})</span>
+            {pendingClientRequestsCount > 0 && (
+              <span style={{
+                background: '#f59e0b',
+                color: '#0f172a',
+                borderRadius: '999px',
+                padding: '1px 6px',
+                fontSize: '0.68rem',
+                fontWeight: 900
+              }}>
+                NUEVO
+              </span>
+            )}
           </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
@@ -4498,6 +4674,250 @@ export default function OrdersSalesModal({
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>{pipelineKpis.facturados} Facturados / {pipelineKpis.preventas} Preventas</div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* TAB 8: SOLICITUDES DE NUEVOS CLIENTES DESDE PREVENTA MÓVIL */}
+          {activeTab === 'solicitudes_clientes' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '10px',
+                padding: '0.85rem 1rem',
+                borderRadius: '12px',
+                background: isDark ? 'rgba(16, 185, 129, 0.12)' : '#ecfdf5',
+                border: '1px solid rgba(16, 185, 129, 0.35)'
+              }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: isDark ? '#34d399' : '#047857', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <UserPlus size={18} /> Solicitudes de Altas de Nuevos Clientes (Vendedores)
+                  </h3>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    Revise RIF, datos de contacto, zona y cupo de crédito sugerido. Al aprobar, el cliente se guarda automáticamente en el Maestro de Clientes.
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'ALL', label: `Todas (${clientRequests.length})` },
+                    { id: 'PENDIENTE_APROBACION', label: `Pendientes (${clientRequests.filter(r => r.status === 'PENDIENTE_APROBACION').length})` },
+                    { id: 'APROBADO', label: `Aprobadas (${clientRequests.filter(r => r.status === 'APROBADO').length})` },
+                    { id: 'RECHAZADO', label: `Rechazadas (${clientRequests.filter(r => r.status === 'RECHAZADO').length})` }
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setClientReqFilter(f.id)}
+                      className="btn btn-sm"
+                      style={{
+                        fontSize: '0.74rem',
+                        fontWeight: 800,
+                        padding: '5px 10px',
+                        borderRadius: '8px',
+                        background: clientReqFilter === f.id ? 'rgba(16, 185, 129, 0.22)' : 'transparent',
+                        color: clientReqFilter === f.id ? (isDark ? '#34d399' : '#047857') : 'var(--text-muted)',
+                        border: `1px solid ${clientReqFilter === f.id ? '#10b981' : 'var(--border-glass)'}`
+                      }}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ position: 'relative' }}>
+                <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="🔍 Buscar solicitud por nombre, RIF, N° solicitud, vendedor o zona..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ paddingLeft: '36px', fontSize: '0.84rem' }}
+                />
+              </div>
+
+              {filteredClientRequests.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)', border: '1px dashed var(--border-glass)', borderRadius: '12px' }}>
+                  <UserPlus size={40} style={{ opacity: 0.3, margin: '0 auto 8px' }} />
+                  <div style={{ fontSize: '0.92rem', fontWeight: 700 }}>No hay solicitudes de clientes con este filtro</div>
+                  <div style={{ fontSize: '0.78rem', marginTop: '4px' }}>Cuando los asesores envíen un nuevo cliente desde Preventa Móvil aparecerá aquí para su aprobación.</div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {filteredClientRequests.map((req) => {
+                    const isPending = req.status === 'PENDIENTE_APROBACION';
+                    const isApproved = req.status === 'APROBADO';
+                    const ov = clientReqOverrides[req.id] || {};
+                    const editLimite = ov.limiteCreditoUsd ?? req.limiteCreditoUsd;
+                    const editDias = ov.diasCredito ?? req.diasCredito;
+                    const editCodigo = ov.codigo ?? `CLI-${String(req.id || '').slice(-6)}`;
+
+                    return (
+                      <div
+                        key={req.id}
+                        style={{
+                          border: `1px solid ${isPending ? 'rgba(245, 158, 11, 0.5)' : isApproved ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.4)'}`,
+                          borderRadius: '12px',
+                          padding: '1rem',
+                          background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '10px'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <span style={{ fontFamily: 'var(--font-code)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--neon-cyan)' }}>
+                                {req.solicitudDoc}
+                              </span>
+                              <strong style={{ fontSize: '1.02rem', color: 'var(--text-primary)' }}>
+                                {req.nombre}
+                              </strong>
+                              <span style={{
+                                fontSize: '0.7rem',
+                                fontWeight: 800,
+                                padding: '2px 10px',
+                                borderRadius: '999px',
+                                background: isPending ? 'rgba(245, 158, 11, 0.18)' : isApproved ? 'rgba(16, 185, 129, 0.18)' : 'rgba(239, 68, 68, 0.18)',
+                                color: isPending ? '#fbbf24' : isApproved ? '#34d399' : '#f87171',
+                                border: `1px solid ${isPending ? '#f59e0b' : isApproved ? '#10b981' : '#ef4444'}`
+                              }}>
+                                {isPending ? '⏳ PENDIENTE APROBACIÓN' : isApproved ? '✓ CLIENTE APROBADO' : '✕ RECHAZADO'}
+                              </span>
+                              {req.esContribuyenteEspecial && (
+                                <span className="badge badge-info" style={{ fontSize: '0.68rem' }}>Contribuyente Especial</span>
+                              )}
+                            </div>
+
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                              <span>RIF: <strong style={{ color: 'var(--text-primary)' }}>{req.rif}</strong></span>
+                              <span>Tel: <strong style={{ color: 'var(--text-primary)' }}>{req.telefono || '—'}</strong></span>
+                              {req.email && <span>Email: {req.email}</span>}
+                              {req.responsable && <span>Contacto: {req.responsable}</span>}
+                              <span>Segmento: {req.tipoCliente}</span>
+                              <span>Zona: <strong>{req.zonaNombre || req.zonaVenta}</strong></span>
+                            </div>
+
+                            <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                              <MapPin size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                              <strong>Dirección:</strong> {req.direccion || 'No especificada'} {req.ciudad ? `(${req.ciudad})` : ''}
+                            </div>
+
+                            {req.notasVendedor && (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', fontStyle: 'italic' }}>
+                                <strong>Notas vendedor:</strong> {req.notasVendedor}
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ textAlign: 'right', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            <div>Solicitado por: <strong style={{ color: 'var(--text-primary)' }}>{req.vendedorNombre || req.vendedorAsignado}</strong></div>
+                            <div>Fecha: {formatDateVe(req.fechaSolicitud)}</div>
+                            {req.aprobadoPor && <div>Resuelto por: <strong>{req.aprobadoPor}</strong></div>}
+                            {req.motivoRechazo && <div style={{ color: '#f87171' }}>Motivo: {req.motivoRechazo}</div>}
+                          </div>
+                        </div>
+
+                        {isPending && (
+                          <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                            gap: '8px',
+                            paddingTop: '10px',
+                            borderTop: '1px dashed var(--border-glass)',
+                            alignItems: 'end'
+                          }}>
+                            <div>
+                              <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700 }}>Código Asignado</label>
+                              <input
+                                type="text"
+                                className="form-control form-control-sm"
+                                value={editCodigo}
+                                onChange={(e) => setClientReqOverrides((prev) => ({ ...prev, [req.id]: { ...prev[req.id], codigo: e.target.value.toUpperCase() } }))}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700 }}>Límite Crédito (USD)</label>
+                              <input
+                                type="number"
+                                min="0"
+                                step="50"
+                                className="form-control form-control-sm"
+                                value={editLimite}
+                                onChange={(e) => setClientReqOverrides((prev) => ({ ...prev, [req.id]: { ...prev[req.id], limiteCreditoUsd: e.target.value } }))}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700 }}>Días de Crédito</label>
+                              <select
+                                className="form-control form-control-sm"
+                                value={editDias}
+                                onChange={(e) => setClientReqOverrides((prev) => ({ ...prev, [req.id]: { ...prev[req.id], diasCredito: Number(e.target.value) } }))}
+                              >
+                                <option value={0}>Contado (0d)</option>
+                                <option value={7}>7 Días</option>
+                                <option value={15}>15 Días</option>
+                                <option value={21}>21 Días</option>
+                                <option value={30}>30 Días</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700 }}>Motivo (si rechaza)</label>
+                              <input
+                                type="text"
+                                className="form-control form-control-sm"
+                                placeholder="Opcional si aprueba..."
+                                value={rejectReasonByReqId[req.id] || ''}
+                                onChange={(e) => setRejectReasonByReqId((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                              />
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleRejectClientRequest(req)}
+                                className="btn btn-sm"
+                                style={{
+                                  background: 'rgba(239, 68, 68, 0.16)',
+                                  color: '#f87171',
+                                  border: '1px solid #ef4444',
+                                  fontWeight: 800,
+                                  padding: '6px 10px'
+                                }}
+                              >
+                                ✕ Rechazar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleApproveClientRequest(req)}
+                                className="btn btn-sm"
+                                style={{
+                                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                                  color: '#fff',
+                                  border: 'none',
+                                  fontWeight: 800,
+                                  padding: '6px 12px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px'
+                                }}
+                              >
+                                <Check size={14} /> Aprobar Cliente
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 

@@ -29,7 +29,14 @@ import {
   Info,
   Building2,
   Zap,
-  Warehouse
+  Warehouse,
+  Users,
+  UserPlus,
+  BellRing,
+  Phone,
+  Mail,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from '../services/formatService';
 import { resolveUnitPrice, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
@@ -38,9 +45,14 @@ import {
   calculateExpirationDate,
   formatDateVe,
   evaluateClientCreditPolicy,
+  evaluateClientCreditPortfolioSummary,
+  isClientAssignedToSeller,
+  encodeClientRequestMetadata,
+  decodeClientRequestMetadata,
   getAuthorizedApproverGroups
 } from '../services/creditPolicyService';
-import { generateSellerOrderPDF } from '../services/pdfReportService';
+import { generateSellerOrderPDF, generateThirdPartyStatementPDF } from '../services/pdfReportService';
+import { saveSupabaseNotification } from '../services/supabaseService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { useNotification } from '../context/NotificationContext';
 
@@ -101,6 +113,36 @@ export default function SellerOrderPOSView({
   const [lastEmittedOrder, setLastEmittedOrder] = useState(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
+  // Estados de Cartera de Clientes del Vendedor y Alertas de Vencimiento
+  const [showClientsPortfolioModal, setShowClientsPortfolioModal] = useState(false);
+  const [portfolioTab, setPortfolioTab] = useState('CARTERA'); // 'CARTERA' | 'SOLICITUDES'
+  const [portfolioScope, setPortfolioScope] = useState('MIS_CLIENTES'); // 'MIS_CLIENTES' | 'TODOS'
+  const [portfolioStatusFilter, setPortfolioStatusFilter] = useState('ALL'); // 'ALL' | 'POR_VENCER' | 'EN_MORA' | 'SOLVENTES' | 'BLOQUEADO'
+  const [portfolioSearch, setPortfolioSearch] = useState('');
+  const [expandedPortfolioClientId, setExpandedPortfolioClientId] = useState(null);
+  const creditAlertNotifiedRef = useRef(false);
+
+  // Estados del Formulario de Nuevo Cliente (enviado a Flujo Comercial para aprobación)
+  const [showNewClientModal, setShowNewClientModal] = useState(false);
+  const [isSubmittingNewClient, setIsSubmittingNewClient] = useState(false);
+  const createInitialNewClientForm = () => ({
+    nombre: '',
+    rif: '',
+    responsable: '',
+    telefono: '',
+    email: '',
+    ciudad: '',
+    estado: '',
+    zonaVenta: (Array.isArray(profitZones) && profitZones[0]?.coZon) || '01',
+    direccion: '',
+    tipoCliente: 'Mayorista',
+    esContribuyenteEspecial: false,
+    diasCredito: 15,
+    limiteCreditoUsd: 500,
+    notasVendedor: ''
+  });
+  const [newClientForm, setNewClientForm] = useState(createInitialNewClientForm);
+
   // Estados de Aprobación Excepcional de Crédito
   const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
   const [creditOverrideApproved, setCreditOverrideApproved] = useState(false);
@@ -144,6 +186,7 @@ export default function SellerOrderPOSView({
 
     orders.forEach((ord) => {
       if (!ord) return;
+      if (String(ord.tipoDoc || ord.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE') return;
       const st = (ord.status || '').toUpperCase();
       if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'RETENIDO_CREDITO') return;
 
@@ -630,12 +673,14 @@ export default function SellerOrderPOSView({
     }
   };
 
-  // Pedidos del vendedor emitidos hoy
+  // Pedidos del vendedor emitidos hoy (excluyendo solicitudes de creación de clientes)
   const sellerTodayOrders = useMemo(() => {
     if (!Array.isArray(orders)) return [];
     const nowStr = new Date().toISOString().slice(0, 10);
     return orders.filter((o) => {
       if (!o) return false;
+      const tDoc = String(o.tipoDoc || o.tipo_doc || '').toUpperCase();
+      if (tDoc === 'SOLICITUD_CLIENTE') return false;
       const isSeller =
         (o.vendedorId && o.vendedorId.toLowerCase().includes(sellerName.toLowerCase())) ||
         (o.vendedorCoVen && o.vendedorCoVen === sellerCode);
@@ -644,13 +689,252 @@ export default function SellerOrderPOSView({
     });
   }, [orders, sellerName, sellerCode]);
 
+  // Solicitudes de nuevo cliente enviadas a Flujo Comercial
+  const sellerClientRequests = useMemo(() => {
+    if (!Array.isArray(orders)) return [];
+    return orders
+      .filter((o) => o && String(o.tipoDoc || o.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE')
+      .map((o) => decodeClientRequestMetadata(o))
+      .sort((a, b) => String(b.fechaSolicitud || '').localeCompare(String(a.fechaSolicitud || '')));
+  }, [orders]);
+
+  // Cartera completa de clientes evaluada (mora, días por vencer <=3d, solvencia, saldo)
+  const clientPortfolioEntries = useMemo(() => {
+    if (!Array.isArray(clients)) return [];
+    return clients
+      .filter(Boolean)
+      .map((client) => ({
+        client,
+        assignedToSeller: isClientAssignedToSeller(client, currentUser, profitSellers),
+        summary: evaluateClientCreditPortfolioSummary({
+          client,
+          profitInvoices,
+          sales,
+          tasaBcv
+        })
+      }))
+      .sort((a, b) => {
+        // Prioridad visual: En Mora -> Por Vencer (<=3d) -> Crédito Vigente -> Bloqueado -> Solvente
+        const rank = { EN_MORA: 0, POR_VENCER: 1, CREDITO_VIGENTE: 2, BLOQUEADO: 3, SOLVENTE: 4 };
+        const ra = rank[a.summary.estadoPortfolio] ?? 5;
+        const rb = rank[b.summary.estadoPortfolio] ?? 5;
+        if (ra !== rb) return ra - rb;
+        return String(a.client.nombre || '').localeCompare(String(b.client.nombre || ''));
+      });
+  }, [clients, currentUser, profitSellers, profitInvoices, sales, tasaBcv]);
+
+  const assignedClientsCount = useMemo(
+    () => clientPortfolioEntries.filter((e) => e.assignedToSeller).length,
+    [clientPortfolioEntries]
+  );
+
+  // Si el usuario tiene clientes asignados usa su cartera; si es Gerencia/Master sin código de vendedor muestra toda la cartera
+  const effectivePortfolioScope = assignedClientsCount > 0 ? portfolioScope : 'TODOS';
+
+  const scopedPortfolioEntries = useMemo(() => {
+    if (effectivePortfolioScope === 'MIS_CLIENTES' && assignedClientsCount > 0) {
+      return clientPortfolioEntries.filter((e) => e.assignedToSeller);
+    }
+    return clientPortfolioEntries;
+  }, [clientPortfolioEntries, effectivePortfolioScope, assignedClientsCount]);
+
+  const portfolioKpis = useMemo(() => {
+    let enMora = 0;
+    let porVencer3d = 0;
+    let solventes = 0;
+    let bloqueados = 0;
+    scopedPortfolioEntries.forEach((e) => {
+      const st = e.summary.estadoPortfolio;
+      if (st === 'EN_MORA') enMora++;
+      else if (st === 'POR_VENCER') porVencer3d++;
+      else if (st === 'BLOQUEADO') bloqueados++;
+      else solventes++;
+    });
+    return { total: scopedPortfolioEntries.length, enMora, porVencer3d, solventes, bloqueados };
+  }, [scopedPortfolioEntries]);
+
+  const filteredPortfolioEntries = useMemo(() => {
+    const q = portfolioSearch.toLowerCase().trim();
+    return scopedPortfolioEntries.filter(({ client, summary }) => {
+      if (portfolioStatusFilter === 'POR_VENCER' && summary.estadoPortfolio !== 'POR_VENCER') return false;
+      if (portfolioStatusFilter === 'EN_MORA' && summary.estadoPortfolio !== 'EN_MORA') return false;
+      if (portfolioStatusFilter === 'SOLVENTES' && summary.estadoPortfolio !== 'SOLVENTE' && summary.estadoPortfolio !== 'CREDITO_VIGENTE') return false;
+      if (portfolioStatusFilter === 'BLOQUEADO' && summary.estadoPortfolio !== 'BLOQUEADO') return false;
+      if (!q) return true;
+      return [
+        client.nombre,
+        client.razonSocial,
+        client.rif,
+        client.codigo,
+        client.id,
+        client.zonaVenta,
+        client.zona,
+        client.ciudad
+      ].some((v) => v && String(v).toLowerCase().includes(q));
+    });
+  }, [scopedPortfolioEntries, portfolioStatusFilter, portfolioSearch]);
+
+  // Notificación automática para el vendedor cuando falten <= 3 días para vencer el crédito de algún cliente
+  useEffect(() => {
+    if (creditAlertNotifiedRef.current) return;
+    const expiring = scopedPortfolioEntries.filter((e) => e.summary.alerta3Dias);
+    if (expiring.length === 0) return;
+
+    creditAlertNotifiedRef.current = true;
+    const namesPreview = expiring
+      .slice(0, 3)
+      .map(({ client, summary }) => `${client.nombre || client.razonSocial} (${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin}d`})`)
+      .join(', ');
+    notify.warning(
+      `⏳ Atención Asesor: ${expiring.length} cliente(s) con crédito por finalizar en ≤ 3 días (${namesPreview}${expiring.length > 3 ? '...' : ''}). Revisa "Mis Clientes".`,
+      { duration: 7500 }
+    );
+
+    const todayKey = new Date().toISOString().slice(0, 10);
+    expiring.slice(0, 10).forEach(({ client, summary }) => {
+      const safeKey = String(client.id || client.codigo || client.rif || 'cli').replace(/[^a-zA-Z0-9_-]/g, '');
+      saveSupabaseNotification({
+        id: `notif_vend_cred3d_${todayKey}_${safeKey}`,
+        tipo: 'cxc',
+        severidad: summary.diasRestantesMin === 0 ? 'critica' : 'advertencia',
+        modulo: 'cxc',
+        titulo: `Alerta Vendedor - Crédito vence en ${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin} día(s)`}: ${client.nombre || client.rif}`,
+        mensaje: `Asesor ${sellerName}: Al cliente ${client.nombre || ''} (${client.rif || ''}) le resta(n) ${summary.diasRestantesMin} día(s) para finalizar su crédito en ${summary.docProximoVencer || 'documento abierto'}.`,
+        destinatario_rol: 'VENTAS',
+        destinatario_usuario: sellerCode || sellerName,
+        origen: 'PREVENTA_MOVIL',
+        metadata: {
+          clienteId: client.id || client.codigo,
+          diasRestantes: summary.diasRestantesMin,
+          documento: summary.docProximoVencer
+        }
+      }).catch(() => {});
+    });
+  }, [scopedPortfolioEntries, sellerName, sellerCode, notify]);
+
+  // Enviar solicitud de Nuevo Cliente al Flujo Comercial para aprobación
+  const handleSubmitNewClientRequest = async (e) => {
+    e.preventDefault();
+    const cleanName = (newClientForm.nombre || '').trim();
+    const cleanRif = (newClientForm.rif || '').trim().toUpperCase();
+    const cleanPhone = (newClientForm.telefono || '').trim();
+    const cleanAddress = (newClientForm.direccion || '').trim();
+
+    if (!cleanName) {
+      notify.error('La razón social o nombre del cliente es obligatorio.');
+      return;
+    }
+    if (!cleanRif || !/^[JVEGP]-?\d{5,10}/i.test(cleanRif)) {
+      notify.error('Ingrese un RIF o Cédula válido (ej: J-123456789 o V-12345678).');
+      return;
+    }
+    if (!cleanPhone) {
+      notify.error('El teléfono / WhatsApp de contacto es obligatorio.');
+      return;
+    }
+    if (!cleanAddress) {
+      notify.error('La dirección fiscal o de despacho es obligatoria.');
+      return;
+    }
+
+    const dupClient = (clients || []).find(
+      (c) => c && String(c.rif || '').trim().toUpperCase() === cleanRif
+    );
+    if (dupClient) {
+      notify.warning(`Ya existe un cliente registrado con el RIF ${cleanRif} (${dupClient.nombre}).`);
+      return;
+    }
+
+    const zoneObj = (profitZones || []).find((z) => String(z.coZon || z.id || '') === String(newClientForm.zonaVenta));
+    const zonaNombre = zoneObj?.zonDes || zoneObj?.nombre || newClientForm.zonaVenta || 'Valencia';
+    const requestId = `SOL-CLI-${Date.now().toString().slice(-6)}`;
+    const nowIso = new Date().toISOString();
+    const diasCred = Number(newClientForm.diasCredito || 0);
+    const limiteUsd = Number(newClientForm.limiteCreditoUsd || 0);
+    const metaEncoded = encodeClientRequestMetadata({
+      ...newClientForm,
+      zonaNombre,
+      vendedorAsignado: sellerCode,
+      diasCredito: diasCred,
+      limiteCreditoUsd: limiteUsd
+    });
+
+    const requestPayload = {
+      id: requestId,
+      numeroDoc: requestId,
+      numeroPedido: requestId,
+      correlativo: requestId,
+      tipoDoc: 'SOLICITUD_CLIENTE',
+      tipo_doc: 'SOLICITUD_CLIENTE',
+      modalidadVenta: 'SOLICITUD_CLIENTE',
+      almacen: '01',
+      almacenId: '01',
+      clienteId: requestId,
+      clienteNombre: cleanName,
+      clienteRif: cleanRif,
+      direccionEntrega: cleanAddress,
+      zonaVenta: zonaNombre,
+      segmento: newClientForm.tipoCliente || 'Mayorista',
+      vendedorId: sellerName,
+      vendedorCoVen: sellerCode,
+      vendedorNombre: sellerName,
+      creadoPor: sellerName,
+      fechaEmision: nowIso,
+      diasCredito: diasCred,
+      condicionPago: diasCred > 0 ? `${diasCred}_DIAS` : 'CONTADO',
+      status: 'PENDIENTE_APROBACION',
+      estado: 'PENDIENTE_APROBACION',
+      totalLitros: 0,
+      totalCajas: 0,
+      totalNetoUsd: limiteUsd,
+      totalUsd: limiteUsd,
+      totalBs: limiteUsd * tasaBcv,
+      observaciones: metaEncoded,
+      comentarios: metaEncoded,
+      items: []
+    };
+
+    setIsSubmittingNewClient(true);
+    try {
+      if (onSaveOrder) {
+        await onSaveOrder(requestPayload);
+      }
+      await saveSupabaseNotification({
+        id: `notif_new_cli_${requestId}`,
+        tipo: 'sistema',
+        severidad: 'info',
+        modulo: 'pedidos',
+        titulo: `Nueva Solicitud de Cliente: ${cleanName} (${cleanRif})`,
+        mensaje: `El asesor ${sellerName} (${sellerCode}) envió la solicitud ${requestId} para aprobar a "${cleanName}" en Flujo Comercial.`,
+        destinatario_rol: 'GERENCIA',
+        destinatario_usuario: 'ALL',
+        origen: 'PREVENTA_MOVIL',
+        metadata: {
+          solicitudId: requestId,
+          rif: cleanRif,
+          vendedor: sellerName
+        }
+      }).catch(() => {});
+
+      setShowNewClientModal(false);
+      setNewClientForm(createInitialNewClientForm());
+      setShowClientsPortfolioModal(true);
+      setPortfolioTab('SOLICITUDES');
+    } catch (err) {
+      console.error('Error enviando solicitud de nuevo cliente:', err);
+      notify.error('No se pudo enviar la solicitud de cliente: ' + (err.message || 'Error de conexión'));
+    } finally {
+      setIsSubmittingNewClient(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       
       {/* ========================================================================= */}
       {/* 1. ENCABEZADO SUPERIOR: TERMINAL DE PREVENTA MÓVIL (ESTILO NATIVO) */}
       {/* ========================================================================= */}
-      <div className="page-header-responsive" style={{ marginBottom: '0.5rem' }}>
+      <div className="page-header-responsive" style={{ marginBottom: '0.25rem' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '10px', margin: 0, fontSize: 'clamp(1.15rem, 3.5vw, 1.55rem)' }}>
             <Smartphone size={28} color="var(--motorven-red)" /> Terminal de Preventa Móvil OILSTONE ®
@@ -683,6 +967,62 @@ export default function SellerOrderPOSView({
             <span>BCV: {formatBs(tasaBcv)}</span>
           </div>
 
+          {/* Botón Cartera de Clientes y Morosidad */}
+          <button
+            type="button"
+            onClick={() => {
+              setPortfolioTab('CARTERA');
+              setPortfolioStatusFilter('ALL');
+              setShowClientsPortfolioModal(true);
+            }}
+            className="btn btn-secondary btn-sm"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.78rem',
+              padding: '6px 12px',
+              borderColor: (portfolioKpis.enMora + portfolioKpis.porVencer3d) > 0 ? 'var(--motorven-gold)' : undefined
+            }}
+          >
+            <Users size={15} color="var(--neon-cyan)" />
+            <span>Mis Clientes ({portfolioKpis.total})</span>
+            {(portfolioKpis.enMora + portfolioKpis.porVencer3d) > 0 && (
+              <span style={{
+                background: portfolioKpis.enMora > 0 ? '#ef4444' : '#f59e0b',
+                color: '#fff',
+                borderRadius: '999px',
+                padding: '1px 6px',
+                fontSize: '0.68rem',
+                fontWeight: 900
+              }}>
+                {portfolioKpis.enMora + portfolioKpis.porVencer3d}
+              </span>
+            )}
+          </button>
+
+          {/* Botón Nuevo Cliente -> Flujo Comercial */}
+          <button
+            type="button"
+            onClick={() => setShowNewClientModal(true)}
+            className="btn btn-sm"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.78rem',
+              padding: '6px 12px',
+              background: 'linear-gradient(135deg, #059669, #047857)',
+              color: '#fff',
+              border: 'none',
+              fontWeight: 800,
+              borderRadius: '8px'
+            }}
+          >
+            <UserPlus size={15} />
+            <span>+ Nuevo Cliente</span>
+          </button>
+
           {/* Botón Historial de Pedidos */}
           <button
             type="button"
@@ -695,6 +1035,85 @@ export default function SellerOrderPOSView({
           </button>
         </div>
       </div>
+
+      {/* BANNER AUTOMÁTICO DE ALERTA CREDITICIA: <= 3 DÍAS POR VENCER / EN MORA */}
+      {(portfolioKpis.porVencer3d > 0 || portfolioKpis.enMora > 0) && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '8px',
+          padding: '8px 14px',
+          borderRadius: '10px',
+          background: portfolioKpis.enMora > 0
+            ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.16), rgba(245, 158, 11, 0.12))'
+            : 'rgba(245, 158, 11, 0.14)',
+          border: portfolioKpis.enMora > 0
+            ? '1px solid rgba(239, 68, 68, 0.45)'
+            : '1px solid rgba(245, 158, 11, 0.45)',
+          fontSize: '0.78rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <BellRing size={16} color={portfolioKpis.enMora > 0 ? '#f87171' : '#f59e0b'} />
+            <strong style={{ color: 'var(--text-primary)' }}>Monitor de Crédito de Cartera:</strong>
+            {portfolioKpis.porVencer3d > 0 && (
+              <span style={{ color: '#fbbf24', fontWeight: 700 }}>
+                ⏳ {portfolioKpis.porVencer3d} cliente(s) por vencer en ≤ 3 días
+              </span>
+            )}
+            {portfolioKpis.enMora > 0 && (
+              <span style={{ color: '#f87171', fontWeight: 700 }}>
+                • 🚨 {portfolioKpis.enMora} cliente(s) en mora
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {portfolioKpis.porVencer3d > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  setPortfolioTab('CARTERA');
+                  setPortfolioStatusFilter('POR_VENCER');
+                  setShowClientsPortfolioModal(true);
+                }}
+                style={{
+                  background: 'rgba(245, 158, 11, 0.22)',
+                  color: '#fbbf24',
+                  border: '1px solid #f59e0b',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '3px 10px'
+                }}
+              >
+                Ver Por Vencer ≤3d ({portfolioKpis.porVencer3d})
+              </button>
+            )}
+            {portfolioKpis.enMora > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  setPortfolioTab('CARTERA');
+                  setPortfolioStatusFilter('EN_MORA');
+                  setShowClientsPortfolioModal(true);
+                }}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.22)',
+                  color: '#fca5a5',
+                  border: '1px solid #ef4444',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '3px 10px'
+                }}
+              >
+                Ver En Mora ({portfolioKpis.enMora})
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 2. CUERPO PRINCIPAL: pos-grid-layout (Catálogo 1.6fr / Resumen 1fr) */}
@@ -1479,56 +1898,6 @@ export default function SellerOrderPOSView({
                     : (modalidadVenta === 'OFICINA' ? '🚀 EMITIR NOTA DE ENTREGA A CAJA' : '🚀 EMITIR FACTURA FISCAL A CAJA')}
                 </span>
               </button>
-
-              {onProcessSale && !isCreditDenied && (
-                <button
-                  type="button"
-                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
-                  onClick={handleDirectSale}
-                  className="btn btn-sm"
-                  style={{
-                    padding: '9px',
-                    fontSize: '0.82rem',
-                    fontWeight: 800,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    background: modalidadVenta === 'OFICINA' ? 'linear-gradient(135deg, #0369a1, #075985)' : 'linear-gradient(135deg, #059669, #047857)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '8px',
-                    boxShadow: '0 3px 10px rgba(0,0,0,0.25)',
-                    opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
-                  }}
-                >
-                  <CheckCircle2 size={15} />
-                  <span>{modalidadVenta === 'OFICINA' ? 'Facturar Directo (Nota de Entrega - Alm 02)' : 'Facturar Directo (Factura Fiscal - Alm 01)'}</span>
-                </button>
-              )}
-
-              {!isCreditDenied && onProceedToPOS && (
-                <button
-                  type="button"
-                  disabled={isSubmitting || cartItems.length === 0 || !selectedClient}
-                  onClick={() => handleSubmitOrder(true)}
-                  className="btn btn-secondary"
-                  style={{
-                    padding: '9px',
-                    fontSize: '0.8rem',
-                    fontWeight: 800,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    border: '1px solid var(--neon-cyan)',
-                    color: 'var(--neon-cyan)',
-                    opacity: cartItems.length === 0 || !selectedClient ? 0.5 : 1
-                  }}
-                >
-                  <Zap size={15} /> Emitir y Abrir Directamente en POS de Caja
-                </button>
-              )}
             </div>
 
             {/* Aviso de Reserva */}
@@ -2092,6 +2461,693 @@ export default function SellerOrderPOSView({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. MODAL: CARTERA DE CLIENTES DEL VENDEDOR (MORA, POR VENCER <=3D, SOLVENTE) */}
+      {/* ========================================================================= */}
+      {showClientsPortfolioModal && (
+        <div
+          className="clients-modal-backdrop"
+          style={{ zIndex: 2450 }}
+          onClick={() => setShowClientsPortfolioModal(false)}
+        >
+          <div
+            className="clients-modal-container"
+            style={{
+              maxWidth: '1080px',
+              width: '96%',
+              maxHeight: '92vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Cabecera Modal Cartera */}
+            <div className="clients-modal-header" style={{ borderBottom: '1px solid var(--border-glass)', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Users size={22} color="var(--neon-cyan)" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Cartera de Clientes & Monitor de Crédito — {sellerName}
+                  </h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Control de solvencia, días restantes para finalizar crédito, alertas ≤ 3 días y morosidad en tiempo real
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowClientsPortfolioModal(false);
+                    setShowNewClientModal(true);
+                  }}
+                  className="btn btn-sm"
+                  style={{
+                    background: 'linear-gradient(135deg, #059669, #047857)',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '6px 12px',
+                    borderRadius: '8px'
+                  }}
+                >
+                  <UserPlus size={14} /> + Solicitar Nuevo Cliente
+                </button>
+                <button type="button" onClick={() => setShowClientsPortfolioModal(false)} className="btn btn-icon">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-tabs: Cartera vs Solicitudes Enviadas */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '8px',
+              padding: '0.65rem 1.25rem',
+              borderBottom: '1px solid var(--border-glass)',
+              background: 'rgba(0,0,0,0.12)'
+            }}>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => setPortfolioTab('CARTERA')}
+                  className="btn btn-sm"
+                  style={{
+                    background: portfolioTab === 'CARTERA' ? 'rgba(0, 240, 255, 0.16)' : 'transparent',
+                    color: portfolioTab === 'CARTERA' ? 'var(--neon-cyan)' : 'var(--text-muted)',
+                    border: `1px solid ${portfolioTab === 'CARTERA' ? 'var(--neon-cyan)' : 'var(--border-glass)'}`,
+                    fontWeight: 800
+                  }}
+                >
+                  📋 Cartera de Clientes ({portfolioKpis.total})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPortfolioTab('SOLICITUDES')}
+                  className="btn btn-sm"
+                  style={{
+                    background: portfolioTab === 'SOLICITUDES' ? 'rgba(16, 185, 129, 0.16)' : 'transparent',
+                    color: portfolioTab === 'SOLICITUDES' ? '#34d399' : 'var(--text-muted)',
+                    border: `1px solid ${portfolioTab === 'SOLICITUDES' ? '#10b981' : 'var(--border-glass)'}`,
+                    fontWeight: 800
+                  }}
+                >
+                  🆕 Solicitudes Enviadas a Flujo Comercial ({sellerClientRequests.length})
+                </button>
+              </div>
+
+              {portfolioTab === 'CARTERA' && assignedClientsCount > 0 && (
+                <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.04)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPortfolioScope('MIS_CLIENTES')}
+                    className="btn btn-sm"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '4px 10px',
+                      background: effectivePortfolioScope === 'MIS_CLIENTES' ? 'var(--neon-cyan)' : 'transparent',
+                      color: effectivePortfolioScope === 'MIS_CLIENTES' ? '#0f172a' : 'var(--text-muted)',
+                      fontWeight: 800,
+                      border: 'none'
+                    }}
+                  >
+                    Mis Asignados ({assignedClientsCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPortfolioScope('TODOS')}
+                    className="btn btn-sm"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '4px 10px',
+                      background: effectivePortfolioScope === 'TODOS' ? 'var(--neon-cyan)' : 'transparent',
+                      color: effectivePortfolioScope === 'TODOS' ? '#0f172a' : 'var(--text-muted)',
+                      fontWeight: 800,
+                      border: 'none'
+                    }}
+                  >
+                    Todos ({clientPortfolioEntries.length})
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {portfolioTab === 'CARTERA' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                {/* KPIs y Filtros Rápidos */}
+                <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--border-glass)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {[
+                      { id: 'ALL', label: `Todos (${portfolioKpis.total})`, color: 'var(--neon-cyan)', bg: 'rgba(56, 189, 248, 0.14)' },
+                      { id: 'POR_VENCER', label: `⏳ Por Vencer ≤3d (${portfolioKpis.porVencer3d})`, color: '#fbbf24', bg: 'rgba(245, 158, 11, 0.16)' },
+                      { id: 'EN_MORA', label: `🚨 En Mora (${portfolioKpis.enMora})`, color: '#f87171', bg: 'rgba(239, 68, 68, 0.16)' },
+                      { id: 'SOLVENTES', label: `✅ Solventes / Al Día (${portfolioKpis.solventes})`, color: '#34d399', bg: 'rgba(16, 185, 129, 0.16)' },
+                      { id: 'BLOQUEADO', label: `⛔ Bloqueados (${portfolioKpis.bloqueados})`, color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.16)' }
+                    ].map((pill) => {
+                      const active = portfolioStatusFilter === pill.id;
+                      return (
+                        <button
+                          key={pill.id}
+                          type="button"
+                          onClick={() => setPortfolioStatusFilter(pill.id)}
+                          className="btn btn-sm"
+                          style={{
+                            fontSize: '0.73rem',
+                            fontWeight: 800,
+                            padding: '5px 11px',
+                            borderRadius: '8px',
+                            background: active ? pill.bg : 'rgba(255,255,255,0.03)',
+                            color: active ? pill.color : 'var(--text-muted)',
+                            border: `1px solid ${active ? pill.color : 'var(--border-glass)'}`
+                          }}
+                        >
+                          {pill.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ position: 'relative' }}>
+                    <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="Filtrar cartera por razón social, RIF, código, ciudad o zona..."
+                      value={portfolioSearch}
+                      onChange={(e) => setPortfolioSearch(e.target.value)}
+                      style={{ paddingLeft: '32px', fontSize: '0.8rem' }}
+                    />
+                  </div>
+                </div>
+
+                {/* Lista Scrollable de Clientes */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '0.85rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {filteredPortfolioEntries.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No hay clientes que coincidan con el filtro seleccionado.
+                    </div>
+                  ) : (
+                    filteredPortfolioEntries.map(({ client, assignedToSeller, summary }) => {
+                      const cKey = client.id || client.codigo || client.rif;
+                      const isExpanded = expandedPortfolioClientId === cKey;
+                      const ev = summary.evalPolicy || {};
+                      const toneColors = {
+                        danger: { border: 'rgba(239, 68, 68, 0.45)', bg: 'rgba(239, 68, 68, 0.14)', text: '#f87171' },
+                        warning: { border: 'rgba(245, 158, 11, 0.5)', bg: 'rgba(245, 158, 11, 0.16)', text: '#fbbf24' },
+                        info: { border: 'rgba(56, 189, 248, 0.45)', bg: 'rgba(56, 189, 248, 0.14)', text: '#38bdf8' },
+                        success: { border: 'rgba(16, 185, 129, 0.4)', bg: 'rgba(16, 185, 129, 0.14)', text: '#34d399' },
+                        neutral: { border: 'var(--border-glass)', bg: 'rgba(148,163,184,0.1)', text: 'var(--text-muted)' }
+                      };
+                      const tc = toneColors[summary.badgeTone] || toneColors.neutral;
+
+                      return (
+                        <div
+                          key={cKey}
+                          style={{
+                            border: `1px solid ${summary.enMora || summary.alerta3Dias ? tc.border : 'var(--border-glass)'}`,
+                            borderRadius: '10px',
+                            background: 'rgba(255,255,255,0.02)',
+                            padding: '10px 12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
+                            <div style={{ flex: '1 1 260px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                <strong style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                                  {client.nombre || client.razonSocial}
+                                </strong>
+                                {assignedToSeller && (
+                                  <span className="badge" style={{ fontSize: '0.64rem', padding: '1px 6px', background: 'rgba(56, 189, 248, 0.14)', color: 'var(--neon-cyan)' }}>
+                                    Mi Cartera
+                                  </span>
+                                )}
+                                <span style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 800,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: tc.bg,
+                                  color: tc.text,
+                                  border: `1px solid ${tc.border}`
+                                }}>
+                                  {summary.estadoLabel}
+                                </span>
+                              </div>
+
+                              <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: '3px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                                <span>RIF: <strong style={{ color: 'var(--text-primary)' }}>{client.rif || 'N/A'}</strong></span>
+                                <span>Cód: {client.codigo || client.id}</span>
+                                <span>Plazo ficha: <strong>{client.diasCredito || 0}d</strong></span>
+                                {client.telefono && <span><Phone size={11} style={{ display: 'inline' }} /> {client.telefono}</span>}
+                                <span>Zona: {client.zonaVenta || client.zona || 'General'}</span>
+                              </div>
+                            </div>
+
+                            {/* Indicadores Financieros + Vencimiento */}
+                            <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center', fontSize: '0.74rem' }}>
+                              <div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.66rem' }}>Límite Crédito</div>
+                                <strong style={{ color: 'var(--text-primary)' }}>{formatUsd(ev.limiteCreditoUsd || 0)}</strong>
+                              </div>
+                              <div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.66rem' }}>Deuda / Saldo</div>
+                                <strong style={{ color: (ev.saldoDeudorUsd || 0) > 0 ? '#f87171' : '#34d399' }}>
+                                  {formatUsd(ev.saldoDeudorUsd || 0)}
+                                </strong>
+                              </div>
+                              <div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.66rem' }}>Crédito Disp.</div>
+                                <strong style={{ color: 'var(--semaforo-verde)' }}>{formatUsd(ev.creditoDisponibleUsd || 0)}</strong>
+                              </div>
+                              <div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.66rem' }}>Próx. Vencimiento</div>
+                                <strong style={{ color: tc.text }}>
+                                  {summary.proximaFechaVencimiento
+                                    ? `${formatDateVe(summary.proximaFechaVencimiento)} (${summary.docProximoVencer || 'Doc'})`
+                                    : 'Sin docs pendientes'}
+                                </strong>
+                              </div>
+                            </div>
+
+                            {/* Acciones por Cliente */}
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '0.72rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                onClick={() => setExpandedPortfolioClientId(isExpanded ? null : cKey)}
+                              >
+                                {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                                <span>Docs ({summary.documentosAbiertos.length})</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '0.72rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                onClick={() => {
+                                  generateThirdPartyStatementPDF({
+                                    entity: client,
+                                    entityType: 'CLIENT',
+                                    documents: summary.documentosAbiertos.map((d) => ({
+                                      ...d,
+                                      factNum: d.numeroDoc,
+                                      fecEmis: d.fechaEmision,
+                                      fecVenc: d.expDateIso || d.fechaVencimiento,
+                                      totNetoUsd: d.montoPendienteUsd,
+                                      saldoUsd: d.montoPendienteUsd,
+                                      isVencida: d.diasMora > 0
+                                    })),
+                                    config: safeConfig,
+                                    currentUser
+                                  });
+                                }}
+                                title="Descargar Estado de Cuenta PDF"
+                              >
+                                <Printer size={13} /> Edo. PDF
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                style={{ fontSize: '0.72rem', padding: '4px 10px', fontWeight: 800 }}
+                                onClick={() => {
+                                  handleSelectClient(client);
+                                  setShowClientsPortfolioModal(false);
+                                  notify.info(`Cliente "${client.nombre || client.razonSocial}" seleccionado para la preventa.`);
+                                }}
+                              >
+                                Usar en Pedido →
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Detalle expandido de documentos abiertos y motivo */}
+                          {isExpanded && (
+                            <div style={{
+                              marginTop: '4px',
+                              padding: '8px 10px',
+                              borderRadius: '8px',
+                              background: 'rgba(15, 23, 42, 0.55)',
+                              border: '1px solid var(--border-glass)',
+                              fontSize: '0.73rem'
+                            }}>
+                              <div style={{ marginBottom: '6px', color: 'var(--text-muted)' }}>
+                                <strong style={{ color: 'var(--text-primary)' }}>Evaluación de política comercial:</strong> {ev.motivo}
+                              </div>
+                              {summary.documentosAbiertos.length === 0 ? (
+                                <div style={{ color: '#34d399', fontWeight: 700 }}>✓ Sin facturas ni notas de entrega pendientes de cobro.</div>
+                              ) : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                                  <thead>
+                                    <tr style={{ borderBottom: '1px solid var(--border-glass)', color: 'var(--text-muted)' }}>
+                                      <th style={{ textAlign: 'left', padding: '4px' }}>Documento</th>
+                                      <th style={{ textAlign: 'left', padding: '4px' }}>Tipo</th>
+                                      <th style={{ textAlign: 'center', padding: '4px' }}>Emisión</th>
+                                      <th style={{ textAlign: 'center', padding: '4px' }}>Vence</th>
+                                      <th style={{ textAlign: 'center', padding: '4px' }}>Días</th>
+                                      <th style={{ textAlign: 'right', padding: '4px' }}>Saldo USD</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {summary.documentosAbiertos.map((d) => {
+                                      const dColor = d.diasMora > 0 ? '#f87171' : (d.diasRestantes !== null && d.diasRestantes <= 3 ? '#fbbf24' : '#34d399');
+                                      return (
+                                        <tr key={d.id || d.numeroDoc} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                                          <td style={{ padding: '4px', fontWeight: 700 }}>{d.numeroDoc}</td>
+                                          <td style={{ padding: '4px', color: 'var(--text-muted)' }}>{d.tipoDoc}</td>
+                                          <td style={{ padding: '4px', textAlign: 'center' }}>{formatDateVe(d.fechaEmision)}</td>
+                                          <td style={{ padding: '4px', textAlign: 'center' }}>{formatDateVe(d.expDateIso || d.fechaVencimiento)}</td>
+                                          <td style={{ padding: '4px', textAlign: 'center', fontWeight: 800, color: dColor }}>
+                                            {d.diasMora > 0
+                                              ? `${d.diasMora}d mora`
+                                              : (d.diasRestantes !== null ? `${d.diasRestantes}d rest.` : '—')}
+                                          </td>
+                                          <td style={{ padding: '4px', textAlign: 'right', fontWeight: 800 }}>{formatUsd(d.montoPendienteUsd)}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* SUB-TAB: SOLICITUDES DE NUEVO CLIENTE ENVIADAS A FLUJO COMERCIAL */
+              <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {sellerClientRequests.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    No se han enviado solicitudes de nuevos clientes a Flujo Comercial todavía.
+                  </div>
+                ) : (
+                  sellerClientRequests.map((req) => {
+                    const isApproved = req.status === 'APROBADO';
+                    const isRejected = req.status === 'RECHAZADO';
+                    const stColor = isApproved ? '#34d399' : isRejected ? '#f87171' : '#fbbf24';
+                    const stLabel = isApproved ? '✓ APROBADO Y REGISTRADO' : isRejected ? '✕ RECHAZADO' : '⏳ PENDIENTE EN FLUJO COMERCIAL';
+                    return (
+                      <div
+                        key={req.id}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '10px',
+                          border: `1px solid ${isApproved ? 'rgba(16,185,129,0.4)' : isRejected ? 'rgba(239,68,68,0.4)' : 'rgba(245,158,11,0.45)'}`,
+                          background: 'rgba(255,255,255,0.03)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '10px'
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <strong style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>{req.nombre}</strong>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--neon-cyan)', fontWeight: 700 }}>{req.solicitudDoc}</span>
+                            <span style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 800,
+                              padding: '2px 8px',
+                              borderRadius: '999px',
+                              border: `1px solid ${stColor}`,
+                              color: stColor
+                            }}>
+                              {stLabel}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: '3px' }}>
+                            RIF: <strong>{req.rif}</strong> • Tel: {req.telefono} • Zona: {req.zonaNombre || req.zonaVenta} • Solicita: {req.diasCredito}d / {formatUsd(req.limiteCreditoUsd)}
+                          </div>
+                          {req.motivoRechazo && (
+                            <div style={{ fontSize: '0.72rem', color: '#f87171', marginTop: '3px' }}>
+                              Motivo rechazo: {req.motivoRechazo}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'right' }}>
+                          <div>Enviado: {formatDateVe(req.fechaSolicitud)}</div>
+                          {req.aprobadoPor && <div>Revisado por: <strong>{req.aprobadoPor}</strong></div>}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Las alertas de vencimiento ≤ 3 días se sincronizan automáticamente con el Centro de Notificaciones.
+              </span>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowClientsPortfolioModal(false)}>
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 6. MODAL: FORMULARIO DE NUEVO CLIENTE -> ENVÍO A FLUJO COMERCIAL          */}
+      {/* ========================================================================= */}
+      {showNewClientModal && (
+        <div
+          className="clients-modal-backdrop"
+          style={{ zIndex: 2500 }}
+          onClick={() => !isSubmittingNewClient && setShowNewClientModal(false)}
+        >
+          <div
+            className="clients-modal-container"
+            style={{ maxWidth: '680px', width: '95%', maxHeight: '92vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="clients-modal-header" style={{ borderBottom: '1px solid var(--border-glass)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <UserPlus size={22} color="#34d399" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Solicitud de Nuevo Cliente → Flujo Comercial
+                  </h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Asesor: <strong>{sellerName}</strong> ({sellerCode}) • Se enviará para revisión y aprobación gerencial
+                  </div>
+                </div>
+              </div>
+              <button type="button" onClick={() => !isSubmittingNewClient && setShowNewClientModal(false)} className="btn btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitNewClientRequest} style={{ padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Razón Social / Nombre Completo *</label>
+                  <input
+                    type="text"
+                    required
+                    className="form-control"
+                    placeholder="Ej: Inversiones Lubricar C.A."
+                    value={newClientForm.nombre}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, nombre: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>RIF / Cédula *</label>
+                  <input
+                    type="text"
+                    required
+                    className="form-control"
+                    placeholder="Ej: J-401234567"
+                    value={newClientForm.rif}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, rif: e.target.value.toUpperCase() }))}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Teléfono / WhatsApp *</label>
+                  <input
+                    type="text"
+                    required
+                    className="form-control"
+                    placeholder="Ej: 0414-1234567"
+                    value={newClientForm.telefono}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, telefono: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Persona de Contacto / Responsable</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Nombre del comprador o dueño"
+                    value={newClientForm.responsable}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, responsable: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Correo Electrónico</label>
+                  <input
+                    type="email"
+                    className="form-control"
+                    placeholder="correo@empresa.com"
+                    value={newClientForm.email}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, email: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Zona Comercial</label>
+                  <select
+                    className="form-control"
+                    value={newClientForm.zonaVenta}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, zonaVenta: e.target.value }))}
+                  >
+                    {(Array.isArray(profitZones) && profitZones.length > 0 ? profitZones : [{ coZon: '01', zonDes: '01 - Valencia / Centro' }]).map((z) => {
+                      const code = z.coZon || z.id || z.codigo || '01';
+                      const label = z.zonDes || z.nombre || code;
+                      return <option key={code} value={code}>{label}</option>;
+                    })}
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Ciudad / Estado</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Ej: Valencia, Carabobo"
+                    value={newClientForm.ciudad}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, ciudad: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Tipo / Segmento de Cliente</label>
+                  <select
+                    className="form-control"
+                    value={newClientForm.tipoCliente}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, tipoCliente: e.target.value }))}
+                  >
+                    <option value="Mayorista">Mayorista / Lubricentro</option>
+                    <option value="Detal / Taller">Detal / Taller Mecánico</option>
+                    <option value="Flota / Transporte">Flota / Transporte Pesado</option>
+                    <option value="Distribuidor">Distribuidor Autorizado</option>
+                    <option value="Industrial">Sector Industrial / Agro</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Dirección Fiscal y de Despacho *</label>
+                <input
+                  type="text"
+                  required
+                  className="form-control"
+                  placeholder="Av. / Calle / Galpón / Punto de referencia completo"
+                  value={newClientForm.direccion}
+                  onChange={(e) => setNewClientForm((p) => ({ ...p, direccion: e.target.value }))}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', alignItems: 'center' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Plazo Crédito Solicitado</label>
+                  <select
+                    className="form-control"
+                    value={newClientForm.diasCredito}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, diasCredito: Number(e.target.value) }))}
+                  >
+                    <option value={0}>Solo Contado (0 Días)</option>
+                    <option value={7}>Crédito 7 Días</option>
+                    <option value={15}>Crédito 15 Días</option>
+                    <option value={21}>Crédito 21 Días</option>
+                    <option value={30}>Crédito 30 Días</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Límite Crédito Sugerido (USD)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    className="form-control"
+                    value={newClientForm.limiteCreditoUsd}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, limiteCreditoUsd: e.target.value }))}
+                  />
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.76rem', fontWeight: 700, cursor: 'pointer', paddingTop: '16px' }}>
+                  <input
+                    type="checkbox"
+                    checked={newClientForm.esContribuyenteEspecial}
+                    onChange={(e) => setNewClientForm((p) => ({ ...p, esContribuyenteEspecial: e.target.checked }))}
+                  />
+                  Contribuyente Especial SENIAT
+                </label>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '0.74rem', fontWeight: 700 }}>Observaciones / Referencias Comerciales</label>
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  placeholder="Referencias comerciales, volumen mensual estimado, horario de recepción..."
+                  value={newClientForm.notasVendedor}
+                  onChange={(e) => setNewClientForm((p) => ({ ...p, notasVendedor: e.target.value }))}
+                />
+              </div>
+
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: '8px',
+                background: 'rgba(16, 185, 129, 0.1)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                fontSize: '0.73rem',
+                color: '#34d399'
+              }}>
+                ℹ️ Al enviar esta solicitud aparecerá inmediatamente en <strong>Flujo Comercial & Pedidos → Solicitudes de Clientes</strong> para su aprobación y alta en la cartera oficial.
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={isSubmittingNewClient}
+                  onClick={() => setShowNewClientModal(false)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-sm"
+                  disabled={isSubmittingNewClient}
+                  style={{
+                    background: 'linear-gradient(135deg, #059669, #047857)',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Send size={14} />
+                  {isSubmittingNewClient ? 'Enviando...' : 'Enviar Solicitud a Flujo Comercial'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
