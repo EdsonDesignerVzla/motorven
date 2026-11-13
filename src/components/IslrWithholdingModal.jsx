@@ -21,7 +21,7 @@ import {
   Check
 } from 'lucide-react';
 import { saveSupabaseProfitIslrWithholding } from '../services/supabaseService';
-import { generateTaxReportPDF } from '../services/pdfReportService';
+import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generatePaymentOrderPDF } from '../services/pdfReportService';
 
 export default function IslrWithholdingModal({
   isOpen,
@@ -200,7 +200,7 @@ export default function IslrWithholdingModal({
       sales: [],
       purchases: purchases || [],
       fiscalClosures: [],
-      withholdings: selectedVoucher ? [selectedVoucher] : (vouchers || []),
+      withholdings: selectedVoucher ? [selectedVoucher] : (withholdings || []),
       config,
       currentUser,
       reportType: 'ISLR'
@@ -580,22 +580,24 @@ export default function IslrWithholdingModal({
                                 Bs. {Number(w.montoRetenido).toLocaleString('es-VE', { minimumFractionDigits: 2 })}
                               </td>
                               <td className="p-3 text-center">
-                                <button
-                                  onClick={() => {
-                                    setSelectedVoucher(w);
-                                    generateTaxReportPDF({
-                                      reportType: 'ISLR',
-                                      period: w.periodoFiscal || '2026-10',
-                                      withholdings: [w],
-                                      config,
-                                      currentUser
-                                    });
-                                  }}
-                                  className="btn btn-print-report text-xs flex items-center gap-1 mx-auto"
-                                >
-                                  <Printer className="w-3.5 h-3.5" color="#ffffff" />
-                                  Imprimir Reporte
-                                </button>
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    onClick={() => {
+                                      setSelectedVoucher(w);
+                                      generateSeniatRetentionVoucherPDF({
+                                        type: 'ISLR',
+                                        record: w,
+                                        config,
+                                        currentUser
+                                      });
+                                    }}
+                                    className="btn btn-print-report text-xs flex items-center gap-1"
+                                    title="Descargar Comprobante Individual de Retención ISLR (Decreto 1.808)"
+                                  >
+                                    <Printer className="w-3.5 h-3.5" color="#ffffff" />
+                                    Comprobante PDF
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -932,6 +934,7 @@ export default function IslrWithholdingModal({
                       <th className="p-3 text-right">Monto Bruto</th>
                       <th className="p-3 text-right">Retenciones</th>
                       <th className="p-3 text-right">Monto Neto</th>
+                      <th className="p-3 text-center">PDF</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
@@ -963,6 +966,16 @@ export default function IslrWithholdingModal({
                         </td>
                         <td className="p-3 text-right font-mono font-black text-emerald-400">
                           Bs. {(Number(o.monto) - Number(o.montoRet)).toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => generatePaymentOrderPDF({ paymentOrder: o, config, currentUser })}
+                            className="px-2 py-1 rounded bg-slate-800 hover:bg-blue-700 text-amber-300 hover:text-white border border-slate-700 text-[11px] font-semibold inline-flex items-center gap-1"
+                            title="Imprimir Orden de Pago oficial Carta PDF"
+                          >
+                            <Printer className="w-3 h-3" /> OP PDF
+                          </button>
                         </td>
                       </tr>
                     ))}

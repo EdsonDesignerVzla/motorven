@@ -167,17 +167,48 @@ let memoryProductsCache = null;
 const persistProductsToStorage = (products) => {
   memoryProductsCache = products;
   try {
-    const serialized = JSON.stringify(products);
-    localStorage.setItem(KEYS.PRODUCTS, serialized);
-    localStorage.setItem('sm_products_v4_fiscal', serialized);
+    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
   } catch (_) {
     try {
       const compact = products.map(({ imagen, ...rest }) => rest);
-      const serializedCompact = JSON.stringify(compact);
-      localStorage.setItem(KEYS.PRODUCTS, serializedCompact);
-      localStorage.setItem('sm_products_v4_fiscal', serializedCompact);
+      localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(compact));
     } catch (_e) {}
   }
+};
+
+export const patchProductsStockInStorage = (updatedItems = []) => {
+  if (!Array.isArray(updatedItems) || updatedItems.length === 0) return [];
+  const products = [...getProducts()];
+  let changed = false;
+  for (const patch of updatedItems) {
+    if (!patch) continue;
+    const pId = String(patch.id || '').trim().toUpperCase();
+    const pCode = String(patch.codigo || '').trim().toUpperCase();
+    const idx = products.findIndex(p => {
+      const curId = String(p.id || '').trim().toUpperCase();
+      const curCode = String(p.codigo || '').trim().toUpperCase();
+      return (pId && curId === pId) || (pCode && curCode === pCode);
+    });
+    if (idx >= 0) {
+      products[idx] = {
+        ...products[idx],
+        stock: patch.stock,
+        stockAlmacen01: patch.stockAlmacen01,
+        stock_almacen_01: patch.stock_almacen_01,
+        stockAlmacen02: patch.stockAlmacen02,
+        stock_almacen_02: patch.stock_almacen_02,
+        updated_at: patch.updated_at || products[idx].updated_at
+      };
+      changed = true;
+    } else {
+      products.push(patch);
+      changed = true;
+    }
+  }
+  if (changed) {
+    persistProductsToStorage(products);
+  }
+  return products;
 };
 
 export const getProducts = () => {

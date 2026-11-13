@@ -1117,7 +1117,6 @@ export default function HeaderBar({
                     type="button"
                     onClick={() => {
                       setDropdownMenuOpen(false);
-                      setExitStep(1);
                       setShowExitModal(true);
                     }}
                     style={{

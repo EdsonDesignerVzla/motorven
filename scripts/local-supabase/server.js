@@ -376,8 +376,11 @@ function saveDatabase() {
   schedulePersist();
 }
 
+let lastSecondaryUsersJson = '';
+let lastSecondarySellersJson = '';
+
 function scheduleSecondaryBackups(serialized) {
-  // Respaldos rotativos y archivos secundarios en segundo plano
+  // Respaldos rotativos y archivos secundarios en segundo plano (sin bloqueo síncrono de event loop)
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
     try {
@@ -400,14 +403,18 @@ function scheduleSecondaryBackups(serialized) {
           !u.username.trim().toLowerCase().startsWith('autotest_')
         );
         const tempUsersFile = path.join(projectRoot, 'src', 'data', 'temp', 'users.json');
-        if (fs.existsSync(path.dirname(tempUsersFile))) {
-          writeAtomicJson(tempUsersFile, cleanUsers);
+        const usersPayload = JSON.stringify(cleanUsers, null, 2);
+        if (usersPayload !== lastSecondaryUsersJson && fs.existsSync(path.dirname(tempUsersFile))) {
+          await writeAtomicPayloadAsync(tempUsersFile, usersPayload);
+          lastSecondaryUsersJson = usersPayload;
         }
       }
       if (Array.isArray(database.profit_sellers)) {
         const tempSellersFile = path.join(projectRoot, 'src', 'data', 'temp', 'profit_sellers.json');
-        if (fs.existsSync(path.dirname(tempSellersFile))) {
-          writeAtomicJson(tempSellersFile, database.profit_sellers);
+        const sellersPayload = JSON.stringify(database.profit_sellers, null, 2);
+        if (sellersPayload !== lastSecondarySellersJson && fs.existsSync(path.dirname(tempSellersFile))) {
+          await writeAtomicPayloadAsync(tempSellersFile, sellersPayload);
+          lastSecondarySellersJson = sellersPayload;
         }
       }
     } catch (e) {
@@ -515,8 +522,8 @@ function matchFilter(value, operator, target) {
       return Number(value) <= Number(target);
     case 'like':
     case 'ilike': {
-      const pattern = strTarget.replace(/\*/g, '.*');
-      return new RegExp(`^${pattern}$`, 'i').test(strVal);
+      const escaped = strTarget.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/[*%]/g, '.*');
+      return new RegExp(`^${escaped}$`, 'i').test(strVal);
     }
     case 'in': {
       // target formato: (a,b,c)
@@ -532,10 +539,29 @@ function matchFilter(value, operator, target) {
   }
 }
 
+function splitTopLevelCommas(str) {
+  const result = [];
+  let depth = 0;
+  let current = '';
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === '(') depth++;
+    else if (ch === ')' && depth > 0) depth--;
+    if (ch === ',' && depth === 0) {
+      if (current.trim()) result.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) result.push(current.trim());
+  return result;
+}
+
 function matchOrFilter(row, orString, tableName = '') {
   if (!orString || typeof orString !== 'string') return false;
   const clean = orString.trim().replace(/^\(|\)$/g, '');
-  const clauses = clean.split(',');
+  const clauses = splitTopLevelCommas(clean);
   for (const clause of clauses) {
     const parts = clause.split('.');
     if (parts.length >= 2) {
@@ -569,8 +595,10 @@ function parseBody(req) {
     req.on('end', () => {
       try {
         resolve(body ? JSON.parse(body) : {});
-      } catch (e) {
-        resolve({});
+      } catch (_e) {
+        const err = new Error('JSON inválido en el cuerpo de la petición');
+        err.statusCode = 400;
+        reject(err);
       }
     });
     req.on('error', reject);
@@ -1126,8 +1154,14 @@ const server = http.createServer(async (req, res) => {
 
   // 2.2. Admin Sync Endpoint (protegido para sincronización atómica entre servidores)
   if (req.method === 'POST' && pathname === '/admin/v1/sync-database') {
+    const expectedAdminKey = process.env.SIGNUM_ADMIN_KEY || '';
+    if (!expectedAdminKey) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Admin sync key not configured' }));
+      return;
+    }
     const adminKey = req.headers['x-signum-admin-key'] || '';
-    if (adminKey !== 'motorven-master-sync-2026') {
+    if (adminKey !== expectedAdminKey) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Forbidden' }));
       return;
@@ -1146,7 +1180,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false, error: 'Payload de base de datos inválido' }));
       return;
     } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.writeHead(err.statusCode || 500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: err.message }));
       return;
     }

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { X, Printer } from 'lucide-react';
+import { X, Printer, Plus } from 'lucide-react';
 import { formatBs, resolveProductUnit } from '../services/formatService';
-import { generateInventoryPDF } from '../services/pdfReportService';
+import { generateInventoryPDF, generateWarehouseTransferOrAdjustmentPDF } from '../services/pdfReportService';
 
 export default function InventoryKardexModal({
   isOpen,
@@ -11,7 +11,9 @@ export default function InventoryKardexModal({
   products = [],
   config = {},
   currentUser = null,
-  onSyncProfit
+  onSyncProfit,
+  onSaveTransfer,
+  onSaveAdjustment
 }) {
   const [activeTab, setActiveTab] = useState('ADJUSTMENTS'); // 'ADJUSTMENTS', 'TRANSFERS', 'KARDEX_SUMMARY'
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,6 +21,14 @@ export default function InventoryKardexModal({
   const [selectedAdjustment, setSelectedAdjustment] = useState(null);
   const [selectedTransfer, setSelectedTransfer] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [savingMov, setSavingMov] = useState(false);
+  const [movSku, setMovSku] = useState('');
+  const [movQty, setMovQty] = useState(1);
+  const [movWarehouse, setMovWarehouse] = useState('01');
+  const [movDestWarehouse, setMovDestWarehouse] = useState('02');
+  const [movAdjType, setMovAdjType] = useState('S'); // 'E' entrada, 'S' salida/merma
+  const [movReason, setMovReason] = useState('');
 
   const tasaDolar = Number(config?.tasaDolar || 1);
 
@@ -227,7 +237,18 @@ export default function InventoryKardexModal({
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {(onSaveTransfer || onSaveAdjustment) && activeTab !== 'KARDEX_SUMMARY' && (
+              <button
+                onClick={() => setShowNewForm((v) => !v)}
+                className="btn btn-primary btn-sm"
+                style={{ fontSize: '0.78rem', fontWeight: 700 }}
+                title="Crear nuevo traslado entre almacenes o ajuste de inventario"
+              >
+                <Plus size={14} />
+                <span>{showNewForm ? 'Cerrar Formulario' : (activeTab === 'TRANSFERS' ? 'Nuevo Traslado' : 'Nuevo Ajuste / Merma')}</span>
+              </button>
+            )}
             <button
               onClick={handleTriggerSync}
               disabled={isSyncing}
@@ -256,6 +277,122 @@ export default function InventoryKardexModal({
             </button>
           </div>
         </div>
+
+        {/* Formulario inline para Nuevo Traslado o Nuevo Ajuste */}
+        {showNewForm && activeTab !== 'KARDEX_SUMMARY' && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!movSku || Number(movQty) <= 0) return;
+              const prod = products.find(p => String(p.codigo || p.id) === movSku) || {};
+              const costUsd = Number(prod.costoUnitarioUsd || prod.precioUsd || 0);
+              const qty = Number(movQty || 1);
+              setSavingMov(true);
+              try {
+                if (activeTab === 'TRANSFERS' && onSaveTransfer) {
+                  const dest = movWarehouse === '01' ? '02' : '01';
+                  const saved = await onSaveTransfer({
+                    almOrig: movWarehouse,
+                    almDest: movDestWarehouse === movWarehouse ? dest : movDestWarehouse,
+                    motivo: movReason.trim() || `Traslado físico Alm ${movWarehouse} -> Alm ${movDestWarehouse}`,
+                    coUsIn: currentUser?.nombre || currentUser?.username || 'WEB',
+                    renglones: [{
+                      co_art: prod.codigo || movSku,
+                      art_des: prod.descripcion || movSku,
+                      total_art: qty,
+                      uni_venta: prod.unidad || 'Caja',
+                      cost_unit_om: costUsd,
+                      cost_unit: costUsd * tasaDolar
+                    }]
+                  });
+                  setSelectedTransfer(saved);
+                  setShowNewForm(false);
+                  generateWarehouseTransferOrAdjustmentPDF({ record: saved, mode: 'TRANSFER', config, currentUser });
+                } else if (activeTab === 'ADJUSTMENTS' && onSaveAdjustment) {
+                  const saved = await onSaveAdjustment({
+                    almacen: movWarehouse,
+                    motivo: movReason.trim() || (movAdjType === 'E' ? 'Ajuste de entrada / Sobrante' : 'Ajuste de salida / Merma'),
+                    coUsIn: currentUser?.nombre || currentUser?.username || 'WEB',
+                    renglones: [{
+                      co_art: prod.codigo || movSku,
+                      art_des: prod.descripcion || movSku,
+                      co_alma: movWarehouse,
+                      tipo: movAdjType === 'E' ? 'E01' : 'S02',
+                      tipo_trans: movAdjType,
+                      total_art: qty,
+                      uni_venta: prod.unidad || 'Caja',
+                      cost_unit_om: costUsd,
+                      cost_unit: costUsd * tasaDolar
+                    }]
+                  });
+                  setSelectedAdjustment(saved);
+                  setShowNewForm(false);
+                  generateWarehouseTransferOrAdjustmentPDF({ record: saved, mode: 'ADJUSTMENT', config, currentUser });
+                }
+              } finally {
+                setSavingMov(false);
+              }
+            }}
+            className="p-4 bg-blue-50/60 dark:bg-[#0c1630] border-b border-slate-200 dark:border-slate-800 grid grid-cols-1 md:grid-cols-5 gap-3 items-end print:hidden"
+          >
+            <div className="md:col-span-2">
+              <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">Producto / SKU</label>
+              <select
+                value={movSku}
+                onChange={(e) => setMovSku(e.target.value)}
+                required
+                className="w-full px-2.5 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
+              >
+                <option value="">-- Seleccionar artículo --</option>
+                {products.map((p) => (
+                  <option key={p.id || p.codigo} value={p.codigo || p.id}>
+                    {p.codigo} - {p.descripcion} (Stock: {p.stock || 0})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                {activeTab === 'TRANSFERS' ? 'Origen ➔ Destino' : 'Tipo y Almacén'}
+              </label>
+              {activeTab === 'TRANSFERS' ? (
+                <div className="flex gap-1.5">
+                  <select value={movWarehouse} onChange={(e) => { setMovWarehouse(e.target.value); setMovDestWarehouse(e.target.value === '01' ? '02' : '01'); }} className="w-1/2 px-2 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs">
+                    <option value="01">Alm 01</option>
+                    <option value="02">Alm 02</option>
+                  </select>
+                  <select value={movDestWarehouse} onChange={(e) => setMovDestWarehouse(e.target.value)} className="w-1/2 px-2 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs">
+                    <option value="02">Alm 02</option>
+                    <option value="01">Alm 01</option>
+                  </select>
+                </div>
+              ) : (
+                <div className="flex gap-1.5">
+                  <select value={movAdjType} onChange={(e) => setMovAdjType(e.target.value)} className="w-1/2 px-2 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs">
+                    <option value="S">Salida / Merma</option>
+                    <option value="E">Entrada (+)</option>
+                  </select>
+                  <select value={movWarehouse} onChange={(e) => setMovWarehouse(e.target.value)} className="w-1/2 px-2 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs">
+                    <option value="01">Alm 01</option>
+                    <option value="02">Alm 02</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">Cant. / Motivo</label>
+              <div className="flex gap-1.5">
+                <input type="number" min="1" step="1" value={movQty} onChange={(e) => setMovQty(e.target.value)} required className="w-20 px-2 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs" />
+                <input type="text" value={movReason} onChange={(e) => setMovReason(e.target.value)} placeholder="Motivo" className="flex-1 px-2 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs" />
+              </div>
+            </div>
+            <div>
+              <button type="submit" disabled={savingMov} className="w-full py-2 px-3 bg-[#002b7a] hover:bg-blue-800 text-white rounded-lg text-xs font-bold">
+                {savingMov ? 'Procesando...' : 'Guardar & PDF'}
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Tarjetas KPI de Resumen */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-5 bg-slate-50 dark:bg-[#070d1e] border-b border-slate-200 dark:border-slate-800">
@@ -438,15 +575,27 @@ export default function InventoryKardexModal({
                               {a.totalItems}
                             </td>
                             <td className="p-3 text-center">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedAdjustment(a);
-                                }}
-                                className="px-2.5 py-1 text-[11px] font-semibold bg-[#002b7a]/10 text-[#002b7a] dark:bg-blue-500/20 dark:text-blue-300 hover:bg-[#002b7a] hover:text-white rounded transition-colors"
-                              >
-                                Ver Detalle
-                              </button>
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    generateWarehouseTransferOrAdjustmentPDF({ record: a, mode: 'ADJUSTMENT', config, currentUser });
+                                  }}
+                                  className="px-2 py-1 text-[11px] font-semibold bg-emerald-600/15 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white rounded transition-colors"
+                                  title="Imprimir comprobante de ajuste PDF"
+                                >
+                                  PDF
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedAdjustment(a);
+                                  }}
+                                  className="px-2.5 py-1 text-[11px] font-semibold bg-[#002b7a]/10 text-[#002b7a] dark:bg-blue-500/20 dark:text-blue-300 hover:bg-[#002b7a] hover:text-white rounded transition-colors"
+                                >
+                                  Ver Detalle
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -601,15 +750,27 @@ export default function InventoryKardexModal({
                               </span>
                             </td>
                             <td className="p-3 text-center">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedTransfer(t);
-                                }}
-                                className="px-2.5 py-1 text-[11px] font-semibold bg-[#002b7a]/10 text-[#002b7a] dark:bg-blue-500/20 dark:text-blue-300 hover:bg-[#002b7a] hover:text-white rounded transition-colors"
-                              >
-                                Ver Detalle
-                              </button>
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    generateWarehouseTransferOrAdjustmentPDF({ record: t, mode: 'TRANSFER', config, currentUser });
+                                  }}
+                                  className="px-2 py-1 text-[11px] font-semibold bg-emerald-600/15 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white rounded transition-colors"
+                                  title="Imprimir nota de traslado PDF"
+                                >
+                                  PDF
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedTransfer(t);
+                                  }}
+                                  className="px-2.5 py-1 text-[11px] font-semibold bg-[#002b7a]/10 text-[#002b7a] dark:bg-blue-500/20 dark:text-blue-300 hover:bg-[#002b7a] hover:text-white rounded transition-colors"
+                                >
+                                  Ver Detalle
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );

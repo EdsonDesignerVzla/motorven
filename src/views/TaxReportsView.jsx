@@ -32,7 +32,7 @@ import {
 } from '../services/fiscalService';
 import FiscalTicketModal from '../components/FiscalTicketModal';
 import IslrWithholdingModal from '../components/IslrWithholdingModal';
-import { generateTaxReportPDF } from '../services/pdfReportService';
+import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF } from '../services/pdfReportService';
 
 export default function TaxReportsView({
   sales = [],
@@ -624,7 +624,35 @@ export default function TaxReportsView({
                         <td style={{ textAlign: 'center' }}>16%</td>
                         <td style={{ textAlign: 'right', color: 'var(--accent-primary)', fontWeight: 600 }}>{formatBs(row.creditoFiscal16Bs)}</td>
                         <td style={{ textAlign: 'right', color: 'var(--motorven-red)', fontWeight: 700 }}>{formatBs(row.retencionIvaBs)}</td>
-                        <td><code style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>{row.comprobanteRetencion}</code></td>
+                        <td>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <code style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>{row.comprobanteRetencion}</code>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '2px 6px', fontSize: '0.68rem' }}
+                              onClick={() => generateSeniatRetentionVoucherPDF({
+                                type: 'IVA',
+                                record: {
+                                  numeroFacturaProv: row.numeroFactura,
+                                  numeroControl: row.numeroControl,
+                                  proveedorNombre: row.nombreProveedor,
+                                  proveedorRif: row.rifProveedor,
+                                  fecha: row.fecha,
+                                  baseGeneralUsd: Number(row.baseImponible16Bs || 0) / (Number(safeConfig.tasaDolar) || 1),
+                                  ivaGeneralUsd: Number(row.creditoFiscal16Bs || 0) / (Number(safeConfig.tasaDolar) || 1),
+                                  retencionIvaBs: row.retencionIvaBs,
+                                  numeroComprobanteRetencionIva: row.comprobanteRetencion
+                                },
+                                config: safeConfig,
+                                currentUser
+                              })}
+                              title="Descargar Comprobante Retención IVA SENIAT en PDF"
+                            >
+                              <Printer size={11} /> PDF
+                            </button>
+                          </div>
+                        </td>
                         <td style={{ textAlign: 'right', color: 'var(--accent-amber)' }}>{formatBs(row.retencionIslrBs)}</td>
                       </tr>
                     ))

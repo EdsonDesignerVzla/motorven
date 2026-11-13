@@ -330,7 +330,6 @@ export default function DeviceSimulatorView() {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '100vh',
         height: '100dvh',
         backgroundColor: '#090d16',
         color: '#f8fafc',

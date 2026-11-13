@@ -222,3 +222,4 @@ try {
 console.log('\n================================================================');
 console.log('--- TODAS LAS PRUEBAS DE PERSISTENCIA DE USUARIOS PASARON (100% OK) ---');
 console.log('================================================================\n');
+process.exit(0);

@@ -25,7 +25,7 @@ import {
   Wallet
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
-import { generateAccountsPayablePDF } from '../services/pdfReportService';
+import { generateAccountsPayablePDF, generateThirdPartyStatementPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import { soundFX } from '../services/soundService';
 
@@ -1069,6 +1069,34 @@ export default function AccountsPayableModal({
           >
             <Download size={15} />
             <span className="hide-on-mobile">Exportar CSV</span>
+          </button>
+
+          {/* Botón Estado de Cuenta Proveedor PDF */}
+          <button
+            type="button"
+            onClick={() => generateThirdPartyStatementPDF({
+              entity: {
+                nombre: supplierFilter === 'ALL' ? 'Todos los Proveedores (Cartera Filtrada)' : supplierFilter,
+                rif: filteredPayables[0]?.rif || ''
+              },
+              entityType: 'SUPPLIER',
+              documents: filteredPayables.map(p => ({
+                ...p,
+                numeroDoc: p.nroDoc,
+                fecha: p.fechaEmision,
+                fechaVencimiento: p.fechaVencimiento,
+                totalUsd: p.montoTotalUsd,
+                restanteUsd: p.saldoUsd
+              })),
+              config,
+              currentUser
+            })}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.55rem 0.85rem', fontSize: '0.82rem' }}
+            title="Descargar Estado de Cuenta de Proveedor(es) en formato Carta PDF"
+          >
+            <FileText size={15} />
+            <span className="hide-on-mobile">Estado de Cuenta</span>
           </button>
 
           {/* Botón Imprimir Reporte PDF Oficial */}

@@ -60,6 +60,7 @@ import {
   updateConfig as updateStorageConfig,
   getProducts as getStorageProducts,
   saveProduct as saveStorageProduct,
+  patchProductsStockInStorage,
   deleteProduct as deleteStorageProduct,
   getClients as getStorageClients,
   saveClient as saveStorageClient,
@@ -494,17 +495,20 @@ export const resetSupabaseOnlineStatus = () => {
 };
 
 const withTimeout = (promise, ms) => {
-  let timeoutMs = 35000;
+  let timeoutMs = 25000;
   try {
     const isLocal = typeof window !== 'undefined' && window.location && LOCAL_HOSTNAMES.includes(window.location.hostname);
-    timeoutMs = isLocal ? (ms || 15000) : Math.max(ms || 35000, 35000);
+    timeoutMs = isLocal ? (ms || 10000) : (ms ? Math.max(ms, 12000) : 25000);
   } catch (_) {
-    timeoutMs = 35000;
+    timeoutMs = ms || 25000;
   }
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("Supabase connection timeout")), timeoutMs))
-  ]);
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Supabase connection timeout")), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
 };
 
 const markSupabaseOffline = (err, action = '') => {
@@ -530,67 +534,79 @@ const markSupabaseOffline = (err, action = '') => {
 
 // --- Mappings ---
 
-const mapConfigToDb = (c) => {
-  const tasaDolar = c.tasaDolar || c.tasa_dolar;
-  const tasaKeystone = c.tasaKeystone || c.tasa_keystone || 38.50;
-  const nombreEmpresa = c.nombreEmpresa || c.nombre_empresa;
-  const marcaOficial = c.marcaOficial || c.marca_oficial;
-  const monedaPrincipal = c.monedaPrincipal || c.moneda_principal;
-  const monedaSecundaria = c.monedaSecundaria || c.moneda_secundaria;
-  const almacenActual = c.almacenActual || c.almacen_actual;
-  const ivaPorcentaje = c.ivaPorcentaje ?? c.iva_porcentaje;
-  const igtfPorcentaje = c.igtfPorcentaje ?? c.igtf_porcentaje;
-  const metaComercialLitros = c.metaComercialLitros ?? c.meta_comercial_litros;
-  return {
-    id: 1,
-    nombre_empresa: nombreEmpresa,
-    nombreEmpresa,
-    marca_oficial: marcaOficial,
-    marcaOficial,
-    rif: c.rif,
-    direccion: c.direccion,
-    telefono: c.telefono,
-    email: c.email,
-    instagram: c.instagram,
-    tasa_dolar: tasaDolar,
-    tasaDolar,
-    tasa_keystone: tasaKeystone,
-    tasaKeystone,
-    moneda_principal: monedaPrincipal,
-    monedaPrincipal,
-    moneda_secundaria: monedaSecundaria,
-    monedaSecundaria,
-    almacen_actual: almacenActual,
-    almacenActual,
-    iva_porcentaje: ivaPorcentaje,
-    ivaPorcentaje,
-    igtf_porcentaje: igtfPorcentaje,
-    igtfPorcentaje,
-    meta_comercial_litros: metaComercialLitros,
-    metaComercialLitros,
-    updated_at: new Date().toISOString()
-  };
+const CORE_CONFIG_FIELDS = [
+  ['nombreEmpresa', 'nombre_empresa', 'string'],
+  ['marcaOficial', 'marca_oficial', 'string'],
+  ['rif', 'rif', 'string'],
+  ['direccion', 'direccion', 'string'],
+  ['telefono', 'telefono', 'string'],
+  ['email', 'email', 'string'],
+  ['instagram', 'instagram', 'string'],
+  ['tasaDolar', 'tasa_dolar', 'number'],
+  ['monedaPrincipal', 'moneda_principal', 'string'],
+  ['monedaSecundaria', 'moneda_secundaria', 'string'],
+  ['almacenActual', 'almacen_actual', 'string'],
+  ['ivaPorcentaje', 'iva_porcentaje', 'number'],
+  ['igtfPorcentaje', 'igtf_porcentaje', 'number'],
+  ['metaComercialLitros', 'meta_comercial_litros', 'number']
+];
+
+const EXTENDED_CONFIG_FIELDS = [
+  ['pieDePagina', 'pie_de_pagina', 'string'],
+  ['tasaKeystone', 'tasa_keystone', 'number'],
+  ['margenKeystonePorcentaje', 'margen_keystone_porcentaje', 'number'],
+  ['diasCreditoDefecto', 'dias_credito_defecto', 'number'],
+  ['limiteCreditoDefecto', 'limite_credito_defecto', 'number'],
+  ['aprobadorCreditoDefecto', 'aprobador_credito_defecto', 'string'],
+  ['aprobadoresCredito', 'aprobadores_credito', 'raw'],
+  ['alertaStockMinimoDias', 'alerta_stock_minimo_dias', 'number'],
+  ['leadTimeDiasDefecto', 'lead_time_dias_defecto', 'number'],
+  ['margenGananciaAceites', 'margen_ganancia_aceites', 'number'],
+  ['activarAlertasQuiebre', 'activar_alertas_quiebre', 'boolean'],
+  ['bloqueoMoraDias', 'bloqueo_mora_dias', 'number'],
+  ['alertaAmarillaMoraDias', 'alerta_amarilla_mora_dias', 'number'],
+  ['plantillaWhatsapp', 'plantilla_whatsapp', 'string'],
+  ['profitBridgeUrl', 'profit_bridge_url', 'string'],
+  ['syncIntervalSec', 'sync_interval_sec', 'number'],
+  ['offlineFirstEnabled', 'offline_first_enabled', 'boolean'],
+  ['sonidosNotificacion', 'sonidos_notificacion', 'boolean'],
+  ['ejercicioFiscalActivo', 'ejercicio_fiscal_activo', 'number'],
+  ['periodoFiscalInicio', 'periodo_fiscal_inicio', 'string'],
+  ['periodoFiscalFin', 'periodo_fiscal_fin', 'string'],
+  ['historialEjercicios', 'historial_ejercicios', 'raw']
+];
+
+const mapConfigToDb = (c, { coreOnly = false } = {}) => {
+  const fields = coreOnly ? CORE_CONFIG_FIELDS : [...CORE_CONFIG_FIELDS, ...EXTENDED_CONFIG_FIELDS];
+  const payload = { id: 1, updated_at: new Date().toISOString() };
+  for (const [camelKey, snakeKey] of fields) {
+    const val = c[camelKey] !== undefined ? c[camelKey] : c[snakeKey];
+    if (val === undefined) continue;
+    payload[snakeKey] = val;
+    if (!coreOnly && camelKey !== snakeKey) {
+      payload[camelKey] = val;
+    }
+  }
+  return payload;
 };
 
 const mapConfigFromDb = (c) => {
   if (!c) return null;
-  return {
-    nombreEmpresa: c.nombre_empresa ?? c.nombreEmpresa,
-    marcaOficial: c.marca_oficial ?? c.marcaOficial,
-    rif: c.rif,
-    direccion: c.direccion,
-    telefono: c.telefono,
-    email: c.email,
-    instagram: c.instagram,
-    tasaDolar: Number(c.tasa_dolar ?? c.tasaDolar),
-    tasaKeystone: Number(c.tasa_keystone ?? c.tasaKeystone ?? 38.50),
-    monedaPrincipal: c.moneda_principal ?? c.monedaPrincipal,
-    monedaSecundaria: c.moneda_secundaria ?? c.monedaSecundaria,
-    almacenActual: c.almacen_actual ?? c.almacenActual,
-    ivaPorcentaje: Number(c.iva_porcentaje ?? c.ivaPorcentaje),
-    igtfPorcentaje: Number(c.igtf_porcentaje ?? c.igtfPorcentaje),
-    metaComercialLitros: Number(c.meta_comercial_litros ?? c.metaComercialLitros)
-  };
+  const cachedLocal = getStorageConfig() || {};
+  const mapped = { ...cachedLocal };
+  for (const [camelKey, snakeKey, type] of [...CORE_CONFIG_FIELDS, ...EXTENDED_CONFIG_FIELDS]) {
+    const rawVal = c[snakeKey] !== undefined ? c[snakeKey] : c[camelKey];
+    if (rawVal === undefined || rawVal === null) continue;
+    if (type === 'number') {
+      const n = Number(rawVal);
+      if (!Number.isNaN(n)) mapped[camelKey] = n;
+    } else if (type === 'boolean') {
+      mapped[camelKey] = Boolean(rawVal);
+    } else {
+      mapped[camelKey] = rawVal;
+    }
+  }
+  return mapped;
 };
 
 export const inferProductLineAndFamily = (p) => {
@@ -1728,7 +1744,14 @@ function applyPendingQueueToEntities(entityName, list) {
 }
 
 // Config
-export const getSupabaseConfig = async () => {
+let cachedConfigData = null;
+let cachedConfigAt = 0;
+const CONFIG_CACHE_TTL_MS = 10000;
+
+export const getSupabaseConfig = async ({ force = false } = {}) => {
+  if (!force && cachedConfigData && (Date.now() - cachedConfigAt) < CONFIG_CACHE_TTL_MS) {
+    return cachedConfigData;
+  }
   if (!isSupabaseAvailable) return getStorageConfig();
   try {
     const { data, error } = await withTimeout(
@@ -1746,6 +1769,8 @@ export const getSupabaseConfig = async () => {
       localStorage.setItem('signum_app_config', JSON.stringify(mapped));
       updateStorageConfig(mapped);
     } catch (_) {}
+    cachedConfigData = mapped;
+    cachedConfigAt = Date.now();
     return mapped;
   } catch (error) {
     markSupabaseOffline(error, 'getSupabaseConfig');
@@ -1756,6 +1781,8 @@ export const getSupabaseConfig = async () => {
 export const updateSupabaseConfig = async (newConfig) => {
   const current = getStorageConfig() || {};
   const merged = { ...current, ...newConfig };
+  cachedConfigData = merged;
+  cachedConfigAt = Date.now();
   
   try {
     localStorage.setItem('signum_app_config', JSON.stringify(merged));
@@ -1764,24 +1791,38 @@ export const updateSupabaseConfig = async (newConfig) => {
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     enqueueSyncAction('config', 'UPDATE', merged);
+    broadcastReconcileChange({ tableId: 'config', action: 'UPDATE', key: 1, item: merged });
     return merged;
   }
 
   try {
-    const { data, error } = await withTimeout(
+    let { data, error } = await withTimeout(
       supabase.from('config').update(mapConfigToDb(merged)).eq('id', 1).select().single()
     );
 
+    if (error && (error.code === 'PGRST204' || error.code === '42703' || /column .* does not exist|schema cache/i.test(error.message || ''))) {
+      const retryRes = await withTimeout(
+        supabase.from('config').update(mapConfigToDb(merged, { coreOnly: true })).eq('id', 1).select().single()
+      );
+      data = retryRes.data;
+      error = retryRes.error;
+    }
+
     if (error) throw error;
     isSupabaseAvailable = true;
-    const mapped = mapConfigFromDb(data);
+    const finalConfig = { ...merged, ...(mapConfigFromDb(data) || {}) };
+    cachedConfigData = finalConfig;
+    cachedConfigAt = Date.now();
     try {
-      localStorage.setItem('signum_app_config', JSON.stringify(mapped));
+      localStorage.setItem('signum_app_config', JSON.stringify(finalConfig));
+      updateStorageConfig(finalConfig);
     } catch (_) {}
-    return mapped;
+    broadcastReconcileChange({ tableId: 'config', action: 'UPDATE', key: 1, item: finalConfig });
+    return finalConfig;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseConfig');
     enqueueSyncAction('config', 'UPDATE', merged);
+    broadcastReconcileChange({ tableId: 'config', action: 'UPDATE', key: 1, item: merged });
     return merged;
   }
 };
@@ -1856,10 +1897,17 @@ export const saveSupabaseProduct = async (product) => {
     updated_at: new Date().toISOString()
   };
 
-  // 2. Guardar en almacenamiento local para respuesta instantánea de la UI
-  try {
-    saveStorageProduct(normalized);
-  } catch (_) {}
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    try { saveStorageProduct(normalized); } catch (_) {}
+    enqueueSyncAction('product', 'UPDATE', normalized);
+    broadcastReconcileChange({
+      tableId: 'products',
+      action: 'RECONCILE',
+      key: normalized.codigo || normalized.id,
+      item: normalized
+    });
+    return normalized;
+  }
 
   try {
     const payload = mapProductToDb(normalized);
@@ -1925,20 +1973,12 @@ export const saveSupabaseProduct = async (product) => {
         stock_des: 0,
         updated_at: new Date().toISOString()
       };
-      await supabase.from('profit_stock_by_warehouse').upsert([stock01Payload, stock02Payload]);
+      await withTimeout(
+        supabase.from('profit_stock_by_warehouse').upsert([stock01Payload, stock02Payload]),
+        6000
+      );
     } catch (e) {
       console.warn('[saveSupabaseProduct] Sync profit_stock_by_warehouse:', e.message);
-    }
-
-    // Reflejo en tiempo real en Supabase (SQL Server: art) y comparativa
-    try {
-      const profitRes = await writeProfitProduct(mapped, 'SAVE');
-      if (profitRes?.comparison) {
-        console.log('[saveSupabaseProduct] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
-        mapped._comparison = profitRes.comparison;
-      }
-    } catch (e) {
-      console.warn('[saveSupabaseProduct] Aviso escribiendo en Supabase:', e.message);
     }
 
     // Difundir actualización en tiempo real a todas las pestañas y terminales
@@ -1952,6 +1992,7 @@ export const saveSupabaseProduct = async (product) => {
     return mapped;
   } catch (err) {
     console.warn('[saveSupabaseProduct] Supabase error:', err?.message || err);
+    try { saveStorageProduct(normalized); } catch (_) {}
     markSupabaseOffline(err, 'saveSupabaseProduct');
     enqueueSyncAction('product', 'UPDATE', normalized);
     writeProfitProduct(normalized, 'SAVE').catch(() => {});
@@ -1966,29 +2007,23 @@ export const deleteSupabaseProduct = async (id) => {
   const coArt = target?.codigo || targetId;
 
   deleteStorageProduct(targetId);
+  writeProfitProduct({ id: targetId, codigo: coArt }, 'DELETE').catch(() => {});
 
-  // Reflejo en tiempo real en Supabase (SQL Server: art anulado=1)
-  writeProfitProduct({ id: targetId, codigo: coArt }, 'DELETE').catch(e => {
-    console.warn('[deleteSupabaseProduct] Aviso eliminando en Supabase:', e.message);
-  });
+  const prodOr = Array.from(new Set([`id.eq.${targetId}`, coArt ? `codigo.eq.${coArt}` : null].filter(Boolean))).join(',');
+  const whOr = Array.from(new Set([
+    `co_art.eq.${targetId}`,
+    coArt ? `codigo.eq.${coArt}` : null,
+    `id.eq.${targetId}_01`,
+    `id.eq.${targetId}_02`
+  ].filter(Boolean))).join(',');
 
   try {
-    const { error } = await withTimeout(
-      supabase.from('products').delete().eq('id', targetId)
-    );
+    const [prodDelRes] = await Promise.all([
+      withTimeout(supabase.from('products').delete().or(prodOr), 6000),
+      withTimeout(supabase.from('profit_stock_by_warehouse').delete().or(whOr), 6000).catch(() => ({}))
+    ]);
+    if (prodDelRes?.error) throw prodDelRes.error;
 
-    if (error) {
-      await supabase.from('products').delete().eq('codigo', coArt);
-    }
-
-    try {
-      await supabase.from('profit_stock_by_warehouse').delete().eq('co_art', targetId);
-      await supabase.from('profit_stock_by_warehouse').delete().eq('codigo', coArt);
-      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_01`);
-      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_02`);
-    } catch (_) {}
-
-    // Notificar eliminación en tiempo real
     broadcastReconcileChange({
       tableId: 'products',
       action: 'DELETE',
@@ -1998,12 +2033,7 @@ export const deleteSupabaseProduct = async (id) => {
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
-    try {
-      await supabase.from('products').delete().eq('codigo', coArt);
-      await supabase.from('profit_stock_by_warehouse').delete().eq('co_art', targetId);
-      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_01`);
-      await supabase.from('profit_stock_by_warehouse').delete().eq('id', `${targetId}_02`);
-    } catch (_) {}
+    markSupabaseOffline(err, 'deleteSupabaseProduct');
     enqueueSyncAction('product', 'DELETE', { id: targetId, codigo: coArt });
     return true;
   }
@@ -2038,15 +2068,21 @@ export const getSupabaseClients = async () => {
 };
 
 export const saveSupabaseClient = async (client) => {
-  saveStorageClient(client);
-  const currentClients = getStorageClients();
-  const clientToSave = currentClients.find(c => (client.id && c.id === client.id) || c.rif === client.rif) || client;
-
   if (!isNetworkOnline() || !isSupabaseAvailable) {
+    saveStorageClient(client);
+    const currentClients = getStorageClients();
+    const clientToSave = currentClients.find(c => (client.id && c.id === client.id) || c.rif === client.rif) || client;
     enqueueSyncAction('client', 'UPDATE', clientToSave);
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'RECONCILE',
+      key: clientToSave.id || clientToSave.rif,
+      item: clientToSave
+    });
     return clientToSave;
   }
 
+  const clientToSave = { ...client };
   try {
     const payload = mapClientToDb(clientToSave);
     const { data, error } = await withTimeout(
@@ -2057,20 +2093,16 @@ export const saveSupabaseClient = async (client) => {
     isSupabaseAvailable = true;
     const mapped = mapClientFromDb(data);
     saveStorageClient(mapped);
-
-    // Reflejo en tiempo real en Supabase (SQL Server: clientes) y comparativa
-    try {
-      const profitRes = await writeProfitClient(mapped, 'SAVE');
-      if (profitRes?.comparison) {
-        console.log('[saveSupabaseClient] 🔍 Comparativa Profit ↔ Supabase completada:', profitRes.comparison);
-        mapped._comparison = profitRes.comparison;
-      }
-    } catch (e) {
-      console.warn('[saveSupabaseClient] Aviso escribiendo en Supabase:', e.message);
-    }
-
+    broadcastReconcileChange({
+      tableId: 'clients',
+      action: 'RECONCILE',
+      key: mapped.id || mapped.rif,
+      item: mapped
+    });
+    writeProfitClient(mapped, 'SAVE').catch(() => {});
     return mapped;
   } catch (err) {
+    saveStorageClient(clientToSave);
     markSupabaseOffline(err, 'saveSupabaseClient');
     enqueueSyncAction('client', 'UPDATE', clientToSave);
     writeProfitClient(clientToSave, 'SAVE').catch(() => {});
@@ -2330,75 +2362,143 @@ const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false 
 
   // Al emitir venta: FACT/NE/ND restan (-1), NC suma (+1). Al eliminar/revertir: se invierte el signo.
   const sign = (isNotaCredito ? 1 : -1) * (reverse ? -1 : 1);
-  const updatedProducts = [];
 
+  const qtyByKey = new Map();
   for (const item of saleRecord.items) {
     const prodKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
     const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
     if (!prodKey || qty <= 0) continue;
+    qtyByKey.set(prodKey, (qtyByKey.get(prodKey) || 0) + qty);
+  }
+  if (qtyByKey.size === 0) return [];
 
-    let prodData = null;
-    const { data: byId, error: byIdErr } = await withTimeout(
-      supabase.from('products').select('*').eq('id', prodKey).single(),
-      4000
-    );
-    if (!byIdErr && byId) {
-      prodData = byId;
-    } else {
-      const { data: byCode, error: byCodeErr } = await withTimeout(
-        supabase.from('products').select('*').eq('codigo', prodKey).single(),
-        4000
+  const stockCols =
+    'id,codigo,sku,nombre,descripcion,almacen,co_alm,stock,stock_almacen_01,stock_almacen_02,stockAlmacen01,stockAlmacen02';
+  const uniqueKeys = Array.from(qtyByKey.keys());
+  const canBatchIn = uniqueKeys.every(k => !/[(),]/.test(k));
+  const resolvedByProdId = new Map();
+
+  if (canBatchIn) {
+    try {
+      const joined = uniqueKeys.join(',');
+      const { data: batchRows } = await withTimeout(
+        supabase.from('products').select(stockCols).or(`id.in.(${joined}),codigo.in.(${joined})`),
+        4500
       );
-      if (!byCodeErr && byCode) prodData = byCode;
+      if (Array.isArray(batchRows)) {
+        for (const row of batchRows) {
+          if (!row) continue;
+          const rId = String(row.id || '').trim();
+          const rCode = String(row.codigo || '').trim();
+          const qId = rId ? (qtyByKey.get(rId) || 0) : 0;
+          const qCode = rCode && rCode !== rId ? (qtyByKey.get(rCode) || 0) : 0;
+          const matchedQty = qId + qCode;
+          if (matchedQty > 0) {
+            const existing = resolvedByProdId.get(rId) || { prodData: row, totalQty: 0 };
+            existing.totalQty += matchedQty;
+            resolvedByProdId.set(rId, existing);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Fallback paralelo para claves no resueltas por lote
+  const matchedKeys = new Set();
+  for (const { prodData } of resolvedByProdId.values()) {
+    if (prodData.id) matchedKeys.add(String(prodData.id).trim());
+    if (prodData.codigo) matchedKeys.add(String(prodData.codigo).trim());
+  }
+  const missingKeys = uniqueKeys.filter(k => !matchedKeys.has(k));
+  if (missingKeys.length > 0) {
+    const missingResults = await Promise.all(
+      missingKeys.map(async (prodKey) => {
+        const { data: byId, error: byIdErr } = await withTimeout(
+          supabase.from('products').select(stockCols).eq('id', prodKey).single(),
+          4000
+        ).catch(() => ({ data: null, error: true }));
+        if (!byIdErr && byId) return { prodKey, prodData: byId };
+        const { data: byCode, error: byCodeErr } = await withTimeout(
+          supabase.from('products').select(stockCols).eq('codigo', prodKey).single(),
+          4000
+        ).catch(() => ({ data: null, error: true }));
+        if (!byCodeErr && byCode) return { prodKey, prodData: byCode };
+        return null;
+      })
+    );
+    for (const res of missingResults) {
+      if (!res?.prodData) continue;
+      const rId = String(res.prodData.id || res.prodKey).trim();
+      const existing = resolvedByProdId.get(rId) || { prodData: res.prodData, totalQty: 0 };
+      existing.totalQty += qtyByKey.get(res.prodKey) || 0;
+      resolvedByProdId.set(rId, existing);
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const updatePromises = [];
+  const updatedProducts = [];
+
+  for (const { prodData, totalQty } of resolvedByProdId.values()) {
+    if (!prodData || totalQty <= 0) continue;
+    const wStocks = getProductWarehouseStocks(prodData);
+    if (targetWh === '02') {
+      wStocks.stock02 = Math.max(0, wStocks.stock02 + sign * totalQty);
+    } else {
+      wStocks.stock01 = Math.max(0, wStocks.stock01 + sign * totalQty);
     }
 
-    if (prodData) {
-      const wStocks = getProductWarehouseStocks(prodData);
-      if (targetWh === '02') {
-        wStocks.stock02 = Math.max(0, wStocks.stock02 + sign * qty);
-      } else {
-        wStocks.stock01 = Math.max(0, wStocks.stock01 + sign * qty);
-      }
+    const newTotal = wStocks.stock01 + wStocks.stock02;
+    const stockPatch = {
+      stock: newTotal,
+      stockAlmacen01: wStocks.stock01,
+      stock_almacen_01: wStocks.stock01,
+      stockAlmacen02: wStocks.stock02,
+      stock_almacen_02: wStocks.stock02,
+      updated_at: nowIso
+    };
 
-      const newTotal = wStocks.stock01 + wStocks.stock02;
-      const nowIso = new Date().toISOString();
-      const stockPatch = {
-        stock: newTotal,
-        stockAlmacen01: wStocks.stock01,
-        stock_almacen_01: wStocks.stock01,
-        stockAlmacen02: wStocks.stock02,
-        stock_almacen_02: wStocks.stock02,
-        updated_at: nowIso
-      };
+    updatePromises.push(
+      withTimeout(supabase.from('products').update(stockPatch).eq('id', prodData.id), 4000)
+        .then(({ error: updErr }) => {
+          if (updErr) console.warn('[adjustSupabaseProductsStockForSale] Error actualizando stock en products:', updErr.message);
+        })
+        .catch(() => {})
+    );
 
-      const { error: updErr } = await withTimeout(
-        supabase.from('products').update(stockPatch).eq('id', prodData.id),
-        4000
-      );
-      if (updErr) {
-        console.warn('[adjustSupabaseProductsStockForSale] Error actualizando stock en products:', updErr.message);
-      }
-
-      const whStockValue = targetWh === '02' ? wStocks.stock02 : wStocks.stock01;
-      await withTimeout(
+    const whStockValue = targetWh === '02' ? wStocks.stock02 : wStocks.stock01;
+    updatePromises.push(
+      withTimeout(
         supabase
           .from('profit_stock_by_warehouse')
           .update({ stock_act: whStockValue, updated_at: nowIso })
           .eq('id', `${prodData.id}_${targetWh}`),
         3000
-      ).catch(() => {});
+      ).catch(() => {})
+    );
 
-      const updatedMapped = mapProductFromDb({ ...prodData, ...stockPatch });
-      if (updatedMapped) {
-        saveStorageProduct(updatedMapped);
-        broadcastReconcileChange({
-          tableId: 'products',
-          action: 'RECONCILE',
-          key: updatedMapped.codigo || updatedMapped.id,
-          item: updatedMapped
-        });
-        updatedProducts.push(updatedMapped);
-      }
+    updatedProducts.push({
+      id: prodData.id,
+      codigo: prodData.codigo || prodData.id,
+      ...stockPatch
+    });
+  }
+
+  if (updatePromises.length > 0) {
+    await Promise.all(updatePromises);
+  }
+
+  if (updatedProducts.length > 0) {
+    try {
+      patchProductsStockInStorage(updatedProducts);
+    } catch (_) {}
+    for (const patch of updatedProducts) {
+      broadcastReconcileChange({
+        tableId: 'products',
+        action: 'RECONCILE',
+        key: patch.codigo || patch.id,
+        item: patch
+      });
     }
   }
 
@@ -2484,6 +2584,51 @@ export const unmarkCxcDeletedDoc = (docOrRef) => {
   } catch (_) {}
 };
 
+const buildProfitInvoicePayloadFromSale = (sale, vendedorId = 'OF') => {
+  if (!sale) return null;
+  const tipoUpper = String(sale.tipoDoc || '').toUpperCase().trim();
+  if (tipoUpper === 'NOTA_CREDITO' || tipoUpper === 'COTIZACION') return null;
+
+  const isNeDoc = tipoUpper === 'NOTA_ENTREGA';
+  const isCreditSale =
+    isCreditPaymentCondition(sale.condicionPago, sale.metodoPago) ||
+    Number(sale.diasCredito || 0) > 0 ||
+    isNeDoc ||
+    String(sale.estado || '').toUpperCase() === 'PENDIENTE';
+  const effectiveNetoUsd = isNeDoc
+    ? Number(sale.subtotalUsd || sale.totalUsd || 0)
+    : Number(sale.totalUsd || 0);
+  const resolvedSaldoUsd = isCreditSale
+    ? Number(sale.saldoUsd !== undefined ? sale.saldoUsd : effectiveNetoUsd)
+    : 0;
+  const resolvedAbonosUsd = isCreditSale
+    ? Math.max(0, Number((effectiveNetoUsd - resolvedSaldoUsd).toFixed(2)))
+    : effectiveNetoUsd;
+
+  return {
+    id: sale.id,
+    factNum: sale.numeroDoc,
+    tipoDoc: sale.tipoDoc,
+    clienteId: sale.clienteId,
+    clienteNombre: sale.clienteNombre,
+    clienteRif: sale.clienteRif,
+    vendedorId: vendedorId || 'OF',
+    vendedorNombre: sale.vendedor,
+    totBrutoUsd: sale.subtotalUsd,
+    ivaUsd: isNeDoc ? 0 : sale.ivaUsd,
+    totNetoUsd: effectiveNetoUsd,
+    saldoUsd: resolvedSaldoUsd,
+    abonosUsd: resolvedAbonosUsd,
+    diasCredito: sale.diasCredito || 0,
+    fechaEmision: sale.fechaEmision || sale.fecha,
+    fechaVencimiento: sale.fechaVencimiento || sale.fechaEmision || sale.fecha,
+    tasa: sale.tasaDolar,
+    status: resolvedSaldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE',
+    formaPago: isCreditSale ? '03' : '01',
+    items: sale.items
+  };
+};
+
 const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
   if (!localSale) return;
   unmarkCxcDeletedDoc(localSale);
@@ -2511,32 +2656,14 @@ const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
   broadcastReconcileChange({
     tableId: 'sales',
     action: 'CREATE',
-    data: localSale
+    key: localSale.numeroDoc || localSale.id,
+    item: localSale
   });
   writeProfitSale(localSale, 'SAVE').catch(() => {});
-  const isNeLocal = String(localSale.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA';
-  const localNeto = isNeLocal ? Number(localSale.subtotalUsd || localSale.totalUsd || 0) : Number(localSale.totalUsd || 0);
-  saveSupabaseProfitInvoice({
-    id: localSale.id,
-    factNum: localSale.numeroDoc,
-    tipoDoc: localSale.tipoDoc,
-    clienteId: localSale.clienteId,
-    clienteNombre: localSale.clienteNombre,
-    clienteRif: localSale.clienteRif,
-    vendedorId: saleData.vendedorId || 'OF',
-    vendedorNombre: localSale.vendedor,
-    totBrutoUsd: localSale.subtotalUsd,
-    ivaUsd: isNeLocal ? 0 : localSale.ivaUsd,
-    totNetoUsd: localNeto,
-    saldoUsd: localNeto,
-    abonosUsd: 0,
-    diasCredito: localSale.diasCredito || 0,
-    fechaEmision: localSale.fechaEmision || localSale.fecha,
-    fechaVencimiento: localSale.fechaVencimiento || localSale.fechaEmision || localSale.fecha,
-    tasa: localSale.tasaDolar,
-    status: 'PENDIENTE',
-    items: localSale.items
-  }).catch(() => {});
+  const invoicePayload = buildProfitInvoicePayloadFromSale(localSale, saleData.vendedorId || 'OF');
+  if (invoicePayload) {
+    saveSupabaseProfitInvoice(invoicePayload).catch(() => {});
+  }
 };
 
 export const processSupabaseSale = async (saleData) => {
@@ -2546,13 +2673,6 @@ export const processSupabaseSale = async (saleData) => {
     return localSale;
   }
   try {
-    const config = await getSupabaseConfig();
-    const { data: dbSales, error: countErr } = await withTimeout(
-      supabase.from('sales').select('id,numero_doc,tipo_doc')
-    );
-    if (countErr) throw countErr;
-    const count = Array.isArray(dbSales) ? dbSales.length : 0;
-    const mappedSales = (dbSales || []).map(s => ({ id: s.id, numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
     const isNotaEntrega =
       String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
       String(saleData.numeroDoc || saleData.id || '').toUpperCase().startsWith('NE-') ||
@@ -2567,15 +2687,27 @@ export const processSupabaseSale = async (saleData) => {
       isNotaEntrega;
     const docPrefix = effectiveTipoDoc === 'NOTA_CREDITO' ? 'NC' : (effectiveTipoDoc === 'NOTA_DEBITO' ? 'ND' : (effectiveTipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
 
+    const hasPresetNumeroDoc = Boolean(saleData.numeroDoc && String(saleData.numeroDoc).trim());
+    const [config, salesRes, invoicesRes] = await Promise.all([
+      getSupabaseConfig(),
+      hasPresetNumeroDoc
+        ? Promise.resolve({ data: [], error: null })
+        : withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc')),
+      (!hasPresetNumeroDoc && effectiveTipoDoc !== 'FACTURA')
+        ? withTimeout(supabase.from('profit_invoices').select('id,fact_num,tipo_doc')).catch(() => ({ data: [] }))
+        : Promise.resolve({ data: [] })
+    ]);
+    if (salesRes?.error) throw salesRes.error;
+    const dbSales = salesRes?.data || [];
+    const count = Array.isArray(dbSales) ? dbSales.length : 0;
+    const mappedSales = dbSales.map(s => ({ id: s.id, numeroDoc: s.numero_doc, tipoDoc: s.tipo_doc }));
+
     let resolvedNumeroDoc = saleData.numeroDoc;
     if (!resolvedNumeroDoc) {
       if (effectiveTipoDoc === 'FACTURA') {
         resolvedNumeroDoc = getNextInvoiceCorrelativo(mappedSales);
       } else {
-        const { data: dbInvoices } = await withTimeout(
-          supabase.from('profit_invoices').select('id,fact_num,tipo_doc')
-        ).catch(() => ({ data: [] }));
-        resolvedNumeroDoc = getNextNotaEntregaCorrelativo(mappedSales, dbInvoices || [], docPrefix);
+        resolvedNumeroDoc = getNextNotaEntregaCorrelativo(mappedSales, invoicesRes?.data || [], docPrefix);
       }
     } else if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
       resolvedNumeroDoc = `NE-${resolvedNumeroDoc}`;
@@ -2661,80 +2793,81 @@ export const processSupabaseSale = async (saleData) => {
     // Limpiar posible marca previa de borrado en CxC si se reutiliza un correlativo nuevo
     unmarkCxcDeletedDoc(newSale);
 
-    // 1. Ajuste de inventario independiente por almacén (Alm 01: Factura/ND, Alm 02: Nota de Entrega; NC reingresa)
-    await adjustSupabaseProductsStockForSale(newSale, { reverse: false });
+    // Ejecutar en paralelo: 1) ajuste de inventario batch, 2) movimiento de caja / saldo cliente, 3) inserción de la venta
+    const stockPromise = adjustSupabaseProductsStockForSale(newSale, { reverse: false });
 
-    // 2. Add cash movement or update client accounts
-    if (!isCredit) {
-      if (newSale.tipoDoc === 'NOTA_CREDITO') {
-        await addSupabaseCashMovement({
-          tipo: 'EGRESO',
-          concepto: `Devolución / NC ${newSale.numeroDoc} a ${newSale.clienteNombre} (Afecta: ${newSale.documentoAfectado || 'N/A'})`,
-          montoUsd: newSale.totalUsd,
-          montoBs: newSale.totalBs,
-          metodo: newSale.metodoPago,
-          usuario: newSale.vendedor
-        });
-      } else {
-        await addSupabaseCashMovement({
-          tipo: 'INGRESO',
-          concepto: `Cobro Venta ${newSale.numeroDoc} - ${newSale.clienteNombre}`,
-          montoUsd: newSale.totalUsd,
-          montoBs: newSale.totalBs,
-          metodo: newSale.metodoPago,
-          usuario: newSale.vendedor
-        });
-      }
-    } else {
-      const { data: clientData, error: clientErr } = await supabase
-        .from('clients')
-        .select('saldo_deudor_usd')
-        .eq('id', newSale.clienteId)
-        .single();
+    const accountOrCashPromise = !isCredit
+      ? addSupabaseCashMovement(
+          newSale.tipoDoc === 'NOTA_CREDITO'
+            ? {
+                tipo: 'EGRESO',
+                concepto: `Devolución / NC ${newSale.numeroDoc} a ${newSale.clienteNombre} (Afecta: ${newSale.documentoAfectado || 'N/A'})`,
+                montoUsd: newSale.totalUsd,
+                montoBs: newSale.totalBs,
+                metodo: newSale.metodoPago,
+                usuario: newSale.vendedor
+              }
+            : {
+                tipo: 'INGRESO',
+                concepto: `Cobro Venta ${newSale.numeroDoc} - ${newSale.clienteNombre}`,
+                montoUsd: newSale.totalUsd,
+                montoBs: newSale.totalBs,
+                metodo: newSale.metodoPago,
+                usuario: newSale.vendedor
+              }
+        )
+      : (async () => {
+          const { data: clientData, error: clientErr } = await withTimeout(
+            supabase
+              .from('clients')
+              .select('saldo_deudor_usd')
+              .eq('id', newSale.clienteId)
+              .single(),
+            6000
+          );
 
-      if (!clientErr && clientData) {
-        const currentDebit = Number(clientData.saldo_deudor_usd);
-        const newDebit = newSale.tipoDoc === 'NOTA_CREDITO'
-          ? Math.max(0, currentDebit - newSale.totalUsd)
-          : currentDebit + newSale.totalUsd;
-        await supabase
-          .from('clients')
-          .update({ saldo_deudor_usd: newDebit })
-          .eq('id', newSale.clienteId);
-      }
+          if (!clientErr && clientData) {
+            const currentDebit = Number(clientData.saldo_deudor_usd || 0);
+            const newDebit = newSale.tipoDoc === 'NOTA_CREDITO'
+              ? Math.max(0, currentDebit - newSale.totalUsd)
+              : currentDebit + newSale.totalUsd;
+            await withTimeout(
+              supabase
+                .from('clients')
+                .update({ saldo_deudor_usd: newDebit })
+                .eq('id', newSale.clienteId),
+              6000
+            );
+            try {
+              const localCli = getStorageClients().find(c => c.id === newSale.clienteId);
+              if (localCli) {
+                saveStorageClient({ ...localCli, saldoDeudorUsd: newDebit });
+              }
+            } catch (_) {}
+            broadcastReconcileChange({
+              tableId: 'clients',
+              action: 'RECONCILE',
+              key: newSale.clienteId,
+              item: { id: newSale.clienteId, saldoDeudorUsd: newDebit }
+            });
+          }
+        })();
 
-      // Sincronizar documento en Cuentas por Cobrar (profit_invoices) — Notas de Entrega llegan SIN IVA (0%)
-      await saveSupabaseProfitInvoice({
-        id: newSale.id,
-        factNum: newSale.numeroDoc,
-        tipoDoc: newSale.tipoDoc,
-        fechaEmision: newSale.fechaEmision,
-        fechaVencimiento: newSale.fechaVencimiento,
-        diasCredito: newSale.diasCredito,
-        clienteId: newSale.clienteId,
-        clienteNombre: newSale.clienteNombre,
-        clienteRif: newSale.clienteRif,
-        vendedorId: saleData.vendedorId || 'OF',
-        vendedorNombre: newSale.vendedor,
-        totBrutoUsd: newSale.subtotalUsd,
-        ivaUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? 0 : newSale.ivaUsd,
-        totNetoUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? newSale.subtotalUsd : newSale.totalUsd,
-        abonosUsd: 0,
-        saldoUsd: newSale.tipoDoc === 'NOTA_ENTREGA' ? newSale.subtotalUsd : newSale.saldoUsd,
-        tasa: newSale.tasaDolar,
-        items: newSale.items
-      }).catch(e => {
-        console.warn('[processSupabaseSale] Aviso registrando documento en CxC:', e?.message);
-      });
-    }
+    const saleInsertPromise = withTimeout(
+      supabase
+        .from('sales')
+        .insert(mapSaleToDb(newSale))
+        .select()
+        .single()
+    );
 
-    // 3. Save sale
-    const { data: savedSale, error: saleErr } = await supabase
-      .from('sales')
-      .insert(mapSaleToDb(newSale))
-      .select()
-      .single();
+    const [, , saleResult] = await Promise.all([
+      stockPromise,
+      accountOrCashPromise,
+      saleInsertPromise
+    ]);
 
+    const { data: savedSale, error: saleErr } = saleResult;
     if (saleErr) throw saleErr;
     isSupabaseAvailable = true;
     const mapped = mapSaleFromDb(savedSale);
@@ -2744,7 +2877,8 @@ export const processSupabaseSale = async (saleData) => {
     broadcastReconcileChange({
       tableId: 'sales',
       action: 'CREATE',
-      data: mapped
+      key: mapped.numeroDoc || mapped.id,
+      item: mapped
     });
 
     // Reflejo en tiempo real simultáneo en Supabase (SQL Server: factura & reng_fac)
@@ -2752,33 +2886,12 @@ export const processSupabaseSale = async (saleData) => {
       console.warn('[processSupabaseSale] Aviso sincronizando venta en Supabase:', e.message);
     });
 
-    // Reflejo en tiempo real simultáneo en profit_invoices para visualización inmediata en CxC y Flujo de Fondos
+    // Reflejo en tiempo real simultáneo en profit_invoices sin re-actualizar sales (acabamos de insertarlo)
     try {
-      const isCredit = mapped.condicionPago === 'CREDITO' || isCreditPaymentCondition(mapped.condicionPago, mapped.metodoPago);
-      const isNeDoc = String(mapped.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA';
-      const effectiveNetoUsd = isNeDoc ? Number(mapped.subtotalUsd || mapped.totalUsd || 0) : Number(mapped.totalUsd || 0);
-      await saveSupabaseProfitInvoice({
-        id: mapped.id,
-        factNum: mapped.numeroDoc,
-        tipoDoc: mapped.tipoDoc,
-        clienteId: mapped.clienteId,
-        clienteNombre: mapped.clienteNombre,
-        clienteRif: mapped.clienteRif,
-        vendedorId: saleData.vendedorId || 'OF',
-        vendedorNombre: mapped.vendedor,
-        totBrutoUsd: mapped.subtotalUsd,
-        ivaUsd: isNeDoc ? 0 : mapped.ivaUsd,
-        totNetoUsd: effectiveNetoUsd,
-        saldoUsd: effectiveNetoUsd,
-        abonosUsd: 0,
-        diasCredito: mapped.diasCredito || 0,
-        fechaEmision: mapped.fechaEmision || mapped.fecha,
-        fechaVencimiento: mapped.fechaVencimiento || mapped.fechaEmision || mapped.fecha,
-        tasa: mapped.tasaDolar,
-        status: 'PENDIENTE',
-        formaPago: isCredit ? '03' : '01',
-        items: mapped.items
-      });
+      const invoicePayload = buildProfitInvoicePayloadFromSale(mapped, saleData.vendedorId || 'OF');
+      if (invoicePayload) {
+        await saveSupabaseProfitInvoice(invoicePayload, { skipSalesSync: true });
+      }
     } catch (invErr) {
       console.warn('[processSupabaseSale] Aviso sincronizando factura en profit_invoices:', invErr?.message);
     }
@@ -2881,6 +2994,12 @@ export const addSupabaseCashMovement = async (mov) => {
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     enqueueSyncAction('cash_movement', 'INSERT', localMov);
+    broadcastReconcileChange({
+      tableId: 'cash_movements',
+      action: 'CREATE',
+      key: localMov.id,
+      item: localMov
+    });
     return localMov;
   }
 
@@ -2892,10 +3011,23 @@ export const addSupabaseCashMovement = async (mov) => {
 
     if (error) throw error;
     isSupabaseAvailable = true;
-    return mapCashMovementFromDb(data);
+    const mappedMov = mapCashMovementFromDb(data);
+    broadcastReconcileChange({
+      tableId: 'cash_movements',
+      action: 'CREATE',
+      key: mappedMov.id,
+      item: mappedMov
+    });
+    return mappedMov;
   } catch (err) {
     markSupabaseOffline(err, 'addSupabaseCashMovement');
     enqueueSyncAction('cash_movement', 'INSERT', localMov);
+    broadcastReconcileChange({
+      tableId: 'cash_movements',
+      action: 'CREATE',
+      key: localMov.id,
+      item: localMov
+    });
     return localMov;
   }
 };
@@ -2937,7 +3069,8 @@ export const saveSupabaseOrder = async (orderData) => {
     broadcastReconcileChange({
       tableId: 'orders',
       action: 'CREATE',
-      data: orderData
+      key: orderData.id || orderData.numeroPedido,
+      item: orderData
     });
     return orderData;
   }
@@ -2966,19 +3099,26 @@ export const saveSupabaseOrder = async (orderData) => {
     }
 
     isSupabaseAvailable = true;
+    const mappedOrd = {
+      ...orderData,
+      ...(ord ? mapOrderFromDb(ord) : {}),
+      items: orderData.items || []
+    };
     broadcastReconcileChange({
       tableId: 'orders',
-      action: 'CREATE',
-      data: orderData
+      action: orderData.status === 'FACTURADO' ? 'RECONCILE' : 'CREATE',
+      key: mappedOrd.id || mappedOrd.numeroPedido,
+      item: mappedOrd
     });
-    return getSupabaseOrders();
+    return mappedOrd;
   } catch (err) {
     markSupabaseOffline(err, 'saveSupabaseOrder');
     enqueueSyncAction('orders', 'UPDATE', orderData);
     broadcastReconcileChange({
       tableId: 'orders',
       action: 'CREATE',
-      data: orderData
+      key: orderData.id || orderData.numeroPedido,
+      item: orderData
     });
     return orderData;
   }
@@ -2995,7 +3135,8 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
   broadcastReconcileChange({
     tableId: 'orders',
     action: 'UPDATE',
-    data: { id: orderId, status: newStatus }
+    key: orderId,
+    item: { id: orderId, status: newStatus }
   });
 
   if (!isNetworkOnline()) {
@@ -3050,11 +3191,12 @@ export const checkAndExpireOverdueOrders = async (existingOrders = null) => {
     }
   }
 
-  if (expiredOrders.length > 0) {
+  for (const expiredOrd of expiredOrders) {
     broadcastReconcileChange({
       tableId: 'orders',
       action: 'RECONCILE',
-      data: expiredOrders
+      key: expiredOrd.id || expiredOrd.numeroPedido,
+      item: { ...expiredOrd, status: 'EXPIRADO' }
     });
   }
 
@@ -3079,15 +3221,16 @@ export const deleteSupabaseOrder = async (orderId) => {
     return true;
   }
   try {
-    // Eliminar renglones asociados
-    await withTimeout(
-      supabase.from('order_items').delete().or(`order_id.eq.${orderId},order_doc.eq.${orderId}`)
-    ).catch(() => {});
-
-    const { error } = await withTimeout(
-      supabase.from('orders').delete().or(`id.eq.${orderId},numero_doc.eq.${orderId}`)
-    );
-    if (error) throw error;
+    // Eliminar renglones asociados y orden en paralelo
+    const [, ordersDelRes] = await Promise.all([
+      withTimeout(
+        supabase.from('order_items').delete().or(`order_id.eq.${orderId},order_doc.eq.${orderId}`)
+      ).catch(() => ({ error: null })),
+      withTimeout(
+        supabase.from('orders').delete().or(`id.eq.${orderId},numero_doc.eq.${orderId}`)
+      )
+    ]);
+    if (ordersDelRes?.error) throw ordersDelRes.error;
     isSupabaseAvailable = true;
     return true;
   } catch (err) {
@@ -3262,7 +3405,7 @@ export const deleteSupabaseSale = async (saleId) => {
     // 3. Limpiar almacenamiento local sin duplicar ajuste de inventario
     candidateKeys.forEach(k => deleteStorageSale(k, { skipStockAdjustment: true }));
 
-    // 4. Eliminar en Supabase (profit_invoices y sales)
+    // 4. Eliminar en Supabase (profit_invoices y sales en paralelo)
     const orInvParts = [];
     if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
     if (cleanNum) {
@@ -3276,20 +3419,28 @@ export const deleteSupabaseSale = async (saleId) => {
       }
     }
     const uniqueOrInvParts = Array.from(new Set(orInvParts));
+    const deletePromises = [];
     if (uniqueOrInvParts.length > 0) {
-      const { error: invDelErr } = await withTimeout(
-        supabase.from('profit_invoices').delete().or(uniqueOrInvParts.join(',')),
-        6000
+      deletePromises.push(
+        withTimeout(
+          supabase.from('profit_invoices').delete().or(uniqueOrInvParts.join(',')),
+          6000
+        )
       );
-      if (invDelErr) throw invDelErr;
     }
-
     if (uniqueOrSalesParts.length > 0) {
-      const { error } = await withTimeout(
-        supabase.from('sales').delete().or(uniqueOrSalesParts.join(',')),
-        6000
+      deletePromises.push(
+        withTimeout(
+          supabase.from('sales').delete().or(uniqueOrSalesParts.join(',')),
+          6000
+        )
       );
-      if (error) throw error;
+    }
+    if (deletePromises.length > 0) {
+      const results = await Promise.all(deletePromises);
+      for (const res of results) {
+        if (res?.error) throw res.error;
+      }
     }
 
     broadcastReconcileChange({ tableId: 'sales', action: 'DELETE', key: broadcastKey, item: broadcastItem });
@@ -5241,7 +5392,7 @@ export const getSupabaseProfitInvoices = async () => {
   }
 };
 
-export const pushProfitInvoiceToSupabase = async (payload) => {
+export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = false } = {}) => {
   if (!payload) return null;
   const { _pendingServerSync, _createdOffline, ...cleanPayload } = payload;
   const id = cleanPayload.id;
@@ -5253,7 +5404,7 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
   );
   if (invErr) throw invErr;
 
-  if (rawNum) {
+  if (!skipSalesSync && rawNum) {
     const salesUpdatePayload = {
       cliente_id: cleanPayload.clienteId,
       cliente_nombre: cleanPayload.clienteNombre,
@@ -5347,7 +5498,7 @@ export const pushProfitInvoiceToSupabase = async (payload) => {
   return cleanPayload;
 };
 
-export const saveSupabaseProfitInvoice = async (docData) => {
+export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
   if (!docData) return null;
   const nowIso = new Date().toISOString();
   const rawNum = String(docData.factNum ?? docData.fact_num ?? docData.numeroDoc ?? docData.id ?? '').trim();
@@ -5567,7 +5718,7 @@ export const saveSupabaseProfitInvoice = async (docData) => {
 
   if (isNetworkOnline()) {
     try {
-      await pushProfitInvoiceToSupabase(payload);
+      await pushProfitInvoiceToSupabase(payload, options);
     } catch (err) {
       console.warn('[saveSupabaseProfitInvoice] Encolando para sincronización posterior:', err.message);
       markSupabaseOffline(err);
@@ -7352,6 +7503,443 @@ export const getSupabaseProfitAuditTrailsEvents = async (limit = 500) => {
     return [];
   }
 };
+
+// =========================================================================
+// DOCUMENTOS EMPRESARIALES EXTENDIDOS (REQ, OC, RECEPCIONES, OP, TRASLADOS, AJUSTES, DEVOLUCIONES)
+// =========================================================================
+function readLocalDocList(storageKey) {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(storageKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function upsertLocalDocList(storageKey, record, idField = 'id') {
+  const list = readLocalDocList(storageKey);
+  const key = String(record?.[idField] || record?.id || '').trim();
+  const idx = key ? list.findIndex(r => String(r?.[idField] || r?.id || '').trim() === key) : -1;
+  const next = idx >= 0 ? list.map((r, i) => (i === idx ? { ...r, ...record } : r)) : [record, ...list];
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(storageKey, JSON.stringify(next));
+    }
+  } catch (_) {}
+  return next;
+}
+
+function mergeRemoteAndLocalDocs(remoteList = [], localList = [], idField = 'id') {
+  const map = new Map();
+  [...localList, ...remoteList].forEach((item) => {
+    if (!item) return;
+    const key = String(item[idField] || item.id || '').trim();
+    if (key) map.set(key, { ...(map.get(key) || {}), ...item });
+  });
+  return Array.from(map.values());
+}
+
+async function applyStockDeltaForWarehouseLines(lines = []) {
+  if (!Array.isArray(lines) || lines.length === 0) return [];
+  const touchedCodes = Array.from(new Set(lines.map(l => String(l.codigo || l.co_art || l.articuloId || '').trim()).filter(Boolean)));
+  if (touchedCodes.length === 0) return [];
+
+  const storageProds = getStorageProducts();
+  let remoteMap = new Map();
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      const orParts = touchedCodes.flatMap(k => [`id.eq.${k}`, `codigo.eq.${k}`]);
+      const { data } = await withTimeout(
+        supabase
+          .from('products')
+          .select('id,codigo,descripcion,stock,stock_almacen_01,stock_almacen_02,stockAlmacen01,stockAlmacen02,comprometido')
+          .or(orParts.join(',')),
+        6000
+      );
+      (data || []).forEach(p => {
+        if (p.id) remoteMap.set(String(p.id), p);
+        if (p.codigo) remoteMap.set(String(p.codigo), p);
+      });
+    } catch (_) {}
+  }
+
+  const productPatches = [];
+  const whRows = [];
+  const nowIso = new Date().toISOString();
+
+  for (const line of lines) {
+    const code = String(line.codigo || line.co_art || line.articuloId || '').trim();
+    const delta01 = Number(line.delta01 || 0);
+    const delta02 = Number(line.delta02 || 0);
+    if (!code || (delta01 === 0 && delta02 === 0)) continue;
+
+    const existing = remoteMap.get(code) || storageProds.find(p => String(p.id) === code || String(p.codigo) === code);
+    if (!existing) continue;
+
+    const stocks = getProductWarehouseStocks(existing);
+    const next01 = Math.max(0, Number((stocks.stock01 + delta01).toFixed(2)));
+    const next02 = Math.max(0, Number((stocks.stock02 + delta02).toFixed(2)));
+    const nextTotal = Number((next01 + next02).toFixed(2));
+    const prodId = String(existing.id || code);
+    const prodCode = String(existing.codigo || prodId);
+
+    productPatches.push({
+      id: prodId,
+      codigo: prodCode,
+      stock: nextTotal,
+      stockAlmacen01: next01,
+      stockAlmacen02: next02,
+      stock_almacen_01: next01,
+      stock_almacen_02: next02
+    });
+
+    if (delta01 !== 0) {
+      whRows.push({ id: `${prodId}_01`, co_art: prodId, codigo: prodCode, co_alma: '01', stock_act: next01, stock_disp: next01, updated_at: nowIso });
+    }
+    if (delta02 !== 0) {
+      whRows.push({ id: `${prodId}_02`, co_art: prodId, codigo: prodCode, co_alma: '02', stock_act: next02, stock_disp: next02, updated_at: nowIso });
+    }
+  }
+
+  if (productPatches.length > 0) {
+    patchProductsStockInStorage(productPatches);
+    productPatches.forEach(p => {
+      broadcastReconcileChange({
+        tableId: 'products',
+        action: 'RECONCILE',
+        key: p.codigo || p.id,
+        item: p
+      });
+    });
+
+    if (isNetworkOnline() && isSupabaseAvailable) {
+      try {
+        await Promise.all([
+          ...productPatches.map(p =>
+            withTimeout(
+              supabase
+                .from('products')
+                .update({ stock: p.stock, stock_almacen_01: p.stockAlmacen01, stock_almacen_02: p.stockAlmacen02 })
+                .eq('id', p.id),
+              6000
+            )
+          ),
+          whRows.length > 0
+            ? withTimeout(supabase.from('profit_stock_by_warehouse').upsert(whRows, { onConflict: 'id' }), 6000)
+            : Promise.resolve()
+        ]);
+      } catch (err) {
+        markSupabaseOffline(err, 'applyStockDeltaForWarehouseLines');
+      }
+    }
+  }
+  return productPatches;
+}
+
+const REQ_STORAGE_KEY = 'signum_purchase_requisitions_v1';
+const PO_STORAGE_KEY = 'signum_purchase_orders_v1';
+const REC_STORAGE_KEY = 'signum_goods_receipt_notes_v1';
+const OP_STORAGE_KEY = 'signum_payment_orders_v1';
+const TRAS_STORAGE_KEY = 'signum_warehouse_transfers_v1';
+const ADJ_STORAGE_KEY = 'signum_inventory_adjustments_v1';
+const RET_STORAGE_KEY = 'signum_customer_returns_v1';
+
+export const getSupabasePurchaseRequisitions = async () => {
+  const local = readLocalDocList(REQ_STORAGE_KEY);
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('purchase_requisitions').select('*').order('fecha', { ascending: false }),
+      4000
+    );
+    if (error) throw error;
+    return mergeRemoteAndLocalDocs(data || [], local, 'id');
+  } catch (_) {
+    return local;
+  }
+};
+
+export const saveSupabasePurchaseRequisition = async (reqData) => {
+  const nowIso = new Date().toISOString();
+  const num = String(reqData.numeroDoc || `REQ-${Date.now().toString().slice(-6)}`).trim();
+  const normalized = { ...reqData, id: reqData.id || num, numeroDoc: num, fecha: reqData.fecha || nowIso, updated_at: nowIso };
+  upsertLocalDocList(REQ_STORAGE_KEY, normalized, 'id');
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('purchase_requisitions').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const getSupabasePurchaseOrders = async () => {
+  const local = readLocalDocList(PO_STORAGE_KEY);
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('purchase_orders').select('*').order('fecha', { ascending: false }),
+      4000
+    );
+    if (error) throw error;
+    return mergeRemoteAndLocalDocs(data || [], local, 'id');
+  } catch (_) {
+    return local;
+  }
+};
+
+export const saveSupabasePurchaseOrder = async (orderData) => {
+  const nowIso = new Date().toISOString();
+  const num = String(orderData.numeroDoc || `OC-${Date.now().toString().slice(-6)}`).trim();
+  const normalized = { ...orderData, id: orderData.id || num, numeroDoc: num, fecha: orderData.fecha || nowIso, updated_at: nowIso };
+  upsertLocalDocList(PO_STORAGE_KEY, normalized, 'id');
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('purchase_orders').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const getSupabaseGoodsReceiptNotesMerged = async () => {
+  const local = readLocalDocList(REC_STORAGE_KEY);
+  const remote = await getSupabaseProfitGoodsReceiptNotes(100);
+  return mergeRemoteAndLocalDocs(remote || [], local, 'id');
+};
+
+export const saveSupabaseGoodsReceiptNote = async (receiptData) => {
+  const nowIso = new Date().toISOString();
+  const num = String(receiptData.numeroDoc || receiptData.not_num || `REC-${Date.now().toString().slice(-6)}`).trim();
+  const normalized = {
+    ...receiptData,
+    id: receiptData.id || num,
+    not_num: receiptData.not_num || num,
+    numeroDoc: num,
+    fec_emis: receiptData.fec_emis || receiptData.fecha || nowIso,
+    co_prov: receiptData.co_prov || receiptData.proveedorRif || '',
+    prov_des: receiptData.prov_des || receiptData.proveedorNombre || '',
+    nro_fact: receiptData.nro_fact || receiptData.nroFactura || '',
+    items_count: (receiptData.items || []).length || Number(receiptData.items_count || 1),
+    updated_at: nowIso
+  };
+  upsertLocalDocList(REC_STORAGE_KEY, normalized, 'id');
+  if (receiptData.applyStock !== false && Array.isArray(receiptData.items) && receiptData.items.length > 0) {
+    const alm = String(receiptData.almacen || '01').includes('02') ? '02' : '01';
+    const lines = receiptData.items.map(it => ({
+      codigo: it.codigo || it.articuloId,
+      delta01: alm === '01' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0,
+      delta02: alm === '02' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0
+    }));
+    await applyStockDeltaForWarehouseLines(lines);
+  }
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('profit_goods_receipt_notes').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const getSupabaseProfitPaymentOrdersMerged = async () => {
+  const local = readLocalDocList(OP_STORAGE_KEY);
+  const remote = await getSupabaseProfitPaymentOrders();
+  return mergeRemoteAndLocalDocs(remote || [], local, 'id');
+};
+
+export const saveSupabaseProfitPaymentOrder = async (opData) => {
+  const nowIso = new Date().toISOString();
+  const ordNum = String(opData.ordNum || opData.ord_num || `OP-${Date.now().toString().slice(-6)}`).trim();
+  const id = String(opData.id || ordNum);
+  const normalized = {
+    id,
+    ordNum,
+    ord_num: ordNum,
+    fecha: opData.fecha || nowIso,
+    codBen: opData.codBen || opData.cod_ben || '',
+    cod_ben: opData.codBen || opData.cod_ben || '',
+    benDes: opData.benDes || opData.ben_des || opData.beneficiario || 'Beneficiario',
+    ben_des: opData.benDes || opData.ben_des || opData.beneficiario || 'Beneficiario',
+    descrip: opData.descrip || opData.motivo || 'Orden de pago emitida',
+    monto: Number(opData.monto || 0),
+    montoRet: Number(opData.montoRet || opData.monto_ret || 0),
+    monto_ret: Number(opData.montoRet || opData.monto_ret || 0),
+    formaPag: opData.formaPag || opData.forma_pag || 'TRANSFERENCIA',
+    forma_pag: opData.formaPag || opData.forma_pag || 'TRANSFERENCIA',
+    codCta: opData.codCta || opData.cod_cta || '',
+    cod_cta: opData.codCta || opData.cod_cta || '',
+    cheNum: opData.cheNum || opData.che_num || '',
+    che_num: opData.cheNum || opData.che_num || '',
+    anulada: Boolean(opData.anulada),
+    tasa: Number(opData.tasa || 1),
+    moneda: opData.moneda || 'BS',
+    coSucu: opData.coSucu || '01',
+    co_sucu: opData.coSucu || '01',
+    updated_at: nowIso
+  };
+  upsertLocalDocList(OP_STORAGE_KEY, normalized, 'id');
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('profit_payment_orders').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const saveSupabaseProfitWarehouseTransfer = async (transferData) => {
+  const nowIso = new Date().toISOString();
+  const trasNum = String(transferData.trasNum || `TRAS-${Date.now().toString().slice(-6)}`).trim();
+  const almOrig = String(transferData.almOrig || '01').includes('02') ? '02' : '01';
+  const almDest = String(transferData.almDest || '02').includes('01') ? '01' : '02';
+  const renglones = Array.isArray(transferData.renglones) ? transferData.renglones : [];
+  const normalized = {
+    id: transferData.id || trasNum,
+    tras_num: trasNum,
+    trasNum,
+    fecha: transferData.fecha || nowIso,
+    alm_orig: almOrig,
+    almOrig,
+    alm_dest: almDest,
+    almDest,
+    motivo: transferData.motivo || 'Traslado interno entre almacenes',
+    confirma: true,
+    anulada: false,
+    co_sucu: '01',
+    co_us_in: transferData.coUsIn || 'WEB',
+    total_items: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
+    totalItems: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
+    renglones,
+    updated_at: nowIso
+  };
+
+  const lines = renglones.map(r => {
+    const qty = Number(r.total_art ?? r.cantidad ?? 0);
+    return {
+      codigo: r.co_art || r.codigo || r.articuloId,
+      delta01: almOrig === '01' ? -qty : (almDest === '01' ? qty : 0),
+      delta02: almOrig === '02' ? -qty : (almDest === '02' ? qty : 0)
+    };
+  });
+  await applyStockDeltaForWarehouseLines(lines);
+
+  upsertLocalDocList(TRAS_STORAGE_KEY, normalized, 'id');
+  broadcastReconcileChange({ tableId: 'warehouse_transfers', action: 'CREATE', key: normalized.trasNum, item: normalized });
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('profit_warehouse_transfers').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const saveSupabaseProfitInventoryAdjustment = async (adjData) => {
+  const nowIso = new Date().toISOString();
+  const ajueNum = String(adjData.ajueNum || `AJU-${Date.now().toString().slice(-6)}`).trim();
+  const alm = String(adjData.almacen || '01').includes('02') ? '02' : '01';
+  const renglones = Array.isArray(adjData.renglones) ? adjData.renglones : [];
+  const normalized = {
+    id: adjData.id || ajueNum,
+    ajue_num: ajueNum,
+    ajueNum,
+    fecha: adjData.fecha || nowIso,
+    almacen: alm,
+    motivo: adjData.motivo || 'Ajuste / Merma de inventario',
+    anulada: false,
+    co_sucu: '01',
+    co_us_in: adjData.coUsIn || 'WEB',
+    total_items: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
+    totalItems: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
+    renglones,
+    updated_at: nowIso
+  };
+
+  const lines = renglones.map(r => {
+    const qty = Number(r.total_art ?? r.cantidad ?? 0);
+    const sign = String(r.tipo_trans || 'S').toUpperCase() === 'E' ? 1 : -1;
+    return {
+      codigo: r.co_art || r.codigo || r.articuloId,
+      delta01: alm === '01' ? sign * qty : 0,
+      delta02: alm === '02' ? sign * qty : 0
+    };
+  });
+  await applyStockDeltaForWarehouseLines(lines);
+
+  upsertLocalDocList(ADJ_STORAGE_KEY, normalized, 'id');
+  broadcastReconcileChange({ tableId: 'inventory_adjustments', action: 'CREATE', key: normalized.ajueNum, item: normalized });
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('profit_inventory_adjustments').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const saveSupabaseProfitCustomerReturn = async (retData) => {
+  const nowIso = new Date().toISOString();
+  const ncNum = String(retData.ncNum || retData.numeroDoc || `NC-${Date.now().toString().slice(-6)}`).trim();
+  const renglones = Array.isArray(retData.renglones) ? retData.renglones : [];
+  const normalized = {
+    id: retData.id || ncNum,
+    fact_num: retData.factNum || retData.documentoAfectado || '',
+    factNum: retData.factNum || retData.documentoAfectado || '',
+    fec_emis: retData.fecEmis || retData.fecha || nowIso,
+    fecEmis: retData.fecEmis || retData.fecha || nowIso,
+    co_cli: retData.coCli || retData.clienteId || 'CLI-GEN',
+    coCli: retData.coCli || retData.clienteId || 'CLI-GEN',
+    cli_des: retData.cliDes || retData.clienteNombre || 'Cliente',
+    cliDes: retData.cliDes || retData.clienteNombre || 'Cliente',
+    rif: retData.rif || retData.clienteRif || '',
+    nc_num: ncNum,
+    ncNum,
+    status: 'PROCESADA',
+    anulada: false,
+    descrip: retData.descrip || retData.motivo || 'Devolución de mercancía',
+    tot_bruto: Number(retData.totBruto || 0),
+    totBruto: Number(retData.totBruto || 0),
+    iva: Number(retData.iva || 0),
+    tot_neto: Number(retData.totNeto || 0),
+    totNeto: Number(retData.totNeto || 0),
+    tasa: Number(retData.tasa || 1),
+    moneda: retData.moneda || 'USD',
+    renglones,
+    updated_at: nowIso
+  };
+
+  if (retData.reenterStock !== false && renglones.length > 0) {
+    const alm = String(retData.almacen || '01').includes('02') ? '02' : '01';
+    const lines = renglones.map(r => ({
+      codigo: r.co_art || r.codigo || r.articuloId,
+      delta01: alm === '01' ? Number(r.total_art ?? r.cantidad ?? 0) : 0,
+      delta02: alm === '02' ? Number(r.total_art ?? r.cantidad ?? 0) : 0
+    }));
+    await applyStockDeltaForWarehouseLines(lines);
+  }
+
+  upsertLocalDocList(RET_STORAGE_KEY, normalized, 'id');
+  if (isNetworkOnline()) {
+    try {
+      await withTimeout(supabase.from('profit_customer_returns').upsert(normalized, { onConflict: 'id' }), 6000);
+    } catch (_) {}
+  }
+  return normalized;
+};
+
+export const getSupabaseProfitReturnsMerged = async () => {
+  const local = readLocalDocList(RET_STORAGE_KEY);
+  const remote = await getSupabaseProfitReturns();
+  return mergeRemoteAndLocalDocs(remote || [], local, 'id');
+};
+
+export const getSupabaseProfitInventoryAdjustmentsMerged = async () => {
+  const local = readLocalDocList(ADJ_STORAGE_KEY);
+  const remote = await getSupabaseProfitInventoryAdjustments();
+  return mergeRemoteAndLocalDocs(remote || [], local, 'id');
+};
+
+export const getSupabaseProfitWarehouseTransfersMerged = async () => {
+  const local = readLocalDocList(TRAS_STORAGE_KEY);
+  const remote = await getSupabaseProfitWarehouseTransfers();
+  return mergeRemoteAndLocalDocs(remote || [], local, 'id');
+};
+
 
 
 

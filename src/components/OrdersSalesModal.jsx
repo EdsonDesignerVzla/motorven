@@ -3677,6 +3677,7 @@ export default function OrdersSalesModal({
                               let saleResult = null;
                               if (onProcessSale) {
                                 saleResult = await onProcessSale({
+                                  preserveOriginOrderOnSale: true,
                                   orderId: selectedOrder.id,
                                   pedidoOrigenId: selectedOrder.id,
                                   pedidoOrigenDoc: selectedOrder.numeroDoc || selectedOrder.id,
@@ -3725,11 +3726,10 @@ export default function OrdersSalesModal({
                                 metodoPagoFactura: billingPaymentMethod
                               };
 
-                              if (onUpdateOrderStatus) {
-                                await onUpdateOrderStatus(selectedOrder.id, 'FACTURADO');
-                              }
                               if (onSaveOrder) {
                                 await onSaveOrder(billedOrder);
+                              } else if (onUpdateOrderStatus) {
+                                await onUpdateOrderStatus(selectedOrder.id, 'FACTURADO');
                               }
 
                               setSelectedOrder(billedOrder);
@@ -3743,7 +3743,7 @@ export default function OrdersSalesModal({
                               setTimeout(() => {
                                 setActiveTab('imprimir');
                                 setFeedbackMsg(null);
-                              }, 1200);
+                              }, 300);
 
                             } catch (err) {
                               console.error(err);

@@ -290,18 +290,26 @@ export default function ClientsDirectoryModal({
     }
   };
 
+  const notifyError = (msg) => {
+    if (notify?.error) {
+      notify.error(msg);
+    } else {
+      alert(msg);
+    }
+  };
+
   const handleSaveForm = async (e) => {
     e.preventDefault();
     if (!clientForm.codigo.trim()) {
-      notify?.error ? notify.error('El código de cliente es obligatorio') : alert('El código de cliente es obligatorio');
+      notifyError('El código de cliente es obligatorio');
       return;
     }
     if (!clientForm.nombre.trim()) {
-      notify?.error ? notify.error('La razón social o nombre es obligatoria') : alert('La razón social o nombre es obligatoria');
+      notifyError('La razón social o nombre es obligatoria');
       return;
     }
     if (!clientForm.rif.trim()) {
-      notify?.error ? notify.error('El RIF es obligatorio') : alert('El RIF es obligatorio');
+      notifyError('El RIF es obligatorio');
       return;
     }
 
@@ -323,7 +331,7 @@ export default function ClientsDirectoryModal({
       setSelectedClientId(payload.codigo);
     } catch (err) {
       console.error(err);
-      notify?.error ? notify.error('Error al guardar el cliente en Supabase') : alert('Error al guardar cliente');
+      notifyError('Error al guardar el cliente en Supabase');
     } finally {
       setIsSavingClient(false);
     }

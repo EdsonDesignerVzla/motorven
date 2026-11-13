@@ -10,10 +10,15 @@ import {
   INITIAL_FISCAL_CLOSURES
 } from '../src/data/mockData.js';
 
-const supabaseUrl = 'https://lccnevmjvcxjxesvlmak.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjY25ldm1qdmN4anhlc3ZsbWFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTY0OTAsImV4cCI6MjEwMDQ5MjQ5MH0.u5iyMytGaemAkOwOgyZVOhGqoxAtCCygCZb0LtLiiEw';
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+if (!supabaseUrl || !supabaseKey) {
+  console.error('❌ Define SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY (o SUPABASE_ANON_KEY) en el entorno antes de ejecutar seed_supabase.js');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function runSeed() {
   console.log("=== INICIANDO SEED EN SUPABASE ===");

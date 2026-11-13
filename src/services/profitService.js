@@ -111,13 +111,26 @@ export function subscribeToRealtimeChanges({
     fiscal_closures: onFiscalClosuresChange
   };
 
+  const debounceTimers = new Map();
+  const scheduleHandler = (tableKey, handler, payload) => {
+    if (typeof handler !== 'function') return;
+    const prevTimer = debounceTimers.get(tableKey);
+    if (prevTimer) clearTimeout(prevTimer);
+    const tid = setTimeout(() => {
+      debounceTimers.delete(tableKey);
+      handler(payload);
+    }, 350);
+    debounceTimers.set(tableKey, tid);
+  };
+
   // 1. Suscribir al motor multi-dispositivo SSE + Delta Polling + BroadcastChannel
+  // Ignorar eventos originados en esta misma pestaña para evitar recargas redundantes de tablas completas
   const unsubscribeBridge = subscribeToRealtimeSync((evt) => {
     if (!evt) return;
     const rawTable = evt.table || evt.tableId;
     const handler = tableCallbacks[rawTable] || tableCallbacks[evt.tableId];
     if (typeof handler === 'function') {
-      handler({
+      scheduleHandler(String(rawTable || evt.tableId), handler, {
         eventType: evt.eventType || (evt.action === 'DELETE' ? 'DELETE' : 'UPDATE'),
         table: rawTable,
         new: evt.item || null,
@@ -125,7 +138,7 @@ export function subscribeToRealtimeChanges({
         key: evt.key
       });
     }
-  });
+  }, { ignoreSelfEvents: true });
 
   // 2. Mantener canal WebSocket nativo de Supabase por compatibilidad si se conecta a Supabase Cloud
   let channel = null;
@@ -135,13 +148,15 @@ export function subscribeToRealtimeChanges({
       .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
         const handler = tableCallbacks[payload?.table];
         if (typeof handler === 'function') {
-          handler(payload);
+          scheduleHandler(String(payload?.table), handler, payload);
         }
       })
       .subscribe();
   } catch (_) {}
 
   return () => {
+    for (const tid of debounceTimers.values()) clearTimeout(tid);
+    debounceTimers.clear();
     unsubscribeBridge();
     if (channel) {
       try {
