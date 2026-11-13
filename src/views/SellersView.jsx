@@ -320,7 +320,7 @@ export default function SellersView({
         documentosPagadosCount: commissionSummary.paidDocsCount,
         documentosPendientesCount: commissionSummary.pendingDocsCount,
         comisionTiers: commissionSummary.tiers,
-        comisionSummary,
+        comisionSummary: commissionSummary,
         comisionEstimadaUsd: commissionSummary.totalComisionUsd,
         comisionEstimadaBs: commissionSummary.totalComisionBs
       };

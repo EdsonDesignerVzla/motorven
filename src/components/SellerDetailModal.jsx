@@ -45,6 +45,7 @@ export default function SellerDetailModal({
   onUpdateSellerZone
 }) {
   const sellerCoVen = (seller?.coVen || seller?.co_ven || seller?.codigo || seller?.id || '').toString().trim();
+  const sellerVenDes = (seller?.venDes || seller?.ven_des || seller?.nombre || '').toString().trim();
 
   // Zone management state
   const initialCoZon = seller?.coZon || seller?.co_zon || '';
