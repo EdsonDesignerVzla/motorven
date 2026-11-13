@@ -307,6 +307,21 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
     mapOrArray: 'array',
     resolveId: (d) => d?.id
   });
+  recoverPendingDocsFromStorage('signum_warehouse_transfers_v1', {
+    entity: 'profit_warehouse_transfer',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
+  recoverPendingDocsFromStorage('signum_inventory_adjustments_v1', {
+    entity: 'profit_inventory_adjustment',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
+  recoverPendingDocsFromStorage('signum_customer_returns_v1', {
+    entity: 'profit_customer_return',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
 
   if (queue.length === 0) {
     notifySubscribers();
@@ -602,6 +617,36 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
             syncSuccess = true;
           } else if (handlers.supabase?.from) {
             const { error } = await handlers.supabase.from('profit_purchases').upsert(cleanPur, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'profit_warehouse_transfer': {
+          const { _pendingServerSync, ...cleanTras } = item.data || {};
+          if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('profit_warehouse_transfers').upsert(cleanTras, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'profit_inventory_adjustment': {
+          const { _pendingServerSync, ...cleanAdj } = item.data || {};
+          if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('profit_inventory_adjustments').upsert(cleanAdj, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'profit_customer_return': {
+          const { _pendingServerSync, ...cleanRet } = item.data || {};
+          if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('profit_customer_returns').upsert(cleanRet, { onConflict: 'id' });
             if (error) throw error;
             syncSuccess = true;
           }

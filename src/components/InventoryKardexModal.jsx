@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { X, Printer, Plus } from 'lucide-react';
-import { formatBs, formatNumberUs, formatUnitVe, resolveProductUnit } from '../services/formatService';
+import { X, Printer, Plus, AlertTriangle } from 'lucide-react';
+import { formatBs, formatNumberUs, formatUnitVe, getProductWarehouseStocks, resolveProductUnit } from '../services/formatService';
 import { generateInventoryPDF, generateWarehouseTransferOrAdjustmentPDF } from '../services/pdfReportService';
+import { buildConsolidatedKardex, isDocumentAnnulled } from '../utils/kardexUtils';
 
 export default function InventoryKardexModal({
   isOpen,
@@ -9,6 +10,12 @@ export default function InventoryKardexModal({
   adjustments = [],
   transfers = [],
   products = [],
+  purchases = [],
+  profitPurchases = [],
+  goodsReceiptNotes = [],
+  sales = [],
+  profitInvoices = [],
+  profitReturns = [],
   config = {},
   currentUser = null,
   onSyncProfit,
@@ -23,6 +30,7 @@ export default function InventoryKardexModal({
   const [isSyncing, setIsSyncing] = useState(false);
   const [showNewForm, setShowNewForm] = useState(false);
   const [savingMov, setSavingMov] = useState(false);
+  const [movError, setMovError] = useState('');
   const [movSku, setMovSku] = useState('');
   const [movQty, setMovQty] = useState(1);
   const [movWarehouse, setMovWarehouse] = useState('01');
@@ -32,9 +40,12 @@ export default function InventoryKardexModal({
 
   const tasaDolar = Number(config?.tasaDolar || 1);
 
-  // Filtrar Ajustes
+  const activeAdjustments = useMemo(() => (adjustments || []).filter(a => a && !isDocumentAnnulled(a)), [adjustments]);
+  const activeTransfers = useMemo(() => (transfers || []).filter(t => t && !isDocumentAnnulled(t)), [transfers]);
+
+  // Filtrar Ajustes (excluye anulados)
   const filteredAdjustments = useMemo(() => {
-    return adjustments.filter(a => {
+    return activeAdjustments.filter(a => {
       const term = searchTerm.toLowerCase();
       const matchSearch =
         String(a.ajueNum || '').toLowerCase().includes(term) ||
@@ -51,11 +62,11 @@ export default function InventoryKardexModal({
 
       return matchSearch && matchType;
     });
-  }, [adjustments, searchTerm, filterType]);
+  }, [activeAdjustments, searchTerm, filterType]);
 
-  // Filtrar Traslados
+  // Filtrar Traslados (excluye anulados)
   const filteredTransfers = useMemo(() => {
-    return transfers.filter(t => {
+    return activeTransfers.filter(t => {
       const term = searchTerm.toLowerCase();
       return (
         String(t.trasNum || '').toLowerCase().includes(term) ||
@@ -68,16 +79,16 @@ export default function InventoryKardexModal({
         )
       );
     });
-  }, [transfers, searchTerm]);
+  }, [activeTransfers, searchTerm]);
 
-  // Estadísticas Generales
+  // Estadísticas Generales (excluye anulados)
   const stats = useMemo(() => {
     let totalEntradasUnits = 0;
     let totalSalidasUnits = 0;
     let totalValorEntradasUsd = 0;
     let totalValorSalidasUsd = 0;
 
-    adjustments.forEach(a => {
+    activeAdjustments.forEach(a => {
       (a.renglones || []).forEach(r => {
         const qty = Number(r.total_art) || 0;
         const costUsd = Number(r.cost_unit_om) || 0;
@@ -92,82 +103,36 @@ export default function InventoryKardexModal({
     });
 
     let totalTrasladosUnits = 0;
-    transfers.forEach(t => {
+    activeTransfers.forEach(t => {
       totalTrasladosUnits += (t.totalItems || 0);
     });
 
     return {
-      totalAdjustments: adjustments.length,
-      totalTransfers: transfers.length,
+      totalAdjustments: activeAdjustments.length,
+      totalTransfers: activeTransfers.length,
       totalEntradasUnits,
       totalSalidasUnits,
       totalValorEntradasUsd,
       totalValorSalidasUsd,
       totalTrasladosUnits
     };
-  }, [adjustments, transfers]);
+  }, [activeAdjustments, activeTransfers]);
 
-  // Kardex consolidado por SKU
+  // Kardex consolidado real por SKU y almacén (Compras + Recepciones + Ventas + Devoluciones + Ajustes + Traslados, sin anulados)
   const kardexByProduct = useMemo(() => {
-    const map = {};
-    products.forEach(p => {
-      map[p.codigo] = {
-        codigo: p.codigo,
-        descripcion: p.descripcion,
-        viscosidad: p.viscosidad,
-        stockActual: p.stock || 0,
-        unidad: resolveProductUnit(p, 'Caja'),
-        entradasAjuste: 0,
-        salidasAjuste: 0,
-        traslados: 0
-      };
+    return buildConsolidatedKardex({
+      products,
+      adjustments: activeAdjustments,
+      transfers: activeTransfers,
+      purchases,
+      profitPurchases,
+      goodsReceiptNotes,
+      sales,
+      profitInvoices,
+      profitReturns,
+      searchTerm
     });
-
-    adjustments.forEach(a => {
-      (a.renglones || []).forEach(r => {
-        const cArt = r.co_art;
-        if (!map[cArt]) {
-          map[cArt] = {
-            codigo: cArt,
-            descripcion: r.art_des || cArt,
-            viscosidad: 'N/A',
-            stockActual: 0,
-            unidad: resolveProductUnit(r, 'Caja'),
-            entradasAjuste: 0,
-            salidasAjuste: 0,
-            traslados: 0
-          };
-        }
-        if (r.tipo_trans === 'E') {
-          map[cArt].entradasAjuste += (r.total_art || 0);
-        } else {
-          map[cArt].salidasAjuste += (r.total_art || 0);
-        }
-      });
-    });
-
-    transfers.forEach(t => {
-      (t.renglones || []).forEach(r => {
-        const cArt = r.co_art;
-        if (map[cArt]) {
-          map[cArt].traslados += (r.total_art || 0);
-        }
-      });
-    });
-
-    return Object.values(map)
-      .filter(p => {
-        if (!searchTerm) return true;
-        const term = searchTerm.toLowerCase();
-        return (
-          String(p.codigo || '').toLowerCase().includes(term) ||
-          String(p.descripcion || '').toLowerCase().includes(term)
-        );
-      })
-      .sort((a, b) =>
-        String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
-      );
-  }, [products, adjustments, transfers, searchTerm]);
+  }, [products, activeAdjustments, activeTransfers, purchases, profitPurchases, goodsReceiptNotes, sales, profitInvoices, profitReturns, searchTerm]);
 
   const handleTriggerSync = async () => {
     if (!onSyncProfit) return;
@@ -283,17 +248,43 @@ export default function InventoryKardexModal({
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!movSku || Number(movQty) <= 0) return;
-              const prod = products.find(p => String(p.codigo || p.id) === movSku) || {};
-              const costUsd = Number(prod.costoUnitarioUsd || prod.precioUsd || 0);
-              const qty = Number(movQty || 1);
+              setMovError('');
+              const qty = Number(movQty || 0);
+              if (!movSku || !(qty > 0)) {
+                setMovError('Seleccione un artículo válido e indique una cantidad mayor a 0.');
+                return;
+              }
+              const prod = products.find(p => String(p.codigo || p.id) === movSku) || null;
+              if (!prod) {
+                setMovError('Producto no encontrado en el catálogo.');
+                return;
+              }
+              const wStocks = getProductWarehouseStocks(prod);
+              const originStock = movWarehouse === '02' ? wStocks.stock02 : wStocks.stock01;
+
+              if (activeTab === 'TRANSFERS') {
+                if (movWarehouse === movDestWarehouse) {
+                  setMovError('El almacén origen y el almacén destino deben ser distintos.');
+                  return;
+                }
+                if (qty > originStock + 0.0001) {
+                  setMovError(`Stock insuficiente en Almacén ${movWarehouse}: disponible ${originStock}, solicitado ${qty}.`);
+                  return;
+                }
+              } else if (activeTab === 'ADJUSTMENTS' && movAdjType === 'S') {
+                if (qty > originStock + 0.0001) {
+                  setMovError(`No puede dar salida/merma de ${qty} u. en Almacén ${movWarehouse} (disponible: ${originStock}).`);
+                  return;
+                }
+              }
+
+              const costUsd = Number(prod.costoUnitarioUsd || prod.costoUsd || prod.precioUsd || 0);
               setSavingMov(true);
               try {
                 if (activeTab === 'TRANSFERS' && onSaveTransfer) {
-                  const dest = movWarehouse === '01' ? '02' : '01';
                   const saved = await onSaveTransfer({
                     almOrig: movWarehouse,
-                    almDest: movDestWarehouse === movWarehouse ? dest : movDestWarehouse,
+                    almDest: movDestWarehouse,
                     motivo: movReason.trim() || `Traslado físico Alm ${movWarehouse} -> Alm ${movDestWarehouse}`,
                     coUsIn: currentUser?.nombre || currentUser?.username || 'WEB',
                     renglones: [{
@@ -307,6 +298,7 @@ export default function InventoryKardexModal({
                   });
                   setSelectedTransfer(saved);
                   setShowNewForm(false);
+                  setMovReason('');
                   generateWarehouseTransferOrAdjustmentPDF({ record: saved, mode: 'TRANSFER', config, currentUser });
                 } else if (activeTab === 'ADJUSTMENTS' && onSaveAdjustment) {
                   const saved = await onSaveAdjustment({
@@ -327,28 +319,40 @@ export default function InventoryKardexModal({
                   });
                   setSelectedAdjustment(saved);
                   setShowNewForm(false);
+                  setMovReason('');
                   generateWarehouseTransferOrAdjustmentPDF({ record: saved, mode: 'ADJUSTMENT', config, currentUser });
                 }
+              } catch (err) {
+                setMovError(err?.message || 'Error al procesar el movimiento de inventario.');
               } finally {
                 setSavingMov(false);
               }
             }}
             className="p-4 bg-blue-50/60 dark:bg-[#0c1630] border-b border-slate-200 dark:border-slate-800 grid grid-cols-1 md:grid-cols-5 gap-3 items-end print:hidden"
           >
+            {movError && (
+              <div className="md:col-span-5 flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/15 border border-red-500/40 text-red-600 dark:text-red-300 text-xs font-bold">
+                <AlertTriangle size={14} />
+                <span>{movError}</span>
+              </div>
+            )}
             <div className="md:col-span-2">
               <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">Producto / SKU</label>
               <select
                 value={movSku}
-                onChange={(e) => setMovSku(e.target.value)}
+                onChange={(e) => { setMovSku(e.target.value); setMovError(''); }}
                 required
                 className="w-full px-2.5 py-2 bg-white dark:bg-[#070d1e] border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
               >
                 <option value="">-- Seleccionar artículo --</option>
-                {products.map((p) => (
-                  <option key={p.id || p.codigo} value={p.codigo || p.id}>
-                    {p.codigo} - {p.descripcion} (Stock: {p.stock || 0})
-                  </option>
-                ))}
+                {products.map((p) => {
+                  const ws = getProductWarehouseStocks(p);
+                  return (
+                    <option key={p.id || p.codigo} value={p.codigo || p.id}>
+                      {p.codigo} - {p.descripcion} (Alm01: {ws.stock01} | Alm02: {ws.stock02})
+                    </option>
+                  );
+                })}
               </select>
             </div>
             <div>
@@ -840,17 +844,22 @@ export default function InventoryKardexModal({
 
           {/* VISTA 3: MATRIZ KARDEX POR SKU */}
           {activeTab === 'KARDEX_SUMMARY' && (
-            <div className="overflow-hidden border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#070d1e]">
+            <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#070d1e]">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
                     <th className="p-3">Código</th>
                     <th className="p-3">Descripción de Lubricante</th>
                     <th className="p-3">Viscosidad</th>
-                    <th className="p-3 text-center">Entradas Ajuste</th>
-                    <th className="p-3 text-center">Salidas / Mermas</th>
+                    <th className="p-3 text-center">Compras (+)</th>
+                    <th className="p-3 text-center">Ventas (-)</th>
+                    <th className="p-3 text-center">Devol. (+)</th>
+                    <th className="p-3 text-center">Aj. Ent (+)</th>
+                    <th className="p-3 text-center">Aj. Sal (-)</th>
                     <th className="p-3 text-center">Traslados</th>
-                    <th className="p-3 text-right">Existencia Físico en Planta</th>
+                    <th className="p-3 text-center">Alm 01</th>
+                    <th className="p-3 text-center">Alm 02</th>
+                    <th className="p-3 text-right">Stock Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -867,17 +876,32 @@ export default function InventoryKardexModal({
                           {p.viscosidad}
                         </span>
                       </td>
+                      <td className="p-3 text-center font-bold text-cyan-600 dark:text-cyan-400">
+                        {p.entradasCompras > 0 ? `+${formatUnitVe(p.entradasCompras, 0)}` : '-'}
+                      </td>
+                      <td className="p-3 text-center font-bold text-amber-600 dark:text-amber-400">
+                        {p.salidasVentas > 0 ? `-${formatUnitVe(p.salidasVentas, 0)}` : '-'}
+                      </td>
+                      <td className="p-3 text-center font-bold text-teal-600 dark:text-teal-400">
+                        {p.devolucionesClientes > 0 ? `+${formatUnitVe(p.devolucionesClientes, 0)}` : '-'}
+                      </td>
                       <td className="p-3 text-center font-bold text-emerald-600 dark:text-emerald-400">
-                        {p.entradasAjuste > 0 ? `+${p.entradasAjuste}` : '-'}
+                        {p.entradasAjuste > 0 ? `+${formatUnitVe(p.entradasAjuste, 0)}` : '-'}
                       </td>
                       <td className="p-3 text-center font-bold text-red-600 dark:text-red-400">
-                        {p.salidasAjuste > 0 ? `-${p.salidasAjuste}` : '-'}
+                        {p.salidasAjuste > 0 ? `-${formatUnitVe(p.salidasAjuste, 0)}` : '-'}
                       </td>
                       <td className="p-3 text-center font-bold text-blue-600 dark:text-blue-400">
-                        {p.traslados > 0 ? p.traslados : '-'}
+                        {p.traslados > 0 ? formatUnitVe(p.traslados, 0) : '-'}
+                      </td>
+                      <td className="p-3 text-center font-semibold text-slate-700 dark:text-slate-300">
+                        {formatUnitVe(p.stock01, 0)}
+                      </td>
+                      <td className="p-3 text-center font-semibold text-slate-700 dark:text-slate-300">
+                        {formatUnitVe(p.stock02, 0)}
                       </td>
                       <td className="p-3 text-right font-black text-slate-900 dark:text-white">
-                        {p.stockActual} <span className="text-[10px] font-normal text-slate-400">{p.unidad}</span>
+                        {formatUnitVe(p.stockActual, 0)} <span className="text-[10px] font-normal text-slate-400">{p.unidad}</span>
                       </td>
                     </tr>
                   ))}
@@ -891,7 +915,7 @@ export default function InventoryKardexModal({
         {/* Pie del Modal */}
         <div className="p-4 bg-slate-100 dark:bg-[#070d1e] border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 print:hidden">
           <div>
-            Auditando <strong>{adjustments.length}</strong> ajustes y <strong>{transfers.length}</strong> traslados sincronizados con Supabase.
+            Auditando <strong>{activeAdjustments.length}</strong> ajustes y <strong>{activeTransfers.length}</strong> traslados vigentes sincronizados con Supabase (anulados excluidos).
           </div>
           <button
             onClick={onClose}

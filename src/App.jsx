@@ -2353,6 +2353,7 @@ function MainApp() {
       const montoNetBs = Number((netoPagarUsd * tasaDolar).toFixed(2));
 
       // 1. Integración automática a Cuentas por Pagar (CxP)
+      let cxpSavedOk = true;
       try {
         const payablePayload = {
           id: `DOC-CP-${tipoDocCxp}-${rawNum}-${provRif.replace(/[^A-Za-z0-9]/g, '')}`,
@@ -2410,14 +2411,50 @@ function MainApp() {
           });
         }
       } catch (cxpErr) {
+        cxpSavedOk = false;
         console.warn('[handleRegisterPurchase] Error al registrar documento CxP:', cxpErr);
+        notify.warning(`La compra se guardó, pero hubo un problema generando la Cuenta por Pagar (CxP): ${cxpErr?.message || ''}`);
       }
 
       // 2. Reflejar en profitPurchases para Libro Diario, reportes y vistas analíticas
+      const mappedProfitItems = Array.isArray(purchaseData.items) && purchaseData.items.length > 0
+        ? purchaseData.items.map((it, idx) => ({
+            rengNum: idx + 1,
+            articuloId: it.codigo || it.productoId || 'LUB-PROV',
+            codigo: it.codigo || '',
+            descripcion: it.descripcion || it.producto || 'Lubricante Proveedor',
+            unidadVenta: 'Caja',
+            cantidad: Number(it.cantidad || 0),
+            litrosUnitarios: 1,
+            litrosTotales: Number(it.cantidad || 0),
+            precioUnitario: Number(it.costoUnitarioUsd || 0),
+            fleteUsd: Number(it.fleteUsd || 0),
+            almacen: String(it.almacen || purchaseData.almacen || '01').includes('02') ? '02' : '01',
+            totalNeto: Number(it.subtotalUsd ?? (Number(it.cantidad || 0) * Number(it.costoUnitarioUsd || 0)))
+          }))
+        : [{
+            rengNum: 1,
+            articuloId: purchaseData.productoCodigo || purchaseData.producto || 'LUB-PROV',
+            codigo: purchaseData.productoCodigo || '',
+            descripcion: purchaseData.producto || 'Lubricante Proveedor',
+            unidadVenta: 'Caja',
+            cantidad: Number(purchaseData.cantidad || 0),
+            litrosUnitarios: 1,
+            litrosTotales: Number(purchaseData.cantidad || 0),
+            precioUnitario: Number(purchaseData.costoUnitarioUsd || 0),
+            fleteUsd: Number(purchaseData.fleteUsd || 0),
+            almacen: String(purchaseData.almacen || '01').includes('02') ? '02' : '01',
+            totalNeto: Number(purchaseData.subtotalUsd || 0)
+          }];
+
       const nextProfitPurchase = {
-        id: `COM-${Date.now().toString().slice(-6)}`,
+        id: `COM-${Date.now().toString(36).toUpperCase()}`,
         factNum: rawNum || Date.now().toString().slice(-6),
         facturaProv: rawNum,
+        tipoDoc: tipoDocRaw,
+        documentoAfectado: purchaseData.documentoAfectado || '',
+        almacen: String(purchaseData.almacen || '01').includes('02') ? '02' : '01',
+        fleteUsd: Number(purchaseData.fleteUsd || 0),
         fechaEmision: purchaseData.fecha || new Date().toISOString(),
         fechaVencimiento: vencDate.toISOString(),
         coProv: provRif,
@@ -2429,23 +2466,13 @@ function MainApp() {
         ivaBs: Number(((purchaseData.ivaGeneralUsd || purchaseData.ivaReducidaUsd || 0) * tasaDolar).toFixed(2)),
         totNetoUsd: totalFacturaUsd,
         totNetoBs: Number((totalFacturaUsd * tasaDolar).toFixed(2)),
-        saldoUsd,
-        saldoBs,
-        status: saldoUsd <= 0.01 ? 'PAGADA' : 'SALDO_PENDIENTE',
+        saldoUsd: tipoDocRaw === 'NOTA_CREDITO' ? 0 : saldoUsd,
+        saldoBs: tipoDocRaw === 'NOTA_CREDITO' ? 0 : saldoBs,
+        status: (tipoDocRaw === 'NOTA_CREDITO' || saldoUsd <= 0.01) ? 'PAGADA' : 'SALDO_PENDIENTE',
         anulada: false,
         formaPag: isContado ? '01' : '04',
         co_us_in: purchaseData.receptor || currentUser?.nombre || 'PROCURA',
-        items: [{
-          rengNum: 1,
-          articuloId: purchaseData.producto || 'LUB-PROV',
-          descripcion: purchaseData.producto || 'Lubricante Proveedor',
-          unidadVenta: 'Caja',
-          cantidad: Number(purchaseData.cantidad || 0),
-          litrosUnitarios: 1,
-          litrosTotales: Number(purchaseData.cantidad || 0),
-          precioUnitario: Number(purchaseData.costoUnitarioUsd || 0),
-          totalNeto: Number(purchaseData.subtotalUsd || 0)
-        }],
+        items: mappedProfitItems,
         fechaSincronizacion: new Date().toISOString()
       };
       setProfitPurchases(prev => [nextProfitPurchase, ...(Array.isArray(prev) ? prev : [])]);
@@ -2468,33 +2495,46 @@ function MainApp() {
         saldo_bs: nextProfitPurchase.saldoBs,
         forma_pag: nextProfitPurchase.formaPag,
         fecha_sincronizacion: nextProfitPurchase.fechaSincronizacion
-      }).catch(() => {});
+      }).catch((err) => {
+        console.warn('[handleRegisterPurchase] Error sincronizando profit_purchases:', err?.message || err);
+      });
 
-      // 3. Actualizar saldo pendiente del proveedor en cartera
+      // 3. Actualizar saldo pendiente del proveedor en cartera (suppliers + profitSuppliers)
       if (provRif && netoPagarUsd > 0) {
-        setSuppliersState(prev => {
-          const list = Array.isArray(prev) ? [...prev] : [];
-          return list.map(s => {
-            if (String(s.rif || '').toUpperCase() === provRif || String(s.id) === String(purchaseData.proveedorId)) {
+        const debtDelta = tipoDocRaw === 'NOTA_CREDITO' ? -netoPagarUsd : (isContado ? 0 : netoPagarUsd);
+        if (debtDelta !== 0) {
+          const matchesSup = (s) =>
+            String(s?.rif || '').trim().toUpperCase() === provRif ||
+            String(s?.coProv || s?.co_prov || '').trim().toUpperCase() === provRif ||
+            (purchaseData.proveedorId && String(s?.id || '') === String(purchaseData.proveedorId));
+
+          setSuppliersState(prev =>
+            (Array.isArray(prev) ? prev : []).map(s => {
+              if (!matchesSup(s)) return s;
               const currentDebt = Number(s.saldoPendienteUsd ?? s.saldo_pendiente_usd ?? 0);
-              const delta = tipoDocRaw === 'NOTA_CREDITO' ? -netoPagarUsd : (isContado ? 0 : netoPagarUsd);
-              const newDebt = Math.max(0, Number((currentDebt + delta).toFixed(2)));
-              return {
-                ...s,
-                saldoPendienteUsd: newDebt,
-                saldo_pendiente_usd: newDebt
-              };
-            }
-            return s;
-          });
-        });
+              const newDebt = Math.max(0, Number((currentDebt + debtDelta).toFixed(2)));
+              return { ...s, saldoPendienteUsd: newDebt, saldo_pendiente_usd: newDebt };
+            })
+          );
+          setProfitSuppliers(prev =>
+            (Array.isArray(prev) ? prev : []).map(s => {
+              if (!matchesSup(s)) return s;
+              const currentDebt = Number(s.saldoUsd ?? s.saldo_usd ?? 0);
+              const newDebt = Math.max(0, Number((currentDebt + debtDelta).toFixed(2)));
+              return { ...s, saldoUsd: newDebt, saldo_usd: newDebt };
+            })
+          );
+        }
       }
 
-      notify.success("Compra registrada y Cuenta por Pagar (CxP) generada exitosamente");
+      if (cxpSavedOk) {
+        notify.success("Compra registrada y Cuenta por Pagar (CxP) generada exitosamente");
+      }
       return created;
     } catch (err) {
       console.error("Error al registrar compra:", err);
-      notify.error("Error al registrar la compra en el sistema");
+      notify.error(err?.message || "Error al registrar la compra en el sistema");
+      throw err;
     }
   };
 
@@ -2509,7 +2549,7 @@ function MainApp() {
       return saved;
     } catch (err) {
       console.error('Error al procesar traslado:', err);
-      notify.error('Error al procesar el traslado entre almacenes');
+      notify.error(err?.message || 'Error al procesar el traslado entre almacenes');
       throw err;
     }
   };
@@ -2525,7 +2565,7 @@ function MainApp() {
       return saved;
     } catch (err) {
       console.error('Error al registrar ajuste:', err);
-      notify.error('Error al registrar el ajuste de inventario');
+      notify.error(err?.message || 'Error al registrar el ajuste de inventario');
       throw err;
     }
   };
@@ -3739,7 +3779,10 @@ function MainApp() {
               warehouseTransfers={profitWarehouseTransfers}
               profitInvoices={profitInvoices}
               sales={sales}
+              purchases={purchases}
               profitPurchases={profitPurchases}
+              goodsReceiptNotes={goodsReceiptNotes}
+              profitReturns={profitReturns}
               profitSuppliers={profitSuppliers}
               onSyncProfit={handleSyncProfit}
               onSaveProduct={handleSaveProduct}

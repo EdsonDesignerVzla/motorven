@@ -10,7 +10,7 @@ import {
   ShoppingCart
 } from 'lucide-react';
 import OilstoneProductImage from '../OilstoneProductImage';
-import { formatUsd, formatBs, resolveProductUnit } from '../../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, getProductWarehouseStocks, resolveProductUnit } from '../../services/formatService';
 
 export default function MobileInventoryView({
   products = [],
@@ -100,7 +100,8 @@ export default function MobileInventoryView({
         {filteredProducts.map(prod => {
           const precioUsd = Number(prod.precioUsdDetal || prod.precio_usd_detal || prod.precio || 0);
           const precioBs = precioUsd * tasaBcv;
-          const stock = Number(prod.stockActual || prod.stock_actual || prod.stock || 0);
+          const wStocks = getProductWarehouseStocks(prod);
+          const stock = wStocks.total > 0 ? wStocks.total : (Number(prod.stockActual || prod.stock_actual || prod.stock || 0) || 0);
           const unit = resolveProductUnit(prod);
 
           const isAgotado = stock <= 0;
@@ -154,6 +155,19 @@ export default function MobileInventoryView({
                   </span>
                   <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b', fontFamily: 'monospace' }}>
                     {formatBs(precioBs)}
+                  </span>
+                </div>
+
+                {/* Desglose por Almacén 01 (Fiscal) y 02 (N.E.) */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '5px' }}>
+                  <span style={{ fontSize: '0.62rem', fontWeight: 700, padding: '2px 6px', borderRadius: '5px', background: 'rgba(59, 130, 246, 0.14)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                    Alm 01: {formatUnitVe(wStocks.stock01, 0)}
+                  </span>
+                  <span style={{ fontSize: '0.62rem', fontWeight: 700, padding: '2px 6px', borderRadius: '5px', background: 'rgba(168, 85, 247, 0.14)', color: '#d8b4fe', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                    Alm 02: {formatUnitVe(wStocks.stock02, 0)}
+                  </span>
+                  <span style={{ fontSize: '0.62rem', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(15, 23, 42, 0.45)', color: '#e2e8f0' }}>
+                    Total: {formatUnitVe(stock, 0)}
                   </span>
                 </div>
 

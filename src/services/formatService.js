@@ -231,9 +231,14 @@ export const getProductWarehouseStocks = (product) => {
     }
   }
 
-  const s01 = Math.round(rawTotal * 0.4);
-  const s02 = Math.max(0, rawTotal - s01);
-  return { stock01: s01, stock02: s02, total: rawTotal };
+  const s01 = 0;
+  const s02 = 0;
+  return {
+    stock01: s01,
+    stock02: s02,
+    total: rawTotal,
+    missingWarehouseSplit: rawTotal > 0
+  };
 };
 
 /**

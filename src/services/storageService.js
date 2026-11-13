@@ -667,49 +667,139 @@ export const savePurchase = (purchaseData) => {
   const purchases = getPurchases();
   const config = getConfig();
 
-  const numSecuencia = String(purchases.length + 1).padStart(3, '0');
   const dateObj = new Date();
-  const voucherIva = generateVatRetentionVoucherNumber(dateObj, purchases.length + 1);
+  const uniqueSuffix = `${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  const seq = purchases.length + 1;
+  const voucherIva = generateVatRetentionVoucherNumber(dateObj, seq);
   const voucherIslr = voucherIva;
+  const tasa = Number(purchaseData?.tasaDolar || config.tasaDolar || 1);
+
+  const almacen = String(purchaseData?.almacen || '01').includes('02') ? '02' : '01';
+  const almacenNombre = purchaseData?.almacenNombre || (
+    almacen === '02'
+      ? 'Almacén 02 (Central / Bóveda - Notas de Entrega)'
+      : 'Almacén 01 (Fiscal / SENIAT)'
+  );
+
+  const normalizedItems = Array.isArray(purchaseData?.items) && purchaseData.items.length > 0
+    ? purchaseData.items.map((it, idx) => {
+        const qty = Number(it.cantidad ?? it.qty ?? 0);
+        const unitCost = Number(it.costoUnitarioUsd ?? it.costoUnitario ?? 0);
+        const itemFlete = Number(it.fleteUsd ?? 0);
+        const sub = Number(it.subtotalUsd ?? (qty * unitCost));
+        return {
+          rengNum: idx + 1,
+          productoId: it.productoId || it.articuloId || it.id || '',
+          codigo: it.codigo || it.co_art || it.productoCodigo || '',
+          producto: it.producto || it.descripcion || '',
+          descripcion: it.descripcion || it.producto || '',
+          cantidad: qty,
+          costoUnitarioUsd: unitCost,
+          fleteUsd: itemFlete,
+          subtotalUsd: Number(sub.toFixed(2)),
+          tipoAlicuota: it.tipoAlicuota || purchaseData?.tipoAlicuota || 'GENERAL_16',
+          almacen: String(it.almacen || almacen).includes('02') ? '02' : '01'
+        };
+      })
+    : (purchaseData?.producto || purchaseData?.productoCodigo || purchaseData?.productoId
+        ? [{
+            rengNum: 1,
+            productoId: purchaseData?.productoId || '',
+            codigo: purchaseData?.productoCodigo || '',
+            producto: purchaseData?.producto || '',
+            descripcion: purchaseData?.producto || '',
+            cantidad: Number(purchaseData?.cantidad || 0),
+            costoUnitarioUsd: Number(purchaseData?.costoUnitarioUsd || 0),
+            fleteUsd: Number(purchaseData?.fleteUsd || 0),
+            subtotalUsd: Number(purchaseData?.subtotalUsd || 0),
+            tipoAlicuota: purchaseData?.tipoAlicuota || 'GENERAL_16',
+            almacen
+          }]
+        : []);
+
+  const totalQty = Number(purchaseData?.cantidad ?? normalizedItems.reduce((s, it) => s + Number(it.cantidad || 0), 0)) || 0;
+  const subtotalUsd = Number(purchaseData?.subtotalUsd ?? 0) || 0;
+  const baseExentaUsd = Number(purchaseData?.baseExentaUsd ?? 0) || 0;
+  const baseGeneralUsd = Number(purchaseData?.baseGeneralUsd ?? 0) || 0;
+  const ivaGeneralUsd = Number(purchaseData?.ivaGeneralUsd ?? 0) || 0;
+  const baseReducidaUsd = Number(purchaseData?.baseReducidaUsd ?? 0) || 0;
+  const ivaReducidaUsd = Number(purchaseData?.ivaReducidaUsd ?? 0) || 0;
+  const fleteUsd = Number(purchaseData?.fleteUsd ?? 0) || 0;
+  const totalUsd = Number(purchaseData?.totalUsd ?? 0) || 0;
+  const retIvaUsd = Number(purchaseData?.retencionIvaUsd ?? 0) || 0;
+  const retIslrUsd = Number(purchaseData?.retencionIslrUsd ?? 0) || 0;
+  const montoNetoPagarUsd = purchaseData?.montoNetoPagarUsd !== undefined
+    ? Number(purchaseData.montoNetoPagarUsd)
+    : Math.max(0, Number((totalUsd - retIvaUsd - retIslrUsd).toFixed(2)));
 
   const newPurchase = {
-    id: `COMP-${numSecuencia}`,
-    numeroFacturaProv: purchaseData.numeroFacturaProv,
-    numeroControl: purchaseData.numeroControl || generateFiscalControlNumber(purchases.length + 5821),
-    tipoDoc: purchaseData.tipoDoc || 'FACTURA',
-    documentoAfectado: purchaseData.documentoAfectado || '',
-    fecha: purchaseData.fecha || dateObj.toISOString(),
-    proveedorId: purchaseData.proveedorId || 'PROV-001',
-    proveedorNombre: purchaseData.proveedorNombre || 'Proveedor General',
-    proveedorRif: purchaseData.proveedorRif || 'J-00000000-0',
-    proveedorDireccion: purchaseData.proveedorDireccion || '',
-    tasaDolar: config.tasaDolar,
-    producto: purchaseData.producto,
-    cantidad: Number(purchaseData.cantidad) || 0,
-    costoUnitarioUsd: Number(purchaseData.costoUnitarioUsd) || 0,
-    subtotalUsd: Number(purchaseData.subtotalUsd) || 0,
-    baseExentaUsd: Number(purchaseData.baseExentaUsd) || 0,
-    baseGeneralUsd: Number(purchaseData.baseGeneralUsd) || Number(purchaseData.subtotalUsd) || 0,
-    ivaGeneralUsd: Number(purchaseData.ivaGeneralUsd) || 0,
-    totalUsd: Number(purchaseData.totalUsd) || 0,
-    subtotalBs: (Number(purchaseData.subtotalUsd) || 0) * config.tasaDolar,
-    baseExentaBs: (Number(purchaseData.baseExentaUsd) || 0) * config.tasaDolar,
-    baseGeneralBs: (Number(purchaseData.baseGeneralUsd) || Number(purchaseData.subtotalUsd) || 0) * config.tasaDolar,
-    ivaGeneralBs: (Number(purchaseData.ivaGeneralUsd) || 0) * config.tasaDolar,
-    totalBs: (Number(purchaseData.totalUsd) || 0) * config.tasaDolar,
-    retencionIvaUsd: Number(purchaseData.retencionIvaUsd) || 0,
-    retencionIvaBs: (Number(purchaseData.retencionIvaUsd) || 0) * config.tasaDolar,
-    retencionIslrUsd: Number(purchaseData.retencionIslrUsd) || 0,
-    retencionIslrBs: (Number(purchaseData.retencionIslrUsd) || 0) * config.tasaDolar,
-    numeroComprobanteRetencionIva: purchaseData.numeroComprobanteRetencionIva || voucherIva,
-    numeroComprobanteRetencionIslr: purchaseData.numeroComprobanteRetencionIslr || voucherIslr,
-    codigoConceptoIslr: purchaseData.codigoConceptoIslr || '055',
-    receptor: purchaseData.receptor || 'Pedro Gómez'
+    id: purchaseData?.id || `COMP-${uniqueSuffix}`,
+    numeroFacturaProv: purchaseData?.numeroFacturaProv || '',
+    numeroControl: purchaseData?.numeroControl || generateFiscalControlNumber(seq + 5821),
+    tipoDoc: purchaseData?.tipoDoc || 'FACTURA',
+    documentoAfectado: purchaseData?.documentoAfectado || '',
+    fecha: purchaseData?.fecha || dateObj.toISOString(),
+    proveedorId: purchaseData?.proveedorId || 'PROV-001',
+    proveedorNombre: purchaseData?.proveedorNombre || 'Proveedor General',
+    proveedorRif: purchaseData?.proveedorRif || 'J-00000000-0',
+    proveedorDireccion: purchaseData?.proveedorDireccion || '',
+    tasaDolar: tasa,
+    condicionPago: purchaseData?.condicionPago || 'CREDITO',
+    diasCredito: Number(purchaseData?.diasCredito ?? 15) || 0,
+    almacen,
+    almacenNombre,
+    producto: purchaseData?.producto || normalizedItems.map(it => it.descripcion || it.codigo).filter(Boolean).join(', '),
+    productoId: purchaseData?.productoId || normalizedItems[0]?.productoId || '',
+    productoCodigo: purchaseData?.productoCodigo || normalizedItems[0]?.codigo || '',
+    cantidad: totalQty,
+    costoUnitarioUsd: Number(purchaseData?.costoUnitarioUsd ?? normalizedItems[0]?.costoUnitarioUsd ?? 0) || 0,
+    fleteUsd,
+    fleteBs: Number((fleteUsd * tasa).toFixed(2)),
+    subtotalUsd,
+    baseExentaUsd,
+    baseGeneralUsd,
+    ivaGeneralUsd,
+    baseReducidaUsd,
+    ivaReducidaUsd,
+    totalUsd,
+    subtotalBs: Number((subtotalUsd * tasa).toFixed(2)),
+    baseExentaBs: Number((baseExentaUsd * tasa).toFixed(2)),
+    baseGeneralBs: Number((baseGeneralUsd * tasa).toFixed(2)),
+    ivaGeneralBs: Number((ivaGeneralUsd * tasa).toFixed(2)),
+    baseReducidaBs: Number((baseReducidaUsd * tasa).toFixed(2)),
+    ivaReducidaBs: Number((ivaReducidaUsd * tasa).toFixed(2)),
+    totalBs: Number((totalUsd * tasa).toFixed(2)),
+    retencionIvaUsd: retIvaUsd,
+    retencionIvaBs: Number((retIvaUsd * tasa).toFixed(2)),
+    retencionIslrUsd: retIslrUsd,
+    retencionIslrBs: Number((retIslrUsd * tasa).toFixed(2)),
+    montoNetoPagarUsd,
+    numeroComprobanteRetencionIva: purchaseData?.numeroComprobanteRetencionIva || voucherIva,
+    numeroComprobanteRetencionIslr: purchaseData?.numeroComprobanteRetencionIslr || voucherIslr,
+    codigoConceptoIslr: purchaseData?.codigoConceptoIslr || '055',
+    receptor: purchaseData?.receptor || 'Pedro Gómez',
+    recepcionId: purchaseData?.recepcionId || '',
+    stockAplicado: Boolean(purchaseData?.stockAplicado),
+    items: normalizedItems
   };
 
-  purchases.unshift(newPurchase);
+  const idx = purchases.findIndex(p => p && p.id === newPurchase.id);
+  if (idx >= 0) {
+    purchases[idx] = { ...purchases[idx], ...newPurchase };
+  } else {
+    purchases.unshift(newPurchase);
+  }
   localStorage.setItem(KEYS.PURCHASES, JSON.stringify(purchases));
   return newPurchase;
+};
+
+export const updateStoragePurchase = (id, patch = {}) => {
+  const purchases = getPurchases();
+  const idx = purchases.findIndex(p => p && p.id === id);
+  if (idx < 0) return null;
+  purchases[idx] = { ...purchases[idx], ...patch };
+  localStorage.setItem(KEYS.PURCHASES, JSON.stringify(purchases));
+  return purchases[idx];
 };
 
 export const getCashMovements = () => {

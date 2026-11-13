@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Package,
   Plus,
@@ -46,6 +46,19 @@ function getPhysicalSysStock(p, warehouse) {
   return Number(p?.stock ?? stocks.total ?? 0) || 0;
 }
 
+const PHYSICAL_TAKE_DRAFT_KEY = 'sm_physical_take_draft_v1';
+
+function readPhysicalTakeDraft() {
+  try {
+    const raw = localStorage.getItem(PHYSICAL_TAKE_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 export default function InventoryView({
   products = [],
   config = {},
@@ -53,7 +66,10 @@ export default function InventoryView({
   warehouseTransfers = [],
   profitInvoices = [],
   sales = [],
+  purchases = [],
   profitPurchases = [],
+  goodsReceiptNotes = [],
+  profitReturns = [],
   profitSuppliers = [],
   onSyncProfit,
   onSaveProduct,
@@ -77,16 +93,35 @@ export default function InventoryView({
   const [showKardexModal, setShowKardexModal] = useState(false);
   const [showReorderModal, setShowReorderModal] = useState(false);
   const [showPhysicalTakeModal, setShowPhysicalTakeModal] = useState(false);
-  const [physicalCounts, setPhysicalCounts] = useState({});
+  const [physicalCounts, setPhysicalCounts] = useState(() => readPhysicalTakeDraft()?.counts || {});
   const [isSyncingPhysical, setIsSyncingPhysical] = useState(false);
-  const [physicalTakeWarehouse, setPhysicalTakeWarehouse] = useState('TODOS');
-  const [auditorName, setAuditorName] = useState(currentUser?.nombre || currentUser?.username || 'Auditor de Almacén');
+  const [physicalTakeWarehouse, setPhysicalTakeWarehouse] = useState(() => readPhysicalTakeDraft()?.warehouse || 'TODOS');
+  const [showZeroStockInPhysicalTake, setShowZeroStockInPhysicalTake] = useState(false);
+  const [applyingPhysicalAdjustments, setApplyingPhysicalAdjustments] = useState(false);
+  const [physicalTakeFeedback, setPhysicalTakeFeedback] = useState(null);
+  const [auditorName, setAuditorName] = useState(() => readPhysicalTakeDraft()?.auditorName || currentUser?.nombre || currentUser?.username || 'Auditor de Almacén');
   const [physicalTakeSearch, setPhysicalTakeSearch] = useState('');
   const [physicalTakeLastSync, setPhysicalTakeLastSync] = useState(new Date().toLocaleTimeString('es-VE'));
   const [editingProduct, setEditingProduct] = useState(null);
   const [selectedSpecProduct, setSelectedSpecProduct] = useState(null);
   const [activeModalWarehouse, setActiveModalWarehouse] = useState('01');
   const [productToDelete, setProductToDelete] = useState(null);
+
+  useEffect(() => {
+    try {
+      const hasCounts = physicalCounts && Object.keys(physicalCounts).length > 0;
+      if (!hasCounts && physicalTakeWarehouse === 'TODOS') {
+        localStorage.removeItem(PHYSICAL_TAKE_DRAFT_KEY);
+      } else {
+        localStorage.setItem(PHYSICAL_TAKE_DRAFT_KEY, JSON.stringify({
+          counts: physicalCounts || {},
+          warehouse: physicalTakeWarehouse,
+          auditorName,
+          updatedAt: new Date().toISOString()
+        }));
+      }
+    } catch (_) {}
+  }, [physicalCounts, physicalTakeWarehouse, auditorName]);
 
   const normSelW = String(selectedWarehouse || '').replace(/^ALM-/, '').trim();
   const isSpecificWarehouse = normSelW === '01' || normSelW === '02';
@@ -322,8 +357,9 @@ export default function InventoryView({
     }
   };
 
-  // Filtrado de productos para Toma Física (por Almacén y Búsqueda interna, ordenados crecientemente por código)
+  // Filtrado de productos para Toma Física (por Almacén real 01/02 y Búsqueda interna, ordenados crecientemente por código)
   const targetPhysicalProducts = useMemo(() => {
+    const normWh = String(physicalTakeWarehouse || '').replace(/^ALM-/, '').trim();
     return products
       .filter(p => {
         const searchLower = (physicalTakeSearch || '').toLowerCase();
@@ -332,20 +368,19 @@ export default function InventoryView({
           (p.descripcion || '').toLowerCase().includes(searchLower) ||
           (p.ubicacion && p.ubicacion.toLowerCase().includes(searchLower));
 
-        const normWh = String(physicalTakeWarehouse || '').replace(/^ALM-/, '').toLowerCase();
-        const matchesWh = physicalTakeWarehouse === 'TODOS' ||
-          normWh === '01' ||
-          normWh === '02' ||
-          (p.almacen && p.almacen.toLowerCase().includes(normWh)) ||
-          (p.coAlm && String(p.coAlm).toLowerCase().includes(normWh)) ||
-          (p.ubicacion && p.ubicacion.toLowerCase().includes(normWh));
+        if (!matchesSearch) return false;
+        if (physicalTakeWarehouse === 'TODOS') return true;
 
-        return matchesSearch && matchesWh;
+        const key = p.codigo || p.id;
+        const hasDraftCount = physicalCounts[key] !== undefined && physicalCounts[key] !== '';
+        const stocks = getProductWarehouseStocks(p);
+        const whStock = normWh === '02' ? stocks.stock02 : stocks.stock01;
+        return whStock > 0 || hasDraftCount || showZeroStockInPhysicalTake;
       })
       .sort((a, b) =>
         String(a.codigo || '').trim().localeCompare(String(b.codigo || '').trim(), undefined, { numeric: true, sensitivity: 'base' })
       );
-  }, [products, physicalTakeSearch, physicalTakeWarehouse]);
+  }, [products, physicalTakeSearch, physicalTakeWarehouse, physicalCounts, showZeroStockInPhysicalTake]);
 
   // Métricas y balance de la Toma Física en vivo
   const physicalTakeMetrics = useMemo(() => {
@@ -394,6 +429,81 @@ export default function InventoryView({
 
   const handleClearCounts = () => {
     setPhysicalCounts({});
+    setPhysicalTakeFeedback(null);
+    try {
+      localStorage.removeItem(PHYSICAL_TAKE_DRAFT_KEY);
+    } catch (_) {}
+  };
+
+  const handleApplyPhysicalTakeAdjustments = async () => {
+    if (!onSaveAdjustment) return;
+    setPhysicalTakeFeedback(null);
+    const normWh = String(physicalTakeWarehouse || '').replace(/^ALM-/, '').trim();
+    if (normWh !== '01' && normWh !== '02') {
+      setPhysicalTakeFeedback({
+        type: 'error',
+        text: 'Seleccione Almacén 01 o Almacén 02 (en lugar de Todos) para poder aplicar los ajustes de toma física al almacén correcto.'
+      });
+      return;
+    }
+
+    const tasa = Number(config?.tasaDolar || 1);
+    const renglones = [];
+    for (const p of targetPhysicalProducts) {
+      const key = p.codigo || p.id;
+      const rawCount = physicalCounts[key];
+      if (rawCount === undefined || rawCount === '') continue;
+      const numCount = Number(rawCount);
+      if (Number.isNaN(numCount) || numCount < 0) continue;
+      const sysStock = getPhysicalSysStock(p, normWh);
+      const diff = Number((numCount - sysStock).toFixed(2));
+      if (Math.abs(diff) < 0.01) continue;
+      const costUsd = Number(p.costoUnitarioUsd || p.costoUsd || p.precioUsd || 0);
+      renglones.push({
+        co_art: p.codigo || p.id,
+        art_des: p.descripcion || p.codigo || p.id,
+        co_alma: normWh,
+        tipo: diff > 0 ? 'E01' : 'S02',
+        tipo_trans: diff > 0 ? 'E' : 'S',
+        total_art: Math.abs(diff),
+        uni_venta: resolveProductUnit(p, 'Caja'),
+        cost_unit_om: costUsd,
+        cost_unit: Number((costUsd * tasa).toFixed(2))
+      });
+    }
+
+    if (renglones.length === 0) {
+      setPhysicalTakeFeedback({
+        type: 'info',
+        text: 'No hay discrepancias contadas (diferencias distintas de cero) para ajustar.'
+      });
+      return;
+    }
+
+    setApplyingPhysicalAdjustments(true);
+    try {
+      const saved = await onSaveAdjustment({
+        almacen: normWh,
+        motivo: `Ajuste por Toma Física - Almacén ${normWh} (Auditor: ${auditorName || 'Sistema'})`,
+        coUsIn: currentUser?.nombre || currentUser?.username || 'WEB',
+        renglones
+      });
+      setPhysicalCounts({});
+      try {
+        localStorage.removeItem(PHYSICAL_TAKE_DRAFT_KEY);
+      } catch (_) {}
+      setPhysicalTakeFeedback({
+        type: 'success',
+        text: `Ajuste ${saved?.ajueNum || ''} aplicado con ${renglones.length} SKU(s) en Almacén ${normWh} y stock actualizado.`
+      });
+    } catch (err) {
+      setPhysicalTakeFeedback({
+        type: 'error',
+        text: err?.message || 'Error al aplicar los ajustes de toma física.'
+      });
+    } finally {
+      setApplyingPhysicalAdjustments(false);
+    }
   };
 
   const handleExportPhysicalTakeCsv = () => {
@@ -2051,6 +2161,16 @@ export default function InventoryView({
                 >
                   <RotateCcw size={13} /> Limpiar Conteos
                 </button>
+                {physicalTakeWarehouse !== 'TODOS' && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', fontWeight: 600, color: '#334155', cursor: 'pointer', padding: '0 6px' }}>
+                    <input
+                      type="checkbox"
+                      checked={showZeroStockInPhysicalTake}
+                      onChange={(e) => setShowZeroStockInPhysicalTake(e.target.checked)}
+                    />
+                    Incluir SKUs en cero
+                  </label>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -2196,8 +2316,26 @@ export default function InventoryView({
               </div>
             </div>
 
-            {/* 7. BOTONES DE ACCIÓN (CERRAR & IMPRIMIR REPORTE ROJO MOTORVEN) */}
-            <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '1rem' }}>
+            {physicalTakeFeedback && (
+              <div
+                className="no-print"
+                style={{
+                  marginBottom: '0.85rem',
+                  padding: '0.65rem 0.9rem',
+                  borderRadius: '8px',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  background: physicalTakeFeedback.type === 'error' ? '#fef2f2' : physicalTakeFeedback.type === 'success' ? '#ecfdf5' : '#eff6ff',
+                  color: physicalTakeFeedback.type === 'error' ? '#b91c1c' : physicalTakeFeedback.type === 'success' ? '#047857' : '#1d4ed8',
+                  border: `1px solid ${physicalTakeFeedback.type === 'error' ? '#fecaca' : physicalTakeFeedback.type === 'success' ? '#a7f3d0' : '#bfdbfe'}`
+                }}
+              >
+                {physicalTakeFeedback.text}
+              </div>
+            )}
+
+            {/* 7. BOTONES DE ACCIÓN (CERRAR, APLICAR AJUSTES & IMPRIMIR REPORTE ROJO MOTORVEN) */}
+            <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '1rem', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -2206,6 +2344,29 @@ export default function InventoryView({
               >
                 Cerrar
               </button>
+              {onSaveAdjustment && physicalTakeMetrics.countDescuadres > 0 && (
+                <button
+                  type="button"
+                  disabled={applyingPhysicalAdjustments}
+                  onClick={handleApplyPhysicalTakeAdjustments}
+                  style={{
+                    padding: '6px 16px',
+                    fontSize: '0.85rem',
+                    fontWeight: 800,
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: '#059669',
+                    color: '#ffffff',
+                    cursor: applyingPhysicalAdjustments ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  title="Genera y aplica un ajuste de entrada/salida por las discrepancias contadas"
+                >
+                  <CheckCircle2 size={15} /> {applyingPhysicalAdjustments ? 'Aplicando...' : `Aplicar Ajustes de Toma Física (${physicalTakeMetrics.countDescuadres})`}
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-print-report"
@@ -2240,6 +2401,12 @@ export default function InventoryView({
         adjustments={inventoryAdjustments}
         transfers={warehouseTransfers}
         products={products}
+        purchases={purchases}
+        profitPurchases={profitPurchases}
+        goodsReceiptNotes={goodsReceiptNotes}
+        sales={sales}
+        profitInvoices={profitInvoices}
+        profitReturns={profitReturns}
         config={config}
         currentUser={currentUser}
         onSyncProfit={onSyncProfit}

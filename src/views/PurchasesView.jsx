@@ -110,6 +110,7 @@ export default function PurchasesView({
   const [recExpectedQty, setRecExpectedQty] = useState(10);
   const [recReceivedQty, setRecReceivedQty] = useState(10);
   const [recDamagedQty, setRecDamagedQty] = useState(0);
+  const [recItems, setRecItems] = useState([]);
   const [recWarehouse, setRecWarehouse] = useState('01');
   const [recNotes, setRecNotes] = useState('');
 
@@ -121,8 +122,40 @@ export default function PurchasesView({
   const [opMotivo, setOpMotivo] = useState('');
   const [opCuenta, setOpCuenta] = useState('');
 
+  // Catálogo unificado de proveedores (Profit + Signum local, sin duplicados por RIF/código)
+  const unifiedSuppliers = useMemo(() => {
+    const byKey = new Map();
+    const pushSupplier = (raw, isProfit = false) => {
+      if (!raw) return;
+      const rifNorm = String(raw.rif || '').trim().toUpperCase();
+      const codeNorm = String(raw.coProv || raw.co_prov || raw.codigo || raw.id || '').trim().toUpperCase();
+      const dedupeKey = rifNorm || codeNorm;
+      if (!dedupeKey) return;
+      const normalized = {
+        id: raw.id || raw.coProv || raw.co_prov || dedupeKey,
+        codigo: raw.codigo || raw.coProv || raw.co_prov || raw.id || dedupeKey,
+        coProv: raw.coProv || raw.co_prov || raw.codigo || raw.id || dedupeKey,
+        nombre: raw.provDes || raw.prov_des || raw.nombre || 'Proveedor',
+        provDes: raw.provDes || raw.prov_des || raw.nombre || 'Proveedor',
+        rif: raw.rif || 'J-00000000-0',
+        domicilioFiscal: raw.domicilioFiscal || raw.direccion || '',
+        direccion: raw.direccion || raw.domicilioFiscal || '',
+        diasCredito: Number(raw.diasCredito ?? raw.dias_credito ?? 30),
+        saldoUsd: Number(raw.saldoUsd ?? raw.saldo_usd ?? raw.saldoPendienteUsd ?? 0),
+        limiteCredito: Number(raw.limiteCredito ?? raw.limite_credito ?? 25000),
+        inactivo: Boolean(raw.inactivo),
+        source: isProfit ? 'PROFIT' : 'LOCAL'
+      };
+      const prev = byKey.get(dedupeKey);
+      byKey.set(dedupeKey, prev ? { ...prev, ...normalized, saldoUsd: Math.max(prev.saldoUsd || 0, normalized.saldoUsd || 0) } : normalized);
+    };
+    (suppliers || []).forEach(s => pushSupplier(s, false));
+    (profitSuppliers || []).forEach(s => pushSupplier(s, true));
+    return Array.from(byKey.values());
+  }, [suppliers, profitSuppliers]);
+
   // Form states for SENIAT purchase entry
-  const [selectedSupplier, setSelectedSupplier] = useState(suppliers[0] || null);
+  const [selectedSupplier, setSelectedSupplier] = useState(() => unifiedSuppliers[0] || suppliers[0] || null);
   const [numeroFacturaProv, setNumeroFacturaProv] = useState('');
   const [numeroControlProv, setNumeroControlProv] = useState('');
   const [tipoDoc, setTipoDoc] = useState('FACTURA');
@@ -133,17 +166,26 @@ export default function PurchasesView({
   const [cantidadRecibida, setCantidadRecibida] = useState(5);
   const [nuevoCostoUsd, setNuevoCostoUsd] = useState(products[0]?.costoUsd || 28);
   const [fleteProrrateadoUsd, setFleteProrrateadoUsd] = useState(0);
+  const [purchaseItems, setPurchaseItems] = useState([]);
+  const [linkedReceiptId, setLinkedReceiptId] = useState('');
   const [porcentajeRetIva, setPorcentajeRetIva] = useState(75);
   const [porcentajeRetIslr, setPorcentajeRetIslr] = useState(2);
   const [condicionPago, setCondicionPago] = useState('CREDITO');
-  const [diasCredito, setDiasCredito] = useState(() => Number(suppliers[0]?.diasCredito ?? suppliers[0]?.dias_credito ?? 30));
+  const [diasCredito, setDiasCredito] = useState(() => Number(unifiedSuppliers[0]?.diasCredito ?? suppliers[0]?.diasCredito ?? 30));
 
   useEffect(() => {
-    if (!selectedSupplier && Array.isArray(suppliers) && suppliers.length > 0) {
-      setSelectedSupplier(suppliers[0]);
-      setDiasCredito(Number(suppliers[0].diasCredito ?? suppliers[0].dias_credito ?? 30));
+    if (!selectedSupplier && unifiedSuppliers.length > 0) {
+      setSelectedSupplier(unifiedSuppliers[0]);
+      setDiasCredito(Number(unifiedSuppliers[0].diasCredito ?? 30));
     }
-  }, [suppliers, selectedSupplier]);
+  }, [unifiedSuppliers, selectedSupplier]);
+
+  useEffect(() => {
+    if (!selectedProduct && Array.isArray(products) && products.length > 0) {
+      setSelectedProduct(products[0]);
+      setNuevoCostoUsd(Number(products[0]?.costoUsd || 0));
+    }
+  }, [products, selectedProduct]);
 
   const [localPurchases, setLocalPurchases] = useState(() => (purchases && purchases.length > 0 ? purchases : [
     {
@@ -179,23 +221,130 @@ export default function PurchasesView({
   const displayPurchases = purchases && purchases.length > 0 ? purchases : localPurchases;
   const rifValidation = selectedSupplier ? validateRif(selectedSupplier.rif) : { isValid: true };
 
-  // Cálculos fiscales instantáneos en pantalla
-  const costoFinalConFlete = nuevoCostoUsd + (cantidadRecibida > 0 ? fleteProrrateadoUsd / cantidadRecibida : 0);
-  const subtotalUsd = costoFinalConFlete * cantidadRecibida;
-  
-  let alicuotaPct = 0.16;
-  if (tipoAlicuota === 'EXENTO_0') alicuotaPct = 0.00;
-  if (tipoAlicuota === 'REDUCIDA_8') alicuotaPct = 0.08;
+  // Cálculos fiscales instantáneos en pantalla (soporta renglón activo o múltiples renglones)
+  const qtyActiva = Math.max(0, Number(cantidadRecibida) || 0);
+  const costoBaseActivo = Math.max(0, Number(nuevoCostoUsd) || 0);
+  const fleteActivo = Math.max(0, Number(fleteProrrateadoUsd) || 0);
+  const costoFinalConFlete = costoBaseActivo + (qtyActiva > 0 ? fleteActivo / qtyActiva : 0);
+  const singleLineSubtotalUsd = costoFinalConFlete * qtyActiva;
 
-  const ivaCalculadoUsd = subtotalUsd * alicuotaPct;
-  const retencionIvaCalculadaUsd = ivaCalculadoUsd * (porcentajeRetIva / 100);
-  const retencionIslrCalculadaUsd = (tipoAlicuota !== 'EXENTO_0' ? subtotalUsd : 0) * (porcentajeRetIslr / 100);
-  const totalFacturaCalculadoUsd = subtotalUsd + ivaCalculadoUsd;
-  const netoPagarCalculadoUsd = Math.max(0, totalFacturaCalculadoUsd - retencionIvaCalculadaUsd - retencionIslrCalculadaUsd);
+  const taxSummary = useMemo(() => {
+    const draftLines = purchaseItems.length > 0
+      ? purchaseItems
+      : [{
+          cantidad: qtyActiva,
+          costoUnitarioUsd: Number(costoFinalConFlete.toFixed(4)),
+          fleteUsd: fleteActivo,
+          subtotalUsd: Number(singleLineSubtotalUsd.toFixed(2)),
+          tipoAlicuota
+        }];
+
+    let subUsd = 0;
+    let baseExenta = 0;
+    let baseGeneral = 0;
+    let ivaGeneral = 0;
+    let baseReducida = 0;
+    let ivaReducida = 0;
+    let islrBase = 0;
+
+    draftLines.forEach((ln) => {
+      const lSub = Number(ln.subtotalUsd || 0);
+      subUsd += lSub;
+      if (ln.tipoAlicuota === 'EXENTO_0') {
+        baseExenta += lSub;
+      } else if (ln.tipoAlicuota === 'REDUCIDA_8') {
+        baseReducida += lSub;
+        ivaReducida += lSub * 0.08;
+        islrBase += lSub;
+      } else {
+        baseGeneral += lSub;
+        ivaGeneral += lSub * 0.16;
+        islrBase += lSub;
+      }
+    });
+
+    const ivaCalc = ivaGeneral + ivaReducida;
+    const retIva = ivaCalc * (porcentajeRetIva / 100);
+    const retIslr = islrBase * (porcentajeRetIslr / 100);
+    const totalFac = subUsd + ivaCalc;
+    const neto = Math.max(0, totalFac - retIva - retIslr);
+
+    return {
+      subtotalUsd: Number(subUsd.toFixed(2)),
+      baseExentaUsd: Number(baseExenta.toFixed(2)),
+      baseGeneralUsd: Number(baseGeneral.toFixed(2)),
+      ivaGeneralUsd: Number(ivaGeneral.toFixed(2)),
+      baseReducidaUsd: Number(baseReducida.toFixed(2)),
+      ivaReducidaUsd: Number(ivaReducida.toFixed(2)),
+      ivaCalculadoUsd: Number(ivaCalc.toFixed(2)),
+      retencionIvaCalculadaUsd: Number(retIva.toFixed(2)),
+      retencionIslrCalculadaUsd: Number(retIslr.toFixed(2)),
+      totalFacturaCalculadoUsd: Number(totalFac.toFixed(2)),
+      netoPagarCalculadoUsd: Number(neto.toFixed(2))
+    };
+  }, [purchaseItems, qtyActiva, costoFinalConFlete, fleteActivo, singleLineSubtotalUsd, tipoAlicuota, porcentajeRetIva, porcentajeRetIslr]);
+
+  const {
+    subtotalUsd,
+    baseExentaUsd,
+    baseGeneralUsd,
+    ivaGeneralUsd,
+    baseReducidaUsd,
+    ivaReducidaUsd,
+    ivaCalculadoUsd,
+    retencionIvaCalculadaUsd,
+    retencionIslrCalculadaUsd,
+    totalFacturaCalculadoUsd,
+    netoPagarCalculadoUsd
+  } = taxSummary;
+
+  // Fusión unificada Profit + Compras locales Signum (evita ocultar compras locales cuando hay profitPurchases)
+  const effectivePurchases = useMemo(() => {
+    const byCanon = new Map();
+    const buildKey = (facNum, rif, fallbackId) => {
+      const f = String(facNum || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+      const r = String(rif || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return f ? `${f}::${r}` : String(fallbackId || '');
+    };
+
+    (profitPurchases || []).forEach(p => {
+      if (!p) return;
+      const key = buildKey(p.facturaProv || p.factNum, p.provRif || p.coProv, p.id);
+      if (key) byCanon.set(key, p);
+    });
+
+    (displayPurchases || []).forEach(p => {
+      if (!p) return;
+      const key = buildKey(p.numeroFacturaProv || p.nroFactura || p.id, p.proveedorRif || p.proveedorId, p.id);
+      if (!key || byCanon.has(key)) return;
+      byCanon.set(key, {
+        id: p.id,
+        factNum: p.numeroFacturaProv || p.nroFactura || p.id,
+        facturaProv: p.numeroFacturaProv || p.nroFactura || p.id,
+        provNombre: p.proveedorNombre || 'Proveedor',
+        provRif: p.proveedorRif || 'J-00000000-0',
+        coProv: p.proveedorId || 'P-0001',
+        fechaEmision: p.fecha,
+        fechaVencimiento: p.fecha,
+        totBrutoUsd: Number(p.subtotalUsd || 0),
+        totBrutoBs: Number(p.subtotalBs || 0),
+        ivaUsd: Number((p.ivaGeneralUsd || 0) + (p.ivaReducidaUsd || 0)),
+        totNetoUsd: Number(p.totalUsd || 0),
+        totNetoBs: Number(p.totalBs || 0),
+        saldoUsd: p.condicionPago === 'CONTADO' ? 0 : Number(p.montoNetoPagarUsd ?? p.totalUsd ?? 0),
+        status: p.condicionPago === 'CONTADO' ? 'PAGADA' : 'SALDO_PENDIENTE',
+        almacen: p.almacen || '01',
+        anulada: Boolean(p.anulada || p.anulado),
+        items: p.items || []
+      });
+    });
+
+    return Array.from(byCanon.values()).sort((a, b) => new Date(b.fechaEmision || 0) - new Date(a.fechaEmision || 0));
+  }, [profitPurchases, displayPurchases]);
 
   // KPIs Generales del Módulo de Compras y Proveedores
   const kpis = useMemo(() => {
-    const activePurchases = (profitPurchases || []).filter(p => p && !p.anulada && !p.anulado);
+    const activePurchases = effectivePurchases.filter(p => p && !p.anulada && !p.anulado);
     const activeCxP = (profitAccountsPayable || []).filter(d => d && !d.anulado);
     const activePayments = (profitSupplierPayments || []).filter(p => p && !p.anulado);
 
@@ -214,7 +363,7 @@ export default function PurchasesView({
     const cxpAlDiaUsd = Math.max(0, totalCxPUsd - cxpVencidaUsd);
 
     return {
-      totalProveedores: profitSuppliers.length || suppliers.length || 5,
+      totalProveedores: unifiedSuppliers.length || 5,
       totalComprasCount: activePurchases.length,
       totalComprasUsd,
       totalComprasBs,
@@ -226,23 +375,7 @@ export default function PurchasesView({
       totalPagadoBs,
       totalPagosCount: activePayments.length
     };
-  }, [profitSuppliers, profitPurchases, profitAccountsPayable, profitSupplierPayments, suppliers]);
-
-  // Filtrado de Facturas de Compra Profit
-  const effectivePurchases = (profitPurchases && profitPurchases.length > 0) ? profitPurchases : displayPurchases.map(p => ({
-    id: p.id,
-    factNum: p.numeroFacturaProv || p.id,
-    facturaProv: p.numeroFacturaProv || p.id,
-    provNombre: p.proveedorNombre || 'Proveedor',
-    provRif: p.proveedorRif || 'J-00000000-0',
-    coProv: p.proveedorId || 'P-0001',
-    fechaEmision: p.fecha,
-    fechaVencimiento: p.fecha,
-    totNetoUsd: Number(p.totalUsd || 0),
-    totNetoBs: Number(p.totalBs || 0),
-    saldoUsd: 0,
-    status: 'PAGADA'
-  }));
+  }, [unifiedSuppliers, effectivePurchases, profitAccountsPayable, profitSupplierPayments]);
 
   const filteredPurchases = useMemo(() => {
     return effectivePurchases.filter(p => {
@@ -259,17 +392,8 @@ export default function PurchasesView({
     });
   }, [effectivePurchases, searchQuery, statusFilter]);
 
-  // Filtrado de Proveedores Profit
-  const effectiveSuppliers = (profitSuppliers && profitSuppliers.length > 0) ? profitSuppliers : suppliers.map(s => ({
-    id: s.id,
-    coProv: s.codigo || s.id,
-    provDes: s.nombre || 'Proveedor',
-    rif: s.rif || 'J-00000000-0',
-    saldoUsd: Number(s.saldoPendienteUsd || 0),
-    limiteCredito: 25000,
-    inactivo: false,
-    direccion: s.direccion || s.domicilioFiscal || ''
-  }));
+  // Filtrado de Proveedores Unificados
+  const effectiveSuppliers = unifiedSuppliers;
 
   const filteredSuppliers = useMemo(() => {
     return effectiveSuppliers.filter(s => {
@@ -356,8 +480,41 @@ export default function PurchasesView({
     setTimeout(() => setSyncing(false), 800);
   };
 
+  const handleAddPurchaseItem = () => {
+    if (!selectedProduct) {
+      notify.warning('Seleccione un lubricante o insumo para agregar.');
+      return;
+    }
+    if (!(qtyActiva > 0)) {
+      notify.warning('La cantidad debe ser mayor a 0.');
+      return;
+    }
+    const newLine = {
+      productoId: selectedProduct.id,
+      codigo: selectedProduct.codigo || selectedProduct.id,
+      producto: selectedProduct.descripcion,
+      descripcion: selectedProduct.descripcion,
+      cantidad: qtyActiva,
+      costoUnitarioUsd: parseFloat(costoFinalConFlete.toFixed(2)),
+      fleteUsd: parseFloat(fleteActivo.toFixed(2)),
+      subtotalUsd: parseFloat(singleLineSubtotalUsd.toFixed(2)),
+      tipoAlicuota,
+      almacen: almacenDestino
+    };
+    setPurchaseItems((prev) => [...prev, newLine]);
+    setFleteProrrateadoUsd(0);
+  };
+
   const handleRegisterPurchase = async (e) => {
     e.preventDefault();
+    if (!selectedSupplier) {
+      notify.warning('Seleccione un proveedor válido.');
+      return;
+    }
+    if (!rifValidation.isValid) {
+      notify.warning(`El RIF "${selectedSupplier.rif}" del proveedor seleccionado es inválido según el patrón SENIAT.`);
+      return;
+    }
     if (!numeroFacturaProv.trim()) {
       notify.warning('Ingrese el Número de Factura del Proveedor.');
       return;
@@ -373,6 +530,30 @@ export default function PurchasesView({
       return;
     }
 
+    const finalItems = purchaseItems.length > 0
+      ? purchaseItems
+      : (selectedProduct && qtyActiva > 0
+          ? [{
+              productoId: selectedProduct.id,
+              codigo: selectedProduct.codigo || selectedProduct.id,
+              producto: selectedProduct.descripcion,
+              descripcion: selectedProduct.descripcion,
+              cantidad: qtyActiva,
+              costoUnitarioUsd: parseFloat(costoFinalConFlete.toFixed(2)),
+              fleteUsd: parseFloat(fleteActivo.toFixed(2)),
+              subtotalUsd: parseFloat(singleLineSubtotalUsd.toFixed(2)),
+              tipoAlicuota,
+              almacen: almacenDestino
+            }]
+          : []);
+
+    if (finalItems.length === 0) {
+      notify.warning('Debe incluir al menos un producto con cantidad mayor a 0.');
+      return;
+    }
+
+    const totalQty = finalItems.reduce((s, it) => s + Number(it.cantidad || 0), 0);
+    const totalFlete = finalItems.reduce((s, it) => s + Number(it.fleteUsd || 0), 0);
     const dateObj = new Date();
     const voucherSeq = displayPurchases.length + 1;
     const voucherNum = generateVatRetentionVoucherNumber(dateObj, voucherSeq);
@@ -384,53 +565,36 @@ export default function PurchasesView({
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim().toUpperCase() : '',
       fecha: dateObj.toISOString(),
       proveedorId: selectedSupplier.id,
-      proveedorNombre: selectedSupplier.nombre,
+      proveedorNombre: selectedSupplier.nombre || selectedSupplier.provDes,
       proveedorRif: selectedSupplier.rif,
       proveedorDireccion: selectedSupplier.domicilioFiscal || selectedSupplier.direccion || '',
       tasaDolar: config.tasaDolar,
       condicionPago,
       diasCredito: condicionPago === 'CONTADO' ? 0 : Math.max(0, parseInt(diasCredito, 10) || 0),
-      producto: selectedProduct.descripcion,
-      cantidad: parseInt(cantidadRecibida),
-      costoUnitarioUsd: parseFloat(costoFinalConFlete.toFixed(2)),
-      subtotalUsd: parseFloat(subtotalUsd.toFixed(2)),
-      baseExentaUsd: tipoAlicuota === 'EXENTO_0' ? parseFloat(subtotalUsd.toFixed(2)) : 0.00,
-      baseGeneralUsd: tipoAlicuota === 'GENERAL_16' ? parseFloat(subtotalUsd.toFixed(2)) : 0.00,
-      ivaGeneralUsd: tipoAlicuota === 'GENERAL_16' ? parseFloat(ivaCalculadoUsd.toFixed(2)) : 0.00,
-      baseReducidaUsd: tipoAlicuota === 'REDUCIDA_8' ? parseFloat(subtotalUsd.toFixed(2)) : 0.00,
-      ivaReducidaUsd: tipoAlicuota === 'REDUCIDA_8' ? parseFloat(ivaCalculadoUsd.toFixed(2)) : 0.00,
-      totalUsd: parseFloat(totalFacturaCalculadoUsd.toFixed(2)),
-      retencionIvaUsd: parseFloat(retencionIvaCalculadaUsd.toFixed(2)),
-      retencionIslrUsd: parseFloat(retencionIslrCalculadaUsd.toFixed(2)),
-      montoNetoPagarUsd: parseFloat(netoPagarCalculadoUsd.toFixed(2)),
+      producto: finalItems.map(it => it.descripcion).filter(Boolean).join(' + '),
+      productoId: finalItems[0]?.productoId || '',
+      productoCodigo: finalItems[0]?.codigo || '',
+      cantidad: totalQty,
+      costoUnitarioUsd: finalItems[0]?.costoUnitarioUsd || 0,
+      fleteUsd: parseFloat(totalFlete.toFixed(2)),
+      subtotalUsd,
+      baseExentaUsd,
+      baseGeneralUsd,
+      ivaGeneralUsd,
+      baseReducidaUsd,
+      ivaReducidaUsd,
+      totalUsd: totalFacturaCalculadoUsd,
+      retencionIvaUsd: retencionIvaCalculadaUsd,
+      retencionIslrUsd: retencionIslrCalculadaUsd,
+      montoNetoPagarUsd: netoPagarCalculadoUsd,
       numeroComprobanteRetencionIva: voucherNum,
       numeroComprobanteRetencionIslr: voucherNum,
       almacen: almacenDestino,
       almacenNombre: almacenDestino === '01' ? 'Almacén 01 (Fiscal / SENIAT)' : 'Almacén 02 (Central / Bóveda - Notas de Entrega)',
-      receptor: currentUser?.nombre || 'Pedro Gómez'
+      receptor: currentUser?.nombre || 'Pedro Gómez',
+      recepcionId: linkedReceiptId || '',
+      items: finalItems
     };
-
-    if (onSaveProduct && selectedProduct) {
-      const wStocks = getProductWarehouseStocks(selectedProduct);
-      const qtyNum = parseInt(cantidadRecibida, 10) || 0;
-      const isNc = tipoDoc === 'NOTA_CREDITO';
-
-      const newStock01 = almacenDestino === '01'
-        ? (isNc ? Math.max(0, wStocks.stock01 - qtyNum) : wStocks.stock01 + qtyNum)
-        : wStocks.stock01;
-      const newStock02 = almacenDestino === '02'
-        ? (isNc ? Math.max(0, wStocks.stock02 - qtyNum) : wStocks.stock02 + qtyNum)
-        : wStocks.stock02;
-
-      const updatedProd = {
-        ...selectedProduct,
-        stock: newStock01 + newStock02,
-        stockAlmacen01: newStock01,
-        stockAlmacen02: newStock02,
-        costoUsd: parseFloat(costoFinalConFlete.toFixed(2))
-      };
-      onSaveProduct(updatedProd);
-    }
 
     if (onRegisterPurchase) {
       await onRegisterPurchase(purchasePayload);
@@ -441,6 +605,9 @@ export default function PurchasesView({
     setNumeroFacturaProv('');
     setNumeroControlProv('');
     setDocumentoAfectado('');
+    setPurchaseItems([]);
+    setLinkedReceiptId('');
+    setFleteProrrateadoUsd(0);
     notify.success(`Compra fiscal registrada con éxito. Comprobante IVA: ${voucherNum}`);
   };
 
@@ -653,7 +820,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <FileText size={16} /> Facturas de Compra ({profitPurchases.length})
+          <FileText size={16} /> Facturas de Compra ({effectivePurchases.length})
         </button>
 
         <button
@@ -673,7 +840,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <Building size={16} /> Directorio Proveedores ({profitSuppliers.length || suppliers.length})
+          <Building size={16} /> Directorio Proveedores ({effectiveSuppliers.length})
         </button>
 
         <button
@@ -1582,7 +1749,7 @@ export default function PurchasesView({
               <label className="form-label">Proveedor</label>
               <select className="input-field" value={poSupplierCode} onChange={(e) => setPoSupplierCode(e.target.value)}>
                 <option value="">-- Seleccionar proveedor --</option>
-                {(profitSuppliers.length > 0 ? profitSuppliers : suppliers).map((s) => (
+                {(unifiedSuppliers).map((s) => (
                   <option key={s.id || s.coProv} value={String(s.coProv || s.id || s.rif)}>
                     {s.provDes || s.nombre} ({s.rif})
                   </option>
@@ -1653,9 +1820,18 @@ export default function PurchasesView({
                             type="button"
                             className="btn btn-primary btn-sm"
                             onClick={() => {
-                              const first = po.items?.[0];
+                              const items = Array.isArray(po.items) ? po.items : [];
+                              const first = items[0];
                               setRecOrderNum(po.numeroDoc || '');
                               setRecSupplierName(po.proveedorNombre || '');
+                              setRecItems(items.map((it) => ({
+                                codigo: it.codigo || '',
+                                descripcion: it.descripcion || it.codigo || '',
+                                cantidadEsperada: Number(it.cantidad || 1),
+                                cantidadRecibida: Number(it.cantidad || 1),
+                                cantidadDanada: 0,
+                                unidad: it.unidad || 'Caja'
+                              })));
                               if (first) {
                                 setRecSku(first.codigo || '');
                                 setRecExpectedQty(first.cantidad || 1);
@@ -1686,8 +1862,23 @@ export default function PurchasesView({
             className="card"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!onSaveGoodsReceipt || !recSku || Number(recReceivedQty) < 0) return;
-              const prod = products.find(p => String(p.codigo || p.id) === recSku) || {};
+              if (!onSaveGoodsReceipt) return;
+              const itemsPayload = recItems.length > 0
+                ? recItems
+                : (() => {
+                    if (!recSku || Number(recReceivedQty) < 0) return [];
+                    const prod = products.find(p => String(p.codigo || p.id) === recSku) || {};
+                    return [{
+                      codigo: prod.codigo || recSku,
+                      descripcion: prod.descripcion || recSku,
+                      cantidadEsperada: Number(recExpectedQty || 0),
+                      cantidadRecibida: Number(recReceivedQty || 0),
+                      cantidadDanada: Number(recDamagedQty || 0),
+                      unidad: prod.unidad || 'Caja'
+                    }];
+                  })();
+              if (itemsPayload.length === 0) return;
+
               const saved = await onSaveGoodsReceipt({
                 ordenCompraRef: recOrderNum.trim(),
                 nroFactura: recInvoiceNum.trim(),
@@ -1695,15 +1886,9 @@ export default function PurchasesView({
                 almacen: recWarehouse,
                 observaciones: recNotes.trim(),
                 applyStock: true,
-                items: [{
-                  codigo: prod.codigo || recSku,
-                  descripcion: prod.descripcion || recSku,
-                  cantidadEsperada: Number(recExpectedQty || 0),
-                  cantidadRecibida: Number(recReceivedQty || 0),
-                  cantidadDanada: Number(recDamagedQty || 0),
-                  unidad: prod.unidad || 'Caja'
-                }]
+                items: itemsPayload
               });
+              setRecItems([]);
               generateGoodsReceiptPDF({ receipt: saved, config, currentUser });
             }}
             style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: '0.75rem', alignItems: 'end', borderRadius: '14px' }}
@@ -1720,8 +1905,8 @@ export default function PurchasesView({
               <input type="text" className="input-field" value={recSupplierName} onChange={(e) => setRecSupplierName(e.target.value)} placeholder="Nombre proveedor" />
             </div>
             <div>
-              <label className="form-label">Artículo Recibido</label>
-              <select className="input-field" value={recSku} onChange={(e) => setRecSku(e.target.value)} required>
+              <label className="form-label">Artículo Recibido {recItems.length > 1 ? `(${recItems.length} renglones)` : ''}</label>
+              <select className="input-field" value={recSku} onChange={(e) => setRecSku(e.target.value)} required={recItems.length === 0}>
                 <option value="">-- Seleccionar SKU --</option>
                 {products.map((p) => (
                   <option key={p.id || p.codigo} value={p.codigo || p.id}>{p.codigo} - {p.descripcion}</option>
@@ -1732,7 +1917,7 @@ export default function PurchasesView({
               <label className="form-label">Esp. / Rec. / Dañ.</label>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <input type="number" min="0" className="input-field" value={recExpectedQty} onChange={(e) => setRecExpectedQty(e.target.value)} title="Esperado" style={{ width: '33%' }} />
-                <input type="number" min="0" className="input-field" value={recReceivedQty} onChange={(e) => setRecReceivedQty(e.target.value)} required title="Recibido conforme" style={{ width: '34%' }} />
+                <input type="number" min="0" className="input-field" value={recReceivedQty} onChange={(e) => setRecReceivedQty(e.target.value)} required={recItems.length === 0} title="Recibido conforme" style={{ width: '34%' }} />
                 <input type="number" min="0" className="input-field" value={recDamagedQty} onChange={(e) => setRecDamagedQty(e.target.value)} title="Dañado" style={{ width: '33%' }} />
               </div>
             </div>
@@ -1751,6 +1936,38 @@ export default function PurchasesView({
                 Recibir Stock & PDF
               </button>
             </div>
+            {recItems.length > 0 && (
+              <div style={{ gridColumn: '1 / -1', background: 'rgba(15, 23, 42, 0.04)', borderRadius: '10px', padding: '0.65rem', border: '1px solid var(--border-glass)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', fontSize: '0.75rem', fontWeight: 700 }}>
+                  <span>Renglones cargados desde Orden de Compra ({recItems.length}):</span>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setRecItems([])}>Limpiar lista</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {recItems.map((rit, idx) => (
+                    <div key={`${rit.codigo}-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 90px 90px', gap: '6px', alignItems: 'center', fontSize: '0.75rem' }}>
+                      <span><strong>{rit.codigo}</strong> - {rit.descripcion}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>Esp: {rit.cantidadEsperada}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        className="input-field"
+                        value={rit.cantidadRecibida}
+                        onChange={(e) => setRecItems(prev => prev.map((x, i) => i === idx ? { ...x, cantidadRecibida: Number(e.target.value || 0) } : x))}
+                        title="Recibido"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        className="input-field"
+                        value={rit.cantidadDanada}
+                        onChange={(e) => setRecItems(prev => prev.map((x, i) => i === idx ? { ...x, cantidadDanada: Number(e.target.value || 0) } : x))}
+                        title="Dañado"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </form>
 
           <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '14px' }}>
@@ -1877,15 +2094,15 @@ export default function PurchasesView({
                     className="form-control"
                     value={selectedSupplier?.id || ''}
                     onChange={(e) => {
-                      const sup = suppliers.find(s => s.id === e.target.value);
+                      const sup = unifiedSuppliers.find(s => String(s.id) === String(e.target.value));
                       setSelectedSupplier(sup || null);
                       if (sup) {
-                        setDiasCredito(Number(sup.diasCredito ?? sup.dias_credito ?? 30));
+                        setDiasCredito(Number(sup.diasCredito ?? 30));
                       }
                     }}
                   >
-                    {suppliers.map(s => (
-                      <option key={s.id} value={s.id}>{s.nombre} ({s.rif})</option>
+                    {unifiedSuppliers.map(s => (
+                      <option key={s.id} value={s.id}>{s.nombre || s.provDes} ({s.rif})</option>
                     ))}
                   </select>
                 </div>
@@ -2024,15 +2241,57 @@ export default function PurchasesView({
 
                   <div className="form-group">
                     <label className="form-label">Flete Prorrateado ($)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="form-control"
-                      value={fleteProrrateadoUsd}
-                      onChange={(e) => setFleteProrrateadoUsd(parseFloat(e.target.value) || 0)}
-                    />
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="form-control"
+                        value={fleteProrrateadoUsd}
+                        onChange={(e) => setFleteProrrateadoUsd(parseFloat(e.target.value) || 0)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleAddPurchaseItem}
+                        title="Agregar este producto como renglón a una compra multi-producto"
+                        style={{ whiteSpace: 'nowrap', fontWeight: 700 }}
+                      >
+                        + Renglón
+                      </button>
+                    </div>
                   </div>
                 </div>
+
+                {purchaseItems.length > 0 && (
+                  <div style={{ background: 'rgba(15, 23, 42, 0.04)', border: '1px solid var(--border-glass)', borderRadius: '10px', padding: '0.65rem', marginBottom: '0.85rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 700, marginBottom: '6px' }}>
+                      <span>Renglones en esta factura ({purchaseItems.length}):</span>
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPurchaseItems([])}>Limpiar</button>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {purchaseItems.map((it, idx) => (
+                        <div key={`${it.codigo}-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.74rem', padding: '4px 6px', background: 'var(--bg-card)', borderRadius: '6px' }}>
+                          <span><strong>{it.codigo}</strong> ({it.cantidad} u. • Alm {it.almacen}) — {formatUsd(it.subtotalUsd)}</span>
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPurchaseItems(prev => prev.filter((_, i) => i !== idx))}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(goodsReceiptNotes) && goodsReceiptNotes.length > 0 && (
+                  <div className="form-group" style={{ marginBottom: '0.85rem' }}>
+                    <label className="form-label">Nota de Recepción Vinculada (Opcional — evita duplicar entrada de stock)</label>
+                    <select className="form-control" value={linkedReceiptId} onChange={(e) => setLinkedReceiptId(e.target.value)}>
+                      <option value="">-- Ninguna (sumar stock directamente con esta factura) --</option>
+                      {goodsReceiptNotes.map(rec => (
+                        <option key={rec.id || rec.numeroDoc} value={rec.id || rec.numeroDoc}>
+                          {rec.numeroDoc || rec.not_num} • {rec.prov_des || rec.proveedorNombre || ''} {rec.stock_aplicado ? '(Stock ya ingresado)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {/* Porcentajes */}
                 <div className="form-row">

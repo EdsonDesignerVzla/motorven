@@ -84,6 +84,7 @@ import {
   saveSale as saveStorageSale,
   getPurchases as getStoragePurchases,
   savePurchase as saveStoragePurchase,
+  updateStoragePurchase,
   getCashMovements as getStorageCashMovements,
   addCashMovement as addStorageCashMovement,
   getFiscalClosures as getStorageFiscalClosures,
@@ -1164,7 +1165,7 @@ const mapSaleFromDb = (s) => {
   };
 };
 
-const mapPurchaseToDb = (p) => ({
+export const mapPurchaseToDb = (p) => ({
   id: p.id,
   numero_factura_prov: p.numeroFacturaProv || p.numero_factura_prov || p.nroFactura || p.nro_factura || '',
   numero_control: p.numeroControl || p.numero_control || p.nroControl || p.nro_control || '00-000000',
@@ -1175,31 +1176,45 @@ const mapPurchaseToDb = (p) => ({
   proveedor_nombre: p.proveedorNombre || p.proveedor_nombre,
   proveedor_rif: p.proveedorRif || p.proveedor_rif,
   proveedor_direccion: p.proveedorDireccion || p.proveedor_direccion || '',
-  tasa_dolar: p.tasaDolar || p.tasa_dolar || p.tasaBcv || p.tasa_bcv || 0,
+  tasa_dolar: Number(p.tasaDolar || p.tasa_dolar || p.tasaBcv || p.tasa_bcv || 0),
+  almacen: String(p.almacen || '01').includes('02') ? '02' : '01',
+  almacen_nombre: p.almacenNombre || p.almacen_nombre || '',
+  condicion_pago: p.condicionPago || p.condicion_pago || 'CREDITO',
+  dias_credito: Number(p.diasCredito ?? p.dias_credito ?? 15),
   producto: p.producto || '',
   cantidad: Number(p.cantidad || 0),
   costo_unitario_usd: Number(p.costoUnitarioUsd ?? p.costo_unitario_usd ?? 0),
+  flete_usd: Number(p.fleteUsd ?? p.flete_usd ?? 0),
+  flete_bs: Number(p.fleteBs ?? p.flete_bs ?? 0),
   subtotal_usd: Number(p.subtotalUsd ?? p.subtotal_usd ?? p.baseImponibleUsd ?? p.base_imponible_usd ?? 0),
   base_exenta_usd: Number(p.baseExentaUsd ?? p.base_exenta_usd ?? 0),
   base_general_usd: Number(p.baseGeneralUsd ?? p.base_general_usd ?? 0),
   iva_general_usd: Number(p.ivaGeneralUsd ?? p.iva_general_usd ?? p.ivaUsd ?? p.iva_usd ?? 0),
+  base_reducida_usd: Number(p.baseReducidaUsd ?? p.base_reducida_usd ?? 0),
+  iva_reducida_usd: Number(p.ivaReducidaUsd ?? p.iva_reducida_usd ?? 0),
   total_usd: Number(p.totalUsd ?? p.total_usd ?? 0),
   subtotal_bs: Number(p.subtotalBs ?? p.subtotal_bs ?? p.baseImponibleBs ?? p.base_imponible_bs ?? 0),
   base_exenta_bs: Number(p.baseExentaBs ?? p.base_exenta_bs ?? 0),
   base_general_bs: Number(p.baseGeneralBs ?? p.base_general_bs ?? 0),
   iva_general_bs: Number(p.ivaGeneralBs ?? p.iva_general_bs ?? p.montoIvaBs ?? p.monto_iva_bs ?? 0),
+  base_reducida_bs: Number(p.baseReducidaBs ?? p.base_reducida_bs ?? 0),
+  iva_reducida_bs: Number(p.ivaReducidaBs ?? p.iva_reducida_bs ?? 0),
   total_bs: Number(p.totalBs ?? p.total_bs ?? 0),
   retencion_iva_usd: Number(p.retencionIvaUsd ?? p.retencion_iva_usd ?? 0),
   retencion_iva_bs: Number(p.retencionIvaBs ?? p.retencion_iva_bs ?? 0),
   retencion_islr_usd: Number(p.retencionIslrUsd ?? p.retencion_islr_usd ?? 0),
   retencion_islr_bs: Number(p.retencionIslrBs ?? p.retencion_islr_bs ?? 0),
+  monto_neto_pagar_usd: Number(p.montoNetoPagarUsd ?? p.monto_neto_pagar_usd ?? 0),
   numero_comprobante_retencion_iva: p.numeroComprobanteRetencionIva || p.numero_comprobante_retencion_iva || '',
   numero_comprobante_retencion_islr: p.numeroComprobanteRetencionIslr || p.numero_comprobante_retencion_islr || '',
   codigo_concepto_islr: p.codigoConceptoIslr || p.codigo_concepto_islr || '055',
-  receptor: p.receptor || ''
+  receptor: p.receptor || '',
+  recepcion_id: p.recepcionId || p.recepcion_id || '',
+  stock_aplicado: Boolean(p.stockAplicado ?? p.stock_aplicado),
+  items: Array.isArray(p.items) ? p.items : []
 });
 
-const mapPurchaseFromDb = (p) => {
+export const mapPurchaseFromDb = (p) => {
   if (!p) return null;
   const subtotalUsd = Number(p.subtotal_usd ?? p.subtotalUsd ?? p.base_imponible_usd ?? p.baseImponibleUsd ?? 0);
   const totalUsd = Number(p.total_usd ?? p.totalUsd ?? 0);
@@ -1211,6 +1226,10 @@ const mapPurchaseFromDb = (p) => {
   const nroControl = p.numero_control || p.numeroControl || p.nro_control || p.nroControl || '00-000000';
   const fecha = p.fecha || p.fecha_compra || p.fechaCompra || p.fecha_emision || p.fechaEmision || '';
   const tasaDolar = Number(p.tasa_dolar ?? p.tasaDolar ?? p.tasa_bcv ?? p.tasaBcv ?? 0);
+  const retIvaUsd = Number(p.retencion_iva_usd ?? p.retencionIvaUsd ?? 0);
+  const retIslrUsd = Number(p.retencion_islr_usd ?? p.retencionIslrUsd ?? 0);
+  const items = Array.isArray(p.items) ? p.items : [];
+  const almacen = String(p.almacen || items[0]?.almacen || '01').includes('02') ? '02' : '01';
   return {
     id: p.id,
     numeroFacturaProv: nroFactura,
@@ -1228,31 +1247,44 @@ const mapPurchaseFromDb = (p) => {
     proveedorDireccion: p.proveedor_direccion || p.proveedorDireccion || '',
     tasaDolar,
     tasaBcv: tasaDolar,
+    almacen,
+    almacenNombre: p.almacen_nombre || p.almacenNombre || (almacen === '02' ? 'Almacén 02 (N.E.)' : 'Almacén 01 (Fiscal)'),
+    condicionPago: p.condicion_pago || p.condicionPago || 'CREDITO',
+    diasCredito: Number(p.dias_credito ?? p.diasCredito ?? 15),
     producto: p.producto || '',
     cantidad: Number(p.cantidad || 0),
     costoUnitarioUsd: Number(p.costo_unitario_usd ?? p.costoUnitarioUsd ?? 0),
+    fleteUsd: Number(p.flete_usd ?? p.fleteUsd ?? 0),
+    fleteBs: Number(p.flete_bs ?? p.fleteBs ?? 0),
     subtotalUsd,
     baseImponibleUsd: subtotalUsd,
     baseExentaUsd: Number(p.base_exenta_usd ?? p.baseExentaUsd ?? 0),
-    baseGeneralUsd: Number(p.base_general_usd ?? subtotalUsd),
+    baseGeneralUsd: Number(p.base_general_usd ?? p.baseGeneralUsd ?? 0),
     ivaGeneralUsd: ivaUsd,
+    baseReducidaUsd: Number(p.base_reducida_usd ?? p.baseReducidaUsd ?? 0),
+    ivaReducidaUsd: Number(p.iva_reducida_usd ?? p.ivaReducidaUsd ?? 0),
     ivaUsd,
     totalUsd,
     subtotalBs,
     baseImponibleBs: subtotalBs,
     baseExentaBs: Number(p.base_exenta_bs ?? p.baseExentaBs ?? 0),
-    baseGeneralBs: Number(p.base_general_bs ?? subtotalBs),
+    baseGeneralBs: Number(p.base_general_bs ?? p.baseGeneralBs ?? 0),
     ivaGeneralBs: ivaBs,
+    baseReducidaBs: Number(p.base_reducida_bs ?? p.baseReducidaBs ?? 0),
+    ivaReducidaBs: Number(p.iva_reducida_bs ?? p.ivaReducidaBs ?? 0),
     totalBs,
-    retencionIvaUsd: Number(p.retencion_iva_usd ?? p.retencionIvaUsd ?? 0),
+    retencionIvaUsd: retIvaUsd,
     retencionIvaBs: Number(p.retencion_iva_bs ?? p.retencionIvaBs ?? 0),
-    retencionIslrUsd: Number(p.retencion_islr_usd ?? p.retencionIslrUsd ?? 0),
+    retencionIslrUsd: retIslrUsd,
     retencionIslrBs: Number(p.retencion_islr_bs ?? p.retencionIslrBs ?? 0),
+    montoNetoPagarUsd: Number(p.monto_neto_pagar_usd ?? p.montoNetoPagarUsd ?? Math.max(0, totalUsd - retIvaUsd - retIslrUsd)),
     numeroComprobanteRetencionIva: p.numero_comprobante_retencion_iva || p.numeroComprobanteRetencionIva || '',
     numeroComprobanteRetencionIslr: p.numero_comprobante_retencion_islr || p.numeroComprobanteRetencionIslr || '',
     codigoConceptoIslr: p.codigo_concepto_islr || p.codigoConceptoIslr || '055',
     receptor: p.receptor || '',
-    items: Array.isArray(p.items) ? p.items : []
+    recepcionId: p.recepcion_id || p.recepcionId || '',
+    stockAplicado: Boolean(p.stock_aplicado ?? p.stockAplicado),
+    items
   };
 };
 
@@ -3414,9 +3446,87 @@ export const getSupabasePurchases = async () => {
   }
 };
 
+const LEGACY_PURCHASE_OPT_COLS = [
+  'almacen', 'almacen_nombre', 'condicion_pago', 'dias_credito',
+  'flete_usd', 'flete_bs', 'base_reducida_usd', 'iva_reducida_usd',
+  'base_reducida_bs', 'iva_reducida_bs', 'monto_neto_pagar_usd',
+  'recepcion_id', 'stock_aplicado'
+];
+
+async function upsertPurchaseRowWithSchemaFallback(payload) {
+  let { data, error } = await withTimeout(
+    supabase.from('purchases').upsert([payload], { onConflict: 'id' }).select().single(),
+    5000
+  );
+  if (error && (String(error.code || '') === 'PGRST204' || /column .* does not exist|schema cache/i.test(String(error.message || '')))) {
+    const legacyPayload = { ...payload };
+    LEGACY_PURCHASE_OPT_COLS.forEach(col => { delete legacyPayload[col]; });
+    const retry = await withTimeout(
+      supabase.from('purchases').upsert([legacyPayload], { onConflict: 'id' }).select().single(),
+      5000
+    );
+    data = retry.data;
+    error = retry.error;
+  }
+  return { data, error };
+}
+
 export const saveSupabasePurchase = async (purchaseData) => {
-  // 1. Guardar primero en almacenamiento local
-  const localSaved = saveStoragePurchase(purchaseData);
+  // 1. Guardar primero en almacenamiento local (incluye almacen, flete, base reducida, condicionPago, items y ID único)
+  let localSaved = saveStoragePurchase(purchaseData);
+
+  // 2. Aplicar delta atómico de stock por almacén (01 o 02) evitando doble entrada si viene vinculada a una Recepción (REC)
+  const tipoDocNorm = String(localSaved.tipoDoc || 'FACTURA').toUpperCase();
+  const isNc = tipoDocNorm === 'NOTA_CREDITO';
+  const shouldApplyStock = !purchaseData?.skipStockApply && !purchaseData?.recepcionId && localSaved.stockAplicado !== true;
+
+  if (shouldApplyStock) {
+    const itemsList = Array.isArray(localSaved.items) && localSaved.items.length > 0 ? localSaved.items : [];
+    const defaultAlm = String(localSaved.almacen || '01').includes('02') ? '02' : '01';
+    const stockLines = [];
+
+    itemsList.forEach((it) => {
+      const qty = Number(it.cantidad || 0);
+      const code = String(it.codigo || it.productoId || it.articuloId || '').trim();
+      if (!code || !(qty > 0)) return;
+      const lineAlm = String(it.almacen || defaultAlm).includes('02') ? '02' : '01';
+      const signedQty = isNc ? -qty : qty;
+      stockLines.push({
+        codigo: code,
+        delta01: lineAlm === '01' ? signedQty : 0,
+        delta02: lineAlm === '02' ? signedQty : 0,
+        costoUnitarioUsd: Number(it.costoUnitarioUsd ?? localSaved.costoUnitarioUsd ?? 0)
+      });
+    });
+
+    if (stockLines.length > 0) {
+      await applyStockDeltaForWarehouseLines(stockLines, { validateStrict: isNc });
+
+      // Actualizar costo unitario del producto si aplica (compras regulares)
+      if (!isNc) {
+        const storageProds = getStorageProducts();
+        const nowIso = new Date().toISOString();
+        for (const sl of stockLines) {
+          if (!(sl.costoUnitarioUsd > 0)) continue;
+          const targetProd = storageProds.find(p => String(p.id) === sl.codigo || String(p.codigo) === sl.codigo);
+          if (!targetProd) continue;
+          const nextCost = Number(sl.costoUnitarioUsd.toFixed(2));
+          saveStorageProduct({ ...targetProd, costoUsd: nextCost, costo_usd: nextCost, costo: nextCost });
+          if (isNetworkOnline() && isSupabaseAvailable) {
+            try {
+              await withTimeout(
+                supabase.from('products').update({ costo_usd: nextCost, costoUsd: nextCost, costo: nextCost, updated_at: nowIso }).eq('id', targetProd.id),
+                4000
+              );
+            } catch (_) {}
+          }
+        }
+      }
+
+      const patched = updateStoragePurchase(localSaved.id, { stockAplicado: true });
+      if (patched) localSaved = patched;
+    }
+  }
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     enqueueSyncAction('purchase', 'INSERT', localSaved);
@@ -3425,13 +3535,21 @@ export const saveSupabasePurchase = async (purchaseData) => {
 
   try {
     const payload = mapPurchaseToDb(localSaved);
-    const { data: saved, error: err } = await withTimeout(
-      supabase.from('purchases').insert([payload]).select().single()
-    );
+    const { data: saved, error: err } = await upsertPurchaseRowWithSchemaFallback(payload);
 
     if (err) throw err;
     isSupabaseAvailable = true;
-    return mapPurchaseFromDb(saved);
+    const mapped = mapPurchaseFromDb(saved);
+    return {
+      ...localSaved,
+      ...mapped,
+      almacen: mapped?.almacen || localSaved.almacen,
+      almacenNombre: mapped?.almacenNombre || localSaved.almacenNombre,
+      fleteUsd: mapped?.fleteUsd || localSaved.fleteUsd,
+      montoNetoPagarUsd: mapped?.montoNetoPagarUsd || localSaved.montoNetoPagarUsd,
+      stockAplicado: Boolean(mapped?.stockAplicado || localSaved.stockAplicado),
+      items: (mapped?.items && mapped.items.length > 0) ? mapped.items : localSaved.items
+    };
   } catch (err) {
     markSupabaseOffline(err, 'saveSupabasePurchase');
     enqueueSyncAction('purchase', 'INSERT', localSaved);
@@ -4915,10 +5033,7 @@ export const pushSaleToSupabase = async (saleData) => {
 
 export const pushPurchaseToSupabase = async (purchaseData) => {
   const payload = mapPurchaseToDb(purchaseData);
-  const { data, error } = await withTimeout(
-    supabase.from('purchases').upsert([payload]).select().single(),
-    4000
-  );
+  const { data, error } = await upsertPurchaseRowWithSchemaFallback(payload);
   if (error) throw error;
   isSupabaseAvailable = true;
   return mapPurchaseFromDb(data);
@@ -7817,6 +7932,7 @@ export const getSupabaseProfitTransports = async () => {
 };
 
 export const getSupabaseProfitReturns = async () => {
+  const local = readLocalDocList(RET_STORAGE_KEY);
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_customer_returns').select('*').order('fec_emis', { ascending: false }),
@@ -7824,37 +7940,39 @@ export const getSupabaseProfitReturns = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(r => ({
+    const mapped = (data || []).map(r => ({
       id: r.id,
-      factNum: r.fact_num,
-      fecEmis: r.fec_emis,
-      coCli: r.co_cli,
-      cliDes: r.cli_des,
+      factNum: r.fact_num || r.factNum,
+      fecEmis: r.fec_emis || r.fecEmis,
+      coCli: r.co_cli || r.coCli,
+      cliDes: r.cli_des || r.cliDes,
       rif: r.rif,
-      coVen: r.co_ven,
-      venDes: r.ven_des,
-      ncNum: r.nc_num,
+      coVen: r.co_ven || r.coVen,
+      venDes: r.ven_des || r.venDes,
+      ncNum: r.nc_num || r.ncNum,
       status: r.status,
-      anulada: r.anulada,
+      anulada: Boolean(r.anulada),
       descrip: r.descrip,
-      totBruto: Number(r.tot_bruto) || 0,
-      totNeto: Number(r.tot_neto) || 0,
+      totBruto: Number(r.tot_bruto ?? r.totBruto) || 0,
+      totNeto: Number(r.tot_neto ?? r.totNeto) || 0,
       iva: Number(r.iva) || 0,
       tasa: Number(r.tasa) || 1,
       moneda: r.moneda,
-      coSucu: r.co_sucu,
-      coUsIn: r.co_us_in,
+      coSucu: r.co_sucu || r.coSucu,
+      coUsIn: r.co_us_in || r.coUsIn,
       renglones: Array.isArray(r.renglones) ? r.renglones : [],
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
+      createdAt: r.created_at || r.createdAt,
+      updatedAt: r.updated_at || r.updatedAt
     }));
+    return mergeRemoteAndLocalDocs(mapped, local, 'id');
   } catch (err) {
     console.warn('[Supabase] Error cargando devoluciones Profit:', err.message);
-    return REAL_PROFIT_CUSTOMER_RETURNS;
+    return mergeRemoteAndLocalDocs(REAL_PROFIT_CUSTOMER_RETURNS || [], local, 'id');
   }
 };
 
 export const getSupabaseProfitInventoryAdjustments = async () => {
+  const local = readLocalDocList(ADJ_STORAGE_KEY);
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_inventory_adjustments').select('*').order('fecha', { ascending: false }),
@@ -7862,26 +7980,32 @@ export const getSupabaseProfitInventoryAdjustments = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(a => ({
-      id: a.id,
-      ajueNum: a.ajue_num,
-      fecha: a.fecha,
-      motivo: a.motivo,
-      anulada: a.anulada,
-      coSucu: a.co_sucu,
-      coUsIn: a.co_us_in,
-      totalItems: Number(a.total_items) || 0,
-      renglones: Array.isArray(a.renglones) ? a.renglones : [],
-      createdAt: a.created_at,
-      updatedAt: a.updated_at
-    }));
+    const mapped = (data || []).map(a => {
+      const renglones = Array.isArray(a.renglones) ? a.renglones : [];
+      return {
+        id: a.id,
+        ajueNum: a.ajue_num || a.ajueNum,
+        fecha: a.fecha,
+        almacen: a.almacen || renglones[0]?.co_alma || '01',
+        motivo: a.motivo,
+        anulada: Boolean(a.anulada),
+        coSucu: a.co_sucu || a.coSucu,
+        coUsIn: a.co_us_in || a.coUsIn,
+        totalItems: Number(a.total_items ?? a.totalItems) || 0,
+        renglones,
+        createdAt: a.created_at || a.createdAt,
+        updatedAt: a.updated_at || a.updatedAt
+      };
+    });
+    return mergeRemoteAndLocalDocs(mapped, local, 'id');
   } catch (err) {
     console.warn('[Supabase] Error cargando ajustes de inventario Profit:', err.message);
-    return REAL_PROFIT_INVENTORY_ADJUSTMENTS;
+    return mergeRemoteAndLocalDocs(REAL_PROFIT_INVENTORY_ADJUSTMENTS || [], local, 'id');
   }
 };
 
 export const getSupabaseProfitWarehouseTransfers = async () => {
+  const local = readLocalDocList(TRAS_STORAGE_KEY);
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_warehouse_transfers').select('*').order('fecha', { ascending: false }),
@@ -7889,25 +8013,26 @@ export const getSupabaseProfitWarehouseTransfers = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(t => ({
+    const mapped = (data || []).map(t => ({
       id: t.id,
-      trasNum: t.tras_num,
+      trasNum: t.tras_num || t.trasNum,
       fecha: t.fecha,
-      almOrig: t.alm_orig,
-      almDest: t.alm_dest,
+      almOrig: t.alm_orig || t.almOrig,
+      almDest: t.alm_dest || t.almDest,
       motivo: t.motivo,
-      confirma: t.confirma,
-      anulada: t.anulada,
-      coSucu: t.co_sucu,
-      coUsIn: t.co_us_in,
-      totalItems: Number(t.total_items) || 0,
+      confirma: Boolean(t.confirma),
+      anulada: Boolean(t.anulada),
+      coSucu: t.co_sucu || t.coSucu,
+      coUsIn: t.co_us_in || t.coUsIn,
+      totalItems: Number(t.total_items ?? t.totalItems) || 0,
       renglones: Array.isArray(t.renglones) ? t.renglones : [],
-      createdAt: t.created_at,
-      updatedAt: t.updated_at
+      createdAt: t.created_at || t.createdAt,
+      updatedAt: t.updated_at || t.updatedAt
     }));
+    return mergeRemoteAndLocalDocs(mapped, local, 'id');
   } catch (err) {
     console.warn('[Supabase] Error cargando traslados de almacén Profit:', err.message);
-    return REAL_PROFIT_WAREHOUSE_TRANSFERS;
+    return mergeRemoteAndLocalDocs(REAL_PROFIT_WAREHOUSE_TRANSFERS || [], local, 'id');
   }
 };
 
@@ -8675,34 +8800,39 @@ function mergeRemoteAndLocalDocs(remoteList = [], localList = [], idField = 'id'
   return Array.from(map.values());
 }
 
-async function applyStockDeltaForWarehouseLines(lines = []) {
+export async function applyStockDeltaForWarehouseLines(lines = [], options = {}) {
+  const { validateStrict = false } = options || {};
   if (!Array.isArray(lines) || lines.length === 0) return [];
   const touchedCodes = Array.from(new Set(lines.map(l => String(l.codigo || l.co_art || l.articuloId || '').trim()).filter(Boolean)));
   if (touchedCodes.length === 0) return [];
 
   const storageProds = getStorageProducts();
-  let remoteMap = new Map();
+  const remoteMap = new Map();
   if (isNetworkOnline() && isSupabaseAvailable) {
     try {
       const orParts = touchedCodes.flatMap(k => [`id.eq.${k}`, `codigo.eq.${k}`]);
-      const { data } = await withTimeout(
+      const { data, error: fetchErr } = await withTimeout(
         supabase
           .from('products')
           .select('id,codigo,descripcion,stock,stock_almacen_01,stock_almacen_02,stockAlmacen01,stockAlmacen02,comprometido')
           .or(orParts.join(',')),
         6000
       );
-      (data || []).forEach(p => {
-        if (p.id) remoteMap.set(String(p.id), p);
-        if (p.codigo) remoteMap.set(String(p.codigo), p);
-      });
-    } catch (_) {}
+      if (fetchErr) {
+        console.warn('[applyStockDeltaForWarehouseLines] Error consultando stock remoto:', fetchErr.message);
+      } else {
+        (data || []).forEach(p => {
+          if (p.id) remoteMap.set(String(p.id), p);
+          if (p.codigo) remoteMap.set(String(p.codigo), p);
+        });
+      }
+    } catch (err) {
+      console.warn('[applyStockDeltaForWarehouseLines] Timeout/error leyendo stock remoto:', err?.message || err);
+    }
   }
 
-  const productPatches = [];
-  const whRows = [];
-  const nowIso = new Date().toISOString();
-
+  // Acumular deltas netos por SKU resuelto para evitar dobles lecturas o validaciones parciales
+  const groupedDeltas = new Map();
   for (const line of lines) {
     const code = String(line.codigo || line.co_art || line.articuloId || '').trim();
     const delta01 = Number(line.delta01 || 0);
@@ -8710,14 +8840,48 @@ async function applyStockDeltaForWarehouseLines(lines = []) {
     if (!code || (delta01 === 0 && delta02 === 0)) continue;
 
     const existing = remoteMap.get(code) || storageProds.find(p => String(p.id) === code || String(p.codigo) === code);
-    if (!existing) continue;
+    if (!existing) {
+      if (validateStrict) {
+        throw new Error(`Producto/SKU "${code}" no encontrado en el inventario.`);
+      }
+      continue;
+    }
 
-    const stocks = getProductWarehouseStocks(existing);
-    const next01 = Math.max(0, Number((stocks.stock01 + delta01).toFixed(2)));
-    const next02 = Math.max(0, Number((stocks.stock02 + delta02).toFixed(2)));
-    const nextTotal = Number((next01 + next02).toFixed(2));
     const prodId = String(existing.id || code);
+    const prev = groupedDeltas.get(prodId) || { existing, delta01: 0, delta02: 0 };
+    prev.delta01 = Number((prev.delta01 + delta01).toFixed(4));
+    prev.delta02 = Number((prev.delta02 + delta02).toFixed(4));
+    groupedDeltas.set(prodId, prev);
+  }
+
+  const productPatches = [];
+  const whRows = [];
+  const nowIso = new Date().toISOString();
+
+  // Validar existencia suficiente ANTES de mutar localStorage o BD
+  for (const [prodId, entry] of groupedDeltas.entries()) {
+    const { existing, delta01, delta02 } = entry;
+    const stocks = getProductWarehouseStocks(existing);
     const prodCode = String(existing.codigo || prodId);
+    const rawNext01 = Number((stocks.stock01 + delta01).toFixed(2));
+    const rawNext02 = Number((stocks.stock02 + delta02).toFixed(2));
+
+    if (validateStrict) {
+      if (delta01 < 0 && rawNext01 < -0.0001) {
+        throw new Error(
+          `Stock insuficiente para ${prodCode} en Almacén 01 (Fiscal): disponible ${stocks.stock01}, solicitado ${Math.abs(delta01)}.`
+        );
+      }
+      if (delta02 < 0 && rawNext02 < -0.0001) {
+        throw new Error(
+          `Stock insuficiente para ${prodCode} en Almacén 02 (N.E.): disponible ${stocks.stock02}, solicitado ${Math.abs(delta02)}.`
+        );
+      }
+    }
+
+    const next01 = Math.max(0, rawNext01);
+    const next02 = Math.max(0, rawNext02);
+    const nextTotal = Number((next01 + next02).toFixed(2));
 
     productPatches.push({
       id: prodId,
@@ -8750,23 +8914,46 @@ async function applyStockDeltaForWarehouseLines(lines = []) {
 
     if (isNetworkOnline() && isSupabaseAvailable) {
       try {
-        await Promise.all([
+        const results = await Promise.all([
           ...productPatches.map(p =>
             withTimeout(
               supabase
                 .from('products')
-                .update({ stock: p.stock, stock_almacen_01: p.stockAlmacen01, stock_almacen_02: p.stockAlmacen02 })
+                .update({
+                  stock: p.stock,
+                  stockAlmacen01: p.stockAlmacen01,
+                  stock_almacen_01: p.stockAlmacen01,
+                  stockAlmacen02: p.stockAlmacen02,
+                  stock_almacen_02: p.stockAlmacen02,
+                  updated_at: nowIso
+                })
                 .eq('id', p.id),
               6000
             )
           ),
           whRows.length > 0
             ? withTimeout(supabase.from('profit_stock_by_warehouse').upsert(whRows, { onConflict: 'id' }), 6000)
-            : Promise.resolve()
+            : Promise.resolve({ error: null })
         ]);
+        const firstErr = results.find(r => r?.error)?.error;
+        if (firstErr) {
+          throw firstErr;
+        }
       } catch (err) {
+        console.warn('[applyStockDeltaForWarehouseLines] Error persistiendo stock en servidor, encolando sincronización:', err?.message || err);
         markSupabaseOffline(err, 'applyStockDeltaForWarehouseLines');
+        const currentProds = getStorageProducts();
+        productPatches.forEach(p => {
+          const fullProd = currentProds.find(cp => String(cp.id) === p.id) || p;
+          enqueueSyncAction('product', 'UPDATE', fullProd);
+        });
       }
+    } else {
+      const currentProds = getStorageProducts();
+      productPatches.forEach(p => {
+        const fullProd = currentProds.find(cp => String(cp.id) === p.id) || p;
+        enqueueSyncAction('product', 'UPDATE', fullProd);
+      });
     }
   }
   return productPatches;
@@ -8882,27 +9069,62 @@ export const getSupabaseGoodsReceiptNotesMerged = async () => {
 export const saveSupabaseGoodsReceiptNote = async (receiptData) => {
   const nowIso = new Date().toISOString();
   const num = String(receiptData.numeroDoc || receiptData.not_num || `REC-${Date.now().toString().slice(-6)}`).trim();
+  const id = receiptData.id || num;
+
+  // Anti-doble-entrada de stock: verificar si esta recepción o la factura/compra asociada ya sumaron stock
+  const existingRecs = readLocalDocList(REC_STORAGE_KEY);
+  const existingRec = existingRecs.find(r => r && (String(r.id) === String(id) || String(r.not_num || r.numeroDoc) === num));
+  const localPurchases = getStoragePurchases();
+  const linkedInvoice = String(receiptData.nro_fact || receiptData.nroFactura || '').trim().toUpperCase();
+  const linkedPurchase = localPurchases.find(p =>
+    (receiptData.compraId && String(p.id) === String(receiptData.compraId)) ||
+    (linkedInvoice && String(p.numeroFacturaProv || p.nroFactura || '').trim().toUpperCase() === linkedInvoice && String(p.proveedorRif || '').toUpperCase() === String(receiptData.proveedorRif || receiptData.co_prov || '').trim().toUpperCase())
+  );
+
+  const alreadyAppliedStock = Boolean(
+    receiptData.skipStockApply ||
+    receiptData.stockAplicado === true ||
+    receiptData.stock_aplicado === true ||
+    existingRec?.stock_aplicado === true ||
+    existingRec?.stockAplicado === true ||
+    (linkedPurchase && linkedPurchase.stockAplicado === true && !receiptData.forceApplyStock)
+  );
+
+  const willApplyStock = !alreadyAppliedStock && receiptData.applyStock !== false && Array.isArray(receiptData.items) && receiptData.items.length > 0;
+  if (willApplyStock) {
+    const alm = String(receiptData.almacen || '01').includes('02') ? '02' : '01';
+    const lines = receiptData.items
+      .filter(it => Number(it.cantidadRecibida ?? it.cantidad ?? 0) > 0)
+      .map(it => ({
+        codigo: it.codigo || it.articuloId || it.productoId,
+        delta01: alm === '01' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0,
+        delta02: alm === '02' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0
+      }));
+    if (lines.length > 0) {
+      await applyStockDeltaForWarehouseLines(lines);
+    }
+    if (linkedPurchase?.id) {
+      updateStoragePurchase(linkedPurchase.id, { recepcionId: id, stockAplicado: true });
+    }
+  }
+
+  const stockWasApplied = Boolean(willApplyStock || existingRec?.stock_aplicado || receiptData.stockAplicado || linkedPurchase?.stockAplicado);
   const normalized = {
     ...receiptData,
-    id: receiptData.id || num,
+    id,
     not_num: receiptData.not_num || num,
     numeroDoc: num,
     fec_emis: receiptData.fec_emis || receiptData.fecha || nowIso,
     co_prov: receiptData.co_prov || receiptData.proveedorRif || '',
     prov_des: receiptData.prov_des || receiptData.proveedorNombre || '',
     nro_fact: receiptData.nro_fact || receiptData.nroFactura || '',
+    almacen: String(receiptData.almacen || '01').includes('02') ? '02' : '01',
+    stock_aplicado: stockWasApplied,
+    stockAplicado: stockWasApplied,
     items_count: (receiptData.items || []).length || Number(receiptData.items_count || 1),
     updated_at: nowIso
   };
-  if (receiptData.applyStock !== false && Array.isArray(receiptData.items) && receiptData.items.length > 0) {
-    const alm = String(receiptData.almacen || '01').includes('02') ? '02' : '01';
-    const lines = receiptData.items.map(it => ({
-      codigo: it.codigo || it.articuloId,
-      delta01: alm === '01' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0,
-      delta02: alm === '02' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0
-    }));
-    await applyStockDeltaForWarehouseLines(lines);
-  }
+
   return persistDocWithOfflineQueue({
     storageKey: REC_STORAGE_KEY,
     tableName: 'profit_goods_receipt_notes',
@@ -8962,44 +9184,75 @@ export const saveSupabaseProfitWarehouseTransfer = async (transferData) => {
   const nowIso = new Date().toISOString();
   const trasNum = String(transferData.trasNum || `TRAS-${Date.now().toString().slice(-6)}`).trim();
   const almOrig = String(transferData.almOrig || '01').includes('02') ? '02' : '01';
-  const almDest = String(transferData.almDest || '02').includes('01') ? '01' : '02';
+  const almDest = String(transferData.almDest || '02').includes('02') ? '02' : '01';
+  if (almOrig === almDest) {
+    throw new Error('El almacén origen y el almacén destino deben ser distintos.');
+  }
   const renglones = Array.isArray(transferData.renglones) ? transferData.renglones : [];
-  const normalized = {
-    id: transferData.id || trasNum,
-    tras_num: trasNum,
-    trasNum,
-    fecha: transferData.fecha || nowIso,
-    alm_orig: almOrig,
-    almOrig,
-    alm_dest: almDest,
-    almDest,
-    motivo: transferData.motivo || 'Traslado interno entre almacenes',
-    confirma: true,
-    anulada: false,
-    co_sucu: '01',
-    co_us_in: transferData.coUsIn || 'WEB',
-    total_items: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
-    totalItems: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
-    renglones,
-    updated_at: nowIso
-  };
+  if (renglones.length === 0) {
+    throw new Error('El traslado debe contener al menos un renglón.');
+  }
 
   const lines = renglones.map(r => {
     const qty = Number(r.total_art ?? r.cantidad ?? 0);
+    if (!(qty > 0)) {
+      throw new Error(`Cantidad inválida (${qty}) para ${r.co_art || r.codigo || 'producto'} en traslado.`);
+    }
     return {
       codigo: r.co_art || r.codigo || r.articuloId,
       delta01: almOrig === '01' ? -qty : (almDest === '01' ? qty : 0),
       delta02: almOrig === '02' ? -qty : (almDest === '02' ? qty : 0)
     };
   });
-  await applyStockDeltaForWarehouseLines(lines);
+  await applyStockDeltaForWarehouseLines(lines, { validateStrict: true });
+
+  const totalItems = renglones.reduce((s, r) => s + Number(r.total_art ?? r.cantidad ?? 0), 0);
+  const id = transferData.id || trasNum;
+  const dbPayload = {
+    id,
+    tras_num: trasNum,
+    fecha: transferData.fecha || nowIso,
+    alm_orig: almOrig,
+    alm_dest: almDest,
+    motivo: transferData.motivo || 'Traslado interno entre almacenes',
+    confirma: true,
+    anulada: false,
+    co_sucu: '01',
+    co_us_in: transferData.coUsIn || 'WEB',
+    total_items: totalItems,
+    renglones,
+    updated_at: nowIso
+  };
+  const normalized = {
+    ...dbPayload,
+    trasNum,
+    almOrig,
+    almDest,
+    coSucu: '01',
+    coUsIn: dbPayload.co_us_in,
+    totalItems,
+    _pendingServerSync: true
+  };
 
   upsertLocalDocList(TRAS_STORAGE_KEY, normalized, 'id');
   broadcastReconcileChange({ tableId: 'warehouse_transfers', action: 'CREATE', key: normalized.trasNum, item: normalized });
   if (isNetworkOnline()) {
     try {
-      await withTimeout(supabase.from('profit_warehouse_transfers').upsert(normalized, { onConflict: 'id' }), 6000);
-    } catch (_) {}
+      const { error } = await withTimeout(
+        supabase.from('profit_warehouse_transfers').upsert(dbPayload, { onConflict: 'id' }),
+        6000
+      );
+      if (error) throw error;
+      isSupabaseAvailable = true;
+      upsertLocalDocList(TRAS_STORAGE_KEY, { ...normalized, _pendingServerSync: false }, 'id');
+      return { ...normalized, _pendingServerSync: false };
+    } catch (err) {
+      console.warn('[profit_warehouse_transfers] Encolando para sincronización posterior:', err?.message || err);
+      markSupabaseOffline(err, 'save_profit_warehouse_transfers');
+      enqueueSyncAction('profit_warehouse_transfer', 'INSERT', dbPayload);
+    }
+  } else {
+    enqueueSyncAction('profit_warehouse_transfer', 'INSERT', dbPayload);
   }
   return normalized;
 };
@@ -9009,39 +9262,81 @@ export const saveSupabaseProfitInventoryAdjustment = async (adjData) => {
   const ajueNum = String(adjData.ajueNum || `AJU-${Date.now().toString().slice(-6)}`).trim();
   const alm = String(adjData.almacen || '01').includes('02') ? '02' : '01';
   const renglones = Array.isArray(adjData.renglones) ? adjData.renglones : [];
-  const normalized = {
-    id: adjData.id || ajueNum,
+  if (renglones.length === 0) {
+    throw new Error('El ajuste de inventario debe contener al menos un renglón.');
+  }
+
+  let hasExit = false;
+  const normalizedRenglones = renglones.map(r => {
+    const qty = Number(r.total_art ?? r.cantidad ?? 0);
+    if (!(qty > 0)) {
+      throw new Error(`Cantidad inválida (${qty}) para ${r.co_art || r.codigo || 'producto'} en ajuste.`);
+    }
+    const lineAlm = String(r.co_alma || alm).includes('02') ? '02' : '01';
+    const tipoTrans = String(r.tipo_trans || 'S').toUpperCase() === 'E' ? 'E' : 'S';
+    if (tipoTrans === 'S') hasExit = true;
+    return {
+      ...r,
+      co_alma: lineAlm,
+      tipo_trans: tipoTrans,
+      total_art: qty
+    };
+  });
+
+  const lines = normalizedRenglones.map(r => {
+    const qty = Number(r.total_art || 0);
+    const sign = r.tipo_trans === 'E' ? 1 : -1;
+    return {
+      codigo: r.co_art || r.codigo || r.articuloId,
+      delta01: r.co_alma === '01' ? sign * qty : 0,
+      delta02: r.co_alma === '02' ? sign * qty : 0
+    };
+  });
+  await applyStockDeltaForWarehouseLines(lines, { validateStrict: hasExit });
+
+  const totalItems = normalizedRenglones.reduce((s, r) => s + Number(r.total_art || 0), 0);
+  const id = adjData.id || ajueNum;
+  const dbPayload = {
+    id,
     ajue_num: ajueNum,
-    ajueNum,
     fecha: adjData.fecha || nowIso,
-    almacen: alm,
     motivo: adjData.motivo || 'Ajuste / Merma de inventario',
     anulada: false,
     co_sucu: '01',
     co_us_in: adjData.coUsIn || 'WEB',
-    total_items: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
-    totalItems: renglones.reduce((s, r) => s + Number(r.total_art || r.cantidad || 0), 0),
-    renglones,
+    total_items: totalItems,
+    renglones: normalizedRenglones,
     updated_at: nowIso
   };
-
-  const lines = renglones.map(r => {
-    const qty = Number(r.total_art ?? r.cantidad ?? 0);
-    const sign = String(r.tipo_trans || 'S').toUpperCase() === 'E' ? 1 : -1;
-    return {
-      codigo: r.co_art || r.codigo || r.articuloId,
-      delta01: alm === '01' ? sign * qty : 0,
-      delta02: alm === '02' ? sign * qty : 0
-    };
-  });
-  await applyStockDeltaForWarehouseLines(lines);
+  const normalized = {
+    ...dbPayload,
+    ajueNum,
+    almacen: alm,
+    coSucu: '01',
+    coUsIn: dbPayload.co_us_in,
+    totalItems,
+    _pendingServerSync: true
+  };
 
   upsertLocalDocList(ADJ_STORAGE_KEY, normalized, 'id');
   broadcastReconcileChange({ tableId: 'inventory_adjustments', action: 'CREATE', key: normalized.ajueNum, item: normalized });
   if (isNetworkOnline()) {
     try {
-      await withTimeout(supabase.from('profit_inventory_adjustments').upsert(normalized, { onConflict: 'id' }), 6000);
-    } catch (_) {}
+      const { error } = await withTimeout(
+        supabase.from('profit_inventory_adjustments').upsert(dbPayload, { onConflict: 'id' }),
+        6000
+      );
+      if (error) throw error;
+      isSupabaseAvailable = true;
+      upsertLocalDocList(ADJ_STORAGE_KEY, { ...normalized, _pendingServerSync: false }, 'id');
+      return { ...normalized, _pendingServerSync: false };
+    } catch (err) {
+      console.warn('[profit_inventory_adjustments] Encolando para sincronización posterior:', err?.message || err);
+      markSupabaseOffline(err, 'save_profit_inventory_adjustments');
+      enqueueSyncAction('profit_inventory_adjustment', 'INSERT', dbPayload);
+    }
+  } else {
+    enqueueSyncAction('profit_inventory_adjustment', 'INSERT', dbPayload);
   }
   return normalized;
 };
@@ -9050,31 +9345,44 @@ export const saveSupabaseProfitCustomerReturn = async (retData) => {
   const nowIso = new Date().toISOString();
   const ncNum = String(retData.ncNum || retData.numeroDoc || `NC-${Date.now().toString().slice(-6)}`).trim();
   const renglones = Array.isArray(retData.renglones) ? retData.renglones : [];
-  const normalized = {
-    id: retData.id || ncNum,
+  const id = retData.id || ncNum;
+  const dbPayload = {
+    id,
     fact_num: retData.factNum || retData.documentoAfectado || '',
-    factNum: retData.factNum || retData.documentoAfectado || '',
     fec_emis: retData.fecEmis || retData.fecha || nowIso,
-    fecEmis: retData.fecEmis || retData.fecha || nowIso,
     co_cli: retData.coCli || retData.clienteId || 'CLI-GEN',
-    coCli: retData.coCli || retData.clienteId || 'CLI-GEN',
     cli_des: retData.cliDes || retData.clienteNombre || 'Cliente',
-    cliDes: retData.cliDes || retData.clienteNombre || 'Cliente',
     rif: retData.rif || retData.clienteRif || '',
+    co_ven: retData.coVen || retData.vendedorId || '',
+    ven_des: retData.venDes || retData.vendedorNombre || '',
     nc_num: ncNum,
-    ncNum,
     status: 'PROCESADA',
     anulada: false,
     descrip: retData.descrip || retData.motivo || 'Devolución de mercancía',
     tot_bruto: Number(retData.totBruto || 0),
-    totBruto: Number(retData.totBruto || 0),
     iva: Number(retData.iva || 0),
     tot_neto: Number(retData.totNeto || 0),
-    totNeto: Number(retData.totNeto || 0),
     tasa: Number(retData.tasa || 1),
     moneda: retData.moneda || 'USD',
+    co_sucu: retData.coSucu || '01',
+    co_us_in: retData.coUsIn || 'WEB',
     renglones,
     updated_at: nowIso
+  };
+  const normalized = {
+    ...dbPayload,
+    factNum: dbPayload.fact_num,
+    fecEmis: dbPayload.fec_emis,
+    coCli: dbPayload.co_cli,
+    cliDes: dbPayload.cli_des,
+    coVen: dbPayload.co_ven,
+    venDes: dbPayload.ven_des,
+    ncNum,
+    totBruto: dbPayload.tot_bruto,
+    totNeto: dbPayload.tot_neto,
+    coSucu: dbPayload.co_sucu,
+    coUsIn: dbPayload.co_us_in,
+    _pendingServerSync: true
   };
 
   if (retData.reenterStock !== false && renglones.length > 0) {
@@ -9090,8 +9398,21 @@ export const saveSupabaseProfitCustomerReturn = async (retData) => {
   upsertLocalDocList(RET_STORAGE_KEY, normalized, 'id');
   if (isNetworkOnline()) {
     try {
-      await withTimeout(supabase.from('profit_customer_returns').upsert(normalized, { onConflict: 'id' }), 6000);
-    } catch (_) {}
+      const { error } = await withTimeout(
+        supabase.from('profit_customer_returns').upsert(dbPayload, { onConflict: 'id' }),
+        6000
+      );
+      if (error) throw error;
+      isSupabaseAvailable = true;
+      upsertLocalDocList(RET_STORAGE_KEY, { ...normalized, _pendingServerSync: false }, 'id');
+      return { ...normalized, _pendingServerSync: false };
+    } catch (err) {
+      console.warn('[profit_customer_returns] Encolando para sincronización posterior:', err?.message || err);
+      markSupabaseOffline(err, 'save_profit_customer_returns');
+      enqueueSyncAction('profit_customer_return', 'INSERT', dbPayload);
+    }
+  } else {
+    enqueueSyncAction('profit_customer_return', 'INSERT', dbPayload);
   }
   return normalized;
 };
