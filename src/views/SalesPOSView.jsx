@@ -58,6 +58,7 @@ import ClientRegistrationModal from '../components/ClientRegistrationModal';
 import ClientApprovalsModal from '../components/ClientApprovalsModal';
 import ClientsDirectoryModal from '../components/ClientsDirectoryModal';
 import { canApproveClients, getClientApprovalStatus, isClientApproved } from '../services/authService';
+import { matchesSeller } from '../services/commissionService';
 import { generateSalesPOSPDF, generateSellerOrderPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
@@ -710,10 +711,31 @@ export default function SalesPOSView({
     }
 
     const resolvedVendedor = activeOrderInPOS
-      ? (activeOrderInPOS.vendedorId || currentUser?.nombre || 'Ricardo Sánchez')
+      ? (activeOrderInPOS.vendedorNombre || activeOrderInPOS.vendedorId || currentUser?.nombre || 'Ricardo Sánchez')
       : modalidadVenta === 'OFICINA'
       ? (officeSeller || currentUser?.nombre || 'Oficina Principal Motorven')
       : (currentUser?.nombre || 'Ricardo Sánchez');
+
+    const totalCajasCarrito = Number(
+      cartItems.reduce((acc, item) => acc + (Number(item?.cantidad || 0) || 0), 0).toFixed(2)
+    );
+    const resolvedVendedorId = (() => {
+      const explicitOrderCode = String(
+        activeOrderInPOS?.vendedorCoVen || activeOrderInPOS?.coVen || activeOrderInPOS?.co_ven || ''
+      ).trim();
+      if (explicitOrderCode && explicitOrderCode.toUpperCase() !== 'OF') return explicitOrderCode;
+      const orderSellerField = String(activeOrderInPOS?.vendedorId || '').trim();
+      if (orderSellerField && orderSellerField.length <= 8 && !/\s/.test(orderSellerField)) return orderSellerField;
+      const matchedInCatalog = (profitSellers || []).find((s) =>
+        matchesSeller(s, activeOrderInPOS || resolvedVendedor)
+      );
+      if (matchedInCatalog?.coVen || matchedInCatalog?.co_ven) {
+        return String(matchedInCatalog.coVen || matchedInCatalog.co_ven).trim();
+      }
+      const userCoVen = String(currentUser?.co_ven || currentUser?.coVen || '').trim();
+      if (userCoVen && modalidadVenta !== 'OFICINA') return userCoVen;
+      return 'OF';
+    })();
 
     const resolvedNextCorrelativo = (tipoDoc === 'FACTURA' || !tipoDoc)
       ? getNextInvoiceCorrelativo(sales, profitInvoices)
@@ -774,6 +796,10 @@ export default function SalesPOSView({
       igtfBs,
       totalBs,
       retencionIvaBs: fiscalTaxes.retencionIvaBs,
+      totalLitros: Number((totalLitrosCarrito || 0).toFixed(2)),
+      totalCajas: totalCajasCarrito,
+      vendedorId: resolvedVendedorId,
+      vendedorCoVen: resolvedVendedorId,
       vendedor: resolvedVendedor
     };
 

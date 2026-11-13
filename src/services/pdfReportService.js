@@ -901,12 +901,12 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
 }
 
 // =========================================================================
-// 1. REPORTE DE FUERZA DE VENTAS & ASESORES COMERCIALES (PRIORITARIO)
+// 1. REPORTE DE FUERZA DE VENTAS & COBRADORES (PRIORITARIO)
 // =========================================================================
 export function generateSellersPDF({ sellers = [], config = {}, currentUser = null, globalQuota = 30000 }) {
   const base = createBaseReport({
-    title: 'REPORTE DE FUERZA DE VENTAS & RENDIMIENTO COMERCIAL',
-    subtitle: 'Cumplimiento de Metas, Facturación Lograda, Liquidación de Comisiones y Cobertura de Zonas',
+    title: 'REPORTE DE FUERZA DE VENTAS, COBRADORES & COMISIONES',
+    subtitle: 'Cumplimiento de Metas, Base Pagada Sin IVA, Comisiones MOTORVEN por Días Vencidos y Cobertura de Zonas',
     moduleCode: 'VEN',
     currentUser,
     config
@@ -914,8 +914,9 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
 
   const totalSellers = sellers.length;
   const totalVendido = sellers.reduce((acc, s) => acc + Number(s.totalVentasUsd || s.ventasTotalesUsd || s.ventasMes || s.montoVentas || 0), 0);
+  const totalBaseSinIva = sellers.reduce((acc, s) => acc + Number(s.basePagadaSinIvaUsd ?? s.totalVentasUsd ?? 0), 0);
   const totalLitros = sellers.reduce((acc, s) => acc + Number(s.totalLitros || s.litrosVendidos || s.litros || 0), 0);
-  const totalComisiones = sellers.reduce((acc, s) => acc + Number(s.comisionEstimadaUsd || s.comisionTotalUsd || s.comisionesUsd || 0), 0);
+  const totalComisiones = sellers.reduce((acc, s) => acc + Number(s.comisionEstimadaUsd ?? s.comisionTotalUsd ?? s.comisionesUsd ?? 0), 0);
   const tasa = Number(config?.tasaDolar) || 886.22;
 
   // Cálculo de cumplimiento global proporcional a litros o dólares
@@ -923,10 +924,10 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
   const cumplimientoGlobal = metaLitrosGlobal > 0 ? (totalLitros > 0 ? (totalLitros / metaLitrosGlobal) * 100 : (totalVendido / (metaLitrosGlobal * 4.5)) * 100) : 0;
 
   const cards = [
-    { label: 'Fuerza Comercial', value: `${totalSellers} Asesores`, subtext: 'Equipo Activo', color: COLORS.navy },
-    { label: 'Ventas Totales USD', value: formatUsd(totalVendido), subtext: formatBs(totalVendido * tasa), color: COLORS.emerald },
+    { label: 'Fuerza de Cobro', value: `${totalSellers} Cobradores`, subtext: 'Equipo Activo', color: COLORS.navy },
+    { label: 'Ventas Totales USD', value: formatUsd(totalVendido), subtext: `Base Pag. s/IVA: ${formatUsd(totalBaseSinIva)}`, color: COLORS.emerald },
     { label: 'Volumen Despachado', value: `${formatUnitVe(totalLitros)} L`, subtext: `${cumplimientoGlobal.toFixed(1)}% Meta (${formatUnitVe(metaLitrosGlobal, 0)} L)`, color: COLORS.cyan },
-    { label: 'Comisiones Devengadas', value: formatUsd(totalComisiones), subtext: 'Incentivos de Ventas', color: COLORS.amber }
+    { label: 'Comisiones Devengadas', value: formatUsd(totalComisiones), subtext: `${formatBs(totalComisiones * tasa)} (s/IVA)`, color: COLORS.amber }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
@@ -934,8 +935,8 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
   currentY = addAnalyticalBox(
     base.doc,
     currentY,
-    'SÍNTESIS EJECUTIVA DE RENDIMIENTO COMERCIAL',
-    `El equipo de Fuerza de Ventas de SIGNUM MOTORVEN consolidó una facturación de ${formatUsd(totalVendido)} (${formatBs(totalVendido * tasa)}) equivalente a ${formatUnitVe(totalLitros)} litros de lubricantes Oilstone. La efectividad global se sitúa en ${cumplimientoGlobal.toFixed(1)}% de la cuota programada de ${formatUnitVe(metaLitrosGlobal, 0)} L. El incentivo comercial estimado asciende a ${formatUsd(totalComisiones)}.`,
+    'SÍNTESIS EJECUTIVA DE COBRADORES & TABULADOR MOTORVEN',
+    `El equipo comercial de SIGNUM MOTORVEN consolidó una facturación de ${formatUsd(totalVendido)} (${formatBs(totalVendido * tasa)}) equivalente a ${formatUnitVe(totalLitros)} litros de lubricantes Oilstone (${cumplimientoGlobal.toFixed(1)}% de ${formatUnitVe(metaLitrosGlobal, 0)} L). Comisión devengada bajo regla oficial MOTORVEN (0–7d: 4% | 8–14d: 3% | 15–21d: 1% | >21d: 0%) sobre base 100% pagada sin IVA (${formatUsd(totalBaseSinIva)}): ${formatUsd(totalComisiones)} (${formatBs(totalComisiones * tasa)}).`,
     base.tableWidth,
     base.startX
   );
@@ -945,11 +946,11 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
     const litros = Number(s.totalLitros || s.litrosVendidos || s.litros || 0);
     const metaLitros = Number(s.metaLitrosMes || s.metaLitros || 3000);
     const pct = Number(s.cumplimientoPct || s.porcentajeCumplimiento) || (metaLitros > 0 ? (litros / metaLitros) * 100 : 0);
-    const comision = Number(s.comisionEstimadaUsd || s.comisionTotalUsd || s.comisionesUsd || (ventas * 0.03));
+    const comision = Number(s.comisionEstimadaUsd ?? s.comisionTotalUsd ?? s.comisionesUsd ?? 0);
 
     return [
       s.coVen || s.co_ven || s.codigo || s.id || 'VEN-00',
-      s.venDes || s.nombre || 'Asesor Comercial',
+      s.venDes || s.nombre || 'Cobrador',
       s.zona || s.ruta || 'Centro / Occidente',
       `${formatUnitVe(litros)} L`,
       formatUsd(ventas),
@@ -962,8 +963,8 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['CÓDIGO', 'ASESOR COMERCIAL', 'ZONA / TERRITORIO', 'VOLUMEN (L)', 'VENTAS USD', '% CUMP.', 'COMISIÓN USD']],
-    body: tableData.length > 0 ? tableData : [['SIN ASESORES', '-', '-', '0 L', '$ 0.00', '0.0%', '$ 0.00']],
+    head: [['CÓDIGO', 'COBRADOR', 'ZONA / TERRITORIO', 'VOLUMEN (L)', 'VENTAS USD', '% CUMP.', 'COMISIÓN USD']],
+    body: tableData.length > 0 ? tableData : [['SIN COBRADORES', '-', '-', '0 L', '$ 0.00', '0.0%', '$ 0.00']],
     theme: 'grid',
     headStyles: {
       fillColor: COLORS.navy,
@@ -1143,7 +1144,7 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
     title: isNotaEntrega
       ? 'REPORTE DOCUMENTOS CXC — NOTAS DE ENTREGA (SIN IVA)'
       : 'REPORTE DOCUMENTOS CXC — FACTURAS FISCALES',
-    subtitle: 'Vendedor • Factura • RIF • Nombre Cliente • Emisión • Vencimiento • Días Vencido • Días Crédito • Monto • Abonos • Restante',
+    subtitle: 'Cobrador • Factura • RIF • Nombre Cliente • Emisión • Vencimiento • Días Vencido • Días Crédito • Monto • Abonos • Restante',
     moduleCode: 'CXC',
     currentUser,
     config
@@ -1226,7 +1227,7 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
     startY: currentY,
     margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
     tableWidth: base.tableWidth,
-    head: [['VEND.', isNotaEntrega ? 'N° NOTA' : 'FACTURA', 'RIF', 'NOMBRE CLIENTE', 'EMISIÓN', 'VENC.', 'D.VENC', 'D.CRÉD', 'TIPO TASA', 'TASA', isNotaEntrega ? 'MONTO NOTA' : 'MONTO FACT.', 'ABONOS', 'RESTANTE']],
+    head: [['COBRADOR', isNotaEntrega ? 'N° NOTA' : 'FACTURA', 'RIF', 'NOMBRE CLIENTE', 'EMISIÓN', 'VENC.', 'D.VENC', 'D.CRÉD', 'TIPO TASA', 'TASA', isNotaEntrega ? 'MONTO NOTA' : 'MONTO FACT.', 'ABONOS', 'RESTANTE']],
     body: tableData.length > 0 ? tableData : [['-', 'SIN DOCS', '-', 'No hay documentos pendientes en cartera', '-', '-', '0', '0', 'BCV', '0,00', '$ 0.00', '$ 0.00', '$ 0.00']],
     theme: 'grid',
     headStyles: {
@@ -1245,10 +1246,10 @@ export function generateAccountsReceivablePDF(arg1 = {}, summaryMetricsArg = nul
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { fontStyle: 'bold', halign: 'center', cellWidth: 10 },
+      0: { fontStyle: 'bold', halign: 'center', cellWidth: 14.5 },
       1: { fontStyle: 'bold', halign: 'center', cellWidth: 13 },
       2: { halign: 'center', cellWidth: 16 },
-      3: { cellWidth: 28 },
+      3: { cellWidth: 23.5 },
       4: { halign: 'center', cellWidth: 13 },
       5: { halign: 'center', cellWidth: 13 },
       6: { halign: 'center', fontStyle: 'bold', cellWidth: 8 },
@@ -6488,7 +6489,7 @@ export function generateConsolidatedCxcPDF({
     `Vista: ${isClientsView ? 'Por Cliente (Agrupado)' : 'Por Documento'}`,
     `Tipo: ${filters?.typeLabel || 'Ambos (FAC + NE)'}`,
     `Estado: ${filters?.statusLabel || 'Cartera activa'}`,
-    `Vendedor: ${filters?.sellerLabel || 'Todos los vendedores'}`
+    `Cobrador: ${filters?.sellerLabel || 'Todos los cobradores'}`
   ];
   if (filters?.searchTerm) {
     filterParts.push(`Búsqueda: "${String(filters.searchTerm).trim()}"`);
@@ -6594,7 +6595,7 @@ export function generateConsolidatedCxcPDF({
       startY: currentY,
       margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
       tableWidth: base.tableWidth,
-      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'VEND.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
+      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'COBR.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
       body: body.length > 0 ? body : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
       foot: [[
         { content: `TOTAL (${docList.length} documentos)`, colSpan: 8, styles: { halign: 'left' } },

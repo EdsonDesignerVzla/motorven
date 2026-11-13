@@ -62,6 +62,7 @@ import { saveSupabaseNotification } from '../services/supabaseService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import ClientApprovalsModal from '../components/ClientApprovalsModal';
 import { canApproveClients, getClientApprovalStatus, isClientApproved } from '../services/authService';
+import { calculateSellerCommissionSummary, calculateProjectedOrderCommission } from '../services/commissionService';
 import { useNotification } from '../context/NotificationContext';
 
 const normalizeCategoryText = (val) =>
@@ -99,6 +100,7 @@ export default function SellerOrderPOSView({
   clients = [],
   orders = [],
   profitInvoices = [],
+  profitCollections = [],
   sales = [],
   profitSellers = [],
   config = {},
@@ -114,9 +116,24 @@ export default function SellerOrderPOSView({
   const safeConfig = config || {};
   const tasaBcv = Number(safeConfig.tasaDolar) || 827.73;
 
-  // Asesor Comercial activo
+  // Asesor Comercial / Cobrador activo
   const sellerName = currentUser?.nombre || 'Asesor Comercial';
   const sellerCode = currentUser?.co_ven || currentUser?.coVen || currentUser?.username || 'V01';
+
+  // Comisiones en tiempo real del asesor activo (regla oficial MOTORVEN: base sin IVA, docs 100% pagados + proyección al día 4%)
+  const sellerCommissionRealtime = useMemo(() => {
+    const nowMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    const monthInvoices = (profitInvoices || []).filter((inv) => {
+      const raw = String(inv?.fechaEmision || inv?.fec_emis || inv?.fecha || '').trim();
+      if (!raw) return true;
+      return raw.slice(0, 7) === nowMonthKey || /^\d{2}\/\d{2}\/\d{4}$/.test(raw) && `${raw.slice(6, 10)}-${raw.slice(3, 5)}` === nowMonthKey;
+    });
+    const baseSummary = calculateSellerCommissionSummary(
+      { coVen: sellerCode, venDes: sellerName },
+      { invoices: monthInvoices.length > 0 ? monthInvoices : profitInvoices, collections: profitCollections, tasaBcv }
+    );
+    return baseSummary;
+  }, [profitInvoices, profitCollections, sellerCode, sellerName, tasaBcv]);
 
   // Estados principales de la preventa / venta por oficina
   const [modalidadVenta, setModalidadVenta] = useState('PREVENTA'); // 'PREVENTA' | 'OFICINA'
@@ -804,7 +821,7 @@ export default function SellerOrderPOSView({
       clienteRif: selectedClient.rif || 'J-000000000',
       direccionEntrega: deliveryAddress,
       zonaVenta: selectedClient.zona || '01 - Valencia',
-      vendedorId: sellerName,
+      vendedorId: sellerCode || sellerName,
       vendedorNombre: sellerName,
       vendedorCoVen: sellerCode,
       fechaEmision: nowIso,
@@ -1105,7 +1122,7 @@ export default function SellerOrderPOSView({
       direccionEntrega: cleanAddress,
       zonaVenta: zonaNombre,
       segmento: newClientForm.tipoCliente || 'Mayorista',
-      vendedorId: sellerName,
+      vendedorId: sellerCode || sellerName,
       vendedorCoVen: sellerCode,
       vendedorNombre: sellerName,
       creadoPor: sellerName,
@@ -1263,6 +1280,97 @@ export default function SellerOrderPOSView({
             <Clock size={15} color="var(--motorven-gold)" />
             <span>Mis Pedidos ({sellerTodayOrders.length})</span>
           </button>
+        </div>
+      </div>
+
+      {/* PANEL EN TIEMPO REAL DE COMISIONES MOTORVEN (BASE SIN IVA • DÍAS VENCIDOS) */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+        gap: '0.65rem'
+      }}>
+        <div style={{
+          padding: '0.65rem 0.9rem',
+          borderRadius: '10px',
+          background: 'rgba(16, 185, 129, 0.10)',
+          border: '1px solid rgba(16, 185, 129, 0.32)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <div>
+            <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#34d399', textTransform: 'uppercase' }}>
+              Comisión Devengada (Docs 100% Pagados)
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              {sellerCommissionRealtime.paidDocsCount} doc(s) • Base s/IVA {formatUsd(sellerCommissionRealtime.basePagadaSinIvaUsd)}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.05rem', fontWeight: 900, color: '#10b981' }}>
+              {formatUsd(sellerCommissionRealtime.totalComisionUsd)}
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)' }}>
+              {formatBs(sellerCommissionRealtime.totalComisionBs)}
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          padding: '0.65rem 0.9rem',
+          borderRadius: '10px',
+          background: 'rgba(56, 189, 248, 0.08)',
+          border: '1px solid rgba(56, 189, 248, 0.30)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <div>
+            <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
+              Proyectada Cartera Al Día (0d = 4%)
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              {sellerCommissionRealtime.pendingDocsCount} pendiente(s) • Vigente s/IVA {formatUsd(sellerCommissionRealtime.projectedAlDiaBaseUsd)}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.05rem', fontWeight: 900, color: '#38bdf8' }}>
+              {formatUsd(sellerCommissionRealtime.projectedAlDiaComisionUsd)}
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)' }}>
+              {formatBs(sellerCommissionRealtime.projectedAlDiaComisionBs)}
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          padding: '0.65rem 0.9rem',
+          borderRadius: '10px',
+          background: 'rgba(245, 158, 11, 0.09)',
+          border: '1px solid rgba(245, 158, 11, 0.30)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <div>
+            <div style={{ fontSize: '0.66rem', fontWeight: 800, color: 'var(--motorven-gold)', textTransform: 'uppercase' }}>
+              Comisión Estimada Carrito (4% s/IVA)
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              Al día 0–7d tras pago total (sin IVA)
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.05rem', fontWeight: 900, color: 'var(--motorven-gold)' }}>
+              {formatUsd(calculateProjectedOrderCommission({ subtotalUsd, tasaBcv }).comisionUsd)}
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              {formatBs(calculateProjectedOrderCommission({ subtotalUsd, tasaBcv }).comisionBs)}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2353,6 +2461,28 @@ export default function SellerOrderPOSView({
                   </div>
                 </div>
               </div>
+
+              {cartItems.length > 0 && (() => {
+                const cartComm = calculateProjectedOrderCommission({ subtotalUsd, tasaBcv });
+                return (
+                  <div style={{
+                    marginTop: '6px',
+                    paddingTop: '5px',
+                    borderTop: '1px solid rgba(16, 185, 129, 0.25)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    fontSize: '0.71rem'
+                  }}>
+                    <span style={{ color: '#6ee7b7', fontWeight: 700 }}>
+                      Comisión Est. (4% base s/IVA • 0–7d al pago):
+                    </span>
+                    <strong style={{ color: '#34d399', fontFamily: 'var(--font-code)' }}>
+                      {formatUsd(cartComm.comisionUsd)} ({formatBs(cartComm.comisionBs)})
+                    </strong>
+                  </div>
+                );
+              })()}
             </div>
 
             {cartItems.length > 0 && !cartWarehouseValidation.isValid && (

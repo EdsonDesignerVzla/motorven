@@ -22,6 +22,14 @@ import {
 import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateSellersPDF } from '../services/pdfReportService';
 import SellerAvatar from './SellerAvatar';
+import {
+  matchesSeller,
+  isDocAnulada,
+  resolveInvoiceLitros,
+  resolveInvoiceCajas,
+  normalizeProfitCollectionUsd,
+  calculateSellerCommissionSummary
+} from '../services/commissionService';
 
 export default function SellerDetailModal({
   seller,
@@ -37,7 +45,6 @@ export default function SellerDetailModal({
   onUpdateSellerZone
 }) {
   const sellerCoVen = (seller?.coVen || seller?.co_ven || seller?.codigo || seller?.id || '').toString().trim();
-  const sellerVenDes = (seller?.venDes || seller?.ven_des || seller?.nombre || '').toString().trim();
 
   // Zone management state
   const initialCoZon = seller?.coZon || seller?.co_zon || '';
@@ -52,28 +59,28 @@ export default function SellerDetailModal({
 
   if (!seller) return null;
 
-  const matchesSeller = (fieldVal) => {
-    if (!fieldVal) return false;
-    const str = fieldVal.toString().trim().toLowerCase();
-    const targetCo = sellerCoVen.toLowerCase();
-    const targetDes = sellerVenDes.toLowerCase();
-    if (targetCo && (str === targetCo || str.startsWith(targetCo) || str.includes(targetCo))) return true;
-    if (targetDes && (str.includes(targetDes) || targetDes.includes(str))) return true;
-    return false;
-  };
+  const validInvoices = (invoices || []).filter(f => !isDocAnulada(f));
+  const validCollections = (collections || [])
+    .filter(c => !c?.anulado)
+    .map(c => ({ ...c, montoUsd: normalizeProfitCollectionUsd(c) }));
 
-  const sellerInvoices = (invoices || []).filter(f => matchesSeller(f?.vendedorId || f?.co_ven || f?.vendedor));
-  const sellerClients = (clients || []).filter(c => matchesSeller(c?.vendedorAsignado || c?.co_ven || c?.vendedor));
-  const sellerOrders = (orders || []).filter(o => matchesSeller(o?.vendedorId || o?.co_ven || o?.vendedor));
-  const sellerCollections = (collections || []).filter(c => matchesSeller(c?.vendedorId || c?.co_ven || c?.vendedor));
+  const sellerInvoices = validInvoices.filter(f => matchesSeller(seller, f));
+  const sellerClients = (clients || []).filter(c => matchesSeller(seller, c?.vendedorAsignado || c?.co_ven || c?.vendedor || c));
+  const sellerOrders = (orders || []).filter(o => matchesSeller(seller, o));
+  const sellerCollections = validCollections.filter(c => matchesSeller(seller, c));
 
   // Metrics
-  const totalLitros = sellerInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros) || 0), 0);
-  const totalCajas = sellerInvoices.reduce((acc, f) => acc + (Number(f?.totalCajas) || 0), 0);
+  const totalLitros = sellerInvoices.reduce((acc, f) => acc + resolveInvoiceLitros(f), 0);
+  const totalCajas = sellerInvoices.reduce((acc, f) => acc + resolveInvoiceCajas(f), 0);
   const totalVentasUsd = sellerInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0);
   const totalVentasBs = sellerInvoices.reduce((acc, f) => acc + (Number(f?.totNetoBs) || 0), 0);
   const totalSaldoPendienteUsd = sellerInvoices.reduce((acc, f) => acc + (Number(f?.saldoUsd) || 0), 0);
-  const totalCobradoUsd = sellerCollections.reduce((acc, c) => acc + (Number(c?.montoUsd) || 0), 0);
+  const totalCobradoUsd = sellerCollections.reduce((acc, c) => acc + normalizeProfitCollectionUsd(c), 0);
+  const commissionSummary = calculateSellerCommissionSummary(seller, {
+    invoices: sellerInvoices,
+    collections: validCollections,
+    tasaBcv
+  });
 
   const metaLitros = Number(seller?.metaLitrosMes) || 3000;
   const cumplimientoPct = metaLitros > 0 ? parseFloat(((totalLitros / metaLitros) * 100).toFixed(1)) : 0;
@@ -154,11 +161,11 @@ export default function SellerDetailModal({
                   Cód: {seller.coVen}
                 </span>
                 <span className="badge badge-success" style={{ fontSize: '0.7rem', padding: '2px 8px' }}>
-                  {seller.comisionPct || 3}% Comisión
+                  {formatUsd(commissionSummary.totalComisionUsd)} Comisión MOTORVEN
                 </span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Asesor Comercial Oficial - Fuerza de Ventas Grupo Motorven C.A.
+                Cobrador Oficial - Fuerza de Ventas Grupo Motorven C.A.
               </div>
             </div>
           </div>
@@ -457,7 +464,7 @@ export default function SellerDetailModal({
                         </td>
                         <td>{f.fechaEmision ? new Date(f.fechaEmision).toLocaleDateString('es-VE') : '-'}</td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)', fontWeight: 700 }}>
-                          {f.totalLitros ? `${f.totalLitros} L` : '-'}
+                          {resolveInvoiceLitros(f) > 0 ? `${formatUnitVe(resolveInvoiceLitros(f))} L` : '-'}
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-tech)' }}>
                           {formatUsd(f.totNetoUsd)}
@@ -524,6 +531,11 @@ export default function SellerDetailModal({
                   totalLitros,
                   totalCajas,
                   totalCobradoUsd,
+                  totalSaldoUsd: totalSaldoPendienteUsd,
+                  basePagadaSinIvaUsd: commissionSummary.basePagadaSinIvaUsd,
+                  comisionEstimadaUsd: commissionSummary.totalComisionUsd,
+                  comisionEstimadaBs: commissionSummary.totalComisionBs,
+                  comisionTiers: commissionSummary.tiers,
                   metaLitrosMes: metaLitros
                 }],
                 config: { tasaDolar: tasaBcv },
@@ -531,7 +543,7 @@ export default function SellerDetailModal({
               });
             }}
             style={{ fontSize: '0.82rem' }}
-            title="Descargar reporte oficial del asesor comercial en PDF"
+            title="Descargar reporte oficial del cobrador en PDF"
           >
             <Printer size={15} color="#ffffff" /> Imprimir Reporte
           </button>

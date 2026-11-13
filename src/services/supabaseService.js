@@ -103,8 +103,18 @@ import {
   markAllStorageNotificationsRead,
   deleteStorageNotification,
   deleteStorageOrder,
-  deleteStorageSale
+  deleteStorageSale,
+  getCommissionSettlements as getStorageCommissionSettlements,
+  saveCommissionSettlement as saveStorageCommissionSettlement,
+  deleteCommissionSettlement as deleteStorageCommissionSettlement
 } from './storageService.js';
+import {
+  normalizeProfitCollectionUsd,
+  matchesSeller,
+  resolveInvoiceLitros,
+  resolveInvoiceCajas
+} from './commissionService.js';
+export { normalizeProfitCollectionUsd };
 import {
   DEFAULT_USERS,
   ROLE_PERMISSIONS,
@@ -2871,7 +2881,7 @@ export const unmarkCxcDeletedDoc = (docOrRef) => {
   } catch (_) {}
 };
 
-export const buildProfitInvoicePayloadFromSale = (sale, vendedorId = 'OF') => {
+export const buildProfitInvoicePayloadFromSale = (sale, vendedorIdArg = '') => {
   if (!sale) return null;
   const tipoUpper = String(sale.tipoDoc || '').toUpperCase().trim();
   if (tipoUpper === 'NOTA_CREDITO' || tipoUpper === 'COTIZACION') return null;
@@ -2897,6 +2907,28 @@ export const buildProfitInvoicePayloadFromSale = (sale, vendedorId = 'OF') => {
     ? Math.max(0, Number((effectiveNetoUsd - resolvedSaldoUsd).toFixed(2)))
     : effectiveNetoUsd;
 
+  const candidateArg = String(vendedorIdArg || '').trim();
+  const candidateOnSale = String(
+    sale.vendedorId || sale.vendedorCoVen || sale.coVen || sale.co_ven || ''
+  ).trim();
+  let resolvedVendedorId =
+    (candidateArg && candidateArg.toUpperCase() !== 'OF' ? candidateArg : '') ||
+    (candidateOnSale && candidateOnSale.toUpperCase() !== 'OF' ? candidateOnSale : '');
+
+  if (!resolvedVendedorId) {
+    const rawSellerName = String(sale.vendedor || sale.vendedorNombre || '').trim();
+    if (rawSellerName) {
+      const matchedSeller = (REAL_PROFIT_SELLERS || []).find((s) => matchesSeller(s, rawSellerName));
+      if (matchedSeller?.coVen) {
+        resolvedVendedorId = String(matchedSeller.coVen).trim();
+      }
+    }
+  }
+  resolvedVendedorId = resolvedVendedorId || candidateArg || candidateOnSale || 'OF';
+
+  const totalLitros = resolveInvoiceLitros(sale);
+  const totalCajas = resolveInvoiceCajas(sale);
+
   return {
     id: sale.id,
     factNum: sale.numeroDoc,
@@ -2905,16 +2937,17 @@ export const buildProfitInvoicePayloadFromSale = (sale, vendedorId = 'OF') => {
     clienteId: sale.clienteId,
     clienteNombre: sale.clienteNombre,
     clienteRif: sale.clienteRif,
-    vendedorId: vendedorId || 'OF',
-    vendedorNombre: sale.vendedor,
-    totBrutoUsd: sale.subtotalUsd,
-    ivaUsd: isNeDoc ? 0 : sale.ivaUsd,
+    vendedorId: resolvedVendedorId,
+    vendedorNombre: sale.vendedor || sale.vendedorNombre || '',
+    totBrutoUsd: Number(sale.subtotalUsd ?? sale.totalBrutoUsd ?? 0),
+    ivaUsd: isNeDoc ? 0 : Number(sale.ivaUsd || 0),
     totNetoUsd: effectiveNetoUsd,
     saldoUsd: resolvedSaldoUsd,
     abonosUsd: resolvedAbonosUsd,
     diasCredito: sale.diasCredito || 0,
     fechaEmision: sale.fechaEmision || sale.fecha,
     fechaVencimiento: sale.fechaVencimiento || sale.fechaEmision || sale.fecha,
+    fechaUltimoCobro: resolvedSaldoUsd <= 0.01 ? (sale.fechaUltimoCobro || sale.fechaEmision || sale.fecha) : undefined,
     tasa: sale.tasaDolar,
     tipoTasa: normalizeRateType(sale.tipoTasa ?? sale.tipo_tasa, {
       tipoDoc: sale.tipoDoc,
@@ -2925,6 +2958,8 @@ export const buildProfitInvoicePayloadFromSale = (sale, vendedorId = 'OF') => {
     monedaPago: sale.monedaPago ?? sale.moneda_pago ?? (String(sale.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
     status: resolvedSaldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE',
     formaPago: isCreditSale ? '03' : '01',
+    totalLitros,
+    totalCajas,
     items: sale.items
   };
 };
@@ -2961,7 +2996,10 @@ const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
     key: localSale.numeroDoc || localSale.id,
     item: localSale
   });
-  const invoicePayload = buildProfitInvoicePayloadFromSale(localSale, saleData.vendedorId || 'OF');
+  const invoicePayload = buildProfitInvoicePayloadFromSale(
+    localSale,
+    saleData.vendedorId || saleData.vendedorCoVen || localSale.vendedorId || ''
+  );
   if (invoicePayload) {
     saveSupabaseProfitInvoice(invoicePayload, { skipSalesSync: true }).catch(() => {});
   }
@@ -3328,7 +3366,10 @@ export const processSupabaseSale = async (saleData) => {
 
     // Reflejo en tiempo real simultáneo en profit_invoices sin re-actualizar sales (acabamos de insertarlo)
     try {
-      const invoicePayload = buildProfitInvoicePayloadFromSale(mapped, saleData.vendedorId || 'OF');
+      const invoicePayload = buildProfitInvoicePayloadFromSale(
+        mapped,
+        saleData.vendedorId || saleData.vendedorCoVen || mapped.vendedorId || ''
+      );
       if (invoicePayload) {
         await saveSupabaseProfitInvoice(invoicePayload, { skipSalesSync: true });
       }
@@ -5725,28 +5766,39 @@ export const getSupabaseProfitCollections = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    const mapped = (data || []).map(c => ({
-      id: c.id,
-      cobNum: c.cob_num ?? c.cobNum,
-      fecha: c.fec_cob ?? c.fecha,
-      clienteId: c.cliente_id ?? c.clienteId,
-      clienteNombre: c.cliente_nombre ?? c.clienteNombre,
-      clienteRif: c.cliente_rif ?? c.clienteRif,
-      vendedorId: c.vendedor_id ?? c.vendedorId,
-      montoUsd: Number(c.monto_usd ?? c.montoUsd ?? 0),
-      montoBs: Number(c.monto_bs ?? c.montoBs ?? 0),
-      tasa: Number(c.tasa || 1),
-      tipoTasa: c.tipo_tasa ?? c.tipoTasa ?? (Array.isArray(c.formas_pago || c.formasPago) ? (c.formas_pago || c.formasPago)[0]?.tipoTasa : undefined) ?? '',
-      tasaPago: Number(c.tasa_pago ?? c.tasaPago ?? c.tasa ?? 1),
-      monedaPago: c.moneda_pago ?? c.monedaPago ?? (Number(c.monto_bs ?? c.montoBs ?? 0) <= 0 && String(c.tipo_tasa ?? c.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
-      cuentaId: c.cuenta_id ?? c.cuentaId ?? '',
-      cuentaNombre: c.cuenta_nombre ?? c.cuentaNombre ?? '',
-      descrip: c.descrip ?? '',
-      anulado: Boolean(c.anulado),
-      formasPago: c.formas_pago || c.formasPago || [],
-      documentosAfectados: c.documentos_afectados || c.documentosAfectados || [],
-      fechaSincronizacion: c.fecha_sincronizacion ?? c.fechaSincronizacion
-    }));
+    const normalizeColRecord = (c) => {
+      const tasaRaw = Number(c.tasa_pago ?? c.tasaPago ?? c.tasa ?? 1);
+      const montoBsVal = Number(c.monto_bs ?? c.montoBs ?? 0);
+      const rawUsdVal = Number(c.monto_usd ?? c.montoUsd ?? 0);
+      const normalizedUsd = normalizeProfitCollectionUsd({
+        montoUsd: rawUsdVal,
+        montoBs: montoBsVal,
+        tasa: tasaRaw
+      });
+      return {
+        id: c.id,
+        cobNum: c.cob_num ?? c.cobNum,
+        fecha: c.fec_cob ?? c.fecha,
+        clienteId: c.cliente_id ?? c.clienteId,
+        clienteNombre: c.cliente_nombre ?? c.clienteNombre,
+        clienteRif: c.cliente_rif ?? c.clienteRif,
+        vendedorId: c.vendedor_id ?? c.vendedorId ?? c.co_ven ?? '',
+        montoUsd: normalizedUsd,
+        montoBs: montoBsVal,
+        tasa: Number(c.tasa || 1),
+        tipoTasa: c.tipo_tasa ?? c.tipoTasa ?? (Array.isArray(c.formas_pago || c.formasPago) ? (c.formas_pago || c.formasPago)[0]?.tipoTasa : undefined) ?? '',
+        tasaPago: Number(c.tasa_pago ?? c.tasaPago ?? c.tasa ?? 1),
+        monedaPago: c.moneda_pago ?? c.monedaPago ?? (montoBsVal <= 0 && String(c.tipo_tasa ?? c.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
+        cuentaId: c.cuenta_id ?? c.cuentaId ?? '',
+        cuentaNombre: c.cuenta_nombre ?? c.cuentaNombre ?? '',
+        descrip: c.descrip ?? '',
+        anulado: Boolean(c.anulado),
+        formasPago: c.formas_pago || c.formasPago || [],
+        documentosAfectados: c.documentos_afectados || c.documentosAfectados || [],
+        fechaSincronizacion: c.fecha_sincronizacion ?? c.fechaSincronizacion
+      };
+    };
+    const mapped = (data || []).map(normalizeColRecord);
     try {
       if (typeof localStorage !== 'undefined') {
         const rawLocalCobs = localStorage.getItem('signum_cxc_collections_v1');
@@ -5801,12 +5853,24 @@ export const getSupabaseProfitCollections = async () => {
         const localCobs = rawLocalCobs ? JSON.parse(rawLocalCobs) : [];
         if (Array.isArray(localCobs) && localCobs.length > 0) {
           const localIds = new Set(localCobs.filter(x => x && x.id).map(x => String(x.id)));
-          const rest = (REAL_PROFIT_COLLECTIONS || []).filter(r => r && !localIds.has(String(r.id)));
-          return [...localCobs, ...rest];
+          const rest = (REAL_PROFIT_COLLECTIONS || []).filter(r => r && !localIds.has(String(r.id))).map(c => ({
+            ...c,
+            vendedorId: c.vendedor_id ?? c.vendedorId ?? c.co_ven ?? '',
+            montoUsd: normalizeProfitCollectionUsd(c)
+          }));
+          return [...localCobs.map(c => ({
+            ...c,
+            vendedorId: c.vendedor_id ?? c.vendedorId ?? c.co_ven ?? '',
+            montoUsd: normalizeProfitCollectionUsd(c)
+          })), ...rest];
         }
       }
     } catch (_) {}
-    return REAL_PROFIT_COLLECTIONS;
+    return (REAL_PROFIT_COLLECTIONS || []).map(c => ({
+      ...c,
+      vendedorId: c.vendedor_id ?? c.vendedorId ?? c.co_ven ?? '',
+      montoUsd: normalizeProfitCollectionUsd(c)
+    }));
   }
 };
 
@@ -6121,6 +6185,7 @@ export const getSupabaseProfitInvoices = async () => {
       formaPago: f.forma_pag ?? f.formaPago,
       totalLitros: Number(f.total_litros ?? f.totalLitros ?? 0),
       totalCajas: Number(f.total_cajas ?? f.totalCajas ?? 0),
+      fechaUltimoCobro: f.fecha_ultimo_cobro ?? f.fechaUltimoCobro ?? f.fecha_cobro_total ?? f.fechaCobroTotal ?? null,
       items: f.items || [],
       observaciones: f.observaciones ?? f.descrip ?? '',
       historialCobros: f.historial_cobros ?? f.historialCobros ?? [],
@@ -6452,6 +6517,16 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     moneda_pago: docData.moneda_pago ?? docData.monedaPago ?? (String(docData.tipo_tasa ?? docData.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
     status: saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE',
     anulada: false,
+    fechaUltimoCobro: saldoUsd <= 0.01
+      ? (docData.fechaUltimoCobro || docData.fecha_ultimo_cobro || nowIso.split('T')[0])
+      : (docData.fechaUltimoCobro || docData.fecha_ultimo_cobro || null),
+    fecha_ultimo_cobro: saldoUsd <= 0.01
+      ? (docData.fecha_ultimo_cobro || docData.fechaUltimoCobro || nowIso.split('T')[0])
+      : (docData.fecha_ultimo_cobro || docData.fechaUltimoCobro || null),
+    totalLitros: Number(docData.totalLitros ?? docData.total_litros ?? 0),
+    total_litros: Number(docData.total_litros ?? docData.totalLitros ?? 0),
+    totalCajas: Number(docData.totalCajas ?? docData.total_cajas ?? 0),
+    total_cajas: Number(docData.total_cajas ?? docData.totalCajas ?? 0),
     formaPago: docData.formaPago || docData.forma_pag || (Number(docData.diasCredito || 0) > 0 ? '03' : '01'),
     forma_pag: docData.formaPago || docData.forma_pag || (Number(docData.diasCredito || 0) > 0 ? '03' : '01'),
     observaciones: docData.observaciones || '',
@@ -9038,6 +9113,111 @@ export const getSupabaseProfitWarehouseTransfersMerged = async () => {
   const remote = await getSupabaseProfitWarehouseTransfers();
   return mergeRemoteAndLocalDocs(remote || [], local, 'id');
 };
+
+// =========================================================================
+// LIQUIDACIONES DE COMISIONES (SINCRONIZADAS CON SUPABASE + FALLBACK LOCAL)
+// =========================================================================
+export const getSupabaseCommissionSettlements = async () => {
+  const localList = getStorageCommissionSettlements();
+  if (!isNetworkOnline()) return localList;
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('commission_settlements').select('*').order('fechaRegistro', { ascending: false }).limit(1000),
+      8000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const remoteList = Array.isArray(data) ? data : [];
+    const mergedMap = new Map();
+    remoteList.forEach((r) => {
+      if (r && r.id) mergedMap.set(String(r.id), r);
+    });
+    localList.forEach((l) => {
+      if (l && l.id && !mergedMap.has(String(l.id))) {
+        mergedMap.set(String(l.id), l);
+      }
+    });
+    const merged = Array.from(mergedMap.values()).sort((a, b) =>
+      String(b?.fechaRegistro || b?.fechaPago || '').localeCompare(String(a?.fechaRegistro || a?.fechaPago || ''))
+    );
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('sm_commission_settlements_v4', JSON.stringify(merged));
+      }
+    } catch (_) {}
+    return merged;
+  } catch (err) {
+    console.warn('[Supabase] Error cargando liquidaciones de comisiones (usando caché local):', err?.message || err);
+    return localList;
+  }
+};
+
+export const saveSupabaseCommissionSettlement = async (settlement) => {
+  const savedLocal = saveStorageCommissionSettlement(settlement);
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('commission_settlement', 'UPDATE', savedLocal);
+    broadcastReconcileChange({
+      tableId: 'commission_settlements',
+      action: 'UPDATE',
+      key: savedLocal.id,
+      item: savedLocal
+    });
+    return savedLocal;
+  }
+  try {
+    const { error } = await withTimeout(
+      supabase.from('commission_settlements').upsert(savedLocal, { onConflict: 'id' }),
+      8000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    broadcastReconcileChange({
+      tableId: 'commission_settlements',
+      action: 'UPDATE',
+      key: savedLocal.id,
+      item: savedLocal
+    });
+    return savedLocal;
+  } catch (err) {
+    console.warn('[Supabase] Encolando liquidación de comisión:', err?.message || err);
+    enqueueSyncAction('commission_settlement', 'UPDATE', savedLocal);
+    return savedLocal;
+  }
+};
+
+export const deleteSupabaseCommissionSettlement = async (id) => {
+  const updatedLocal = deleteStorageCommissionSettlement(id);
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('commission_settlement', 'DELETE', { id });
+    broadcastReconcileChange({
+      tableId: 'commission_settlements',
+      action: 'DELETE',
+      key: id,
+      item: { id }
+    });
+    return updatedLocal;
+  }
+  try {
+    const { error } = await withTimeout(
+      supabase.from('commission_settlements').delete().eq('id', id),
+      8000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    broadcastReconcileChange({
+      tableId: 'commission_settlements',
+      action: 'DELETE',
+      key: id,
+      item: { id }
+    });
+    return updatedLocal;
+  } catch (err) {
+    console.warn('[Supabase] Encolando anulación de liquidación:', err?.message || err);
+    enqueueSyncAction('commission_settlement', 'DELETE', { id });
+    return updatedLocal;
+  }
+};
+
 
 
 

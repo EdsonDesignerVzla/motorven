@@ -619,6 +619,19 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           syncSuccess = true;
           break;
 
+        case 'commission_settlement':
+          if (handlers.supabase?.from) {
+            if (item.action === 'DELETE' && item.data?.id) {
+              const { error } = await handlers.supabase.from('commission_settlements').delete().eq('id', item.data.id);
+              if (error) throw error;
+            } else if (item.data) {
+              const { error } = await handlers.supabase.from('commission_settlements').upsert(item.data, { onConflict: 'id' });
+              if (error) throw error;
+            }
+            syncSuccess = true;
+          }
+          break;
+
         default:
           console.warn(`[OfflineSync] Entidad no reconocida: ${item.entity}`);
           syncSuccess = true; // Quitar de cola para no bloquear

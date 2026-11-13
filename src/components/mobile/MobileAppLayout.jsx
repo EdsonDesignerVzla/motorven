@@ -87,6 +87,10 @@ export default function MobileAppLayout({
   onUsersUpdated,
   onUpdateCurrentUser,
   onSyncProfit,
+  onUpdateSellerTarget,
+  onUpdateGlobalTarget,
+  onUpdateSellerPhoto,
+  onUpdateSellerZone,
   onLogout
 }) {
   const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'cxc' | 'inventario' | 'menu' | <module_id>
@@ -239,6 +243,7 @@ export default function MobileAppLayout({
               clients={clients}
               orders={orders}
               profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
               sales={sales}
               profitSellers={profitSellers}
               config={config}
@@ -423,14 +428,16 @@ export default function MobileAppLayout({
               profitInvoices={profitInvoices}
               profitCollections={profitCollections}
               profitBankAccounts={profitBankAccounts}
+              profitZones={profitZones}
               clients={clients}
               orders={orders}
               config={config}
+              currentUser={currentUser}
               onSyncProfit={onSyncProfit}
-              onUpdateSellerTarget={async () => {}}
-              onUpdateSellerPhoto={async () => {}}
-              onUpdateSellerZone={async () => {}}
-              onUpdateGlobalTarget={async () => {}}
+              onUpdateSellerTarget={onUpdateSellerTarget || (async () => {})}
+              onUpdateSellerPhoto={onUpdateSellerPhoto || (async () => {})}
+              onUpdateSellerZone={onUpdateSellerZone || (async () => {})}
+              onUpdateGlobalTarget={onUpdateGlobalTarget || (async () => {})}
             />
           )}
 

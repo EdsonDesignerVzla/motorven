@@ -15,9 +15,29 @@ import {
   Building
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, round2 } from '../services/formatService';
-import { saveCommissionSettlement } from '../services/storageService';
+import { saveSupabaseCommissionSettlement } from '../services/supabaseService';
 import { generateSellersPDF } from '../services/pdfReportService';
 import SellerAvatar from './SellerAvatar';
+import {
+  matchesSeller,
+  isDocAnulada,
+  resolveInvoiceLitros,
+  resolveInvoiceCajas,
+  normalizeProfitCollectionUsd,
+  calculateSellerCommissionSummary,
+  countDistinctActiveMonths,
+  MOTORVEN_TIER_ORDER,
+  MOTORVEN_COMMISSION_TIERS
+} from '../services/commissionService';
+
+function extractPeriodMonth(dateVal) {
+  if (!dateVal) return '';
+  const str = String(dateVal).trim();
+  const iso = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (iso) return iso[2].padStart(2, '0');
+  const d = new Date(str);
+  return !isNaN(d.getTime()) ? String(d.getUTCMonth() + 1).padStart(2, '0') : '';
+}
 
 export default function SellerCommissionModal({
   seller,
@@ -31,13 +51,12 @@ export default function SellerCommissionModal({
   onSettlementSaved
 }) {
   const [selectedMes, setSelectedMes] = useState(initialMonth || 'ALL');
-  const [comisionVentaPct, setComisionVentaPct] = useState(Number(seller?.comisionPct) || 3.0);
-  const [comisionCobroPct, setComisionCobroPct] = useState(1.5);
-  const [bonoPorLitroUsd, setBonoPorLitroUsd] = useState(0.02); // $0.02 por litro sobre meta
+  const [bonoAdicionalUsd, setBonoAdicionalUsd] = useState(0);
   const [metodoPago, setMetodoPago] = useState('TRANSFERENCIA');
   const [referenciaPago, setReferenciaPago] = useState('');
   const [fechaPago, setFechaPago] = useState(new Date().toISOString().substring(0, 10));
   const [notas, setNotas] = useState('');
+  const [saving, setSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [savedSettlementId, setSavedSettlementId] = useState(null);
 
@@ -46,98 +65,114 @@ export default function SellerCommissionModal({
   const sellerCoVen = (seller?.coVen || seller?.co_ven || seller?.codigo || seller?.id || '').toString().trim();
   const sellerVenDes = (seller?.venDes || seller?.ven_des || seller?.nombre || '').toString().trim();
 
-  const matchesSeller = (fieldVal) => {
-    if (!fieldVal) return false;
-    const str = fieldVal.toString().trim().toLowerCase();
-    const targetCo = sellerCoVen.toLowerCase();
-    const targetDes = sellerVenDes.toLowerCase();
-    if (targetCo && (str === targetCo || str.startsWith(targetCo) || str.includes(targetCo))) return true;
-    if (targetDes && (str.includes(targetDes) || targetDes.includes(str))) return true;
-    return false;
-  };
+  const validInvoicesAll = (invoices || []).filter(f => !isDocAnulada(f));
+  const validCollectionsAll = (collections || [])
+    .filter(c => !c?.anulado)
+    .map(c => ({ ...c, montoUsd: normalizeProfitCollectionUsd(c) }));
 
-  // Filtrado por Asesor
-  const sellerInvoicesAll = (invoices || []).filter(f => matchesSeller(f?.vendedorId || f?.co_ven || f?.vendedor));
-  const sellerCollectionsAll = (collections || []).filter(c => matchesSeller(c?.vendedorId || c?.co_ven || c?.vendedor));
+  // Filtrado estricto por Cobrador
+  const sellerInvoicesAll = validInvoicesAll.filter(f => matchesSeller(seller, f));
+  const sellerCollectionsAll = validCollectionsAll.filter(c => matchesSeller(seller, c));
 
   // Filtrado por Mes/Período
   const sellerInvoices = sellerInvoicesAll.filter(f => {
     if (selectedMes === 'ALL') return true;
-    const raw = f?.fechaEmision || f?.fec_emis || '';
+    const raw = f?.fechaEmision || f?.fec_emis || f?.fecha || '';
     if (!raw) return true;
-    const d = new Date(raw);
-    const m = !isNaN(d.getTime()) ? String(d.getMonth() + 1).padStart(2, '0') : '';
-    return m === selectedMes;
+    return extractPeriodMonth(raw) === selectedMes;
   });
 
   const sellerCollections = sellerCollectionsAll.filter(c => {
     if (selectedMes === 'ALL') return true;
     const raw = c?.fecha || c?.fec_cob || '';
     if (!raw) return true;
-    const d = new Date(raw);
-    const m = !isNaN(d.getTime()) ? String(d.getMonth() + 1).padStart(2, '0') : '';
-    return m === selectedMes;
+    return extractPeriodMonth(raw) === selectedMes;
   });
 
-  const totalLitros = round2(sellerInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros) || 0), 0));
+  const totalLitros = round2(sellerInvoices.reduce((acc, f) => acc + resolveInvoiceLitros(f), 0));
+  const totalCajas = round2(sellerInvoices.reduce((acc, f) => acc + resolveInvoiceCajas(f), 0));
   const totalFacturadoUsd = round2(sellerInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0));
-  const totalCobradoUsd = round2(sellerCollections.reduce((acc, c) => acc + (Number(c?.montoUsd) || 0), 0));
+  const totalCobradoUsd = round2(sellerCollections.reduce((acc, c) => acc + normalizeProfitCollectionUsd(c), 0));
 
+  const activeMonths = countDistinctActiveMonths(validInvoicesAll, validCollectionsAll);
   const metaLitros = Number(seller?.metaLitrosMes) || 3000;
-  const metaEfectiva = selectedMes === 'ALL' ? metaLitros * 10 : metaLitros;
-  const litrosExcedentes = Math.max(0, round2(totalLitros - metaEfectiva));
+  const metaEfectiva = selectedMes === 'ALL' ? metaLitros * Math.max(1, activeMonths) : metaLitros;
 
-  // Cálculos de Comisiones
-  const comisionVentaMontoUsd = round2(totalFacturadoUsd * (comisionVentaPct / 100));
-  const comisionCobroMontoUsd = round2(totalCobradoUsd * (comisionCobroPct / 100));
-  const bonoVolumenMontoUsd = round2(litrosExcedentes * bonoPorLitroUsd);
+  // Regla Oficial MOTORVEN: 0-7d (4%), 8-14d (3%), 15-21d (1%), >21d (0%), Base Sin IVA, Solo 100% Pagados
+  const commissionSummary = calculateSellerCommissionSummary(seller, {
+    invoices: sellerInvoices,
+    collections: validCollectionsAll,
+    tasaBcv
+  });
 
-  const totalComisionUsd = round2(comisionVentaMontoUsd + comisionCobroMontoUsd + bonoVolumenMontoUsd);
+  const basePagadaSinIvaUsd = round2(commissionSummary.basePagadaSinIvaUsd);
+  const comisionDevengadaUsd = round2(commissionSummary.totalComisionUsd);
+  const bonoExtra = round2(Number(bonoAdicionalUsd) || 0);
+  const totalComisionUsd = round2(comisionDevengadaUsd + bonoExtra);
   const totalComisionBs = round2(totalComisionUsd * tasaBcv);
 
+  const currentYear = new Date().getFullYear();
   const getMesLabel = (id) => {
     const map = {
-      'ALL': 'Cierre Anual 2026 (Acumulado)',
-      '01': 'Enero 2026', '02': 'Febrero 2026', '03': 'Marzo 2026',
-      '04': 'Abril 2026', '05': 'Mayo 2026', '06': 'Junio 2026',
-      '07': 'Julio 2026', '08': 'Agosto 2026', '09': 'Septiembre 2026',
-      '10': 'Octubre 2026', '11': 'Noviembre 2026', '12': 'Diciembre 2026'
+      'ALL': `Cierre Anual ${currentYear} (Acumulado)`,
+      '01': `Enero ${currentYear}`, '02': `Febrero ${currentYear}`, '03': `Marzo ${currentYear}`,
+      '04': `Abril ${currentYear}`, '05': `Mayo ${currentYear}`, '06': `Junio ${currentYear}`,
+      '07': `Julio ${currentYear}`, '08': `Agosto ${currentYear}`, '09': `Septiembre ${currentYear}`,
+      '10': `Octubre ${currentYear}`, '11': `Noviembre ${currentYear}`, '12': `Diciembre ${currentYear}`
     };
     return map[id] || id;
   };
 
-  const handleSaveSettlement = () => {
-    const settlementData = {
-      coVen: sellerCoVen,
-      venDes: sellerVenDes,
-      cedula: seller?.cedula || '',
-      periodo: getMesLabel(selectedMes),
-      periodoId: selectedMes,
-      totalLitros,
-      metaLitros: metaEfectiva,
-      totalFacturadoUsd,
-      comisionVentaPct,
-      comisionVentaMontoUsd,
-      totalCobradoUsd,
-      comisionCobroPct,
-      comisionCobroMontoUsd,
-      litrosExcedentes,
-      bonoPorLitroUsd,
-      bonoVolumenMontoUsd,
-      totalComisionUsd,
-      totalComisionBs,
-      tasaBcv,
-      metodoPago,
-      referenciaPago: referenciaPago || 'S/R',
-      fechaPago,
-      notas,
-      estado: 'PAGADA'
-    };
+  const enrichedSellerForPdf = {
+    ...seller,
+    totalLitros,
+    totalCajas,
+    totalVentasUsd: totalFacturadoUsd,
+    totalCobradoUsd,
+    totalSaldoUsd: round2(sellerInvoices.reduce((acc, f) => acc + (Number(f?.saldoUsd) || 0), 0)),
+    basePagadaSinIvaUsd,
+    comisionEstimadaUsd: totalComisionUsd,
+    comisionEstimadaBs: totalComisionBs,
+    comisionTiers: commissionSummary.tiers,
+    metaLitrosMes: metaEfectiva
+  };
 
-    const saved = saveCommissionSettlement(settlementData);
-    setIsSaved(true);
-    setSavedSettlementId(saved.id);
-    if (onSettlementSaved) onSettlementSaved(saved);
+  const handleSaveSettlement = async () => {
+    setSaving(true);
+    try {
+      const settlementData = {
+        coVen: sellerCoVen,
+        venDes: sellerVenDes,
+        cedula: seller?.cedula || '',
+        periodo: getMesLabel(selectedMes),
+        periodoId: selectedMes,
+        totalLitros,
+        metaLitros: metaEfectiva,
+        totalFacturadoUsd,
+        basePagadaSinIvaUsd,
+        documentosPagadosCount: commissionSummary.paidDocsCount,
+        documentosPendientesExcluidosCount: commissionSummary.pendingDocsCount,
+        motorvenTiers: commissionSummary.tiers,
+        bonoAdicionalUsd: bonoExtra,
+        totalCobradoUsd,
+        totalComisionUsd,
+        totalComisionBs,
+        tasaBcv,
+        metodoPago,
+        referenciaPago: referenciaPago || 'S/R',
+        fechaPago,
+        notas,
+        seller: enrichedSellerForPdf,
+        estado: 'PAGADA'
+      };
+
+      const saved = await saveSupabaseCommissionSettlement(settlementData);
+      setIsSaved(true);
+      setSavedSettlementId(saved?.id || settlementData.id);
+      if (onSettlementSaved) onSettlementSaved(saved);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -174,10 +209,10 @@ export default function SellerCommissionModal({
             <SellerAvatar seller={seller} size={46} />
             <div>
               <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                Liquidación de Comisiones: {seller.venDes}
+                Liquidación de Comisiones (Cobrador): {seller.venDes}
               </h3>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Cód: {sellerCoVen} | Período: <strong>{getMesLabel(selectedMes)}</strong>
+                Cód. Cobrador: {sellerCoVen} | Período: <strong>{getMesLabel(selectedMes)}</strong> | Regla MOTORVEN (Sin IVA)
               </div>
             </div>
           </div>
@@ -243,124 +278,108 @@ export default function SellerCommissionModal({
                 onChange={(e) => setSelectedMes(e.target.value)}
                 style={{ fontSize: '0.85rem', fontWeight: 700 }}
               >
-                <option value="ALL">Cierre Anual 2026 (Acumulado)</option>
-                <option value="01">Enero 2026</option>
-                <option value="02">Febrero 2026</option>
-                <option value="03">Marzo 2026</option>
-                <option value="04">Abril 2026</option>
-                <option value="05">Mayo 2026</option>
-                <option value="06">Junio 2026</option>
-                <option value="07">Julio 2026</option>
-                <option value="08">Agosto 2026</option>
-                <option value="09">Septiembre 2026</option>
-                <option value="10">Octubre 2026</option>
-                <option value="11">Noviembre 2026</option>
-                <option value="12">Diciembre 2026</option>
+                <option value="ALL">Cierre Anual {currentYear} (Acumulado)</option>
+                <option value="01">Enero {currentYear}</option>
+                <option value="02">Febrero {currentYear}</option>
+                <option value="03">Marzo {currentYear}</option>
+                <option value="04">Abril {currentYear}</option>
+                <option value="05">Mayo {currentYear}</option>
+                <option value="06">Junio {currentYear}</option>
+                <option value="07">Julio {currentYear}</option>
+                <option value="08">Agosto {currentYear}</option>
+                <option value="09">Septiembre {currentYear}</option>
+                <option value="10">Octubre {currentYear}</option>
+                <option value="11">Noviembre {currentYear}</option>
+                <option value="12">Diciembre {currentYear}</option>
               </select>
             </div>
 
             <div>
               <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block', marginBottom: '4px' }}>
-                % Comisión Venta Directa
+                Documentos 100% Pagados (Base Sin IVA)
               </label>
-              <input
-                type="number"
-                step="0.1"
-                className="form-control"
-                value={comisionVentaPct}
-                onChange={(e) => setComisionVentaPct(parseFloat(e.target.value) || 0)}
-                style={{ fontSize: '0.85rem', fontWeight: 700 }}
-              />
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--semaforo-verde)', fontFamily: 'var(--font-tech)', paddingTop: '6px' }}>
+                {commissionSummary.paidDocsCount} docs ({formatUsd(basePagadaSinIvaUsd)})
+              </div>
             </div>
 
             <div>
               <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block', marginBottom: '4px' }}>
-                % Comisión Cobranza
+                Pendientes Excluidos (Sin Devengo)
               </label>
-              <input
-                type="number"
-                step="0.1"
-                className="form-control"
-                value={comisionCobroPct}
-                onChange={(e) => setComisionCobroPct(parseFloat(e.target.value) || 0)}
-                style={{ fontSize: '0.85rem', fontWeight: 700 }}
-              />
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--motorven-gold)', fontFamily: 'var(--font-tech)', paddingTop: '6px' }}>
+                {commissionSummary.pendingDocsCount} docs con saldo &gt; $0.01
+              </div>
             </div>
 
             <div>
               <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block', marginBottom: '4px' }}>
-                Bono por Litro Excedente ($/L)
+                Bono Adicional Gerencia ($ USD)
               </label>
               <input
                 type="number"
                 step="0.01"
+                min="0"
                 className="form-control"
-                value={bonoPorLitroUsd}
-                onChange={(e) => setBonoPorLitroUsd(parseFloat(e.target.value) || 0)}
+                value={bonoAdicionalUsd}
+                onChange={(e) => setBonoAdicionalUsd(parseFloat(e.target.value) || 0)}
                 style={{ fontSize: '0.85rem', fontWeight: 700 }}
               />
             </div>
           </div>
 
-          {/* CUADRO DESGLOSADO DE LIQUIDACIÓN */}
+          {/* CUADRO DESGLOSADO DE LIQUIDACIÓN MOTORVEN POR DÍAS VENCIDOS */}
           <div className="table-container" style={{ border: '1px solid var(--border-glass)', borderRadius: '12px', overflow: 'hidden' }}>
             <table className="custom-table" style={{ fontSize: '0.84rem' }}>
               <thead>
                 <tr>
-                  <th>CONCEPTO DE COMISIÓN</th>
-                  <th style={{ textAlign: 'right' }}>BASE DE CÁLCULO</th>
-                  <th style={{ textAlign: 'center' }}>% / TARIFA</th>
-                  <th style={{ textAlign: 'right' }}>MONTO ($ USD)</th>
-                  <th style={{ textAlign: 'right' }}>MONTO (BS.)</th>
+                  <th>TRAMO DÍAS VENCIDOS (MOTORVEN • SIN IVA)</th>
+                  <th style={{ textAlign: 'right' }}>BASE PAGADA ($)</th>
+                  <th style={{ textAlign: 'center' }}>% TARIFA</th>
+                  <th style={{ textAlign: 'right' }}>COMISIÓN ($ USD)</th>
+                  <th style={{ textAlign: 'right' }}>COMISIÓN (BS.)</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>
-                    <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>Comisión por Ventas Facturadas</div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{sellerInvoices.length} facturas emitidas en el período</div>
-                  </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>{formatUsd(totalFacturadoUsd)}</td>
-                  <td style={{ textAlign: 'center', fontWeight: 700 }}>{comisionVentaPct}%</td>
-                  <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
-                    {formatUsd(comisionVentaMontoUsd)}
-                  </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
-                    {formatBs(comisionVentaMontoUsd * tasaBcv)}
-                  </td>
-                </tr>
-
-                <tr>
-                  <td>
-                    <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>Comisión por Cobranza Efectiva</div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{sellerCollections.length} recibos de cobro aplicados</div>
-                  </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>{formatUsd(totalCobradoUsd)}</td>
-                  <td style={{ textAlign: 'center', fontWeight: 700 }}>{comisionCobroPct}%</td>
-                  <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
-                    {formatUsd(comisionCobroMontoUsd)}
-                  </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
-                    {formatBs(comisionCobroMontoUsd * tasaBcv)}
-                  </td>
-                </tr>
-
-                <tr>
-                  <td>
-                    <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>Bono por Cumplimiento de Litros</div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      {litrosExcedentes > 0 ? `${formatUnitVe(litrosExcedentes)} L sobre meta de ${formatUnitVe(metaEfectiva, 0)} L` : `Meta de ${formatUnitVe(metaEfectiva, 0)} L no superada`}
-                    </div>
-                  </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUnitVe(litrosExcedentes)} L</td>
-                  <td style={{ textAlign: 'center', fontWeight: 700 }}>{formatUsd(bonoPorLitroUsd)} / L</td>
-                  <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
-                    {formatUsd(bonoVolumenMontoUsd)}
-                  </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
-                    {formatBs(bonoVolumenMontoUsd * tasaBcv)}
-                  </td>
-                </tr>
+                {MOTORVEN_TIER_ORDER.map((tierKey) => {
+                  const meta = MOTORVEN_COMMISSION_TIERS[tierKey];
+                  const t = commissionSummary.tiers?.[tierKey] || { docsCount: 0, baseSinIvaUsd: 0, comisionUsd: 0 };
+                  const docsCnt = Number(t.docsCount ?? t.count ?? 0);
+                  return (
+                    <tr key={tierKey}>
+                      <td>
+                        <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{meta.label}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                          {docsCnt} documento(s) totalmente pagado(s)
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>{formatUsd(t.baseSinIvaUsd)}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 800 }}>{meta.ratePct}%</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
+                        {formatUsd(t.comisionUsd)}
+                      </td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
+                        {formatBs(t.comisionUsd * tasaBcv)}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {bonoExtra > 0 && (
+                  <tr>
+                    <td>
+                      <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>Bono Adicional de Gerencia</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Ajuste especial aprobado</div>
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>{formatUsd(bonoExtra)}</td>
+                    <td style={{ textAlign: 'center', fontWeight: 700 }}>Fijo</td>
+                    <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
+                      {formatUsd(bonoExtra)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
+                      {formatBs(bonoExtra * tasaBcv)}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -493,7 +512,7 @@ export default function SellerCommissionModal({
             <button
               className="btn btn-primary"
               onClick={handleSaveSettlement}
-              disabled={isSaved}
+              disabled={isSaved || saving}
               style={{
                 fontSize: '0.82rem',
                 display: 'flex',
@@ -502,11 +521,11 @@ export default function SellerCommissionModal({
                 background: isSaved ? 'var(--semaforo-verde)' : undefined
               }}
             >
-              <Save size={15} /> {isSaved ? 'Liquidación Guardada' : 'Registrar y Liquidar Comisión'}
+              <Save size={15} /> {saving ? 'Guardando...' : (isSaved ? 'Liquidación Guardada' : 'Registrar y Liquidar Comisión')}
             </button>
             <button
               className="btn btn-print-report"
-              onClick={() => generateSellersPDF({ sellers: [seller], config, currentUser })}
+              onClick={() => generateSellersPDF({ sellers: [enrichedSellerForPdf], config, currentUser })}
               style={{ fontSize: '0.82rem' }}
             >
               <Printer size={15} color="#ffffff" /> Imprimir Reporte

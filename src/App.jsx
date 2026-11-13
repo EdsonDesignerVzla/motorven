@@ -8,6 +8,7 @@ import {
   resolveExchangeRates
 } from './utils/treasuryAccountUtils';
 import { normalizeRateType } from './utils/rateClassificationUtils';
+import { resolveInvoiceLitros, resolveInvoiceCajas, matchesSeller } from './services/commissionService';
 import { ShieldAlert, Smartphone } from 'lucide-react';
 import Navigation from './components/Navigation';
 import HeaderBar from './components/HeaderBar';
@@ -2170,6 +2171,17 @@ function MainApp() {
           const saldoVal = goesToReceivables
             ? Number(newSale.saldoUsd !== undefined && Number(newSale.saldoUsd) > 0 ? newSale.saldoUsd : netoUsd)
             : 0;
+          const resolvedSellerObj = (profitSellers || []).find(s =>
+            matchesSeller(s, saleData.vendedorId || saleData.vendedorCoVen || newSale.vendedor || '')
+          );
+          const resolvedVendedorId =
+            saleData.vendedorCoVen ||
+            resolvedSellerObj?.coVen ||
+            resolvedSellerObj?.co_ven ||
+            saleData.vendedorId ||
+            'OF';
+          const resolvedLitros = resolveInvoiceLitros({ ...saleData, items: newSale.items || saleData.items || [] });
+          const resolvedCajas = resolveInvoiceCajas({ ...saleData, items: newSale.items || saleData.items || [] });
           const previewInv = {
             id: newSale.id,
             factNum: newSale.numeroDoc,
@@ -2180,8 +2192,8 @@ function MainApp() {
             clienteId: newSale.clienteId,
             clienteNombre: newSale.clienteNombre,
             clienteRif: newSale.clienteRif,
-            vendedorId: saleData.vendedorId || 'OF',
-            vendedorNombre: newSale.vendedor,
+            vendedorId: resolvedVendedorId,
+            vendedorNombre: newSale.vendedor || resolvedSellerObj?.venDes || resolvedSellerObj?.nombre || '',
             totBrutoUsd: newSale.subtotalUsd,
             ivaUsd: isNeDoc ? 0 : newSale.ivaUsd,
             totNetoUsd: netoUsd,
@@ -2190,6 +2202,9 @@ function MainApp() {
             diasCredito: newSale.diasCredito || 0,
             fechaEmision: newSale.fechaEmision || newSale.fecha,
             fechaVencimiento: newSale.fechaVencimiento || newSale.fechaEmision || newSale.fecha,
+            fechaUltimoCobro: saldoVal <= 0.01 ? (newSale.fechaEmision || newSale.fecha) : null,
+            totalLitros: resolvedLitros,
+            totalCajas: resolvedCajas,
             tasa: newSale.tasaDolar,
             status: saldoVal <= 0.01 ? 'COBRADA' : 'PENDIENTE',
             items: newSale.items || []
@@ -3010,7 +3025,22 @@ function MainApp() {
   // Registrar Cobro en Cuentas por Cobrar (Parte A) y actualizar Abonos, Tesorería y Flujo de Caja
   const handleRegisterCxcCollection = async (payloadOrParams) => {
     const raw = payloadOrParams || {};
-    const docToSave = raw.updatedDoc || raw.updatedInvoice || null;
+    const rawDocToSave = raw.updatedDoc || raw.updatedInvoice || null;
+    const isNowFullyPaid = rawDocToSave && Number(rawDocToSave.saldoUsd ?? rawDocToSave.saldo_usd ?? 1) <= 0.01;
+    const docToSave = rawDocToSave
+      ? {
+          ...rawDocToSave,
+          ...(isNowFullyPaid
+            ? {
+                fechaUltimoCobro:
+                  raw.fecha ||
+                  raw.collectionPayload?.fecha ||
+                  rawDocToSave.fechaUltimoCobro ||
+                  new Date().toISOString().split('T')[0]
+              }
+            : {})
+        }
+      : null;
     const targetCanon = docToSave ? getEraScopedCanonicalDocKey(docToSave) : '';
     const prevDocSnapshot = docToSave
       ? (profitInvoices || []).find(p =>
@@ -3392,6 +3422,116 @@ function MainApp() {
     );
   }
 
+  const handleUpdateSellerTarget = async (coVen, data) => {
+    setProfitSellers(prev => {
+      const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+      return base.map(s => {
+        const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
+        if (c === coVen.toString().trim()) {
+          return {
+            ...s,
+            metaLitrosMes: Number(data.metaLitrosMes),
+            meta_litros_mes: Number(data.metaLitrosMes),
+            comisionPct: Number(data.comisionPct),
+            comision_pct: Number(data.comisionPct)
+          };
+        }
+        return s;
+      });
+    });
+    try {
+      await updateSupabaseSellerTarget(coVen, data);
+      const fresh = await getSupabaseProfitSellers();
+      if (fresh && fresh.length > 0) setProfitSellers(fresh);
+    } catch (err) {
+      console.warn('[Fuerza de Ventas] Guardado reactivo local. Supabase:', err?.message);
+    }
+  };
+
+  const handleUpdateGlobalTarget = async (totalLitrosMeta) => {
+    const currentList = (profitSellers && profitSellers.length > 0) ? profitSellers : DEFAULT_PROFIT_SELLERS;
+    const activeCodes = currentList.map(s => (s.coVen || s.co_ven || s.id || '').toString().trim()).filter(Boolean);
+    const quotaPerSeller = activeCodes.length > 0 ? parseFloat((totalLitrosMeta / activeCodes.length).toFixed(2)) : totalLitrosMeta;
+
+    setProfitSellers(prev => {
+      const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+      return base.map(s => ({
+        ...s,
+        metaLitrosMes: quotaPerSeller,
+        meta_litros_mes: quotaPerSeller
+      }));
+    });
+
+    try {
+      await updateSupabaseConfig({ metaComercialLitros: totalLitrosMeta });
+      setConfigState(prev => ({ ...prev, metaComercialLitros: totalLitrosMeta }));
+    } catch (e) {
+      console.warn('[Fuerza de Ventas] Error actualizando config global:', e.message);
+    }
+
+    try {
+      await updateSupabaseGlobalSellersTarget(activeCodes, totalLitrosMeta);
+      const fresh = await getSupabaseProfitSellers();
+      if (fresh && fresh.length > 0) setProfitSellers(fresh);
+    } catch (err) {
+      console.warn('[Fuerza de Ventas] Error persistiendo meta distribuida en Supabase:', err?.message);
+    }
+  };
+
+  const handleUpdateSellerPhoto = async (coVen, photoUrl) => {
+    const targetClean = String(coVen || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
+    setProfitSellers(prev => {
+      const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+      return base.map(s => {
+        const c = (s.coVen || s.co_ven || s.id || '').toString().trim().replace(/^usr-seller-/i, '').toLowerCase();
+        if (c === targetClean) {
+          return { ...s, foto: photoUrl || '' };
+        }
+        return s;
+      });
+    });
+    try {
+      await updateSupabaseSellerPhoto(coVen, photoUrl);
+      const fresh = await getSupabaseProfitSellers();
+      if (fresh && fresh.length > 0) setProfitSellers(fresh);
+      const freshUsers = await getSupabaseUsers();
+      if (freshUsers && freshUsers.length > 0) setUsersList(freshUsers);
+    } catch (err) {
+      console.warn('[Fuerza de Ventas] Error actualizando foto asesor:', err?.message);
+    }
+  };
+
+  const handleUpdateSellerZone = async (coVen, zoneData) => {
+    const targetCoZon = typeof zoneData === 'object' ? (zoneData.coZon || zoneData.co_zon || '') : zoneData;
+    const targetZonDes = typeof zoneData === 'object'
+      ? (zoneData.zona || zoneData.zonDes || zoneData.zon_des || '')
+      : ((profitZones || []).find(z => (z.coZon || z.co_zon) === targetCoZon)?.zonDes || targetCoZon);
+
+    setProfitSellers(prev => {
+      const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
+      return base.map(s => {
+        const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
+        if (c === coVen.toString().trim()) {
+          return {
+            ...s,
+            coZon: targetCoZon,
+            co_zon: targetCoZon,
+            zona: targetZonDes
+          };
+        }
+        return s;
+      });
+    });
+
+    try {
+      await updateSupabaseSellerZone(coVen, { coZon: targetCoZon, zona: targetZonDes });
+      const fresh = await getSupabaseProfitSellers();
+      if (fresh && fresh.length > 0) setProfitSellers(fresh);
+    } catch (err) {
+      console.warn('[Fuerza de Ventas] Error actualizando zona de asesor:', err?.message);
+    }
+  };
+
   if (deviceViewMode === 'mobile') {
     return (
       <MobileAppLayout
@@ -3446,6 +3586,10 @@ function MainApp() {
         onUsersUpdated={handleUsersUpdated}
         onUpdateCurrentUser={handleUpdateCurrentUser}
         onSyncProfit={handleSyncProfit}
+        onUpdateSellerTarget={handleUpdateSellerTarget}
+        onUpdateGlobalTarget={handleUpdateGlobalTarget}
+        onUpdateSellerPhoto={handleUpdateSellerPhoto}
+        onUpdateSellerZone={handleUpdateSellerZone}
         onLogout={handleLogout}
       />
     );
@@ -3539,6 +3683,7 @@ function MainApp() {
                 clients={clients}
                 orders={orders}
                 profitInvoices={profitInvoices}
+                profitCollections={profitCollections}
                 sales={sales}
                 profitSellers={profitSellers}
                 config={config}
@@ -3646,118 +3791,11 @@ function MainApp() {
                 orders={orders}
                 config={config}
                 onSyncProfit={handleSyncProfit}
-                onUpdateSellerTarget={async (coVen, data) => {
-                  setProfitSellers(prev => {
-                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
-                    return base.map(s => {
-                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
-                      if (c === coVen.toString().trim()) {
-                        return {
-                          ...s,
-                          metaLitrosMes: Number(data.metaLitrosMes),
-                          meta_litros_mes: Number(data.metaLitrosMes),
-                          comisionPct: Number(data.comisionPct),
-                          comision_pct: Number(data.comisionPct)
-                        };
-                      }
-                      return s;
-                    });
-                  });
-                  try {
-                    await updateSupabaseSellerTarget(coVen, data);
-                    const fresh = await getSupabaseProfitSellers();
-                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
-                  } catch (err) {
-                    console.warn('[Fuerza de Ventas] Guardado reactivo local. Supabase:', err?.message);
-                  }
-                }}
-                onUpdateGlobalTarget={async (totalLitrosMeta) => {
-                  const currentList = (profitSellers && profitSellers.length > 0) ? profitSellers : DEFAULT_PROFIT_SELLERS;
-                  const activeCodes = currentList.map(s => (s.coVen || s.co_ven || s.id || '').toString().trim()).filter(Boolean);
-                  const quotaPerSeller = activeCodes.length > 0 ? parseFloat((totalLitrosMeta / activeCodes.length).toFixed(2)) : totalLitrosMeta;
-
-                  // 1. Actualización optimista inmediata en estado local
-                  setProfitSellers(prev => {
-                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
-                    return base.map(s => ({
-                      ...s,
-                      metaLitrosMes: quotaPerSeller,
-                      meta_litros_mes: quotaPerSeller
-                    }));
-                  });
-
-                  // 2. Persistir en config general
-                  try {
-                    await updateSupabaseConfig({ metaComercialLitros: totalLitrosMeta });
-                    setConfigState(prev => ({ ...prev, metaComercialLitros: totalLitrosMeta }));
-                  } catch (e) {
-                    console.warn('[Fuerza de Ventas] Error actualizando config global:', e.message);
-                  }
-
-                  // 3. Persistir en base de datos Supabase para todos los asesores
-                  try {
-                    await updateSupabaseGlobalSellersTarget(activeCodes, totalLitrosMeta);
-                    const fresh = await getSupabaseProfitSellers();
-                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
-                  } catch (err) {
-                    console.warn('[Fuerza de Ventas] Error persistiendo meta distribuida en Supabase:', err?.message);
-                  }
-                }}
-                onUpdateSellerPhoto={async (coVen, photoUrl) => {
-                  const targetClean = String(coVen || '').trim().replace(/^usr-seller-/i, '').toLowerCase();
-                  setProfitSellers(prev => {
-                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
-                    return base.map(s => {
-                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim().replace(/^usr-seller-/i, '').toLowerCase();
-                      if (c === targetClean) {
-                        return { ...s, foto: photoUrl || '' };
-                      }
-                      return s;
-                    });
-                  });
-                  try {
-                    await updateSupabaseSellerPhoto(coVen, photoUrl);
-                    const fresh = await getSupabaseProfitSellers();
-                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
-                    const freshUsers = await getSupabaseUsers();
-                    if (freshUsers && freshUsers.length > 0) setUsersList(freshUsers);
-                  } catch (err) {
-                    console.warn('[Fuerza de Ventas] Error actualizando foto asesor:', err?.message);
-                  }
-                }}
+                onUpdateSellerTarget={handleUpdateSellerTarget}
+                onUpdateGlobalTarget={handleUpdateGlobalTarget}
+                onUpdateSellerPhoto={handleUpdateSellerPhoto}
+                onUpdateSellerZone={handleUpdateSellerZone}
                 profitZones={profitZones}
-                onUpdateSellerZone={async (coVen, zoneData) => {
-                  const targetCoZon = typeof zoneData === 'object' ? (zoneData.coZon || zoneData.co_zon || '') : zoneData;
-                  const targetZonDes = typeof zoneData === 'object' 
-                    ? (zoneData.zona || zoneData.zonDes || zoneData.zon_des || '') 
-                    : ((profitZones || []).find(z => (z.coZon || z.co_zon) === targetCoZon)?.zonDes || targetCoZon);
-
-                  // 1. Optimistic local state update
-                  setProfitSellers(prev => {
-                    const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
-                    return base.map(s => {
-                      const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
-                      if (c === coVen.toString().trim()) {
-                        return {
-                          ...s,
-                          coZon: targetCoZon,
-                          co_zon: targetCoZon,
-                          zona: targetZonDes
-                        };
-                      }
-                      return s;
-                    });
-                  });
-
-                  // 2. Persist in Supabase and Profit bridge
-                  try {
-                    await updateSupabaseSellerZone(coVen, { coZon: targetCoZon, zona: targetZonDes });
-                    const fresh = await getSupabaseProfitSellers();
-                    if (fresh && fresh.length > 0) setProfitSellers(fresh);
-                  } catch (err) {
-                    console.warn('[Fuerza de Ventas] Error actualizando zona de asesor:', err?.message);
-                  }
-                }}
                 currentUser={currentUser}
               />
             </ModuleErrorBoundary>
