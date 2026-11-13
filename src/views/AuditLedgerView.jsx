@@ -1761,7 +1761,7 @@ export default function AuditLedgerView({
                   Período Operativo • Ejercicio Fiscal en Curso
                 </div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                  Tasa Referencial BCV: Bs. {tasa.toFixed(2)}
+                  Tasa Referencial BCV: {formatBs(tasa)}
                 </div>
               </div>
             </div>

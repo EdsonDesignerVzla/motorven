@@ -39,13 +39,26 @@ import {
   FileSpreadsheet,
   AlertTriangle
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatNumberUs, formatUnitVe, round2 } from '../services/formatService';
+import { doProvidersMatch, normalizeProviderName, normalizeProviderRif, resolveCxpProviderKey } from '../utils/cxpUtils';
+import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber } from '../utils/rateClassificationUtils';
 import ClientsDirectoryModal from '../components/ClientsDirectoryModal';
 import ProfitReceiptModal from '../components/ProfitReceiptModal';
 import ProfitInvoiceModal from '../components/ProfitInvoiceModal';
 import DebtCollectionIntelligenceModal from '../components/DebtCollectionIntelligenceModal';
 import CreditScoreEngineModal from '../components/CreditScoreEngineModal';
-import { generateCashflowPDF, generateAccountsReceivablePDF, generateBankAccountsPDF } from '../services/pdfReportService';
+import { generateCashflowPDF, generateConsolidatedCxcPDF, generateBankAccountsPDF } from '../services/pdfReportService';
+import { consolidateClientReceivables } from '../utils/cxcUtils';
+import {
+  resolveExchangeRates,
+  computeBankBalancesSummary,
+  computeCashDesksSummary,
+  computeTodayCashInflows,
+  matchesCashDesk,
+  matchesBankAccount,
+  applyTreasuryBalanceDelta,
+  validateSufficientTreasuryBalance
+} from '../utils/treasuryAccountUtils';
 
 export default function CashflowView({
   products = [],
@@ -62,6 +75,8 @@ export default function CashflowView({
   onSyncProfit,
   config = {},
   onAddCashMovement,
+  onUpdateCashDesk,
+  onUpdateBankAccount,
   onSaveClient,
   onDeleteClient,
   onApproveClient,
@@ -113,14 +128,18 @@ export default function CashflowView({
   const [movTipo, setMovTipo] = useState('INGRESO');
   const [movConcepto, setMovConcepto] = useState('');
   const [movMontoUsd, setMovMontoUsd] = useState('');
+  const [movMontoBs, setMovMontoBs] = useState('');
+  const [movAccountKind, setMovAccountKind] = useState('CAJA');
+  const [movTargetId, setMovTargetId] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
+  const [movError, setMovError] = useState('');
 
   // Formulario de Cobro CxC
   const [cobroMontoUsd, setCobroMontoUsd] = useState('');
   const [cobroMetodo, setCobroMetodo] = useState('PAGO_MOVIL');
   const [cobroReferencia, setCobroReferencia] = useState('');
 
-  const tasaBcv = Number(config?.tasaDolar) || 827.73;
+  const { tasaBcv } = useMemo(() => resolveExchangeRates(config), [config]);
 
   // Sincronización Profit
   const handleTriggerSync = async () => {
@@ -142,105 +161,40 @@ export default function CashflowView({
     setTimeout(() => setCopiedAccount(null), 2000);
   };
 
-  // Cálculos de saldo de caja
-  const totalIngresosUsd = useMemo(() => {
-    return cashMovements
-      .filter((m) => m.tipo === 'INGRESO')
-      .reduce((acc, m) => acc + (Number(m.montoUsd) || 0), 0);
-  }, [cashMovements]);
+  // Cálculos reales de Cajas Chicas y Entradas del Día
+  const cashDesksSummary = useMemo(
+    () => computeCashDesksSummary(profitCashDesks, config),
+    [profitCashDesks, config]
+  );
 
-  const totalEgresosUsd = useMemo(() => {
-    return cashMovements
-      .filter((m) => m.tipo === 'EGRESO')
-      .reduce((acc, m) => acc + (Number(m.montoUsd) || 0), 0);
-  }, [cashMovements]);
+  const todayInflows = useMemo(
+    () => computeTodayCashInflows(cashMovements),
+    [cashMovements]
+  );
 
-  const saldoCajaUsd = totalIngresosUsd - totalEgresosUsd;
-  const saldoCajaBs = saldoCajaUsd * tasaBcv;
+  const totalIngresosUsd = todayInflows.totalUsd;
+  const totalIngresosHoyBs = todayInflows.totalBs;
 
-  // Cartera CxC Consolidada (Clientes Locales + Facturas Pendientes Supabase)
+  const saldoCajaUsd = profitCashDesks.length > 0
+    ? cashDesksSummary.totalUsd
+    : round2(
+        cashMovements.filter(m => m.tipo === 'INGRESO').reduce((acc, m) => acc + (Number(m.montoUsd ?? m.monto_usd ?? 0)), 0) -
+        cashMovements.filter(m => m.tipo === 'EGRESO').reduce((acc, m) => acc + (Number(m.montoUsd ?? m.monto_usd ?? 0)), 0)
+      );
+  const saldoCajaBs = profitCashDesks.length > 0
+    ? cashDesksSummary.totalBs
+    : round2(saldoCajaUsd * tasaBcv);
+
+  // Cartera CxC Consolidada (Clientes Locales + Facturas Pendientes Supabase + Ventas Crédito)
   const clientesConDeuda = useMemo(() => {
-    const map = new Map();
-    const hoy = new Date();
-
-    // 1. Integrar clientes locales con saldoDeudorUsd
-    (clients || []).forEach(c => {
-      const coCli = (c.id || c.codigo || c.co_cli || '').toString().trim();
-      const rif = (c.rif || '').toString().trim().toUpperCase();
-      const saldoLocal = Number(c.saldoDeudorUsd) || 0;
-      if (saldoLocal > 0.01) {
-        map.set(rif || coCli, {
-          id: c.id || coCli,
-          coCli,
-          nombre: c.nombre || c.razonSocial || 'Cliente General',
-          rif: c.rif || 'J-00000000-0',
-          telefono: c.telefono || c.telefonos || '',
-          ciudad: c.ciudad || '',
-          asesor: c.vendedorAsignado || '01',
-          saldoUsd: saldoLocal,
-          facturasCount: 0,
-          maxDiasMora: 0,
-          tramo: 'VIGENTE'
-        });
-      }
+    return consolidateClientReceivables({
+      clients,
+      profitInvoices,
+      sales,
+      tasaBcv,
+      includePendingDocs: false
     });
-
-    // 2. Integrar facturas de Supabase con saldo pendiente
-    (profitInvoices || []).forEach(inv => {
-      if (inv.anulado || inv.status === 'ANULADA') return;
-      const saldo = Number(inv.saldoUsd || (inv.saldoBs ? inv.saldoBs / (inv.tasa || tasaBcv) : inv.saldo || 0));
-      if (saldo <= 0.01) return;
-
-      const rif = (inv.clienteRif || '').toString().trim().toUpperCase();
-      const coCli = (inv.coCli || inv.co_cli || inv.clienteCod || '').toString().trim();
-      const key = rif || coCli;
-
-      const fEmis = inv.fechaEmision || inv.fec_emis ? new Date(inv.fechaEmision || inv.fec_emis) : hoy;
-      const fVenc = inv.fechaVencimiento || inv.fec_venc ? new Date(inv.fechaVencimiento || inv.fec_venc) : fEmis;
-      const diffMs = hoy - fVenc;
-      const diasVencido = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-
-      if (!map.has(key)) {
-        const clientProfile = (clients || []).find(c => (c.rif && c.rif.toString().trim().toUpperCase() === rif) || (c.id && c.id.toString().trim() === coCli)) || {};
-        map.set(key, {
-          id: clientProfile.id || coCli || key,
-          coCli,
-          nombre: inv.clienteNombre || clientProfile.nombre || clientProfile.razonSocial || 'Cliente General',
-          rif: rif || clientProfile.rif || 'J-00000000-0',
-          telefono: clientProfile.telefono || clientProfile.telefonos || '',
-          ciudad: clientProfile.ciudad || '',
-          asesor: inv.vendedorId || inv.co_ven || clientProfile.vendedorAsignado || '01',
-          saldoUsd: saldo,
-          facturasCount: 1,
-          maxDiasMora: diasVencido,
-          tramo: diasVencido > 30 ? 'OVER_30' : diasVencido > 15 ? '16_30' : diasVencido > 7 ? '8_15' : diasVencido > 0 ? '1_7' : 'VIGENTE'
-        });
-      } else {
-        const existing = map.get(key);
-        existing.saldoUsd = existing.facturasCount === 0 ? saldo : existing.saldoUsd + saldo;
-        existing.facturasCount += 1;
-        if (diasVencido > existing.maxDiasMora) {
-          existing.maxDiasMora = diasVencido;
-          existing.tramo = diasVencido > 30 ? 'OVER_30' : diasVencido > 15 ? '16_30' : diasVencido > 7 ? '8_15' : diasVencido > 0 ? '1_7' : 'VIGENTE';
-        }
-      }
-    });
-
-    return Array.from(map.values()).map(cli => {
-      let rating = 'AAA';
-      if (cli.maxDiasMora > 30) rating = 'D';
-      else if (cli.maxDiasMora > 15) rating = 'C';
-      else if (cli.maxDiasMora > 7) rating = 'B';
-      else if (cli.maxDiasMora > 0) rating = 'A';
-      else rating = 'AA';
-
-      return {
-        ...cli,
-        rating,
-        saldoBs: cli.saldoUsd * tasaBcv
-      };
-    }).sort((a, b) => b.saldoUsd - a.saldoUsd);
-  }, [clients, profitInvoices, tasaBcv]);
+  }, [clients, profitInvoices, sales, tasaBcv]);
 
   const totalDeudaUsd = useMemo(() => {
     return clientesConDeuda.reduce((acc, c) => acc + (Number(c.saldoUsd) || 0), 0);
@@ -305,7 +259,7 @@ export default function CashflowView({
     else if (clean.length === 10 && !clean.startsWith('58')) clean = '58' + clean;
 
     const fechaHoy = new Date().toLocaleDateString('es-VE');
-    const msg = `Estimado(a) *${cli.nombre}* (RIF: ${cli.rif}), le saludamos cordialmente de *${config.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.'}*.\n\nLe compartimos su saldo pendiente al día de hoy *${fechaHoy}*: *$ ${cli.saldoUsd.toFixed(2)} USD* (Bs. ${cli.saldoBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} a Tasa Oficial BCV Bs. ${tasaBcv.toFixed(2)}).\n\nAgradecemos enviarnos su comprobante de pago por este canal para procesar su recibo oficial de caja.\n\n¡Muchas gracias por su preferencia!`;
+    const msg = `Estimado(a) *${cli.nombre}* (RIF: ${cli.rif}), le saludamos cordialmente de *${config.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.'}*.\n\nLe compartimos su saldo pendiente al día de hoy *${fechaHoy}*: *$ ${formatNumberUs(cli.saldoUsd)} USD* (${formatBs(cli.saldoBs)} a Tasa Oficial BCV ${formatBs(tasaBcv)}).\n\nAgradecemos enviarnos su comprobante de pago por este canal para procesar su recibo oficial de caja.\n\n¡Muchas gracias por su preferencia!`;
     const encoded = encodeURIComponent(msg);
     const url = clean ? `https://wa.me/${clean}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
     window.open(url, '_blank');
@@ -348,24 +302,125 @@ export default function CashflowView({
     document.body.removeChild(link);
   };
 
-  // Imprimir reporte oficial de Cartera CxC & Aging
+  // Imprimir reporte oficial consolidado de Cartera CxC por Cliente & Aging
   const handlePrintAgingReport = () => {
-    generateAccountsReceivablePDF({ cxcList: filteredConsolidatedCxc, clients, sellers: profitSellers, config, currentUser });
+    const agg = (pred) => filteredConsolidatedCxc.reduce(
+      (acc, c) => {
+        const part = pred(c);
+        acc.count += Number(part.count || 0);
+        acc.restante += Number(part.restante || 0);
+        acc.monto += Number(part.restante || 0);
+        return acc;
+      },
+      { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+    );
+    const facTotals = agg(c => c.fac || {});
+    const neTotals = agg(c => c.ne || {});
+    const visibleTotal = filteredConsolidatedCxc.reduce(
+      (acc, c) => {
+        acc.count += Number(c.facturasCount || 0);
+        acc.monto += Number(c.totalMonto || c.saldoUsd || 0);
+        acc.abonos += Number(c.totalAbonos || 0);
+        acc.restante += Number(c.totalRestante || c.saldoUsd || 0);
+        if (Number(c.maxDiasMora || 0) > 0) {
+          acc.vencido += Number(c.totalRestante || c.saldoUsd || 0);
+        }
+        return acc;
+      },
+      { count: 0, monto: 0, abonos: 0, restante: 0, vencido: 0, vencidas: 0 }
+    );
+    generateConsolidatedCxcPDF({
+      clientRows: filteredConsolidatedCxc,
+      totals: {
+        fac: facTotals,
+        ne: neTotals,
+        all: visibleTotal
+      },
+      visibleTotals: visibleTotal,
+      tasaBcv,
+      viewMode: 'CLIENTES',
+      filters: {
+        typeLabel: 'Ambos (FAC + NE)',
+        statusLabel: cxcAgingFilter === 'TODOS' ? 'Cartera activa' : cxcAgingFilter,
+        sellerLabel: cxcSellerFilter === 'TODOS' ? 'Todos los vendedores' : cxcSellerFilter,
+        searchTerm: cxcSearch
+      },
+      config,
+      currentUser
+    });
   };
+  const cxpSupplierRows = useMemo(() => {
+    const activeDocs = (profitAccountsPayable || []).filter(d => d && !d.anulado);
+    const hasPayablesSource = activeDocs.length > 0 || (Array.isArray(profitAccountsPayable) && profitAccountsPayable.length > 0);
+    const groupedMap = new Map();
+    const now = new Date();
+
+    if (hasPayablesSource) {
+      activeDocs.forEach(doc => {
+        const key = resolveCxpProviderKey(doc) || normalizeProviderName(doc.provNombre || 'GENERAL') || doc.id;
+        const saldo = Math.max(0, Number(doc.saldoUsd ?? doc.saldo_usd ?? 0));
+        const isPendingDoc = saldo > 0.01;
+        const vencDate = doc.fechaVencimiento || doc.fec_venc ? new Date(doc.fechaVencimiento || doc.fec_venc) : null;
+        const isVencido = Boolean(isPendingDoc && vencDate && !Number.isNaN(vencDate.getTime()) && vencDate < now);
+
+        const matchedSup = (suppliers || []).find(s => doProvidersMatch(s, doc));
+        if (!groupedMap.has(key)) {
+          groupedMap.set(key, {
+            id: key,
+            codigo: matchedSup?.codigo || doc.coProv || doc.co_prov || 'PROV',
+            nombre: doc.provNombre || doc.prov_nombre || matchedSup?.nombre || 'Proveedor',
+            rif: doc.provRif || doc.prov_rif || matchedSup?.rif || doc.coProv || '-',
+            domicilioFiscal: matchedSup?.domicilioFiscal || matchedSup?.direccion || '',
+            email: matchedSup?.email || '',
+            telefono: matchedSup?.telefono || '',
+            saldoPendienteUsd: 0,
+            docsActivos: 0,
+            docsVencidos: 0
+          });
+        }
+        const entry = groupedMap.get(key);
+        entry.saldoPendienteUsd = Number((entry.saldoPendienteUsd + saldo).toFixed(2));
+        if (isPendingDoc) entry.docsActivos += 1;
+        if (isVencido) entry.docsVencidos += 1;
+      });
+    }
+
+    (suppliers || []).forEach(sup => {
+      if (!sup) return;
+      const alreadyIncluded = Array.from(groupedMap.values()).some(g => doProvidersMatch(g, sup));
+      if (!alreadyIncluded) {
+        const key = resolveCxpProviderKey(sup) || sup.id;
+        groupedMap.set(key, {
+          id: sup.id || key,
+          codigo: sup.codigo || 'PROV',
+          nombre: sup.nombre || 'Proveedor',
+          rif: sup.rif || '-',
+          domicilioFiscal: sup.domicilioFiscal || sup.direccion || '',
+          email: sup.email || '',
+          telefono: sup.telefono || '',
+          saldoPendienteUsd: hasPayablesSource ? 0 : Math.max(0, Number(sup.saldoPendienteUsd) || 0),
+          docsActivos: 0,
+          docsVencidos: 0
+        });
+      }
+    });
+
+    return Array.from(groupedMap.values()).sort((a, b) => (b.saldoPendienteUsd || 0) - (a.saldoPendienteUsd || 0));
+  }, [profitAccountsPayable, suppliers]);
+
   const totalCxPUsd = useMemo(() => {
-    return suppliers.reduce((acc, s) => acc + (Number(s.saldoPendienteUsd) || 0), 0);
-  }, [suppliers]);
+    return cxpSupplierRows.reduce((acc, s) => acc + (Number(s.saldoPendienteUsd) || 0), 0);
+  }, [cxpSupplierRows]);
 
   const totalCxPBs = totalCxPUsd * tasaBcv;
 
-  // Cuentas Bancarias Profit
-  const totalBancosBs = useMemo(() => {
-    return profitBankAccounts.reduce((acc, b) => acc + (Number(b.saldoBs) || 0), 0);
-  }, [profitBankAccounts]);
-
-  const totalBancosUsd = useMemo(() => {
-    return tasaBcv > 0 ? totalBancosBs / tasaBcv : 0;
-  }, [totalBancosBs, tasaBcv]);
+  // Cuentas Bancarias Supabase (fórmula unificada)
+  const bankSummary = useMemo(
+    () => computeBankBalancesSummary(profitBankAccounts, config),
+    [profitBankAccounts, config]
+  );
+  const totalBancosBs = bankSummary.totalBs;
+  const totalBancosUsd = bankSummary.totalUsd;
 
   // Cobranzas Profit Filtradas
   const filteredProfitCollections = useMemo(() => {
@@ -421,24 +476,77 @@ export default function CashflowView({
     });
   }, [cashMovements, searchTerm, filterTipo]);
 
-  // Manejador para registrar movimiento manual
-  const handleRegisterMovement = (e) => {
+  // Manejador para registrar movimiento manual (USD o Bs + actualización real de Caja/Banco)
+  const handleRegisterMovement = async (e) => {
     e.preventDefault();
-    if (!movConcepto.trim() || !movMontoUsd || Number(movMontoUsd) <= 0) return;
+    setMovError('');
+    const usdRaw = parseFloat(movMontoUsd) || 0;
+    const bsRaw = parseFloat(movMontoBs) || 0;
+    if (!movConcepto.trim() || (usdRaw <= 0 && bsRaw <= 0)) {
+      setMovError('Ingrese un concepto y un monto mayor a 0 en USD o Bolívares.');
+      return;
+    }
 
-    const montoVal = parseFloat(movMontoUsd);
-    onAddCashMovement({
+    const effectiveUsd = usdRaw > 0 ? round2(usdRaw) : (tasaBcv > 0 ? round2(bsRaw / tasaBcv) : 0);
+    const effectiveBs = bsRaw > 0 ? round2(bsRaw) : round2(effectiveUsd * tasaBcv);
+
+    const targetAccount = movTargetId
+      ? (movAccountKind === 'CAJA'
+          ? profitCashDesks.find(d => matchesCashDesk(d, movTargetId))
+          : profitBankAccounts.find(b => matchesBankAccount(b, movTargetId)))
+      : null;
+
+    if (movTipo === 'EGRESO' && targetAccount) {
+      const check = validateSufficientTreasuryBalance(targetAccount, {
+        deltaUsd: -effectiveUsd,
+        deltaBs: -effectiveBs,
+        label: targetAccount.descripcion || targetAccount.bancoNombre
+      });
+      if (!check.ok) {
+        setMovError(check.message);
+        return;
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const targetId = targetAccount ? (targetAccount.id || targetAccount.coCaja || targetAccount.codCta) : '';
+    const targetLabel = targetAccount
+      ? (targetAccount.descripcion || targetAccount.bancoNombre || targetId)
+      : 'Caja General';
+
+    if (targetAccount) {
+      const deltaUsd = movTipo === 'INGRESO' ? effectiveUsd : -effectiveUsd;
+      const deltaBs = movTipo === 'INGRESO' ? effectiveBs : -effectiveBs;
+      if (movAccountKind === 'CAJA' && onUpdateCashDesk) {
+        await onUpdateCashDesk(applyTreasuryBalanceDelta(targetAccount, { deltaUsd, deltaBs, clampZero: false, nowIso }));
+      } else if (movAccountKind === 'BANCO' && onUpdateBankAccount) {
+        await onUpdateBankAccount(applyTreasuryBalanceDelta(targetAccount, { deltaUsd, deltaBs, clampZero: false, nowIso }));
+      }
+    }
+
+    await onAddCashMovement({
       tipo: movTipo,
       concepto: movConcepto.trim(),
-      montoUsd: montoVal,
-      montoBs: montoVal * tasaBcv,
+      montoUsd: effectiveUsd,
+      monto_usd: effectiveUsd,
+      montoBs: effectiveBs,
+      monto_bs: effectiveBs,
       metodo: movMetodo,
+      metodoPago: movMetodo,
+      cuentaId: targetId,
+      cajaId: movAccountKind === 'CAJA' ? targetId : null,
+      cuentaNombre: targetLabel,
+      cajaOBanco: targetLabel,
+      tasa: tasaBcv,
       usuario: currentUser?.nombre || 'Administración'
     });
 
     setShowMovModal(false);
     setMovConcepto('');
     setMovMontoUsd('');
+    setMovMontoBs('');
+    setMovTargetId('');
+    setMovError('');
   };
 
   // Abrir modal de cobro
@@ -454,8 +562,8 @@ export default function CashflowView({
     e.preventDefault();
     if (!selectedClientForCobro || !cobroMontoUsd || Number(cobroMontoUsd) <= 0) return;
 
-    const abonado = parseFloat(cobroMontoUsd);
-    const nuevoSaldo = Math.max(0, Number(selectedClientForCobro.saldoDeudorUsd) - abonado);
+    const abonado = round2(parseFloat(cobroMontoUsd));
+    const nuevoSaldo = round2(Math.max(0, Number(selectedClientForCobro.saldoDeudorUsd) - abonado));
 
     onSaveClient({ ...selectedClientForCobro, saldoDeudorUsd: nuevoSaldo });
 
@@ -464,7 +572,7 @@ export default function CashflowView({
       tipo: 'INGRESO',
       concepto: `Abono CxC - ${selectedClientForCobro.nombre}${refText}`,
       montoUsd: abonado,
-      montoBs: abonado * tasaBcv,
+      montoBs: round2(abonado * tasaBcv),
       metodo: cobroMetodo,
       usuario: currentUser?.nombre || 'Caja Cobranzas'
     });
@@ -572,6 +680,8 @@ export default function CashflowView({
               {!compactMode && <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>TIPO</th>}
               <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>CONCEPTO / MOTIVO</th>
               <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>MÉTODO</th>
+              <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem', textAlign: 'center' }}>CLASIF. TASA</th>
+              <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem', textAlign: 'right' }}>TASA PAGO</th>
               {!compactMode && <th style={{ fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>RESPONSABLE</th>}
               <th style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>MONTO ($ USD)</th>
               <th style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.72rem' }}>MONTO (BS.)</th>
@@ -580,7 +690,7 @@ export default function CashflowView({
           <tbody>
             {filteredMovements.length === 0 ? (
               <tr>
-                <td colSpan={compactMode ? 5 : 7} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                <td colSpan={compactMode ? 7 : 9} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
                   No se encontraron movimientos de caja registrados.
                 </td>
               </tr>
@@ -589,6 +699,10 @@ export default function CashflowView({
                 const isIngreso = mov.tipo === 'INGRESO';
                 const fechaObj = new Date(mov.fecha || new Date());
                 const horaFormatted = fechaObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const mRateType = resolveRecordRateType(mov, 'BCV');
+                const mRateMeta = resolveRateMeta(mRateType, 'BCV');
+                const mTasa = resolveEffectiveRateNumber(mov, 0);
+                const hasBsAmount = Number(mov.montoBs || 0) > 0;
 
                 return (
                   <tr key={mov.id}>
@@ -627,6 +741,26 @@ export default function CashflowView({
                       </span>
                     </td>
 
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '0.14rem 0.45rem',
+                        borderRadius: '6px',
+                        fontSize: '0.66rem',
+                        fontWeight: 800,
+                        fontFamily: 'var(--font-code)',
+                        background: mRateMeta.bg,
+                        color: mRateMeta.color,
+                        border: `1px solid ${mRateMeta.border}`
+                      }}>
+                        {mRateMeta.badgeText}
+                      </span>
+                    </td>
+
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.74rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                      {mRateType === 'USD' ? 'Divisa USD' : (mTasa > 0 ? formatBs(mTasa) : '—')}
+                    </td>
+
                     {!compactMode && (
                       <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                         {mov.usuario || 'Ana Rivas'}
@@ -640,7 +774,9 @@ export default function CashflowView({
                     </td>
 
                     <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
-                      {formatBs(mov.montoBs || ((mov.montoUsd || 0) * tasaBcv))}
+                      {mRateType === 'USD' && !hasBsAmount
+                        ? 'Divisa USD'
+                        : formatBs(hasBsAmount ? mov.montoBs : ((mov.montoUsd || 0) * (mTasa > 0 ? mTasa : tasaBcv)))}
                     </td>
                   </tr>
                 );
@@ -650,7 +786,7 @@ export default function CashflowView({
           {filteredMovements.length > 0 && (
             <tfoot>
               <tr style={{ background: 'var(--bg-table-header)', fontWeight: 800, borderTop: '2px solid var(--border-glass)' }}>
-                <td colSpan={compactMode ? 3 : 5} style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem', textTransform: 'uppercase' }}>
+                <td colSpan={compactMode ? 5 : 7} style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem', textTransform: 'uppercase' }}>
                   SALDO NETO EN CAJA:
                 </td>
                 <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)', fontSize: '0.95rem', color: saldoCajaUsd >= 0 ? 'var(--semaforo-verde)' : 'var(--motorven-red)' }}>
@@ -1512,10 +1648,10 @@ export default function CashflowView({
               Volumen de Lubricantes
             </div>
             <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: 'var(--motorven-navy-light)', marginTop: '2px' }}>
-              {totalLitros?.toLocaleString('es-VE', { minimumFractionDigits: 1 })} L
+              {formatUnitVe(totalLitros || 0, 2)} L
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              ≈ {(totalLitros / 11.35).toFixed(1)} Cajas Eq.
+              ≈ {formatUnitVe((totalLitros || 0) / 11.35, 2)} Cajas Eq.
             </div>
           </div>
 
@@ -1650,7 +1786,7 @@ export default function CashflowView({
                           </span>
                         </td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>
-                          {fac.totalLitros ? `${fac.totalLitros.toFixed(1)} L` : '-'}
+                          {fac.totalLitros ? `${formatUnitVe(fac.totalLitros, 2)} L` : '-'}
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
                           {formatUsd(fac.totNetoUsd)}
@@ -1848,7 +1984,7 @@ export default function CashflowView({
               {formatUsd(totalIngresosUsd)}
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-              {formatBs(totalIngresosUsd * tasaBcv)}
+              {formatBs(totalIngresosHoyBs || totalIngresosUsd * tasaBcv)}
             </div>
           </div>
         </div>
@@ -2028,7 +2164,7 @@ export default function CashflowView({
             )}
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>BCV:</span>
             <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--motorven-gold)', fontFamily: 'var(--font-tech)', background: 'var(--semaforo-amarillo-bg)', padding: '3px 8px', borderRadius: '6px', border: '1px solid rgba(217, 119, 6, 0.3)' }}>
-              Bs. {tasaBcv.toFixed(2)}
+              {formatBs(tasaBcv)}
             </span>
           </div>
         </div>
@@ -2092,25 +2228,30 @@ export default function CashflowView({
                 </tr>
               </thead>
               <tbody>
-                {suppliers.length === 0 ? (
+                {cxpSupplierRows.length === 0 ? (
                   <tr>
                     <td colSpan="7" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
-                      No existen proveedores registrados.
+                      No existen proveedores ni compromisos CxP registrados.
                     </td>
                   </tr>
                 ) : (
-                  suppliers.map((sup) => {
+                  cxpSupplierRows.map((sup) => {
                     const pendienteUsd = Number(sup.saldoPendienteUsd) || 0;
+                    const hasOverdue = Number(sup.docsVencidos || 0) > 0;
                     return (
                       <tr key={sup.id}>
                         <td><strong style={{ fontFamily: 'var(--font-code)' }}>{sup.codigo || 'PROV'}</strong></td>
                         <td>
                           <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{sup.nombre}</div>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{sup.email || sup.telefono}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            {sup.docsActivos > 0
+                              ? `${sup.docsActivos} doc(s) pendiente(s)${hasOverdue ? ` • ${sup.docsVencidos} vencido(s)` : ''}`
+                              : (sup.email || sup.telefono || 'Sin documentos pendientes')}
+                          </div>
                         </td>
                         <td><code style={{ fontFamily: 'var(--font-code)', fontSize: '0.75rem' }}>{sup.rif}</code></td>
                         <td style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          {sup.domicilioFiscal || sup.direccion}
+                          {sup.domicilioFiscal || sup.direccion || '-'}
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: pendienteUsd > 0 ? 'var(--motorven-red)' : 'var(--semaforo-verde)' }}>
                           {formatUsd(pendienteUsd)}
@@ -2119,8 +2260,8 @@ export default function CashflowView({
                           {formatBs(pendienteUsd * tasaBcv)}
                         </td>
                         <td style={{ textAlign: 'center' }}>
-                          <span className={`badge ${pendienteUsd > 0 ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.68rem' }}>
-                            {pendienteUsd > 0 ? 'Pendiente' : 'Solvente'}
+                          <span className={`badge ${pendienteUsd > 0 ? (hasOverdue ? 'badge-danger' : 'badge-warning') : 'badge-success'}`} style={{ fontSize: '0.68rem' }}>
+                            {pendienteUsd <= 0.01 ? 'Solvente' : hasOverdue ? 'Vencida' : 'Pendiente'}
                           </span>
                         </td>
                       </tr>
@@ -2242,6 +2383,40 @@ export default function CashflowView({
                 </div>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Tipo de Cuenta</label>
+                  <select
+                    className="form-control"
+                    value={movAccountKind}
+                    onChange={(e) => {
+                      setMovAccountKind(e.target.value);
+                      setMovTargetId('');
+                    }}
+                  >
+                    <option value="CAJA">Caja Operativa</option>
+                    <option value="BANCO">Cuenta Bancaria</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">{movAccountKind === 'CAJA' ? 'Caja Destino / Origen' : 'Banco Destino / Origen'}</label>
+                  <select
+                    className="form-control"
+                    value={movTargetId}
+                    onChange={(e) => setMovTargetId(e.target.value)}
+                  >
+                    <option value="">-- Caja General (Solo registro) --</option>
+                    {(movAccountKind === 'CAJA' ? profitCashDesks : profitBankAccounts).map(acc => {
+                      const accId = acc.id || acc.coCaja || acc.codCta;
+                      const accLabel = movAccountKind === 'CAJA'
+                        ? `${acc.coCaja || acc.co_caja} - ${acc.descripcion}`
+                        : `${acc.codCta || acc.cod_cta} - ${acc.bancoNombre || acc.banco_nombre}`;
+                      return <option key={accId} value={accId}>{accLabel}</option>;
+                    })}
+                  </select>
+                </div>
+              </div>
+
               <div className="form-group" style={{ marginBottom: '1.1rem' }}>
                 <label className="form-label">Concepto / Motivo *</label>
                 <input
@@ -2256,29 +2431,55 @@ export default function CashflowView({
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.1rem' }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Monto ($ USD) *</label>
+                  <label className="form-label">Monto ($ USD)</label>
                   <input
                     type="number"
                     step="0.01"
-                    min="0.01"
+                    min="0"
                     className="form-control"
                     placeholder="0.00"
                     value={movMontoUsd}
-                    onChange={(e) => setMovMontoUsd(e.target.value)}
-                    required
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setMovMontoUsd(raw);
+                      const val = parseFloat(raw);
+                      if (raw === '' || isNaN(val) || val <= 0) {
+                        setMovMontoBs('');
+                      } else {
+                        setMovMontoBs((val * tasaBcv).toFixed(2));
+                      }
+                    }}
                   />
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Equivalente (Bs.)</label>
+                  <label className="form-label">Monto en Bolívares (Bs.)</label>
                   <input
-                    type="text"
+                    type="number"
+                    step="0.01"
+                    min="0"
                     className="form-control"
-                    value={movMontoUsd ? formatBs(parseFloat(movMontoUsd || 0) * tasaBcv) : 'Bs. 0,00'}
-                    readOnly
-                    style={{ background: 'var(--bg-tertiary)', color: 'var(--motorven-gold)', fontWeight: 700 }}
+                    placeholder="0.00"
+                    value={movMontoBs}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setMovMontoBs(raw);
+                      const valBs = parseFloat(raw);
+                      if (raw === '' || isNaN(valBs) || valBs <= 0) {
+                        setMovMontoUsd('');
+                      } else if (tasaBcv > 0) {
+                        setMovMontoUsd((valBs / tasaBcv).toFixed(2));
+                      }
+                    }}
+                    style={{ fontWeight: 700 }}
                   />
                 </div>
               </div>
+
+              {movError && (
+                <div style={{ marginBottom: '1rem', padding: '0.65rem 0.85rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: '#ef4444', fontSize: '0.8rem', fontWeight: 600 }}>
+                  {movError}
+                </div>
+              )}
 
               <div className="form-group" style={{ marginBottom: '1.5rem' }}>
                 <label className="form-label">Método de Pago</label>

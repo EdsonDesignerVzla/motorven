@@ -4,6 +4,7 @@ import {
   validateCedula,
   roundTo2Decimals,
   calculateFiscalTaxes,
+  resolveConfigIgtfOptions,
   generateFiscalControlNumber,
   generateVatRetentionVoucherNumber,
   generateSeniatVatRetentionTxt,
@@ -15,11 +16,22 @@ import {
   formatFiscalTicketText,
   calculateFiscalHashSha256,
   getCanonicalDocKey,
+  isLegacyPreNovInvoice,
+  getEraScopedCanonicalDocKey,
   dedupeCanonicalDocs,
   getNextInvoiceCorrelativo,
-  getNextNotaEntregaCorrelativo
+  commitInvoiceCorrelativo,
+  setInvoiceCorrelativo,
+  getNextNotaEntregaCorrelativo,
+  getNextCxcMovementCorrelativo,
+  commitCxcMovementCorrelativo,
+  setCxcMovementCorrelativo,
+  clearCxcMovementCorrelativoForce,
+  getCxcMovementReportCorrelativo,
+  setCxcMovementReportCorrelativo,
+  commitCxcMovementReportCorrelativo
 } from '../services/fiscalService.js';
-import { formatBs, formatUsd } from '../services/formatService.js';
+import { formatBs, formatNumberUs, formatNumberVe, formatUnitVe, formatUsd, round2 } from '../services/formatService.js';
 
 console.log('--- INICIANDO BATERÍA DE PRUEBAS DE CUMPLIMIENTO FISCAL SENIAT ---');
 
@@ -120,6 +132,32 @@ assert.strictEqual(resBs.igtfBs, 0);
 assert.strictEqual(resBs.retencionIvaUsd, 0);
 assert.strictEqual(resBs.totalFacturaUsd, 314.4);
 console.log('  ✓ Pruebas de exención de IGTF en transacciones en Bolívares superadas.');
+
+// Caso C: Respeto de esSujetoPasivoEspecial / igtfPorcentaje configurable
+const optDisabledSpe = resolveConfigIgtfOptions({ esSujetoPasivoEspecial: false, igtfPorcentaje: 3 });
+assert.strictEqual(optDisabledSpe.esSujetoPasivoEspecial, false);
+const resNoSpe = calculateFiscalTaxes({
+  items,
+  metodoPago: 'EFECTIVO_USD',
+  condicionPago: 'CONTADO',
+  tasaBcv,
+  ...optDisabledSpe
+});
+assert.strictEqual(resNoSpe.igtfUsd, 0, 'Con esSujetoPasivoEspecial=false no debe cobrar IGTF');
+assert.strictEqual(resNoSpe.totalFacturaUsd, 314.4);
+
+const optZeroIgtf = resolveConfigIgtfOptions({ igtfPorcentaje: 0 });
+assert.strictEqual(optZeroIgtf.esSujetoPasivoEspecial, false);
+assert.strictEqual(optZeroIgtf.porcentajeIgtf, 0);
+const resZeroIgtf = calculateFiscalTaxes({
+  items,
+  metodoPago: 'EFECTIVO_USD',
+  condicionPago: 'CONTADO',
+  tasaBcv,
+  ...optZeroIgtf
+});
+assert.strictEqual(resZeroIgtf.igtfUsd, 0, 'Con igtfPorcentaje=0 no debe cobrar IGTF');
+console.log('  ✓ Pruebas de configuración IGTF / Sujeto Pasivo Especial superadas.');
 
 // 5. Formatos de Correlativo y Número de Control
 console.log('5. Verificando Número de Control (00-XXXXXX)...');
@@ -396,12 +434,109 @@ try {
     [{ id: 'NE-002228', factNum: '002228', tipoDoc: 'NOTA_ENTREGA' }]
   );
   assert.strictEqual(nextNe, 'NE-002229', 'Debe avanzar correlativo NE evitando colisión con sales + invoices');
+
+  // Fijación manual de correlativo (ej. 000009) con histórico Profit 16..499 presente en BD
+  const legacyInvoices = Array.from({ length: 484 }, (_, idx) => ({
+    id: `fac-${idx + 16}`,
+    factNum: idx + 16,
+    tipoDoc: 'FACTURA',
+    fec_emis: '2026-03-10T00:00:00.000Z'
+  }));
+  const novInvoices = [
+    { id: '000001', numeroDoc: '000001', tipoDoc: 'FACTURA', fechaEmision: '2026-11-12T19:08:44.341Z' },
+    { id: '000008', numeroDoc: '000008', tipoDoc: 'FACTURA', fechaEmision: '2026-11-12T21:00:42.571Z' }
+  ];
+  setInvoiceCorrelativo('000009');
+  const manualNext = getNextInvoiceCorrelativo(novInvoices, legacyInvoices);
+  assert.strictEqual(manualNext, '000009', 'Fijar N° Factura 000009 debe mantenerse en 000009 sin saltar a 000500');
+  commitInvoiceCorrelativo('000009');
+  const afterCommit = getNextInvoiceCorrelativo(
+    [...novInvoices, { id: '000009', numeroDoc: '000009', tipoDoc: 'FACTURA', fechaEmision: '2026-11-13T06:00:00.000Z' }],
+    legacyInvoices
+  );
+  assert.strictEqual(afterCommit, '000010', 'Luego de emitir 000009 debe continuar en 000010');
+
+  // Correlativos de Movimientos y Reportes CxC (incluyendo fijación manual e historial previo)
+  const legacyCollections = [{ id: 'cob-3864', cobNum: 3864, fecha: '2026-10-23T00:00:00+00:00' }];
+  clearCxcMovementCorrelativoForce();
+  assert.strictEqual(
+    getNextCxcMovementCorrelativo(legacyCollections, []),
+    '000001',
+    'La serie nueva de movimientos CxC debe iniciar en 000001 ignorando IDs Profit de octubre'
+  );
+  assert.strictEqual(setCxcMovementCorrelativo('000025'), '000025');
+  assert.strictEqual(getNextCxcMovementCorrelativo(legacyCollections, []), '000025');
+  commitCxcMovementCorrelativo('000025');
+  assert.strictEqual(
+    getNextCxcMovementCorrelativo(
+      [...legacyCollections, { id: 'cob-mov-000025', cobNum: '000025', fecha: '2026-11-13T10:00:00.000Z' }],
+      []
+    ),
+    '000026',
+    'Después de confirmar movimiento 000025 debe continuar en 000026'
+  );
+
+  assert.strictEqual(setCxcMovementReportCorrelativo(12), '000012');
+  assert.strictEqual(getCxcMovementReportCorrelativo(), '000012');
+  assert.strictEqual(commitCxcMovementReportCorrelativo('000012'), '000013');
+
+  // Separación de serie histórica (< 2026-11-01) vs serie nueva (>= 2026-11-01)
+  const legacy16 = { id: 'fac-16', factNum: '16', tipoDoc: 'FACTURA', fec_emis: '2026-02-10T00:00:00.000Z', clienteNombre: 'Cliente Febrero' };
+  const modern16 = { id: '000016', factNum: '000016', tipoDoc: 'FACTURA', fec_emis: '2026-11-13T14:00:00.000Z', clienteNombre: 'Cliente Noviembre' };
+  assert.strictEqual(isLegacyPreNovInvoice(legacy16), true);
+  assert.strictEqual(isLegacyPreNovInvoice(modern16), false);
+  assert.notStrictEqual(
+    getEraScopedCanonicalDocKey(legacy16),
+    getEraScopedCanonicalDocKey(modern16),
+    'La clave canónica con era debe distinguir fac-16 de febrero contra 000016 de noviembre'
+  );
+  const eraDeduped = dedupeCanonicalDocs([legacy16, modern16]);
+  assert.strictEqual(eraDeduped.length, 2, 'dedupeCanonicalDocs NO debe fusionar fac-16 antiguo con 000016 de noviembre');
+
+  // Sin override manual activo, avanzar de 000015 a 000016 sin saltar al histórico 500+
+  memStore.clear();
+  const novWith15 = [
+    ...novInvoices,
+    { id: '000015', numeroDoc: '000015', tipoDoc: 'FACTURA', fechaEmision: '2026-11-13T12:00:00.000Z' }
+  ];
+  assert.strictEqual(
+    getNextInvoiceCorrelativo(novWith15, legacyInvoices),
+    '000016',
+    'Debe avanzar exactamente a 000016 ignorando fac-16..fac-499 de febrero-octubre'
+  );
+  assert.strictEqual(
+    getNextInvoiceCorrelativo(
+      [...novWith15, modern16],
+      legacyInvoices
+    ),
+    '000017',
+    'Después de 000016 debe avanzar a 000017 sin colisionar con fac-17'
+  );
 } finally {
   if (typeof prevLocalStorage === 'undefined') {
     delete globalThis.localStorage;
   }
 }
 console.log('  ✓ Clave canónica, deduplicación y correlativos anti-colisión verificados.');
+
+// 14. Precisión simétrica y formato estricto a 2 decimales (USD y Bs)
+console.log('14. Verificando redondeo y formato estricto a 2 decimales...');
+assert.strictEqual(round2(1.005), 1.01);
+assert.strictEqual(round2(-1.005), -1.01);
+assert.strictEqual(round2(10.1 + 20.2), 30.3);
+assert.strictEqual(Object.is(round2(-0.0001), 0), true, 'Nunca debe devolver -0');
+assert.strictEqual(formatUsd(50), '$ 50.00');
+assert.strictEqual(formatUsd(-0.0001), '$ 0.00');
+assert.strictEqual(formatUsd(1000), '$ 1,000.00');
+assert.strictEqual(formatUsd(1234.567), '$ 1,234.57');
+assert.strictEqual(formatNumberUs(1000), '1,000.00');
+assert.strictEqual(formatBs(50), 'Bs. 50,00');
+assert.strictEqual(formatBs(-0.0001), 'Bs. 0,00');
+assert.strictEqual(formatBs(1000), 'Bs. 1.000,00');
+assert.strictEqual(formatNumberVe(1000), '1.000,00');
+assert.strictEqual(formatUnitVe(1234.5), '1.234,50');
+assert.strictEqual(formatUnitVe(1234.6, 0), '1.235');
+console.log('  ✓ Precisión y formato americano (USD) / venezolano (Bs. y unidades) verificados.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS PRUEBAS UNITARIAS FISCALES PASARON EXITOSAMENTE (100% OK) ---');

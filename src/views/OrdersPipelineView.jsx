@@ -33,6 +33,7 @@ import {
 import {
   formatUsd,
   formatBs,
+  formatUnitVe,
   resolveProductUnit,
   resolveProductLitersPerUnit,
   getProductWarehouseStocks,
@@ -423,10 +424,10 @@ export default function OrdersPipelineView({
               </span>
             </div>
             <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, marginTop: '2px', color: 'var(--motorven-gold)' }}>
-              {totalLitrosEnCola.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+              {formatUnitVe(totalLitrosEnCola, 2)} L
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-              ≈ {totalCajasEnCola.toFixed(0)} Cajas (12L) equivalentes
+              ≈ {formatUnitVe(totalCajasEnCola, 0)} Cajas (12L) equivalentes
             </div>
           </div>
         </div>
@@ -755,9 +756,9 @@ export default function OrdersPipelineView({
                           </div>
                         </td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)', fontWeight: 700 }}>
-                          {Number(order.totalLitros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                          {formatUnitVe(order.totalLitros || 0, 2)} L
                           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 400 }}>
-                            {Number(order.totalCajas || 0).toFixed(0)} Cajas
+                            {formatUnitVe(order.totalCajas || 0, 0)} Cajas
                           </div>
                         </td>
                         <td style={{ textAlign: 'right' }}>
@@ -891,11 +892,11 @@ export default function OrdersPipelineView({
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', margin: '0.75rem 0', background: 'var(--bg-glass-accent)', padding: '0.65rem', borderRadius: '8px' }}>
                       <div>
                         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>VOLUMEN</div>
-                        <div style={{ fontWeight: 800, color: '#3b82f6', fontSize: '0.9rem' }}>{zone.totalLitros.toFixed(0)} L</div>
+                        <div style={{ fontWeight: 800, color: '#3b82f6', fontSize: '0.9rem' }}>{formatUnitVe(zone.totalLitros, 2)} L</div>
                       </div>
                       <div>
                         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>BULTOS</div>
-                        <div style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '0.9rem' }}>{zone.totalCajas} Cajas</div>
+                        <div style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '0.9rem' }}>{formatUnitVe(zone.totalCajas, 0)} Cajas</div>
                       </div>
                       <div>
                         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>COBRO RUTA</div>
@@ -1074,7 +1075,7 @@ export default function OrdersPipelineView({
                             <td style={{ color: 'var(--text-muted)' }}>{resolveProductUnit(it, 'Caja')}</td>
                             <td style={{ textAlign: 'right', fontWeight: 700 }}>{it.cantidad}</td>
                             <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>
-                              {Number(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1))).toFixed(1)} L
+                              {formatUnitVe(it.litrosTotales || (it.cantidad * (it.litrosUnitarios || 1)), 2)} L
                             </td>
                             <td style={{ textAlign: 'right' }}>{formatUsd(it.precioUnitarioUsd)}</td>
                             <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--semaforo-verde)' }}>
@@ -1093,14 +1094,14 @@ export default function OrdersPipelineView({
                 <div className="clients-info-card" style={{ borderLeft: '4px solid var(--motorven-gold)' }}>
                   <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>TOTAL LITROS DESPACHO</span>
                   <div style={{ fontSize: '1.15rem', fontWeight: 900, fontFamily: 'var(--font-tech)', color: 'var(--motorven-gold)' }}>
-                    {Number(selectedOrder.totalLitros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                    {formatUnitVe(selectedOrder.totalLitros || 0, 2)} L
                   </div>
                 </div>
 
                 <div className="clients-info-card" style={{ borderLeft: '4px solid var(--motorven-navy-light)' }}>
                   <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>CAJAS ESTIMADAS</span>
                   <div style={{ fontSize: '1.15rem', fontWeight: 900, fontFamily: 'var(--font-tech)', color: 'var(--text-primary)' }}>
-                    {Number(selectedOrder.totalCajas || 0).toFixed(0)} Cajas
+                    {formatUnitVe(selectedOrder.totalCajas || 0, 0)} Cajas
                   </div>
                 </div>
 
@@ -1682,9 +1683,9 @@ export default function OrdersPipelineView({
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed var(--border-glass)' }}>
           <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.75rem', color: 'var(--motorven-gold)', fontWeight: 700 }}>
-            {Number(order.totalLitros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+            {formatUnitVe(order.totalLitros || 0, 2)} L
             <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 400, marginLeft: '3px' }}>
-              ({Number(order.totalCajas || 0).toFixed(0)} cj)
+              ({formatUnitVe(order.totalCajas || 0, 0)} cj)
             </span>
           </div>
 

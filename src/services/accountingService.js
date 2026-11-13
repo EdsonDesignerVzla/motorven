@@ -163,12 +163,12 @@ export const CHART_OF_ACCOUNTS = [
   { codigo: '6.01.09.004', nombre: 'Gastos Varios', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'MISCELANEOS' },
 ];
 
+import { round2 } from './formatService.js';
+
 export const CHART_OF_ACCOUNTS_MAP = CHART_OF_ACCOUNTS.reduce((acc, item) => {
   acc[item.codigo] = item;
   return acc;
 }, {});
-
-const round2 = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 export function resolveCashAccount(desk) {
   if (!desk) return { codigo: '1.01.01.002', nombre: 'Caja Divisas' };
@@ -309,9 +309,56 @@ export function generateAccountingEntries({
   const entries = [];
   let seq = 1001;
 
+  // Indexar facturas que poseen cobro registrado en profit_collections para no tratarlas como caja directa
+  const collectedDocKeys = new Set();
+  profitCollections.forEach((cob) => {
+    if (!cob || cob.anulado || cob.anulada) return;
+    if (cob.factNum) collectedDocKeys.add(String(cob.factNum).trim().toUpperCase());
+    if (cob.docOrig) collectedDocKeys.add(String(cob.docOrig).trim().toUpperCase());
+    const affected = cob.documentosAfectados || cob.documentos_afectados || [];
+    if (Array.isArray(affected)) {
+      affected.forEach((d) => {
+        const ref = String(d?.nroDoc || d?.factNum || d?.docNum || d?.id || '').trim().toUpperCase();
+        if (ref) collectedDocKeys.add(ref);
+      });
+    }
+  });
+
+  // Indexar movimientos de caja provenientes de ventas POS/Caja al contado ("Cobro Venta <num>")
+  const cashSaleMovByDocKey = new Map();
+  cashMovements.forEach((mov, idx) => {
+    if (!mov) return;
+    const tipoMov = String(mov.tipo || '').toUpperCase().trim();
+    if (tipoMov !== 'INGRESO') return;
+    const refRaw = String(mov.referencia || '').trim().toUpperCase();
+    const concept = String(mov.concepto || mov.descripcion || '').trim();
+    const matchCobro = concept.match(/^Cobro\s+Venta\s+([A-Z0-9-]+)/i);
+    const docKey = (matchCobro && matchCobro[1] ? matchCobro[1].toUpperCase() : '') || (String(mov.categoria || '').toUpperCase() === 'VENTAS' ? refRaw : '');
+    if (docKey) {
+      const movId = mov.id || `mov-${idx + 1}`;
+      cashSaleMovByDocKey.set(docKey, { mov, movId });
+    }
+  });
+  const consumedSaleCashMovIds = new Set();
+
+  const resolveDirectSaleTreasuryAccount = (inv, cashMov) => {
+    const metodoRaw = String(
+      cashMov?.metodo || cashMov?.metodoPago || inv.metodoPago || inv.metodo_pago || inv.formaPago || ''
+    ).toUpperCase().trim();
+    if (metodoRaw.includes('ZELLE')) {
+      return { codigo: '1.01.01.004', nombre: 'Zelle' };
+    }
+    if (metodoRaw.includes('BS') || metodoRaw.includes('PAGO_MOVIL') || metodoRaw.includes('TRANSFERENCIA')) {
+      return { codigo: '1.01.01.001', nombre: 'Caja Moneda Nacional' };
+    }
+    return { codigo: '1.01.01.002', nombre: 'Caja Divisas' };
+  };
+
   profitInvoices.forEach((inv) => {
     if (inv.anulado || inv.anulada) return;
     const docNum = inv.factNum || inv.id;
+    const docNumUpper = String(docNum || '').trim().toUpperCase();
+    const invIdUpper = String(inv.id || '').trim().toUpperCase();
     const fecha = inv.fechaEmision || inv.fec_emis;
     const rate = Number(inv.tasa || tasa || 827.73);
     const totalUsd = round2(inv.totNetoUsd ?? inv.tot_neto_usd ?? (inv.totNetoBs ? inv.totNetoBs / rate : 0));
@@ -338,8 +385,24 @@ export function generateAccountingEntries({
     const ivaBs = round2(ivaUsd * rate);
     const descuentoBs = round2(descuentoUsd * rate);
 
+    const matchedCashEntry = cashSaleMovByDocKey.get(docNumUpper) || cashSaleMovByDocKey.get(invIdUpper);
+    const hasCollection = collectedDocKeys.has(docNumUpper) || collectedDocKeys.has(invIdUpper);
+    const isExplicitCashContado =
+      String(inv.condicionPago || '').toUpperCase().trim() === 'CONTADO' &&
+      Number(inv.diasCredito ?? 0) === 0 &&
+      Number(inv.saldoUsd ?? 1) <= 0.01 &&
+      !hasCollection;
+    const useDirectCashAccount = Boolean(matchedCashEntry) || isExplicitCashContado;
+    if (matchedCashEntry) {
+      consumedSaleCashMovIds.add(matchedCashEntry.movId);
+    }
+
+    const debitAccount = useDirectCashAccount
+      ? resolveDirectSaleTreasuryAccount(inv, matchedCashEntry?.mov)
+      : { codigo: '1.01.03.001', nombre: 'Cuentas por Cobrar Comerciales' };
+
     const lines = [
-      { cuentaCodigo: '1.01.03.001', cuentaNombre: 'Cuentas por Cobrar Comerciales', debeUsd: totalUsd, haberUsd: 0, debeBs: totalBs, haberBs: 0 },
+      { cuentaCodigo: debitAccount.codigo, cuentaNombre: debitAccount.nombre, debeUsd: totalUsd, haberUsd: 0, debeBs: totalBs, haberBs: 0 },
     ];
     if (descuentoUsd > 0) {
       lines.push({ cuentaCodigo: '4.01.02.001', cuentaNombre: 'Descuento en Ventas', debeUsd: descuentoUsd, haberUsd: 0, debeBs: descuentoBs, haberBs: 0 });
@@ -354,11 +417,11 @@ export function generateAccountingEntries({
       asientoNum: `ASI-${seq++}`,
       fecha,
       tipoOperacion: 'VENTA',
-      origenDoc: `Factura Venta #${docNum}`,
+      origenDoc: `${useDirectCashAccount ? 'Venta Contado' : 'Factura Venta'} #${docNum}`,
       documentoReferencia: `FAC-${docNum}`,
       usuario: inv.coVen || inv.co_us_in || 'FACTURACIÓN',
       tasa: rate,
-      concepto: `Facturación de venta a cliente: ${inv.clienteNombre || inv.cli_des || 'Cliente General'}`,
+      concepto: `Facturación de venta${useDirectCashAccount ? ' de contado' : ''} a cliente: ${inv.clienteNombre || inv.cli_des || 'Cliente General'}`,
       montoTotalUsd: totalUsd,
       lines,
     });
@@ -537,12 +600,13 @@ export function generateAccountingEntries({
   });
 
   cashMovements.forEach((mov, idx) => {
+    const movId = mov.id || `mov-${idx + 1}`;
+    if (consumedSaleCashMovIds.has(movId)) return;
     const montoUsd = round2(mov.montoUsd || 0);
     if (montoUsd <= 0) return;
     const rate = Number(mov.tasa || tasa || 827.73);
     const montoBs = round2(mov.montoBs || montoUsd * rate);
     const isEgreso = (mov.tipo || 'EGRESO').toUpperCase() === 'EGRESO';
-    const movId = mov.id || `mov-${idx + 1}`;
     const fecha = mov.fecha || mov.createdAt || new Date().toISOString();
 
     let cashCuenta = { codigo: '1.01.01.002', nombre: 'Caja Divisas' };

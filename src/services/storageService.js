@@ -20,6 +20,7 @@ import {
 } from '../data/supabaseRealData.js';
 import {
   calculateFiscalTaxes,
+  resolveConfigIgtfOptions,
   generateFiscalControlNumber,
   generateVatRetentionVoucherNumber,
   getNextInvoiceCorrelativo,
@@ -420,8 +421,12 @@ export const saveSale = (saleData, options = {}) => {
   const effectiveTipoDoc = isNotaEntrega ? 'NOTA_ENTREGA' : (saleData.tipoDoc || 'FACTURA');
   const isCredit =
     isCreditPaymentCondition(saleData.condicionPago, saleData.metodoPago) ||
-    Number(saleData.diasCredito || 0) > 0 ||
-    isNotaEntrega;
+    Number(saleData.diasCredito || 0) > 0;
+  // Todo lo facturado (Factura o Nota de Entrega), incluso de contado, genera CxC en lugar de ingresar directo a Caja
+  const sendToReceivables =
+    isCredit ||
+    effectiveTipoDoc === 'FACTURA' ||
+    effectiveTipoDoc === 'NOTA_ENTREGA';
   const docPrefix = effectiveTipoDoc === 'NOTA_CREDITO' ? 'NC' : (effectiveTipoDoc === 'NOTA_DEBITO' ? 'ND' : (effectiveTipoDoc === 'NOTA_ENTREGA' ? 'NE' : 'FACT'));
   let resolvedNumeroDoc = saleData.numeroDoc
     ? String(saleData.numeroDoc)
@@ -430,12 +435,6 @@ export const saveSale = (saleData, options = {}) => {
         : getNextNotaEntregaCorrelativo(sales, REAL_PROFIT_INVOICES, docPrefix));
   if (isNotaEntrega && !String(resolvedNumeroDoc).toUpperCase().startsWith('NE-')) {
     resolvedNumeroDoc = `NE-${resolvedNumeroDoc}`;
-  }
-
-  if (effectiveTipoDoc === 'FACTURA') {
-    commitInvoiceCorrelativo(resolvedNumeroDoc);
-  } else if (effectiveTipoDoc === 'NOTA_ENTREGA') {
-    commitNotaEntregaCorrelativo(resolvedNumeroDoc);
   }
 
   const itemsConLitros = (saleData.items || []).map(item => ({
@@ -449,21 +448,27 @@ export const saveSale = (saleData, options = {}) => {
     metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
     condicionPago: saleData.condicionPago || 'CONTADO',
     tasaBcv: config.tasaDolar,
-    porcentajeRetencionIva: saleData.porcentajeRetencionIva || 75
+    porcentajeRetencionIva: saleData.porcentajeRetencionIva ?? 0,
+    ...resolveConfigIgtfOptions(config)
   });
 
   const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 15) : 0);
   const effectiveFechaEmision = saleData.fechaEmision || saleData.fecha || new Date().toISOString();
-  const effectiveFechaVencimiento = saleData.fechaVencimiento || (isCredit ? calculateExpirationDate(effectiveFechaEmision, effectiveDiasCredito).toISOString() : null);
+  const effectiveFechaVencimiento = saleData.fechaVencimiento || (
+    isCredit
+      ? calculateExpirationDate(effectiveFechaEmision, effectiveDiasCredito).toISOString()
+      : (sendToReceivables ? effectiveFechaEmision : null)
+  );
 
   const resolvedId = (effectiveTipoDoc === 'FACTURA' || String(resolvedNumeroDoc).toUpperCase().startsWith(`${docPrefix}-`))
     ? resolvedNumeroDoc
     : `${docPrefix}-${resolvedNumeroDoc}`;
+  const ctrlDigits = parseInt(String(resolvedNumeroDoc).replace(/[^0-9]/g, ''), 10);
 
   const newSale = {
     id: resolvedId,
     numeroDoc: resolvedNumeroDoc,
-    numeroControl: saleData.numeroControl || generateFiscalControlNumber(parseInt(resolvedNumeroDoc.replace(/[^0-9]/g, ''), 10) || (sales.length + 1)),
+    numeroControl: saleData.numeroControl || generateFiscalControlNumber(!isNaN(ctrlDigits) ? ctrlDigits : (sales.length + 1)),
     tipoDoc: effectiveTipoDoc,
     documentoAfectado: saleData.documentoAfectado || '',
     fecha: effectiveFechaEmision,
@@ -475,7 +480,10 @@ export const saveSale = (saleData, options = {}) => {
     clienteRif: saleData.clienteRif || 'V-18456789-6',
     clienteDireccion: saleData.clienteDireccion || saleData.direccion || '',
     tasaDolar: config.tasaDolar,
-    condicionPago: saleData.condicionPago || (isNotaEntrega ? 'CREDITO' : 'CONTADO'),
+    tipoTasa: saleData.tipoTasa || saleData.tipo_tasa || (effectiveTipoDoc === 'FACTURA' ? 'BCV' : 'BCV'),
+    tasaPago: Number(saleData.tasaPago ?? saleData.tasa_pago ?? config.tasaDolar ?? 1),
+    monedaPago: saleData.monedaPago || saleData.moneda_pago || (String(saleData.metodoPago || '').includes('USD') || String(saleData.metodoPago || '') === 'ZELLE' ? 'USD' : 'BS'),
+    condicionPago: saleData.condicionPago || (isCredit ? 'CREDITO' : 'CONTADO'),
     items: itemsConLitros,
     subtotalUsd: taxes.subtotalNetoUsd,
     baseExentaUsd: taxes.baseExentaUsd,
@@ -499,11 +507,15 @@ export const saveSale = (saleData, options = {}) => {
     ivaBs: taxes.totalIvaBs,
     igtfBs: taxes.igtfBs,
     totalBs: taxes.totalFacturaBs,
-    saldoUsd: isCredit ? (isNotaEntrega ? taxes.subtotalNetoUsd : (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd)) : 0,
-    saldoBs: isCredit ? (isNotaEntrega ? taxes.subtotalNetoBs : (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs)) : 0,
+    saldoUsd: sendToReceivables && effectiveTipoDoc !== 'NOTA_CREDITO'
+      ? (isNotaEntrega ? taxes.subtotalNetoUsd : (Number(saleData.saldoUsd) > 0 ? Number(saleData.saldoUsd) : taxes.totalFacturaUsd))
+      : 0,
+    saldoBs: sendToReceivables && effectiveTipoDoc !== 'NOTA_CREDITO'
+      ? (isNotaEntrega ? taxes.subtotalNetoBs : (Number(saleData.saldoBs) > 0 ? Number(saleData.saldoBs) : taxes.totalFacturaBs))
+      : 0,
     retencionIvaBs: taxes.retencionIvaBs,
     comprobanteRetencionIva: saleData.comprobanteRetencionIva || '',
-    estado: isCredit ? 'PENDIENTE' : 'PAGADO',
+    estado: sendToReceivables ? 'PENDIENTE' : 'PAGADO',
     metodoPago: saleData.metodoPago || 'EFECTIVO_USD',
     vendedor: saleData.vendedor || 'Usuario Sistema',
     pedidoOrigenId: saleData.pedidoOrigenId || saleData.orderId || null,
@@ -518,37 +530,33 @@ export const saveSale = (saleData, options = {}) => {
     adjustLocalProductsStockForSale(newSale, { reverse: false });
   }
 
-  // Movimientos de Caja y Cuentas por Cobrar
-  if (!isCredit) {
-    if (newSale.tipoDoc === 'NOTA_CREDITO') {
-      addCashMovement({
-        tipo: 'EGRESO',
-        concepto: `Devolución / NC ${newSale.numeroDoc} a ${newSale.clienteNombre} (Afecta: ${newSale.documentoAfectado || 'N/A'})`,
-        montoUsd: newSale.totalUsd,
-        montoBs: newSale.totalBs,
-        metodo: newSale.metodoPago,
-        usuario: newSale.vendedor
-      });
-    } else {
-      addCashMovement({
-        tipo: 'INGRESO',
-        concepto: `Cobro Venta ${newSale.numeroDoc} - ${newSale.clienteNombre}`,
-        montoUsd: newSale.totalUsd,
-        montoBs: newSale.totalBs,
-        metodo: newSale.metodoPago,
-        usuario: newSale.vendedor
-      });
-    }
-  } else {
-    const clients = getClients();
-    const clientIndex = clients.findIndex(c => c.id === newSale.clienteId);
-    if (clientIndex >= 0) {
+  // Movimientos de Caja (solo devoluciones NC no a crédito) y Cuentas por Cobrar (Facturas / NE incluso contado)
+  if (!skipStockAdjustment) {
+    if (!sendToReceivables) {
       if (newSale.tipoDoc === 'NOTA_CREDITO') {
-        clients[clientIndex].saldoDeudorUsd = Math.max(0, (clients[clientIndex].saldoDeudorUsd || 0) - newSale.totalUsd);
-      } else {
-        clients[clientIndex].saldoDeudorUsd = (clients[clientIndex].saldoDeudorUsd || 0) + newSale.totalUsd;
+        addCashMovement({
+          tipo: 'EGRESO',
+          categoria: 'VENTAS',
+          referencia: newSale.id || newSale.numeroDoc,
+          concepto: `Devolución / NC ${newSale.numeroDoc} a ${newSale.clienteNombre} (Afecta: ${newSale.documentoAfectado || 'N/A'})`,
+          montoUsd: newSale.totalUsd,
+          montoBs: newSale.totalBs,
+          metodo: newSale.metodoPago,
+          usuario: newSale.vendedor
+        });
       }
-      localStorage.setItem(KEYS.CLIENTS, JSON.stringify(clients));
+    } else {
+      const clients = getClients();
+      const clientIndex = clients.findIndex(c => c.id === newSale.clienteId);
+      if (clientIndex >= 0) {
+        const deltaUsd = Number(newSale.saldoUsd ?? (isNotaEntrega ? newSale.subtotalUsd : newSale.totalUsd) ?? 0);
+        if (newSale.tipoDoc === 'NOTA_CREDITO') {
+          clients[clientIndex].saldoDeudorUsd = Math.max(0, Number(((clients[clientIndex].saldoDeudorUsd || 0) - newSale.totalUsd).toFixed(2)));
+        } else {
+          clients[clientIndex].saldoDeudorUsd = Number(((clients[clientIndex].saldoDeudorUsd || 0) + deltaUsd).toFixed(2));
+        }
+        localStorage.setItem(KEYS.CLIENTS, JSON.stringify(clients));
+      }
     }
   }
 
@@ -565,6 +573,13 @@ export const saveSale = (saleData, options = {}) => {
     sales.unshift(newSale);
   }
   localStorage.setItem(KEYS.SALES, JSON.stringify(sales));
+  if (!skipStockAdjustment) {
+    if (effectiveTipoDoc === 'FACTURA') {
+      commitInvoiceCorrelativo(resolvedNumeroDoc);
+    } else if (effectiveTipoDoc === 'NOTA_ENTREGA') {
+      commitNotaEntregaCorrelativo(resolvedNumeroDoc);
+    }
+  }
   return newSale;
 };
 
@@ -599,9 +614,43 @@ export const deleteStorageSale = (saleIdOrObj, options = {}) => {
 
   const sales = getSales();
   const target = sales.find(isMatch);
-  if (!skipStockAdjustment && target && Array.isArray(target.items)) {
+  if (!skipStockAdjustment && target) {
+    if (Array.isArray(target.items)) {
+      try {
+        adjustLocalProductsStockForSale(target, { reverse: true });
+      } catch (_) {}
+    }
     try {
-      adjustLocalProductsStockForSale(target, { reverse: true });
+      const targetIsCredit =
+        isCreditPaymentCondition(target.condicionPago, target.metodoPago) ||
+        Number(target.diasCredito || 0) > 0 ||
+        String(target.estado || '').toUpperCase() === 'PENDIENTE';
+      if (targetIsCredit && target.clienteId) {
+        const clients = getClients();
+        const cIdx = clients.findIndex(c => c.id === target.clienteId);
+        if (cIdx >= 0) {
+          const currentDebit = Number(clients[cIdx].saldoDeudorUsd || 0);
+          const amt = Number(target.saldoUsd ?? target.totalUsd ?? 0);
+          clients[cIdx].saldoDeudorUsd = target.tipoDoc === 'NOTA_CREDITO'
+            ? currentDebit + Number(target.totalUsd || 0)
+            : Math.max(0, Number((currentDebit - amt).toFixed(2)));
+          localStorage.setItem(KEYS.CLIENTS, JSON.stringify(clients));
+        }
+      } else if (!targetIsCredit) {
+        const targetRef = String(target.id || target.numeroDoc || '').trim();
+        const targetNum = String(target.numeroDoc || target.id || '').trim();
+        const movs = getCashMovements() || [];
+        const filteredMovs = movs.filter(m => {
+          const mRef = String(m?.referencia || '').trim();
+          const mConcept = String(m?.concepto || '');
+          if (targetRef && mRef && (mRef === targetRef || mRef === targetNum)) return false;
+          if (targetNum && (mConcept.includes(`Cobro Venta ${targetNum} `) || mConcept.includes(`NC ${targetNum} `))) return false;
+          return true;
+        });
+        if (filteredMovs.length !== movs.length) {
+          localStorage.setItem(KEYS.CASH_MOVEMENTS, JSON.stringify(filteredMovs));
+        }
+      }
     } catch (_) {}
   }
   const filtered = sales.filter(s => !isMatch(s));
@@ -670,14 +719,23 @@ export const getCashMovements = () => {
 
 export const addCashMovement = (mov) => {
   const movements = getCashMovements();
+  const resolvedTasa = Number(mov?.tasaPago ?? mov?.tasa_pago ?? mov?.tasa ?? 0);
+  const resolvedTipoTasa = mov?.tipoTasa || mov?.tipo_tasa || (String(mov?.monedaPago || mov?.moneda_pago || mov?.moneda || '').toUpperCase().includes('USD') ? 'USD' : 'BCV');
+  const resolvedMonedaPago = mov?.monedaPago || mov?.moneda_pago || (resolvedTipoTasa === 'USD' ? 'USD' : 'BS');
   const newMov = {
     id: `MOV-${String(movements.length + 1).padStart(3, '0')}`,
     fecha: new Date().toISOString(),
-    ...mov
+    ...mov,
+    tipoTasa: resolvedTipoTasa,
+    tipo_tasa: resolvedTipoTasa,
+    tasaPago: resolvedTasa > 0 ? resolvedTasa : (resolvedTipoTasa === 'USD' ? 1 : 0),
+    tasa_pago: resolvedTasa > 0 ? resolvedTasa : (resolvedTipoTasa === 'USD' ? 1 : 0),
+    monedaPago: resolvedMonedaPago,
+    moneda_pago: resolvedMonedaPago
   };
   movements.unshift(newMov);
   localStorage.setItem(KEYS.CASH_MOVEMENTS, JSON.stringify(movements));
-  return movements;
+  return newMov;
 };
 
 export const getFiscalClosures = () => {

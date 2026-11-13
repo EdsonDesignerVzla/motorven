@@ -25,7 +25,7 @@ import {
   Send,
   FileText
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, round2 } from '../services/formatService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
 
 export default function CreditScoreEngineModal({
@@ -167,7 +167,7 @@ export default function CreditScoreEngineModal({
         colorVeredicto = 'var(--semaforo-verde)';
         textoVeredicto = 'Despacho Inmediato Autorizado';
         accionSugerida = 'Elegible para ampliación de crédito (+25%). Despacho express sin restricciones.';
-        limiteSugeridoUsd = Math.round(limiteCreditoUsd * 1.25);
+        limiteSugeridoUsd = round2(limiteCreditoUsd * 1.25);
       } else if (creditScore >= 70) {
         rating = 'AA';
         ratingBadgeClass = 'badge-primary';
@@ -175,7 +175,7 @@ export default function CreditScoreEngineModal({
         colorVeredicto = '#0284c7';
         textoVeredicto = 'Despacho Autorizado';
         accionSugerida = 'Despacho normal dentro de la línea de crédito acordada.';
-        limiteSugeridoUsd = limiteCreditoUsd;
+        limiteSugeridoUsd = round2(limiteCreditoUsd);
       } else if (creditScore >= 55) {
         rating = 'A';
         ratingBadgeClass = 'badge-warning';
@@ -183,7 +183,7 @@ export default function CreditScoreEngineModal({
         colorVeredicto = 'var(--motorven-gold)';
         textoVeredicto = 'Aprobación Gerencial';
         accionSugerida = 'Monitoreo de cobranza. Exige abono previo si supera el 80% del límite.';
-        limiteSugeridoUsd = Math.round(limiteCreditoUsd * 0.85);
+        limiteSugeridoUsd = round2(limiteCreditoUsd * 0.85);
       } else if (creditScore >= 40) {
         rating = 'B';
         ratingBadgeClass = 'badge-warning';
@@ -191,7 +191,7 @@ export default function CreditScoreEngineModal({
         colorVeredicto = '#ea580c';
         textoVeredicto = 'Riesgo Moderado / Aprobación Requerida';
         accionSugerida = 'Requiere abono del 50% de la deuda pendiente antes de despachar nueva mercancía.';
-        limiteSugeridoUsd = Math.round(limiteCreditoUsd * 0.60);
+        limiteSugeridoUsd = round2(limiteCreditoUsd * 0.60);
       } else {
         rating = 'C';
         ratingBadgeClass = 'badge-danger';

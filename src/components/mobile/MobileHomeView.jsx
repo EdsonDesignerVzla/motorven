@@ -99,7 +99,7 @@ export default function MobileHomeView({
       icon: ShieldCheck,
       gradient: 'linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)',
       accentColor: '#34d399',
-      kpi: `Bs. ${tasaBcv.toFixed(2)}`
+      kpi: formatBs(tasaBcv)
     },
     {
       id: 'flujo_caja',

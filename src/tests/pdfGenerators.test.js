@@ -1878,6 +1878,47 @@ async function runPdfTests() {
     }
   });
 
+  // 45b. Regresión Recibo de Cobro: Sin desplazamiento de fecha por medianoche UTC (-1 día en VE UTC-4)
+  testGen('Recibo de Cobro conserva fecha calendario sin desplazamiento UTC-4 (2026-11-10 -> 10/11/2026)', () => {
+    const cases = [
+      { cobNum: '004095', fecha: '2026-11-10T00:00:00+00:00' },
+      { cobNum: '004096', fecha: '2026-11-10' }
+    ];
+    for (const c of cases) {
+      generateCollectionReceiptPDF({
+        receipt: {
+          cobNum: c.cobNum,
+          fecha: c.fecha,
+          clienteNombre: 'Emprendimiento Sheyla Argellos',
+          clienteRif: 'J-07528324',
+          tasa: 1001.19,
+          montoUsd: 20,
+          montoBs: 20023.80,
+          formaPago: 'EFECTIVO',
+          cuentaNombre: 'Caja USDT (Binance)',
+          referencia: '#50944'
+        },
+        allocations: [{
+          factNum: '1996',
+          tipoDoc: 'NOTA_ENTREGA',
+          abonoUsd: 20,
+          saldoAnteriorUsd: 20,
+          saldoRestanteUsd: 0
+        }],
+        config: mockConfig,
+        currentUser: mockUser
+      });
+      const pdfFile = `Recibo_Cobro_${c.cobNum}.pdf`;
+      const pdfContent = fs.readFileSync(pdfFile, 'latin1');
+      if (!pdfContent.includes('10/11/2026')) {
+        throw new Error(`${pdfFile} no contiene la fecha esperada 10/11/2026`);
+      }
+      if (pdfContent.includes('9/11/2026') || pdfContent.includes('09/11/2026')) {
+        throw new Error(`${pdfFile} sufrió desplazamiento de fecha a 9/11/2026`);
+      }
+    }
+  });
+
   // 46. Auditoría Global de Todos los PDF Generados: Cero formato "Página X de Y" y cumplimiento 1/2, 2/2
   testGen('Auditoría Global: Todos los PDF generados cumplen norma 1/2, 2/2 (sin "Página X de Y")', () => {
     const cwdFiles = fs.readdirSync(process.cwd()).filter(f => f.endsWith('.pdf'));

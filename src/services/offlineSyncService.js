@@ -200,53 +200,113 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
 
   let queue = getSyncQueue();
 
-  // Revisar signum_cxc_custom_docs_v1 por documentos pendientes (_pendingServerSync) que hayan quedado fuera de la cola
+  // Helper interno para recuperar documentos locales con _pendingServerSync que quedaron fuera de la cola
+  const recoverPendingDocsFromStorage = (storageKey, { entity, mapOrArray = 'object', isDeleted = null, matchEntities = [], resolveId = (d) => d?.id } = {}) => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const list = mapOrArray === 'array'
+        ? (Array.isArray(parsed) ? parsed : [])
+        : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
+      if (list.length === 0) return;
+
+      const entitySet = new Set([entity, ...matchEntities]);
+      const queuedIds = new Set(
+        queue
+          .filter(q => q && entitySet.has(q.entity))
+          .map(q => String(resolveId(q.data) || q.data?.id || '').trim())
+          .filter(Boolean)
+      );
+      const addedIds = new Set();
+      let queueModified = false;
+
+      list.forEach(doc => {
+        if (!doc || !doc._pendingServerSync) return;
+        const dId = String(resolveId(doc) || doc.id || '').trim();
+        if (!dId) return;
+        if (isDeleted && isDeleted(doc, dId)) return;
+        if (queuedIds.has(dId) || addedIds.has(dId)) return;
+        addedIds.add(dId);
+        queuedIds.add(dId);
+        const { _pendingServerSync, ...cleanDoc } = doc;
+        queue.push({
+          id: `sync_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          entity,
+          action: entity === 'profit_supplier_payment' || entity === 'profit_payment_order' ? 'INSERT' : 'UPDATE',
+          data: cleanDoc,
+          timestamp: new Date().toISOString(),
+          attempts: 0,
+          lastError: null
+        });
+        queueModified = true;
+      });
+
+      if (queueModified) {
+        saveSyncQueue(queue);
+      }
+    } catch (_) {}
+  };
+
+  // Recuperar CxC pendientes
+  let cxcDelSet = new Set();
   try {
     if (typeof localStorage !== 'undefined') {
-      const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
-      if (rawCustom) {
-        const customMap = JSON.parse(rawCustom);
-        const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
-        const delSet = new Set(rawDel ? JSON.parse(rawDel).map(String) : []);
-        if (customMap && typeof customMap === 'object') {
-          const queuedIds = new Set(
-            queue
-              .filter(q => q && (q.entity === 'profit_invoice' || q.entity === 'profit_invoices' || q.entity === 'sale' || q.entity === 'sales'))
-              .map(q => String(q.data?.id || q.data?.factNum || q.data?.fact_num || q.data?.numeroDoc || '').trim())
-              .filter(Boolean)
-          );
-          const addedCustomIds = new Set();
-          let queueModified = false;
-          Object.values(customMap).forEach(doc => {
-            if (!doc || !doc._pendingServerSync) return;
-            const dId = String(doc.id || '').trim();
-            const dNum = String(doc.factNum ?? doc.fact_num ?? '').trim();
-            if (!dId && !dNum) return;
-            if ((dId && delSet.has(dId)) || (dNum && delSet.has(dNum))) return;
-            if ((dId && queuedIds.has(dId)) || (dNum && queuedIds.has(dNum))) return;
-            const dedupKey = dId || dNum;
-            if (addedCustomIds.has(dedupKey)) return;
-            addedCustomIds.add(dedupKey);
-            if (dId) queuedIds.add(dId);
-            if (dNum) queuedIds.add(dNum);
-            queue.push({
-              id: `sync_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-              entity: 'profit_invoice',
-              action: 'UPDATE',
-              data: doc,
-              timestamp: new Date().toISOString(),
-              attempts: 0,
-              lastError: null
-            });
-            queueModified = true;
-          });
-          if (queueModified) {
-            saveSyncQueue(queue);
-          }
-        }
-      }
+      const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+      if (rawDel) cxcDelSet = new Set(JSON.parse(rawDel).map(String));
     }
   } catch (_) {}
+  recoverPendingDocsFromStorage('signum_cxc_custom_docs_v1', {
+    entity: 'profit_invoice',
+    mapOrArray: 'object',
+    matchEntities: ['profit_invoices', 'sale', 'sales'],
+    resolveId: (d) => d?.id || d?.factNum || d?.fact_num || d?.numeroDoc,
+    isDeleted: (doc, dId) => {
+      const dNum = String(doc?.factNum ?? doc?.fact_num ?? '').trim();
+      return cxcDelSet.has(dId) || (dNum && cxcDelSet.has(dNum));
+    }
+  });
+
+  // Recuperar CxP, pagos a proveedores y órdenes de pago pendientes
+  let cxpDelSet = new Set();
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCxpDel = localStorage.getItem('signum_cxp_deleted_docs_v1');
+      if (rawCxpDel) cxpDelSet = new Set(JSON.parse(rawCxpDel).map(String));
+    }
+  } catch (_) {}
+  recoverPendingDocsFromStorage('signum_cxp_custom_docs_v1', {
+    entity: 'profit_accounts_payable',
+    mapOrArray: 'object',
+    resolveId: (d) => d?.id,
+    isDeleted: (_doc, dId) => cxpDelSet.has(dId)
+  });
+  recoverPendingDocsFromStorage('signum_cxp_payments_v1', {
+    entity: 'profit_supplier_payment',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
+  recoverPendingDocsFromStorage('signum_payment_orders_v1', {
+    entity: 'profit_payment_order',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
+  recoverPendingDocsFromStorage('signum_purchase_requisitions_v1', {
+    entity: 'purchase_requisition',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
+  recoverPendingDocsFromStorage('signum_purchase_orders_v1', {
+    entity: 'purchase_order',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
+  recoverPendingDocsFromStorage('signum_goods_receipt_notes_v1', {
+    entity: 'profit_goods_receipt_note',
+    mapOrArray: 'array',
+    resolveId: (d) => d?.id
+  });
 
   if (queue.length === 0) {
     notifySubscribers();
@@ -482,6 +542,71 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
             syncSuccess = true;
           }
           break;
+
+        case 'profit_payment_order': {
+          const { _pendingServerSync, ...cleanOrder } = item.data || {};
+          if (handlers.pushProfitPaymentOrderToSupabase) {
+            await handlers.pushProfitPaymentOrderToSupabase(cleanOrder);
+            syncSuccess = true;
+          } else if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('profit_payment_orders').upsert(cleanOrder, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'purchase_requisition': {
+          const { _pendingServerSync, ...cleanReq } = item.data || {};
+          if (handlers.pushPurchaseRequisitionToSupabase) {
+            await handlers.pushPurchaseRequisitionToSupabase(cleanReq);
+            syncSuccess = true;
+          } else if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('purchase_requisitions').upsert(cleanReq, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'purchase_order': {
+          const { _pendingServerSync, ...cleanPo } = item.data || {};
+          if (handlers.pushPurchaseOrderToSupabase) {
+            await handlers.pushPurchaseOrderToSupabase(cleanPo);
+            syncSuccess = true;
+          } else if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('purchase_orders').upsert(cleanPo, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'profit_goods_receipt_note': {
+          const { _pendingServerSync, ...cleanRec } = item.data || {};
+          if (handlers.pushGoodsReceiptNoteToSupabase) {
+            await handlers.pushGoodsReceiptNoteToSupabase(cleanRec);
+            syncSuccess = true;
+          } else if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('profit_goods_receipt_notes').upsert(cleanRec, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
+
+        case 'profit_purchase': {
+          const { _pendingServerSync, ...cleanPur } = item.data || {};
+          if (handlers.pushProfitPurchaseToSupabase) {
+            await handlers.pushProfitPurchaseToSupabase(cleanPur);
+            syncSuccess = true;
+          } else if (handlers.supabase?.from) {
+            const { error } = await handlers.supabase.from('profit_purchases').upsert(cleanPur, { onConflict: 'id' });
+            if (error) throw error;
+            syncSuccess = true;
+          }
+          break;
+        }
 
         case 'notification':
           if (item.action === 'MARK_ALL_READ' && handlers.markAllSupabaseNotificationsRead) {

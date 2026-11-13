@@ -37,7 +37,7 @@ import {
   Check,
   X
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import SellerDetailModal from '../components/SellerDetailModal';
 import SellerCommissionModal from '../components/SellerCommissionModal';
 import DebtCollectionIntelligenceModal from '../components/DebtCollectionIntelligenceModal';
@@ -460,7 +460,7 @@ export default function SellersView({
         await onUpdateGlobalTarget(total);
       }
       setIsEditingGlobalTarget(false);
-      notify.success(`Meta mensual distribuida guardada exitosamente: ${total.toLocaleString()} L`);
+      notify.success(`Meta mensual distribuida guardada exitosamente: ${formatUnitVe(total, 0)} L`);
     } catch (err) {
       console.error(err);
       notify.error('Error guardando la meta mensual distribuida.');
@@ -627,7 +627,7 @@ export default function SellersView({
             </span>
           </div>
           <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-main)', fontFamily: 'var(--font-tech)' }}>
-            {kpis.totalMetaGlobal.toLocaleString()} L
+            {formatUnitVe(kpis.totalMetaGlobal, 0)} L
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
             <span
@@ -659,10 +659,10 @@ export default function SellersView({
             <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Oilstone ®</span>
           </div>
           <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-tech)' }}>
-            {kpis.totalLitrosGlobal.toLocaleString('es-VE', { minimumFractionDigits: 1 })} L
+            {formatUnitVe(kpis.totalLitrosGlobal, 2)} L
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
-            ≈ {kpis.totalCajasGlobal.toFixed(1)} Cajas Totales
+            ≈ {formatUnitVe(kpis.totalCajasGlobal, 2)} Cajas Totales
           </div>
         </div>
 
@@ -692,7 +692,7 @@ export default function SellersView({
             {kpis.topSeller ? kpis.topSeller.venDes : 'N/A'}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-tech)', marginTop: '2px' }}>
-            {kpis.topSeller ? `${kpis.topSeller.totalLitros.toLocaleString()} L (${kpis.topSeller.cumplimientoPct}% Meta)` : '-'}
+            {kpis.topSeller ? `${formatUnitVe(kpis.topSeller.totalLitros, 2)} L (${kpis.topSeller.cumplimientoPct}% Meta)` : '-'}
           </div>
         </div>
       </div>
@@ -963,14 +963,14 @@ export default function SellersView({
                           {seller.clientesCount}
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--motorven-navy-light)', fontSize: '0.92rem' }}>
-                          {seller.totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 1 })} L
+                          {formatUnitVe(seller.totalLitros, 2)} L
                         </td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>
-                          {seller.totalCajas.toFixed(1)}
+                          {formatUnitVe(seller.totalCajas, 2)}
                         </td>
                         <td>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', marginBottom: '3px' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Meta: {seller.metaLitrosMes?.toLocaleString()} L</span>
+                            <span style={{ color: 'var(--text-muted)' }}>Meta: {formatUnitVe(seller.metaLitrosMes || 0, 0)} L</span>
                             <strong style={{ color: seller.cumplimientoPct >= 100 ? 'var(--semaforo-verde)' : 'var(--motorven-navy-light)' }}>
                               {seller.cumplimientoPct}%
                             </strong>
@@ -1430,10 +1430,10 @@ export default function SellersView({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '1.25rem', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--motorven-navy-light)' }}>
-                      {kpis.totalMetaGlobal.toLocaleString()} L
+                      {formatUnitVe(kpis.totalMetaGlobal, 0)} L
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      ≈ {(kpis.totalMetaGlobal / (effectiveSellers.length || 1)).toLocaleString()} L por Asesor
+                      ≈ {formatUnitVe(kpis.totalMetaGlobal / (effectiveSellers.length || 1), 0)} L por Asesor
                     </div>
                   </div>
                   {isMasterOrGerencia(currentUser) && (
@@ -1493,7 +1493,7 @@ export default function SellersView({
                             />
                           ) : (
                             <strong style={{ fontFamily: 'var(--font-tech)', fontSize: '0.92rem' }}>
-                              {seller.metaLitrosMes?.toLocaleString() || 3000} L
+                              {formatUnitVe(seller.metaLitrosMes || 3000, 0)} L
                             </strong>
                           )}
                         </td>
@@ -1514,7 +1514,7 @@ export default function SellersView({
                           )}
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--motorven-navy-light)' }}>
-                          {seller.totalLitros.toLocaleString()} L
+                          {formatUnitVe(seller.totalLitros, 2)} L
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           <span
@@ -1637,7 +1637,7 @@ export default function SellersView({
 
                   <div>Teléfono: <strong style={{ color: 'var(--text-main)' }}>{seller.telefonos || 'N/A'}</strong></div>
                   <div>Clientes Asignados: <strong style={{ color: 'var(--text-main)' }}>{seller.clientesCount}</strong></div>
-                  <div>Volumen del Período: <strong style={{ color: 'var(--motorven-navy-light)' }}>{seller.totalLitros.toLocaleString()} L</strong></div>
+                  <div>Volumen del Período: <strong style={{ color: 'var(--motorven-navy-light)' }}>{formatUnitVe(seller.totalLitros, 2)} L</strong></div>
                 </div>
               </div>
 
@@ -1894,7 +1894,7 @@ export default function SellersView({
                 </tr>
                 <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                   <td style={{ padding: '8px' }}>Bono Cumplimiento Volumen</td>
-                  <td style={{ padding: '8px', textAlign: 'right' }}>{receiptModalSettlement.litrosExcedentes?.toFixed(1)} L</td>
+                  <td style={{ padding: '8px', textAlign: 'right' }}>{formatUnitVe(receiptModalSettlement.litrosExcedentes || 0, 2)} L</td>
                   <td style={{ padding: '8px', textAlign: 'center' }}>{formatUsd(receiptModalSettlement.bonoPorLitroUsd)} / L</td>
                   <td style={{ padding: '8px', textAlign: 'right', fontWeight: 700 }}>{formatUsd(receiptModalSettlement.bonoVolumenMontoUsd)}</td>
                 </tr>

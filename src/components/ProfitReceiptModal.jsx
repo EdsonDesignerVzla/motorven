@@ -27,12 +27,25 @@ export default function ProfitReceiptModal({ receipt, onClose, config = {}, curr
     });
   };
 
-  const fechaObj = new Date(receipt.fecha || new Date());
-  const fechaFormatted = fechaObj.toLocaleDateString('es-VE', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  });
+  const rawFecha = receipt.fecha || '';
+  const rawFechaStr = typeof rawFecha === 'string' ? rawFecha.trim() : '';
+  const isPureOrMidnightUtc =
+    /^\d{4}-\d{2}-\d{2}$/.test(rawFechaStr) ||
+    /^\d{4}-\d{2}-\d{2}[T\s]00:00:00(?:\.0+)?(?:Z|[+-]\d{2}:?\d{2})?$/i.test(rawFechaStr);
+  let fechaFormatted;
+  if (isPureOrMidnightUtc) {
+    const [y, m, d] = rawFechaStr.slice(0, 10).split('-');
+    fechaFormatted = `${d}/${m}/${y}`;
+  } else {
+    const fechaObj = new Date(rawFecha || new Date());
+    fechaFormatted = isNaN(fechaObj.getTime())
+      ? String(rawFecha || '')
+      : fechaObj.toLocaleDateString('es-VE', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        });
+  }
 
   const getFormaBadge = (forma) => {
     const tipo = forma.tipo || '';

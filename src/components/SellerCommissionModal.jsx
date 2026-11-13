@@ -14,7 +14,7 @@ import {
   CreditCard,
   Building
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, round2 } from '../services/formatService';
 import { saveCommissionSettlement } from '../services/storageService';
 import { generateSellersPDF } from '../services/pdfReportService';
 import SellerAvatar from './SellerAvatar';
@@ -79,21 +79,21 @@ export default function SellerCommissionModal({
     return m === selectedMes;
   });
 
-  const totalLitros = sellerInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros) || 0), 0);
-  const totalFacturadoUsd = sellerInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0);
-  const totalCobradoUsd = sellerCollections.reduce((acc, c) => acc + (Number(c?.montoUsd) || 0), 0);
+  const totalLitros = round2(sellerInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros) || 0), 0));
+  const totalFacturadoUsd = round2(sellerInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0));
+  const totalCobradoUsd = round2(sellerCollections.reduce((acc, c) => acc + (Number(c?.montoUsd) || 0), 0));
 
   const metaLitros = Number(seller?.metaLitrosMes) || 3000;
   const metaEfectiva = selectedMes === 'ALL' ? metaLitros * 10 : metaLitros;
-  const litrosExcedentes = Math.max(0, totalLitros - metaEfectiva);
+  const litrosExcedentes = Math.max(0, round2(totalLitros - metaEfectiva));
 
   // Cálculos de Comisiones
-  const comisionVentaMontoUsd = totalFacturadoUsd * (comisionVentaPct / 100);
-  const comisionCobroMontoUsd = totalCobradoUsd * (comisionCobroPct / 100);
-  const bonoVolumenMontoUsd = litrosExcedentes * bonoPorLitroUsd;
+  const comisionVentaMontoUsd = round2(totalFacturadoUsd * (comisionVentaPct / 100));
+  const comisionCobroMontoUsd = round2(totalCobradoUsd * (comisionCobroPct / 100));
+  const bonoVolumenMontoUsd = round2(litrosExcedentes * bonoPorLitroUsd);
 
-  const totalComisionUsd = comisionVentaMontoUsd + comisionCobroMontoUsd + bonoVolumenMontoUsd;
-  const totalComisionBs = totalComisionUsd * tasaBcv;
+  const totalComisionUsd = round2(comisionVentaMontoUsd + comisionCobroMontoUsd + bonoVolumenMontoUsd);
+  const totalComisionBs = round2(totalComisionUsd * tasaBcv);
 
   const getMesLabel = (id) => {
     const map = {
@@ -349,10 +349,10 @@ export default function SellerCommissionModal({
                   <td>
                     <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>Bono por Cumplimiento de Litros</div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      {litrosExcedentes > 0 ? `${litrosExcedentes.toFixed(1)} L sobre meta de ${metaEfectiva} L` : `Meta de ${metaEfectiva} L no superada`}
+                      {litrosExcedentes > 0 ? `${formatUnitVe(litrosExcedentes)} L sobre meta de ${formatUnitVe(metaEfectiva, 0)} L` : `Meta de ${formatUnitVe(metaEfectiva, 0)} L no superada`}
                     </div>
                   </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{litrosExcedentes.toFixed(1)} L</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUnitVe(litrosExcedentes)} L</td>
                   <td style={{ textAlign: 'center', fontWeight: 700 }}>{formatUsd(bonoPorLitroUsd)} / L</td>
                   <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>
                     {formatUsd(bonoVolumenMontoUsd)}

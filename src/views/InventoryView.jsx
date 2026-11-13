@@ -28,7 +28,7 @@ import {
   RotateCcw,
   Download
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST, getProductWarehouseStocks } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST, getProductWarehouseStocks } from '../services/formatService';
 import { getProductRetailPrice, getProductWholesalePrice } from '../services/pricingService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { canManageProducts, canViewCosts } from '../services/authService';
@@ -1200,7 +1200,7 @@ export default function InventoryView({
                   const precioUsdMayor = getProductWholesalePrice(p);
                   const precioBsDetal = precioUsdDetal * (Number(config?.tasaDolar) || 886.22);
                   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0);
-                  const totalLitrosStock = (currentStock * resolveProductLitersPerUnit(p)).toFixed(1);
+                  const totalLitrosStock = formatUnitVe(currentStock * resolveProductLitersPerUnit(p), 2);
 
                   return (
                     <tr key={p.id || p.codigo}>
@@ -2007,13 +2007,13 @@ export default function InventoryView({
 
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '0.75rem' }}>
                 <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Stock en Sistema</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#0f172a' }}>{physicalTakeMetrics.totalCajasSistema.toLocaleString()} Caj</div>
-                <div style={{ fontSize: '0.72rem', color: '#64748b' }}>≈ {physicalTakeMetrics.totalLitrosSistema.toLocaleString()} Lts</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#0f172a' }}>{formatUnitVe(physicalTakeMetrics.totalCajasSistema, 0)} Caj</div>
+                <div style={{ fontSize: '0.72rem', color: '#64748b' }}>≈ {formatUnitVe(physicalTakeMetrics.totalLitrosSistema, 2)} Lts</div>
               </div>
 
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '0.75rem' }}>
                 <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Cajas Contadas</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#0284c7' }}>{physicalTakeMetrics.totalCajasContadas.toLocaleString()} Caj</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#0284c7' }}>{formatUnitVe(physicalTakeMetrics.totalCajasContadas, 0)} Caj</div>
                 <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{physicalTakeMetrics.countAuditados} de {physicalTakeMetrics.totalSkus} contados</div>
               </div>
 
@@ -2389,8 +2389,8 @@ export default function InventoryView({
                   const specWhStock = specWh === '02' ? specStocks.stock02 : specStocks.stock01;
                   const specOtherStock = specWh === '02' ? specStocks.stock01 : specStocks.stock02;
                   const litersUnit = resolveProductLitersPerUnit(selectedSpecProduct);
-                  const specWhLiters = (specWhStock * litersUnit).toFixed(1);
-                  const specTotalLiters = (specStocks.total * litersUnit).toFixed(1);
+                  const specWhLiters = formatUnitVe(specWhStock * litersUnit, 2);
+                  const specTotalLiters = formatUnitVe(specStocks.total * litersUnit, 2);
 
                   return (
                     <>
@@ -2419,16 +2419,16 @@ export default function InventoryView({
                           Presentación: <strong style={{ color: 'var(--text-primary)' }}>{resolveProductUnit(selectedSpecProduct, 'Caja')}</strong>
                         </div>
                         <div>
-                          Litros x Envase: <strong style={{ color: 'var(--text-primary)' }}>{litersUnit} L</strong>
+                          Litros x Envase: <strong style={{ color: 'var(--text-primary)' }}>{formatUnitVe(litersUnit, 2)} L</strong>
                         </div>
                         <div style={{ background: specWh === '02' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(2, 132, 199, 0.08)', padding: '5px 8px', borderRadius: '6px', border: `1px solid ${specWh === '02' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(2, 132, 199, 0.25)'}` }}>
-                          Stock en {specWh === '02' ? 'Alm 02 (Entrega)' : 'Alm 01 (Fiscal)'}: <strong style={{ color: specWh === '02' ? 'var(--motorven-emerald)' : '#38bdf8', fontSize: '0.9rem' }}>{specWhStock} unid.</strong> ({specWhLiters} L)
+                          Stock en {specWh === '02' ? 'Alm 02 (Entrega)' : 'Alm 01 (Fiscal)'}: <strong style={{ color: specWh === '02' ? 'var(--motorven-emerald)' : '#38bdf8', fontSize: '0.9rem' }}>{formatUnitVe(specWhStock, 0)} unid.</strong> ({specWhLiters} L)
                         </div>
                         <div style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
-                          Stock en {specWh === '02' ? 'Alm 01 (Fiscal)' : 'Alm 02 (Entrega)'}: <strong style={{ color: 'var(--text-primary)' }}>{specOtherStock} unid.</strong>
+                          Stock en {specWh === '02' ? 'Alm 01 (Fiscal)' : 'Alm 02 (Entrega)'}: <strong style={{ color: 'var(--text-primary)' }}>{formatUnitVe(specOtherStock, 0)} unid.</strong>
                         </div>
                         <div style={{ gridColumn: 'span 2', fontSize: '0.72rem', color: 'var(--neon-cyan)', background: 'rgba(0, 240, 255, 0.06)', padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(0, 240, 255, 0.2)' }}>
-                          Σ Consolidado Total (Alm 01 + Alm 02): <strong>{specStocks.total} unid.</strong> ({specTotalLiters} L)
+                          Σ Consolidado Total (Alm 01 + Alm 02): <strong>{formatUnitVe(specStocks.total, 0)} unid.</strong> ({specTotalLiters} L)
                         </div>
                       </div>
                     </>

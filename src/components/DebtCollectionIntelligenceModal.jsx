@@ -25,7 +25,7 @@ import {
   AlertCircle,
   ArrowUpDown
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatNumberUs, round2 } from '../services/formatService';
 import { generateAccountsReceivablePDF, generateWhatsAppCollectionPDF } from '../services/pdfReportService';
 
 export default function DebtCollectionIntelligenceModal({
@@ -122,10 +122,10 @@ export default function DebtCollectionIntelligenceModal({
           limiteCredito: Number(c.limiteCredito || c.lim_cred || 0),
           coVen: c.vendedorAsignado || c.vendedorId || '01',
           invoices: [],
-          totalSaldoUsd: saldoLocal,
-          totalSaldoBs: saldoLocal * tasaBcv,
+          totalSaldoUsd: round2(saldoLocal),
+          totalSaldoBs: round2(saldoLocal * tasaBcv),
           totalVencidoUsd: 0,
-          totalVigenteUsd: saldoLocal,
+          totalVigenteUsd: round2(saldoLocal),
           maxDiasVencido: 0,
           tramoMayor: 'VIGENTE'
         };
@@ -410,8 +410,8 @@ export default function DebtCollectionIntelligenceModal({
 
     const nombre = selectedClient.nombre;
     const rif = selectedClient.rif;
-    const totalUsd = selectedClient.totalSaldoUsd.toFixed(2);
-    const totalBs = (selectedClient.totalSaldoUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2 });
+    const totalUsd = formatNumberUs(selectedClient.totalSaldoUsd);
+    const totalBs = (selectedClient.totalSaldoUsd * tasaBcv).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const fechaHoy = new Date().toLocaleDateString('es-VE');
 
     let facturasTexto = '';
@@ -420,7 +420,7 @@ export default function DebtCollectionIntelligenceModal({
         const statusText = inv.diasVencido > 0
           ? `🔴 Vencida hace ${inv.diasVencido} día(s)`
           : `🟢 Vence el ${inv.fechaVencimiento}`;
-        facturasTexto += `  • *FAC #${inv.factNum}*: $ ${inv.saldoUsd.toFixed(2)} USD (${statusText})\n`;
+        facturasTexto += `  • *FAC #${inv.factNum}*: ${formatUsd(inv.saldoUsd)} USD (${statusText})\n`;
       });
     } else {
       facturasTexto = `  • *Saldo en Cuenta Corriente*: $ ${totalUsd} USD (Al día)\n`;
@@ -433,7 +433,7 @@ export default function DebtCollectionIntelligenceModal({
 
     const defaultBancos = '  • Banesco / Mercantil / Provincial\n  • Pago Móvil Disponible\n';
 
-    const msg = `Estimado(a) *${nombre}* (RIF: ${rif}), le saludamos cordialmente de *${config.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.'}*.\n\nLe compartimos su estado de cuenta y facturas pendientes al día de hoy *${fechaHoy}*:\n\n📄 *Detalle de Facturas:*\n${facturasTexto}\n💵 *Total por Pagar:* *$ ${totalUsd} USD*\n🇻🇪 *Equivalente en Bs. (Tasa BCV Bs. ${tasaBcv.toFixed(2)}):* *Bs. ${totalBs}*\n\n🏦 *Cuentas Bancarias para Transferencias / Pagos:*\n${bancosTexto || defaultBancos}\nAgradecemos nos envíe su comprobante de pago a este mismo número para procesar su recibo oficial de caja.\n\n¡Muchas gracias por su preferencia y confianza!`;
+    const msg = `Estimado(a) *${nombre}* (RIF: ${rif}), le saludamos cordialmente de *${config.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.'}*.\n\nLe compartimos su estado de cuenta y facturas pendientes al día de hoy *${fechaHoy}*:\n\n📄 *Detalle de Facturas:*\n${facturasTexto}\n💵 *Total por Pagar:* *$ ${totalUsd} USD*\n🇻🇪 *Equivalente en Bs. (Tasa BCV ${formatBs(tasaBcv)}):* *Bs. ${totalBs}*\n\n🏦 *Cuentas Bancarias para Transferencias / Pagos:*\n${bancosTexto || defaultBancos}\nAgradecemos nos envíe su comprobante de pago a este mismo número para procesar su recibo oficial de caja.\n\n¡Muchas gracias por su preferencia y confianza!`;
 
     return msg;
   }, [selectedClient, tasaBcv, targetBankAccounts, config.nombreEmpresa]);
@@ -605,7 +605,7 @@ export default function DebtCollectionIntelligenceModal({
               <span>Imprimir Reporte WhatsApp</span>
             </button>
             <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', padding: '0.5rem 0' }}>
-              Tasa BCV del Día: <strong style={{ color: 'var(--motorven-gold)', fontWeight: 800 }}>Bs. {tasaBcv.toFixed(2)}</strong>
+              Tasa BCV del Día: <strong style={{ color: 'var(--motorven-gold)', fontWeight: 800 }}>{formatBs(tasaBcv)}</strong>
             </div>
           </div>
         </div>
@@ -1137,7 +1137,7 @@ export default function DebtCollectionIntelligenceModal({
                       <div style={{ textAlign: 'right', border: '1px solid #cbd5e1', padding: '8px 12px', borderRadius: '6px', backgroundColor: '#f8fafc' }}>
                         <p style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748b', margin: 0, textTransform: 'uppercase' }}>ESTADO DE CUENTA COMERCIAL</p>
                         <p style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0f172a', margin: '3px 0 0 0' }}>FECHA: {new Date().toLocaleDateString('es-VE')}</p>
-                        <p style={{ fontSize: '0.68rem', color: '#64748b', margin: '2px 0 0 0', fontFamily: 'monospace' }}>TASA BCV: Bs. {tasaBcv.toFixed(2)}</p>
+                        <p style={{ fontSize: '0.68rem', color: '#64748b', margin: '2px 0 0 0', fontFamily: 'monospace' }}>TASA BCV: {formatBs(tasaBcv)}</p>
                       </div>
                     </div>
 
@@ -1185,10 +1185,10 @@ export default function DebtCollectionIntelligenceModal({
                                   )}
                                 </td>
                                 <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>
-                                  $ {inv.saldoUsd.toFixed(2)}
+                                  {formatUsd(inv.saldoUsd)}
                                 </td>
                                 <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: '#1e293b' }}>
-                                  Bs. {inv.saldoBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                                  {formatBs(inv.saldoBs)}
                                 </td>
                               </tr>
                             ))
@@ -1203,10 +1203,10 @@ export default function DebtCollectionIntelligenceModal({
                                 Al día
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>
-                                $ {selectedClient.totalSaldoUsd.toFixed(2)}
+                                {formatUsd(selectedClient.totalSaldoUsd)}
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: '#1e293b' }}>
-                                Bs. {selectedClient.totalSaldoBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                                {formatBs(selectedClient.totalSaldoBs)}
                               </td>
                             </tr>
                           )}
@@ -1217,10 +1217,10 @@ export default function DebtCollectionIntelligenceModal({
                               Total Deuda al Día de Hoy:
                             </td>
                             <td style={{ padding: '10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '0.88rem', fontWeight: 900, color: '#b91c1c', backgroundColor: '#fee2e2' }}>
-                              $ {selectedClient.totalSaldoUsd.toFixed(2)} USD
+                              {formatUsd(selectedClient.totalSaldoUsd)} USD
                             </td>
                             <td style={{ padding: '10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '0.88rem', fontWeight: 900, color: '#b91c1c', backgroundColor: '#fee2e2' }}>
-                              Bs. {(selectedClient.totalSaldoUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                              {formatBs(selectedClient.totalSaldoUsd * tasaBcv)}
                             </td>
                           </tr>
                         </tfoot>

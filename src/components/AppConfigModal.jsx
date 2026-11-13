@@ -27,7 +27,7 @@ import {
   Unlock
 } from 'lucide-react';
 import { INITIAL_CONFIG } from '../data/mockData';
-import { formatBs } from '../services/formatService';
+import { formatBs, formatNumberUs, formatUnitVe } from '../services/formatService';
 import { generateConfigPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
@@ -95,8 +95,7 @@ export default function AppConfigModal({
     alertaAmarillaMoraDias: config?.alertaAmarillaMoraDias || 15,
     plantillaWhatsapp: config?.plantillaWhatsapp || 'Estimado(a) {cliente}, le saludamos de {empresa}. Le recordamos cordialmente que presenta un saldo pendiente de {montoUsd} ({montoBs}) con {diasMora} días de antigüedad. Agradecemos su pronta gestión de pago. ¡Feliz día!',
 
-    // Sincronización Profit
-    profitBridgeUrl: config?.profitBridgeUrl || '',
+    // Sincronización
     syncIntervalSec: config?.syncIntervalSec || 60,
     offlineFirstEnabled: config?.offlineFirstEnabled !== undefined ? config.offlineFirstEnabled : true,
 
@@ -200,7 +199,6 @@ export default function AppConfigModal({
         bloqueoMoraDias: 30,
         alertaAmarillaMoraDias: 15,
         plantillaWhatsapp: 'Estimado(a) {cliente}, le saludamos de {empresa}. Le recordamos cordialmente que presenta un saldo pendiente de {montoUsd} ({montoBs}) con {diasMora} días de antigüedad. Agradecemos su pronta gestión de pago. ¡Feliz día!',
-        profitBridgeUrl: '',
         syncIntervalSec: 60,
         offlineFirstEnabled: true,
         sonidosNotificacion: true
@@ -779,13 +777,13 @@ export default function AppConfigModal({
                               {h.fechaInicio} al {h.fechaFin}
                             </td>
                             <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--motorven-cyan)' }}>
-                              {Number(h.litrosFacturados || 0).toLocaleString('de-DE', { minimumFractionDigits: 1 })} L
+                              {formatUnitVe(h.litrosFacturados || 0)} L
                             </td>
                             <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--semaforo-verde)' }}>
-                              ${Number(h.totalVentasUsd || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              ${formatNumberUs(h.totalVentasUsd || 0)}
                             </td>
                             <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#38bdf8' }}>
-                              ${Number(h.totalCobranzasUsd || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              ${formatNumberUs(h.totalCobranzasUsd || 0)}
                             </td>
                             <td style={{ padding: '8px 10px', textAlign: 'center', color: 'var(--text-muted)' }}>
                               {h.facturasEmitidas || 0} fac. / {h.cobrosRealizados || 0} cob.
@@ -922,7 +920,7 @@ export default function AppConfigModal({
                     </label>
                     <input
                       type="number"
-                      step="0.5"
+                      step="0.01"
                       value={formData.ivaPorcentaje}
                       onChange={(e) => handleChange('ivaPorcentaje', parseFloat(e.target.value) || 0)}
                       style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-glass)', fontSize: '0.85rem', outline: 'none' }}
@@ -935,7 +933,7 @@ export default function AppConfigModal({
                     </label>
                     <input
                       type="number"
-                      step="0.5"
+                      step="0.01"
                       value={formData.igtfPorcentaje}
                       onChange={(e) => handleChange('igtfPorcentaje', parseFloat(e.target.value) || 0)}
                       style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-glass)', fontSize: '0.85rem', outline: 'none' }}
@@ -967,7 +965,7 @@ export default function AppConfigModal({
                     </label>
                     <input
                       type="number"
-                      step="50"
+                      step="0.01"
                       value={formData.limiteCreditoDefecto}
                       onChange={(e) => handleChange('limiteCreditoDefecto', parseFloat(e.target.value) || 0)}
                       style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-glass)', fontSize: '0.85rem', fontFamily: 'var(--font-code)', outline: 'none' }}
@@ -1192,7 +1190,7 @@ export default function AppConfigModal({
                     </label>
                     <input
                       type="number"
-                      step="0.5"
+                      step="0.01"
                       value={formData.margenGananciaAceites}
                       onChange={(e) => handleChange('margenGananciaAceites', parseFloat(e.target.value) || 0)}
                       style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-glass)', fontSize: '0.85rem', outline: 'none' }}

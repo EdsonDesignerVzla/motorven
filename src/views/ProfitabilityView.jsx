@@ -28,7 +28,7 @@ import {
   Zap,
   Info
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import SkuProfitabilityModal from '../components/SkuProfitabilityModal';
 import OperationalPandLModal from '../components/OperationalPandLModal';
 import MotorvenLogo from '../components/MotorvenLogo';
@@ -662,10 +662,10 @@ export default function ProfitabilityView({
 
                           <td style={{ padding: '0.75rem', textAlign: 'center' }}>
                             <div style={{ fontWeight: 700, color: p.stock > 0 ? 'var(--text-primary)' : '#ef4444' }}>
-                              {p.stock} <span style={{ fontSize: '0.7rem', fontWeight: 500 }}>cajas</span>
+                              {formatUnitVe(p.stock, 0)} <span style={{ fontSize: '0.7rem', fontWeight: 500 }}>cajas</span>
                             </div>
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                              {(p.stock * p.litrosPorUnidad).toFixed(0)} L
+                              {formatUnitVe(p.stock * p.litrosPorUnidad, 2)} L
                             </div>
                           </td>
 
@@ -708,7 +708,7 @@ export default function ProfitabilityView({
                               {formatUsd(p.facturadoUsd)}
                             </div>
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                              {p.unidadesVendidas} unid ({p.litrosVendidos.toFixed(0)} L)
+                              {formatUnitVe(p.unidadesVendidas, 0)} unid ({formatUnitVe(p.litrosVendidos, 2)} L)
                             </div>
                           </td>
 
@@ -757,7 +757,7 @@ export default function ProfitabilityView({
                       {line.categoria}
                     </h4>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {line.skusCount} referencias • {line.totalStock} cajas en stock ({line.totalLitrosStock.toFixed(0)} L)
+                      {line.skusCount} referencias • {formatUnitVe(line.totalStock, 0)} cajas en stock ({formatUnitVe(line.totalLitrosStock, 2)} L)
                     </span>
                   </div>
                   <span style={{
@@ -798,7 +798,7 @@ export default function ProfitabilityView({
 
                   <div style={{ background: 'var(--bg-glass-accent)', padding: '0.5rem 0.75rem', borderRadius: '8px' }}>
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>VOLUMEN COLOCADO</div>
-                    <div style={{ fontWeight: 800, color: '#3b82f6' }}>{line.litrosVendidos.toFixed(0)} L</div>
+                    <div style={{ fontWeight: 800, color: '#3b82f6' }}>{formatUnitVe(line.litrosVendidos, 2)} L</div>
                   </div>
                 </div>
               </div>
@@ -1005,7 +1005,7 @@ export default function ProfitabilityView({
                   Fecha de Emisión: {new Date().toLocaleDateString('es-VE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                  Tasa Oficial BCV: Bs. {tasa.toFixed(2)}
+                  Tasa Oficial BCV: {formatBs(tasa)}
                 </div>
               </div>
             </div>

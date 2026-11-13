@@ -257,7 +257,7 @@ export default function FiscalTicketModal({ closure, config = {}, currentUser = 
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>TASA OFICIAL BCV:</span>
-              <strong>Bs. {Number(closure.tasaBcv || 827.73).toFixed(2)} / USD</strong>
+              <strong>{formatBs(closure.tasaBcv || 827.73)} / USD</strong>
             </div>
 
             <div style={{ borderTop: '1px dashed #666', margin: '6px 0' }} />

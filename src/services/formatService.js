@@ -4,35 +4,54 @@
  * Formato Bs.: Bs. 1.000,00
  */
 
+export const round2 = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  const sign = num < 0 ? -1 : 1;
+  const abs = Math.abs(num);
+  // Evitar sesgo binario IEEE-754 en mitades (p. ej. 1.005 * 100 = 100.49999999999999)
+  const rounded = (sign * Math.round((abs + 1e-12) * 100)) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+};
+
+export const formatNumberUs = (value, decimals = 2) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return decimals > 0 ? `0.${'0'.repeat(decimals)}` : '0';
+  }
+  const safeVal = decimals === 2 ? round2(num) : num;
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(safeVal);
+};
+
+export const formatNumberVe = (value, decimals = 2) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return decimals > 0 ? `0,${'0'.repeat(decimals)}` : '0';
+  }
+  const safeVal = decimals === 2 ? round2(num) : num;
+  return new Intl.NumberFormat('de-DE', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(safeVal);
+};
+
+export const formatUnitVe = (value, decimals = 2) => formatNumberVe(value, decimals);
+
 export const formatUsd = (value) => {
   if (value === undefined || value === null || isNaN(Number(value))) {
     return '$ 0.00';
   }
-  // Redondeo a 2 decimales
-  const rounded = Math.round((Number(value) + Number.EPSILON) * 100) / 100;
-  
-  const formatted = new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(rounded);
-  
-  return `$ ${formatted}`;
+  return `$ ${formatNumberUs(value, 2)}`;
 };
 
 export const formatBs = (value) => {
   if (value === undefined || value === null || isNaN(Number(value))) {
     return 'Bs. 0,00';
   }
-  // Redondeo financiero estándar a 2 decimales (Normativa SENIAT / Contabilidad)
-  const val = Number(value);
-  const rounded = Math.round((val + Number.EPSILON) * 100) / 100;
-  
-  const formatted = new Intl.NumberFormat('de-DE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(rounded);
-  
-  return `Bs. ${formatted}`;
+  return `Bs. ${formatNumberVe(value, 2)}`;
 };
 
 /**

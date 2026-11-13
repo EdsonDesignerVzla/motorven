@@ -193,4 +193,42 @@ assert.strictEqual(realFs.balanceGeneral.ecuacionCuadrada, true, 'El Balance Gen
 assert.ok(realTb.totalSumasDebeUsd < 10000000, 'La normalización de cobranzas históricas Profit debe evitar montos en Bs multiplicados');
 console.log(`  ✓ ${realEntries.length} asientos reales auditados: 100% cuadrados (Sumas: $${realTb.totalSumasDebeUsd.toLocaleString('en-US')}, Activo = Pasivo + Patrimonio: $${realFs.balanceGeneral.totalActivoUsd.toLocaleString('en-US')}, Diff: $${realFs.balanceGeneral.diferenciaEcuacionUsd}).`);
 
+// 6. Regresión: Ventas POS de Contado no deben inflar CxC ni duplicar Ventas con cashMovements
+const posCashEntries = buildAccountingEntries({
+  profitInvoices: [
+    {
+      id: '000010',
+      factNum: '000010',
+      fechaEmision: '2026-11-12T15:00:00Z',
+      condicionPago: 'CONTADO',
+      metodoPago: 'EFECTIVO_USD',
+      diasCredito: 0,
+      totBrutoUsd: 100,
+      ivaUsd: 16,
+      totNetoUsd: 116,
+      saldoUsd: 0,
+      tasa: 827.73
+    }
+  ],
+  cashMovements: [
+    {
+      id: 'MOV-POS-10',
+      fecha: '2026-11-12T15:00:00Z',
+      tipo: 'INGRESO',
+      categoria: 'VENTAS',
+      referencia: '000010',
+      concepto: 'Cobro Venta 000010 - Cliente Contado',
+      montoUsd: 116,
+      metodo: 'EFECTIVO_USD'
+    }
+  ],
+  tasa: 827.73
+});
+assert.strictEqual(posCashEntries.length, 1, 'Venta POS contado con su cashMovement debe generar exactamente 1 asiento contable');
+const posCashGl = computeGeneralLedger(posCashEntries);
+assert.strictEqual(posCashGl.accountsByCode['1.01.03.001'], undefined, 'Venta POS contado NO debe tocar CxC Comerciales (1.01.03.001)');
+assert.strictEqual(posCashGl.accountsByCode['1.01.01.002']?.saldoFinalUsd, 116, 'Venta POS contado debe cargar $116 a Caja Divisas');
+assert.strictEqual(posCashGl.accountsByCode['4.01.01.001']?.saldoFinalUsd, 100, 'Ventas debe quedar en $100 sin duplicarse');
+console.log('  ✓ Regresión contable: Venta POS contado debita Caja directo sin inflar CxC ni duplicar Ventas.');
+
 console.log('\n--- TODAS LAS PRUEBAS DEL PLAN DE CUENTAS Y PARTIDA DOBLE FINALIZADAS CON ÉXITO ---');

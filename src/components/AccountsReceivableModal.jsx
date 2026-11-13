@@ -4,23 +4,46 @@ import {
     DollarSign, Users, Calendar, Filter, ArrowUpDown, ChevronDown,
     ChevronUp, Printer, ShieldAlert, TrendingDown, Eye, Trash2, Edit2,
     Plus, Landmark, Wallet, Receipt, FileText, Check, RefreshCw, MessageSquare,
-    ExternalLink, Database, Layers, UserPlus, UserCheck
+    ExternalLink, Database, Layers, UserPlus, UserCheck, History
 } from 'lucide-react';
 import {
     REAL_PROFIT_CASH_DESKS,
     REAL_PROFIT_BANK_ACCOUNTS,
     REAL_PROFIT_SELLERS
 } from '../data/supabaseRealData';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatNumberUs, formatUnitVe } from '../services/formatService';
+import {
+    getNextCxcMovementCorrelativo,
+    commitCxcMovementCorrelativo
+} from '../services/fiscalService';
 import {
     CXC_DELETED_DOCS_KEY,
     getScopedCxcDeleteKeys,
     isCxcEntryDeleted,
     sanitizeCxcDeletedDocsStorage
 } from '../services/supabaseService';
+import {
+    isCxcInvoiceCancelled,
+    inferCxcDocType,
+    getCxcScopedDocKey,
+    doesCollectionMatchInvoice,
+    classifyCollectionRateType
+} from '../utils/cxcUtils';
+import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
+import {
+    normalizeRateType,
+    getAllowedRateTypesForDoc,
+    resolveDefaultRateValue,
+    resolveRateMeta,
+    resolveRecordRateType,
+    resolveEffectiveRateNumber,
+    isFiscalDocumentForRatePolicy,
+    RATE_TYPE_META
+} from '../utils/rateClassificationUtils';
 import { generateAccountsReceivablePDF, generateDeliveryNotePDF, generateCollectionReceiptPDF, generateThirdPartyStatementPDF, generateCreditDebitNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import { CxcConsolidatedModal } from './CxcConsolidatedModal';
+import CxcMovementsModal from './CxcMovementsModal';
 import ClientRegistrationModal from './ClientRegistrationModal';
 import ClientApprovalsModal from './ClientApprovalsModal';
 import ClientsDirectoryModal from './ClientsDirectoryModal';
@@ -169,30 +192,6 @@ const resolveSellerFromCatalog = (rawId, rawName, sellerCatalog) => {
     };
 };
 
-const inferDocType = (raw) => {
-    const explicit = String(raw?.tipoDoc || raw?.tipo_doc || raw?.docType || '').toUpperCase().trim();
-    if (explicit === 'NOTA_ENTREGA' || explicit === 'N/E' || explicit === 'NE') {
-        return 'NOTA_ENTREGA';
-    }
-    const idStr = String(raw?.id || '').toUpperCase().trim();
-    const factStr = String(raw?.factNum || raw?.factura || raw?.numeroDoc || '').toUpperCase().trim();
-    const origStr = String(raw?.pedidoOrigenDoc || raw?.pedido_origen_doc || '').toUpperCase().trim();
-    if (
-        idStr.startsWith('NE-') ||
-        idStr.startsWith('NDE-') ||
-        factStr.startsWith('NE-') ||
-        factStr.startsWith('NDE-') ||
-        factStr.startsWith('NE') ||
-        origStr.startsWith('PED-NE')
-    ) {
-        return 'NOTA_ENTREGA';
-    }
-    if (explicit === 'FACTURA' || explicit === 'FACT') {
-        return 'FACTURA';
-    }
-    return 'FACTURA';
-};
-
 export function AccountsReceivableModal({
     isOpen = true,
     onClose,
@@ -212,6 +211,7 @@ export function AccountsReceivableModal({
     onDeleteSale,
     onSaveDocument,
     onRegisterCollection,
+    onUpdateCollection,
     onOpenCollectionIntelligence,
     onSaveClient,
     onDeleteClient,
@@ -241,6 +241,10 @@ export function AccountsReceivableModal({
     // Modal consolidado: Facturas Fiscales + Notas de Entrega sumadas
     const [isConsolidatedOpen, setIsConsolidatedOpen] = useState(false);
 
+    // Modal de Movimientos & Abonos por Día con correlativo e impresión Ctrl+P
+    const [isMovementsModalOpen, setIsMovementsModalOpen] = useState(false);
+    const [movementsInitialDoc, setMovementsInitialDoc] = useState(null);
+
     // Filtros del Reporte (Parte B)
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedClient, setSelectedClient] = useState('ALL');
@@ -260,10 +264,14 @@ export function AccountsReceivableModal({
     // ========================================================================
     // PARTE A: Estado del Formulario "Para Registrar Cobros"
     // ========================================================================
-    const tasaBcv = Number(config?.tasaDolar) > 0 ? Number(config.tasaDolar) : 451.51;
+    const { tasaBcv: resolvedBcvCfg, tasaKeystone: resolvedKeystoneCfg, tasaEuro: resolvedEuroCfg } = resolveExchangeRates(config);
+    const tasaBcv = resolvedBcvCfg > 0 ? resolvedBcvCfg : 451.51;
+    const tasaKeystone = resolvedKeystoneCfg > 0 ? resolvedKeystoneCfg : round2(tasaBcv * 1.03);
+    const tasaEuro = resolvedEuroCfg > 0 ? resolvedEuroCfg : tasaBcv;
     const [cobroDocKey, setCobroDocKey] = useState('');
     const [cobroDocSearch, setCobroDocSearch] = useState('');
-    const [cobroTasa, setCobroTasa] = useState(String(tasaBcv));
+    const [cobroTipoTasa, setCobroTipoTasa] = useState('BCV');
+    const [cobroTasa, setCobroTasa] = useState(round2(tasaBcv).toFixed(2));
     const [cobroFecha, setCobroFecha] = useState(getTodayIso());
     const [cobroCuentaKey, setCobroCuentaKey] = useState('');
     const [cobroMontoUsd, setCobroMontoUsd] = useState('');
@@ -279,12 +287,18 @@ export function AccountsReceivableModal({
     const [isCreatingDoc, setIsCreatingDoc] = useState(false);
     const [isSavingDoc, setIsSavingDoc] = useState(false);
 
-    // Sincronizar tasa por defecto cuando abre o cambia la configuración
+    // Sincronizar tasa por defecto según clasificación cuando cambia la configuración
     useEffect(() => {
-        if (tasaBcv > 0) {
-            setCobroTasa(String(tasaBcv));
+        if (cobroTipoTasa === 'BCV' && tasaBcv > 0) {
+            setCobroTasa(round2(tasaBcv).toFixed(2));
+        } else if (cobroTipoTasa === 'KEYSTONE' && tasaKeystone > 0) {
+            setCobroTasa(round2(tasaKeystone).toFixed(2));
+        } else if (cobroTipoTasa === 'EURO' && tasaEuro > 0) {
+            setCobroTasa(round2(tasaEuro).toFixed(2));
+        } else if (cobroTipoTasa === 'USD') {
+            setCobroTasa('1.00');
         }
-    }, [tasaBcv]);
+    }, [cobroTipoTasa, tasaBcv, tasaKeystone, tasaEuro]);
 
     // Catálogo unificado de Caja y Bancos para la Parte A
     const catalogCuentas = useMemo(() => {
@@ -300,6 +314,7 @@ export function AccountsReceivableModal({
                 key: `CAJA:${id}`,
                 kind: 'CAJA',
                 rawId: id,
+                coCaja: code,
                 accountType: 'CAJA',
                 id,
                 nombre: desc,
@@ -312,12 +327,15 @@ export function AccountsReceivableModal({
 
         banksSource.forEach((b, idx) => {
             const code = b.cod_cta || b.codCta || b.code || b.id || `cta-${idx}`;
+            const bankId = b.id || (String(code).toUpperCase().startsWith('CTA-') ? code : `CTA-${code}`);
             const num = b.numCta || b.num_cta || b.nroCta || b.nro_cta || code;
             const bancoName = b.bancoNombre || b.banco_nombre || b.banco || b.des_ban || b.desBan || 'Banco';
             list.push({
                 key: `BANCO:${code}`,
                 kind: 'BANCO',
                 rawId: code,
+                bankId,
+                codCta: code,
                 accountType: 'BANCO',
                 id: code,
                 nombre: `${bancoName} (${num})`,
@@ -370,12 +388,13 @@ export function AccountsReceivableModal({
         const delSet = new Set(sanitizeCxcDeletedDocsStorage().map(k => String(k).trim()).filter(Boolean));
         const isDocDeleted = (docOrObj) => isCxcEntryDeleted(docOrObj, delSet);
 
-        // 1. Cargar documentos desde profitInvoices (omitiendo eliminados y unificando duplicados 000583 / 583)
+        // 1. Cargar documentos desde profitInvoices (omitiendo eliminados y unificando duplicados 000583 / 583 sin cruzar FAC vs NE)
         (profitInvoices || []).forEach(inv => {
             const key = String(inv.factNum || inv.id || '').trim();
-            if (!key || isDocDeleted(inv)) return;
-            const docType = inferDocType(inv);
+            if (!key || isDocDeleted(inv) || isCxcInvoiceCancelled(inv)) return;
+            const docType = inferCxcDocType(inv);
             const cKey = canonicalDocLookupKey(key, docType);
+            const scopedKey = getCxcScopedDocKey(inv, docType) || `${docType}:${key}`;
             const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
             const resolvedInvSeller = resolveSellerFromCatalog(
                 inv.vendedorId || inv.co_ven,
@@ -384,6 +403,8 @@ export function AccountsReceivableModal({
             );
             const normalizedInv = {
                 ...inv,
+                factNum: key,
+                tipoDoc: docType,
                 vendedorId: resolvedInvSeller.sellerId,
                 vendedorNombre: resolvedInvSeller.sellerName,
                 _source: isPosFormat ? 'POS' : 'PROFIT',
@@ -400,43 +421,42 @@ export function AccountsReceivableModal({
                     normalizeTextSimple(existing.clienteNombre) === normalizeTextSimple(inv.clienteNombre);
 
                 if (sameClient) {
-                    const preferredKey = /^0+\d+$/.test(existingRawKey) && !/^0+\d+$/.test(key) ? key : existingRawKey;
+                    const existingDisplayNum = String(existing.factNum || existingRawKey).trim();
+                    const preferredDisplayNum = /^0+\d+$/.test(existingDisplayNum) && !/^0+\d+$/.test(key) ? key : existingDisplayNum;
                     const mergedSeller = resolveSellerFromCatalog(
                         existing.vendedorId && existing.vendedorId !== 'OF' ? existing.vendedorId : normalizedInv.vendedorId,
                         existing.vendedorNombre || normalizedInv.vendedorNombre,
                         sellerCatalog
                     );
-                    if (preferredKey !== existingRawKey) {
-                        rawMap.delete(existingRawKey);
-                    }
-                    rawMap.set(preferredKey, {
+                    rawMap.set(existingRawKey, {
                         ...existing,
                         ...normalizedInv,
-                        factNum: preferredKey,
+                        factNum: preferredDisplayNum,
                         items: pickPreferredLineItems(existing.items, normalizedInv.items),
                         vendedorId: mergedSeller.sellerId,
                         vendedorNombre: mergedSeller.sellerName
                     });
-                    if (cKey) canonicalKeyToRawKey.set(cKey, preferredKey);
                     return;
                 }
             }
 
-            rawMap.set(key, normalizedInv);
-            if (cKey) canonicalKeyToRawKey.set(cKey, key);
+            rawMap.set(scopedKey, normalizedInv);
+            if (cKey) canonicalKeyToRawKey.set(cKey, scopedKey);
         });
 
         // 2. Cargar todas las Facturas Fiscales y Notas de Entrega emitidas en POS (sales/invoices)
         effectiveSales.forEach(sale => {
+            if (!sale || isCxcInvoiceCancelled(sale)) return;
             const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
             if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
-            const saleDocType = inferDocType(sale);
+            const saleDocType = inferCxcDocType(sale);
             const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
             const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
             if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
 
             const cKey = canonicalDocLookupKey(key, saleDocType);
-            const existingRawKey = rawMap.has(key) ? key : (cKey ? canonicalKeyToRawKey.get(cKey) : null);
+            const scopedSaleKey = getCxcScopedDocKey({ ...sale, factNum: key, tipoDoc: saleDocType }, saleDocType) || `${saleDocType}:${key}`;
+            const existingRawKey = rawMap.has(scopedSaleKey) ? scopedSaleKey : (cKey ? canonicalKeyToRawKey.get(cKey) : null);
 
             const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
             const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
@@ -467,7 +487,7 @@ export function AccountsReceivableModal({
             );
 
             if (!existingRawKey) {
-                rawMap.set(key, {
+                rawMap.set(scopedSaleKey, {
                     id: sale.id || `DOC-${key}`,
                     factNum: key,
                     tipoDoc: saleDocType,
@@ -495,7 +515,7 @@ export function AccountsReceivableModal({
                     _source: 'POS',
                     _isPosSale: true
                 });
-                if (cKey) canonicalKeyToRawKey.set(cKey, key);
+                if (cKey) canonicalKeyToRawKey.set(cKey, scopedSaleKey);
             } else {
                 const existing = rawMap.get(existingRawKey);
                 const resolvedMergedSeller = resolveSellerFromCatalog(
@@ -516,28 +536,42 @@ export function AccountsReceivableModal({
             }
         });
 
-        // 3. Aplicar overrides locales de esta sesión (respetando cambios remotos más recientes vía SSE)
+        // 3. Aplicar overrides locales de esta sesión (respetando cambios remotos y sin cruzar FACTURA vs NOTA_ENTREGA)
         Object.entries(localDocOverrides).forEach(([key, override]) => {
             if (override?._deleted) {
                 rawMap.delete(key);
-                const cleanKey = String(key).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-                for (const mapK of Array.from(rawMap.keys())) {
-                    const cleanMapK = String(mapK).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-                    if (cleanMapK === cleanKey || mapK === key) {
+                const delTipo = override._tipoDoc ? inferCxcDocType({ tipoDoc: override._tipoDoc }) : inferCxcDocType(key);
+                const delCanon = canonicalDocLookupKey(key, delTipo);
+                for (const [mapK, mapVal] of Array.from(rawMap.entries())) {
+                    if (mapK === key) {
+                        rawMap.delete(mapK);
+                        continue;
+                    }
+                    const mapTipo = inferCxcDocType(mapVal);
+                    if (mapTipo !== delTipo) continue;
+                    const mapCanon = canonicalDocLookupKey(mapVal?.factNum || mapK, mapTipo);
+                    if ((delCanon && mapCanon === delCanon) || String(mapVal?.id || '') === String(key)) {
                         rawMap.delete(mapK);
                     }
                 }
                 return;
             }
-            const existing = rawMap.get(key) || {};
+            const ovTipo = inferCxcDocType(override);
+            const ovCanon = canonicalDocLookupKey(override?.factNum || key, ovTipo);
+            const targetKey = rawMap.has(key)
+                ? key
+                : ((ovCanon && canonicalKeyToRawKey.get(ovCanon)) || getCxcScopedDocKey(override, ovTipo) || key);
+            const existing = rawMap.get(targetKey) || {};
             const existingTs = Date.parse(existing.updated_at || existing.fechaSincronizacion || existing.fecha_sincronizacion || '') || 0;
             const localTs = Date.parse(override?._localSavedAt || override?.updated_at || override?.fechaSincronizacion || '') || 0;
             if (existingTs > 0 && localTs > 0 && existingTs > localTs) {
                 return;
             }
-            rawMap.set(key, {
+            rawMap.set(targetKey, {
                 ...existing,
                 ...override,
+                factNum: override?.factNum || existing.factNum || String(key).replace(/^(FAC:|NE:|NC:|ND:)/i, ''),
+                tipoDoc: ovTipo,
                 items: pickPreferredLineItems(existing.items, override?.items)
             });
         });
@@ -545,10 +579,11 @@ export function AccountsReceivableModal({
         const processed = [];
 
         rawMap.forEach((inv, mapKey) => {
-            if (inv.anulada) return;
+            if (isCxcInvoiceCancelled(inv)) return;
 
             const factNum = String(inv.factNum || inv.factura || mapKey).trim();
-            const tipoDoc = inferDocType(inv);
+            const tipoDoc = inferCxcDocType(inv);
+            const scopedOverrideKey = getCxcScopedDocKey({ ...inv, factNum, tipoDoc }, tipoDoc);
             const isNotaEntrega = tipoDoc === 'NOTA_ENTREGA';
             const isPosDoc = Boolean(inv._isPosSale) || inv._source === 'POS' || /^0+\d+$/.test(factNum) || /^NE-0+\d+$/i.test(factNum);
 
@@ -590,7 +625,8 @@ export function AccountsReceivableModal({
                 Boolean(inv._customCreated) ||
                 (rawAbonosField !== undefined && rawAbonosField !== null && !isNaN(Number(rawAbonosField)) && Number(rawAbonosField) > 0.01);
             const hasCobroHistory = Array.isArray(inv.historialCobros) && inv.historialCobros.length > 0;
-            const hasManualOverride = Boolean(localDocOverrides[factNum]) || recentlyPaidKeys.has(factNum);
+            const matchingScopedOverride = localDocOverrides[scopedOverrideKey];
+            const hasManualOverride = Boolean(matchingScopedOverride) || recentlyPaidKeys.has(scopedOverrideKey) || recentlyPaidKeys.has(factNum);
             let abonosUsd = 0;
             if (isPosDoc && !isExplicitlySettled && !hasCobroHistory && !hasManualOverride && Number(rawSaldoField ?? 0) <= 0.01) {
                 // Facturas emitidas desde el POS sin cobros ni edición registrados en CxC inician pendientes por cobrar en CxC
@@ -647,12 +683,12 @@ export function AccountsReceivableModal({
             vencMidnight.setHours(0, 0, 0, 0);
             const diffVencDays = Math.floor((today.getTime() - vencMidnight.getTime()) / (1000 * 60 * 60 * 24));
 
-            const hasExplicitSessionCustomDays = localDocOverrides[factNum]?.diasVencidoCustom !== undefined &&
-                localDocOverrides[factNum]?.diasVencidoCustom !== null &&
-                localDocOverrides[factNum]?.diasVencidoCustom !== '';
+            const hasExplicitSessionCustomDays = matchingScopedOverride?.diasVencidoCustom !== undefined &&
+                matchingScopedOverride?.diasVencidoCustom !== null &&
+                matchingScopedOverride?.diasVencidoCustom !== '';
 
             const diasVencidos = hasExplicitSessionCustomDays
-                ? Number(localDocOverrides[factNum].diasVencidoCustom)
+                ? Number(matchingScopedOverride.diasVencidoCustom)
                 : (inv.diasVencidoCustom !== undefined && inv.diasVencidoCustom !== null && inv.diasVencidoCustom !== '' && Number(inv.diasVencidoCustom) > 0)
                     ? Math.max(Number(inv.diasVencidoCustom), Math.max(0, diffVencDays))
                     : Math.max(0, diffVencDays);
@@ -703,6 +739,9 @@ export function AccountsReceivableModal({
                 abonosBs: round2(abonosUsd * tasaDoc),
                 saldoPendienteBs: round2(restanteUsd * tasaDoc),
                 tasa: tasaDoc,
+                tipoTasa: resolveRecordRateType(inv, 'BCV'),
+                tasaPago: resolveEffectiveRateNumber(inv, tasaDoc),
+                monedaPago: inv.monedaPago || inv.moneda_pago || (String(inv.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
                 rawTotalNetoBs: inv.totalNeto ?? inv.tot_neto ?? inv.totNetoBs ?? null,
                 originalTotalNetoUsd: inv.totalNetoUsd ?? inv.originalTotalNetoUsd ?? null,
                 _customCreated: Boolean(inv._customCreated),
@@ -1030,14 +1069,56 @@ export function AccountsReceivableModal({
     // ========================================================================
     // Handlers de Parte A: Formulario "Para Registrar Cobros"
     // ========================================================================
+    const isSelectedCobroFiscal = selectedCobroDoc
+        ? isFiscalDocumentForRatePolicy(selectedCobroDoc.tipoDoc)
+        : activeDocType !== 'NOTA_ENTREGA';
+    const allowedCobroRateTypes = useMemo(
+        () => getAllowedRateTypesForDoc(selectedCobroDoc?.tipoDoc || activeDocType, { includeEuro: true }),
+        [selectedCobroDoc?.tipoDoc, activeDocType]
+    );
+
+    useEffect(() => {
+        if (isSelectedCobroFiscal && cobroTipoTasa !== 'BCV' && cobroTipoTasa !== 'USD') {
+            setCobroTipoTasa('BCV');
+            setCobroTasa(round2(tasaBcv).toFixed(2));
+        }
+    }, [isSelectedCobroFiscal, cobroTipoTasa, tasaBcv]);
+
+    const handleCobroTipoTasaChange = (nextTypeRaw) => {
+        const nextType = normalizeRateType(nextTypeRaw, {
+            tipoDoc: selectedCobroDoc?.tipoDoc || activeDocType,
+            fallback: 'BCV'
+        });
+        setCobroTipoTasa(nextType);
+        const nextRate = resolveDefaultRateValue(nextType, {
+            tasaBcv,
+            tasaKeystone,
+            tasaEuro,
+            customRate: Number(cobroTasa) > 10 ? Number(cobroTasa) : tasaBcv
+        });
+        setCobroTasa(round2(nextRate).toFixed(2));
+        const usd = Number(cobroMontoUsd);
+        if (nextType === 'USD') {
+            setCobroMontoBs('0.00');
+        } else if (!isNaN(usd) && cobroMontoUsd !== '' && nextRate > 0) {
+            setCobroMontoBs(String(round2(usd * nextRate).toFixed(2)));
+        }
+    };
+
     const handleSelectDocForCobro = (factNum) => {
         setCobroDocKey(factNum);
         const doc = docsForActiveType.find(d => String(d.factNum) === String(factNum));
         if (doc) {
-            const rate = Number(cobroTasa) > 0 ? Number(cobroTasa) : tasaBcv;
+            const docIsFiscal = isFiscalDocumentForRatePolicy(doc.tipoDoc);
+            const nextType = docIsFiscal
+                ? (cobroTipoTasa === 'USD' ? 'USD' : 'BCV')
+                : normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: cobroTipoTasa || 'BCV' });
+            setCobroTipoTasa(nextType);
+            const rate = resolveDefaultRateValue(nextType, { tasaBcv, tasaKeystone, tasaEuro, customRate: doc.tasaPago || doc.tasa });
+            setCobroTasa(round2(rate).toFixed(2));
             const rest = round2(doc.restanteUsd);
             setCobroMontoUsd(String(rest.toFixed(2)));
-            setCobroMontoBs(String(round2(rest * rate).toFixed(2)));
+            setCobroMontoBs(nextType === 'USD' ? '0.00' : String(round2(rest * rate).toFixed(2)));
         }
     };
 
@@ -1115,41 +1196,67 @@ export function AccountsReceivableModal({
         }
 
         if (abonoUsd > round2(selectedCobroDoc.restanteUsd + 0.01)) {
-            const msg = `El monto a cobrar ($${abonoUsd.toFixed(2)}) no puede superar el Restante del documento ($${selectedCobroDoc.restanteUsd.toFixed(2)}).`;
+            const msg = `El monto a cobrar ($${formatNumberUs(abonoUsd)}) no puede superar el Restante del documento ($${formatNumberUs(selectedCobroDoc.restanteUsd)}).`;
             setCobroFeedback({ type: 'error', message: msg });
             notify.warning(msg);
             return;
         }
 
+        const resolvedTipoTasa = normalizeRateType(cobroTipoTasa, {
+            tipoDoc: selectedCobroDoc.tipoDoc,
+            monedaPago: cobroTipoTasa === 'USD' ? 'USD' : 'BS',
+            fallback: 'BCV'
+        });
+        const isDirectUsdCobro = resolvedTipoTasa === 'USD';
         const effectiveAbonoUsd = Math.min(abonoUsd, selectedCobroDoc.restanteUsd);
-        const effectiveAbonoBs = round2(effectiveAbonoUsd * tasaNum);
+        const typedBs = round2(Number(cobroMontoBs));
+        const computedBs = isDirectUsdCobro ? 0 : round2(effectiveAbonoUsd * tasaNum);
+        const effectiveAbonoBs = isDirectUsdCobro
+            ? 0
+            : ((typedBs > 0 && Math.abs(computedBs - typedBs) < Math.max(2, tasaNum * 0.015))
+                ? typedBs
+                : computedBs);
         const nuevoAbonosUsd = round2(selectedCobroDoc.abonosUsd + effectiveAbonoUsd);
         const nuevoRestanteUsd = round2(Math.max(0, selectedCobroDoc.montoFacturaUsd - nuevoAbonosUsd));
 
+        const factKey = String(selectedCobroDoc.factNum);
+        const scopedCobroKey = getCxcScopedDocKey(selectedCobroDoc, selectedCobroDoc.tipoDoc);
+        const prevOverrideSnapshot = localDocOverrides[scopedCobroKey];
+        const prevRecentlyPaidHadKey = recentlyPaidKeys.has(scopedCobroKey);
+
         setIsSavingCobro(true);
         try {
-            const factKey = String(selectedCobroDoc.factNum);
-            const cobroNum = `COB-${Date.now().toString().slice(-6)}`;
-            const observacionCobro = `Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} @ Tasa ${tasaNum}`;
+            const cobNum = getNextCxcMovementCorrelativo(collections, allDocuments);
+            const effectiveTasaPago = isDirectUsdCobro ? 1 : tasaNum;
+            const monedaPagoVal = isDirectUsdCobro ? 'USD' : 'BS';
+            const observacionCobro = isDirectUsdCobro
+                ? `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} [Divisa Directa USD]`
+                : `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} @ Tasa ${tasaNum} [${resolvedTipoTasa}]`;
             const cobroRecord = {
-                cobroNum,
+                id: `mov-${cobNum}-${Date.now().toString().slice(-4)}`,
+                correlativo: cobNum,
+                cobNum,
                 factNum: factKey,
                 tipoDoc: selectedCobroDoc.tipoDoc,
                 fecha: cobroFecha,
-                tasa: tasaNum,
+                tasa: effectiveTasaPago,
+                tasaPago: effectiveTasaPago,
+                tipoTasa: resolvedTipoTasa,
+                monedaPago: monedaPagoVal,
                 montoUsd: effectiveAbonoUsd,
                 montoBs: effectiveAbonoBs,
                 cuentaKey: cuentaObj.key,
                 cuentaId: cuentaObj.rawId || cuentaObj.id,
                 cuentaNombre: cuentaObj.nombre,
                 accountType: cuentaObj.accountType,
-                moneda: cuentaObj.moneda,
+                moneda: isDirectUsdCobro ? 'US$' : cuentaObj.moneda,
                 referencia: cobroReferencia.trim()
             };
 
             const collectionPayload = {
-                id: `cob-${cobroNum}`,
-                cobNum: cobroNum,
+                id: `cob-mov-${cobNum}-${Date.now().toString().slice(-5)}`,
+                correlativo: cobNum,
+                cobNum,
                 fecha: cobroFecha,
                 clienteId: selectedCobroDoc.clienteId || '',
                 clienteNombre: selectedCobroDoc.cliente || 'Cliente General',
@@ -1157,7 +1264,12 @@ export function AccountsReceivableModal({
                 vendedorId: selectedCobroDoc.vendedorId || 'OF',
                 montoUsd: effectiveAbonoUsd,
                 montoBs: effectiveAbonoBs,
-                tasa: tasaNum,
+                tasa: effectiveTasaPago,
+                tasaPago: effectiveTasaPago,
+                tipoTasa: resolvedTipoTasa,
+                tipo_tasa: resolvedTipoTasa,
+                monedaPago: monedaPagoVal,
+                moneda_pago: monedaPagoVal,
                 cuentaId: cuentaObj.rawId || cuentaObj.id,
                 cuentaNombre: cuentaObj.nombre,
                 descrip: observacionCobro,
@@ -1165,9 +1277,12 @@ export function AccountsReceivableModal({
                     formaPago: cuentaObj.accountType === 'CAJA' ? 'EFEC' : 'TRANS',
                     monto: effectiveAbonoBs,
                     montoUsd: effectiveAbonoUsd,
+                    tipoTasa: resolvedTipoTasa,
+                    tasaPago: effectiveTasaPago,
                     referencia: cobroReferencia.trim(),
                     codCaja: cuentaObj.accountType === 'CAJA' ? (cuentaObj.rawId || cuentaObj.id) : '',
-                    codCta: cuentaObj.accountType === 'BANCO' ? (cuentaObj.rawId || cuentaObj.id) : ''
+                    codCta: cuentaObj.accountType === 'BANCO' ? (cuentaObj.rawId || cuentaObj.id) : '',
+                    banco: cuentaObj.accountType === 'BANCO' ? (cuentaObj.rawId || cuentaObj.id) : ''
                 }],
                 documentosAfectados: [{
                     numDoc: factKey,
@@ -1195,7 +1310,10 @@ export function AccountsReceivableModal({
                 totNetoUsd: selectedCobroDoc.montoFacturaUsd,
                 abonosUsd: nuevoAbonosUsd,
                 saldoUsd: nuevoRestanteUsd,
-                tasa: tasaNum,
+                tasa: isDirectUsdCobro ? (Number(selectedCobroDoc.tasa || tasaBcv) || 1) : tasaNum,
+                tipoTasa: resolvedTipoTasa,
+                tasaPago: effectiveTasaPago,
+                monedaPago: monedaPagoVal,
                 historialCobros: [cobroRecord, ...(selectedCobroDoc.historialCobros || [])]
             };
 
@@ -1211,13 +1329,13 @@ export function AccountsReceivableModal({
             if (nuevoRestanteUsd > 0.01) {
                 setRecentlyPaidKeys(prev => {
                     const next = new Set(prev);
-                    next.add(factKey);
+                    next.add(scopedCobroKey);
                     return next;
                 });
             }
             setLocalDocOverrides(prev => ({
                 ...prev,
-                [factKey]: overridePayload
+                [scopedCobroKey]: overridePayload
             }));
 
             // 2. Persistir en App / Supabase / Cajas y Bancos
@@ -1232,10 +1350,13 @@ export function AccountsReceivableModal({
                     clienteNombre: selectedCobroDoc.cliente,
                     vendedorId: selectedCobroDoc.vendedorId,
                     fecha: cobroFecha,
-                    tasa: tasaNum,
+                    tasa: effectiveTasaPago,
+                    tasaPago: effectiveTasaPago,
+                    tipoTasa: resolvedTipoTasa,
+                    monedaPago: monedaPagoVal,
                     montoUsd: effectiveAbonoUsd,
                     montoBs: effectiveAbonoBs,
-                    moneda: cuentaObj.moneda,
+                    moneda: isDirectUsdCobro ? 'US$' : cuentaObj.moneda,
                     accountType: cuentaObj.accountType,
                     accountId: cuentaObj.rawId || cuentaObj.id,
                     cuentaDestino: cuentaObj.nombre,
@@ -1246,30 +1367,46 @@ export function AccountsReceivableModal({
                 });
             }
 
+            commitCxcMovementCorrelativo(cobNum);
+
             const successMsg = nuevoRestanteUsd <= 0.01
-                ? `Cobro total registrado en #${factKey} (${formatUsd(effectiveAbonoUsd)}). Estatus PAGADA — movido a Solventes.`
-                : `Cobro registrado en #${factKey}: Abono ${formatUsd(effectiveAbonoUsd)} (${formatBs(effectiveAbonoBs)}) → Nuevo Total Abonos: ${formatUsd(nuevoAbonosUsd)} | Restante: ${formatUsd(nuevoRestanteUsd)}`;
+                ? `Cobro total #${cobNum} registrado en #${factKey} (${formatUsd(effectiveAbonoUsd)}). Estatus PAGADA — movido a Solventes.`
+                : `Cobro #${cobNum} registrado en #${factKey}: Abono ${formatUsd(effectiveAbonoUsd)} (${formatBs(effectiveAbonoBs)}) → Nuevo Total Abonos: ${formatUsd(nuevoAbonosUsd)} | Restante: ${formatUsd(nuevoRestanteUsd)}`;
             setCobroFeedback({
                 type: 'success',
                 message: successMsg,
                 receipt: {
-                  cobNum: `REC-${Date.now().toString().slice(-6)}`,
+                  cobNum,
+                  factNum: factKey,
+                  tipoDoc: selectedCobroDoc.tipoDoc || 'FACTURA',
                   fecha: cobroFecha,
+                  clienteNombre: selectedCobroDoc.cliente,
                   cliDes: selectedCobroDoc.cliente,
                   coCli: selectedCobroDoc.clienteId,
+                  clienteRif: selectedCobroDoc.rif || '',
                   rif: selectedCobroDoc.rif || '',
-                  tasa: tasaNum,
+                  tasa: effectiveTasaPago,
+                  tasaPago: effectiveTasaPago,
+                  tipoTasa: resolvedTipoTasa,
+                  monedaPago: monedaPagoVal,
                   montoUsd: effectiveAbonoUsd,
                   montoBs: effectiveAbonoBs,
                   formaPago: cuentaObj.accountType === 'CAJA' ? 'EFECTIVO' : 'TRANSFERENCIA',
                   referencia: cobroReferencia.trim(),
-                  cuentaDestino: cuentaObj.nombre,
+                  cuentaNombre: cuentaObj.nombre,
                   descrip: `Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${factKey}`
                 },
                 allocations: [
                   {
-                    tipoDoc: selectedCobroDoc.tipoDoc || 'FACT',
-                    numDoc: factKey,
+                    factNum: factKey,
+                    tipoDoc: selectedCobroDoc.tipoDoc || 'FACTURA',
+                    tipoTasa: resolvedTipoTasa,
+                    tasaPago: effectiveTasaPago,
+                    tasa: effectiveTasaPago,
+                    abonoUsd: effectiveAbonoUsd,
+                    montoBs: effectiveAbonoBs,
+                    saldoAnteriorUsd: round2(selectedCobroDoc.restanteUsd),
+                    saldoRestanteUsd: nuevoRestanteUsd,
                     montoCobrado: effectiveAbonoBs,
                     montoCobradoUsd: effectiveAbonoUsd
                   }
@@ -1287,8 +1424,24 @@ export function AccountsReceivableModal({
                 setCobroMontoBs('');
             }
         } catch (err) {
+            // Rollback optimista si el servidor o tesorería falló
+            setLocalDocOverrides(prev => {
+                const next = { ...prev };
+                if (prevOverrideSnapshot === undefined) {
+                    delete next[scopedCobroKey];
+                } else {
+                    next[scopedCobroKey] = prevOverrideSnapshot;
+                }
+                return next;
+            });
+            setRecentlyPaidKeys(prev => {
+                const next = new Set(prev);
+                if (prevRecentlyPaidHadKey) next.add(scopedCobroKey);
+                else next.delete(scopedCobroKey);
+                return next;
+            });
             console.error('Error registrando cobro CxC:', err);
-            const errMsg = 'Ocurrió un error al registrar el cobro en el servidor.';
+            const errMsg = err?.message || 'Ocurrió un error al registrar el cobro en el servidor.';
             setCobroFeedback({ type: 'error', message: errMsg });
             notify.error(errMsg);
         } finally {
@@ -1338,6 +1491,7 @@ export function AccountsReceivableModal({
         setIsCreatingDoc(false);
         setEditingDoc({
             originalFactNum: inv.factNum,
+            originalTipoDoc: inv.tipoDoc,
             id: inv.id,
             tipoDoc: inv.tipoDoc,
             vendedorId: inv.vendedorId || 'OF',
@@ -1356,7 +1510,7 @@ export function AccountsReceivableModal({
             montoFacturaUsd: round2(inv.montoFacturaUsd),
             abonosUsd: round2(inv.abonosUsd),
             restanteUsd: round2(inv.restanteUsd),
-            tasa: Number(inv.tasa || tasaBcv),
+            tasa: round2(inv.tasa || tasaBcv),
             observaciones: inv.observaciones || '',
             items: Array.isArray(inv.items) ? inv.items : [],
             historialCobros: inv.historialCobros || []
@@ -1503,29 +1657,40 @@ export function AccountsReceivableModal({
             _localSavedAt: savedAtIso
         };
 
+        const scopedEditKey = getCxcScopedDocKey(payload, payload.tipoDoc);
+        const origScopedKey = editingDoc.originalFactNum
+            ? getCxcScopedDocKey({ factNum: editingDoc.originalFactNum, tipoDoc: editingDoc.originalTipoDoc || editingDoc.tipoDoc }, editingDoc.originalTipoDoc || editingDoc.tipoDoc)
+            : '';
+        const prevOverrideSnapshot = localDocOverrides[scopedEditKey];
+        const prevOrigOverrideSnapshot = origScopedKey ? localDocOverrides[origScopedKey] : undefined;
+        const prevRecentlyPaidHadKey = recentlyPaidKeys.has(scopedEditKey);
+
         setIsSavingDoc(true);
         try {
             setLocalDocOverrides(prev => {
                 const next = { ...prev };
-                if (editingDoc.originalFactNum && editingDoc.originalFactNum !== factKey) {
-                    next[editingDoc.originalFactNum] = { _deleted: true };
+                if (origScopedKey && origScopedKey !== scopedEditKey) {
+                    next[origScopedKey] = { _deleted: true, _tipoDoc: editingDoc.originalTipoDoc || editingDoc.tipoDoc };
                 }
-                next[factKey] = overridePayload;
+                next[scopedEditKey] = overridePayload;
                 return next;
             });
 
             setRecentlyPaidKeys(prev => {
                 const next = new Set(prev);
                 if (restanteUsd <= 0.01) {
-                    next.delete(factKey);
+                    next.delete(scopedEditKey);
                 } else {
-                    next.add(factKey);
+                    next.add(scopedEditKey);
                 }
                 return next;
             });
 
             if (onSaveDocument) {
-                await onSaveDocument(payload);
+                const savedRes = await onSaveDocument(payload);
+                if (!savedRes) {
+                    throw new Error('No se pudo confirmar el guardado del documento en el servidor.');
+                }
             }
 
             if (editingDoc.tipoDoc !== activeDocType) {
@@ -1543,6 +1708,22 @@ export function AccountsReceivableModal({
             }
             setEditingDoc(null);
         } catch (err) {
+            setLocalDocOverrides(prev => {
+                const next = { ...prev };
+                if (prevOverrideSnapshot === undefined) delete next[scopedEditKey];
+                else next[scopedEditKey] = prevOverrideSnapshot;
+                if (origScopedKey && origScopedKey !== scopedEditKey) {
+                    if (prevOrigOverrideSnapshot === undefined) delete next[origScopedKey];
+                    else next[origScopedKey] = prevOrigOverrideSnapshot;
+                }
+                return next;
+            });
+            setRecentlyPaidKeys(prev => {
+                const next = new Set(prev);
+                if (prevRecentlyPaidHadKey) next.add(scopedEditKey);
+                else next.delete(scopedEditKey);
+                return next;
+            });
             console.error('Error guardando documento CxC:', err);
             notify.error('No se pudo guardar el documento: ' + (err.message || 'Error del servidor'));
         } finally {
@@ -1559,13 +1740,21 @@ export function AccountsReceivableModal({
         const rawId = String(inv.id || '').trim();
         const keysToDelete = getScopedCxcDeleteKeys(inv);
 
+        const prevDeletedSnapshots = {};
+        keysToDelete.forEach(k => {
+            prevDeletedSnapshots[k] = localDocOverrides[k];
+        });
+        const scopedDelKey = getCxcScopedDocKey(inv, inv.tipoDoc);
+        prevDeletedSnapshots[scopedDelKey] = localDocOverrides[scopedDelKey];
+
         setDeletingKey(rawId || rawNum);
         try {
-            // 1. Marcar como eliminado en overrides de la sesión
+            // 1. Marcar como eliminado en overrides de la sesión (acotado por tipoDoc)
             setLocalDocOverrides(prev => {
                 const next = { ...prev };
+                next[scopedDelKey] = { _deleted: true, _tipoDoc: inv.tipoDoc };
                 keysToDelete.forEach(k => {
-                    next[k] = { _deleted: true };
+                    next[k] = { _deleted: true, _tipoDoc: inv.tipoDoc };
                 });
                 return next;
             });
@@ -1601,6 +1790,14 @@ export function AccountsReceivableModal({
             }
             notify.success(`${docLabel} #${inv.factura} eliminada de Cuentas por Cobrar.`);
         } catch (err) {
+            setLocalDocOverrides(prev => {
+                const next = { ...prev };
+                Object.entries(prevDeletedSnapshots).forEach(([k, oldVal]) => {
+                    if (oldVal === undefined) delete next[k];
+                    else next[k] = oldVal;
+                });
+                return next;
+            });
             console.error('Error al eliminar documento:', err);
             notify.error('Error al eliminar: ' + (err.message || 'Error desconocido'));
         } finally {
@@ -2034,6 +2231,33 @@ export function AccountsReceivableModal({
                     {/* Estado de Cuenta Cliente PDF */}
                     <button
                         type="button"
+                        onClick={() => {
+                            setMovementsInitialDoc(null);
+                            setIsMovementsModalOpen(true);
+                        }}
+                        className="btn"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            padding: '0.55rem 0.95rem',
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                            background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.28), rgba(2, 132, 199, 0.35))',
+                            border: '1px solid rgba(129, 140, 248, 0.5)',
+                            color: '#ffffff',
+                            boxShadow: '0 2px 10px rgba(79, 70, 229, 0.25)',
+                            cursor: 'pointer'
+                        }}
+                        title="Ver, insertar e imprimir (Ctrl + P) los movimientos y abonos diarios por factura con correlativo"
+                    >
+                        <History size={16} color="#a5b4fc" />
+                        <span>Movimientos / Abonos</span>
+                    </button>
+
+                    {/* Estado de Cuenta Cliente PDF */}
+                    <button
+                        type="button"
                         onClick={() => generateThirdPartyStatementPDF({
                             entity: {
                                 nombre: selectedClient === 'ALL' ? 'Clientes Filtrados (Estado de Cuenta General)' : (filteredInvoices[0]?.cliente || selectedClient),
@@ -2043,7 +2267,12 @@ export function AccountsReceivableModal({
                             documents: filteredInvoices.map(inv => ({
                                 ...inv,
                                 numeroDoc: inv.factNum,
-                                totalUsd: inv.montoFacturaUsd
+                                totNetoUsd: inv.montoFacturaUsd,
+                                totalUsd: inv.montoFacturaUsd,
+                                abonosUsd: inv.abonosUsd,
+                                saldoUsd: inv.restanteUsd,
+                                isVencida: Number(inv.diasVencidos || 0) > 0,
+                                diasMora: Number(inv.diasVencidos || 0)
                             })),
                             config,
                             currentUser
@@ -2355,29 +2584,64 @@ export function AccountsReceivableModal({
                                 ) : (
                                     searchedPayableDocs.map(doc => (
                                         <option key={doc.factNum} value={doc.factNum}>
-                                            #{doc.factura} • {doc.cliente.slice(0, 22)} • RIF: {doc.rif} • Vend: {doc.vendedorId} • Restante: ${doc.restanteUsd.toFixed(2)}
+                                            #{doc.factura} • {doc.cliente.slice(0, 22)} • RIF: {doc.rif} • Vend: {doc.vendedorId} • Restante: ${formatNumberUs(doc.restanteUsd)}
                                         </option>
                                     ))
                                 )}
                             </select>
                         </div>
 
-                        {/* Campo 1 Requerido: TASA (Decimal, multimoneda) */}
+                        {/* Campo 1 Requerido: CLASIFICACIÓN DE TASA + TASA */}
+                        <div style={{ minWidth: '210px' }}>
+                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                                Clasificación de Tasa * {isSelectedCobroFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(Fiscal: Solo BCV/USD)</span>}
+                            </label>
+                            <select
+                                value={cobroTipoTasa}
+                                onChange={(e) => handleCobroTipoTasaChange(e.target.value)}
+                                className="select-modern"
+                                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: RATE_TYPE_META[cobroTipoTasa]?.color || '#10b981' }}
+                            >
+                                {allowedCobroRateTypes.map((rt) => (
+                                    <option key={rt} value={rt}>
+                                        {RATE_TYPE_META[rt]?.label || rt}
+                                        {rt === 'BCV' ? ` (Bs. ${tasaBcv.toFixed(2)})` : rt === 'KEYSTONE' ? ` (Bs. ${tasaKeystone.toFixed(2)})` : rt === 'EURO' ? ` (Bs. ${tasaEuro.toFixed(2)})` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
                         <div>
                             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                                Tasa (Bs/USD) *
+                                {cobroTipoTasa === 'USD' ? 'Moneda Directa' : 'Tasa del Cobro (Bs/USD) *'}
                             </label>
-                            <input
-                                type="number"
-                                step="0.0001"
-                                min="0.0001"
-                                required
-                                value={cobroTasa}
-                                onChange={(e) => handleTasaChange(e.target.value)}
-                                placeholder="Ej. 451.51"
-                                className="input-modern"
-                                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: '#10b981' }}
-                            />
+                            {cobroTipoTasa === 'USD' ? (
+                                <div className="input-modern" style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: '#22c55e', fontFamily: 'var(--font-code)' }}>
+                                    Divisa Directa USD ($1 = $1)
+                                </div>
+                            ) : (
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0.01"
+                                    required
+                                    readOnly={cobroTipoTasa !== 'EDITABLE'}
+                                    value={cobroTasa}
+                                    onChange={(e) => handleTasaChange(e.target.value)}
+                                    placeholder="Ej. 451.51"
+                                    className="input-modern"
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.65rem 0.85rem',
+                                        fontSize: '0.85rem',
+                                        fontWeight: 700,
+                                        fontFamily: 'var(--font-code)',
+                                        color: '#10b981',
+                                        opacity: cobroTipoTasa !== 'EDITABLE' ? 0.88 : 1,
+                                        cursor: cobroTipoTasa !== 'EDITABLE' ? 'not-allowed' : 'text'
+                                    }}
+                                />
+                            )}
                         </div>
 
                         {/* Campo 2 Requerido: FECHA (Date, default hoy) */}
@@ -2933,6 +3197,14 @@ export function AccountsReceivableModal({
                                             <ArrowUpDown size={12} />
                                         </div>
                                     </th>
+                                    {/* 8b. Clasificación Tasa */}
+                                    <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center' }}>
+                                        Clasif. Tasa
+                                    </th>
+                                    {/* 8c. Tasa Aplicada */}
+                                    <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>
+                                        Tasa
+                                    </th>
                                     {/* 9. Monto Factura */}
                                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('montoFacturaUsd')}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
@@ -2963,7 +3235,7 @@ export function AccountsReceivableModal({
                             <tbody>
                                 {filteredInvoices.length === 0 ? (
                                     <tr>
-                                        <td colSpan="12" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                        <td colSpan="14" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
                                                 <CheckCircle size={36} color="#10b981" />
                                                 <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
@@ -3101,6 +3373,34 @@ export function AccountsReceivableModal({
                                                     {inv.diasCredito} días
                                                 </td>
 
+                                                {/* 8b. Clasificación Tasa */}
+                                                <td style={{ padding: '0.85rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                                    {(() => {
+                                                        const rType = resolveRecordRateType(inv, 'BCV');
+                                                        const rMeta = resolveRateMeta(rType, 'BCV');
+                                                        return (
+                                                            <span style={{
+                                                                display: 'inline-block',
+                                                                padding: '0.16rem 0.48rem',
+                                                                borderRadius: '6px',
+                                                                fontSize: '0.7rem',
+                                                                fontWeight: 800,
+                                                                fontFamily: 'var(--font-code)',
+                                                                background: rMeta.bg,
+                                                                color: rMeta.color,
+                                                                border: `1px solid ${rMeta.border}`
+                                                            }}>
+                                                                {rMeta.badgeText}
+                                                            </span>
+                                                        );
+                                                    })()}
+                                                </td>
+
+                                                {/* 8c. Tasa Aplicada */}
+                                                <td style={{ padding: '0.85rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                                    {inv.tipoTasa === 'USD' ? 'USD Directo' : formatBs(resolveEffectiveRateNumber(inv, tasaBcv))}
+                                                </td>
+
                                                 {/* 9. Monto Factura */}
                                                 <td style={{ padding: '0.85rem 0.9rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-code)', whiteSpace: 'nowrap' }}>
                                                     {formatUsd(inv.montoFacturaUsd)}
@@ -3167,6 +3467,26 @@ export function AccountsReceivableModal({
                                                             title="Ver Detalle"
                                                         >
                                                             <Eye size={14} />
+                                                        </button>
+
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setMovementsInitialDoc(inv);
+                                                                setIsMovementsModalOpen(true);
+                                                            }}
+                                                            className="btn"
+                                                            style={{
+                                                                padding: '0.35rem 0.55rem',
+                                                                borderRadius: '7px',
+                                                                background: 'rgba(99, 102, 241, 0.16)',
+                                                                color: '#a5b4fc',
+                                                                border: '1px solid rgba(99, 102, 241, 0.4)',
+                                                                cursor: 'pointer'
+                                                            }}
+                                                            title={`Ver o insertar movimientos / abonos de #${inv.factura}`}
+                                                        >
+                                                            <History size={14} />
                                                         </button>
 
                                                         {(inv.tipoDoc === 'NOTA_CREDITO' || inv.tipoDoc === 'NOTA_DEBITO') && (
@@ -3270,7 +3590,7 @@ export function AccountsReceivableModal({
                             {filteredInvoices.length > 0 && (
                                 <tfoot>
                                     <tr style={{ fontWeight: 700 }}>
-                                        <td colSpan="8" style={{ padding: '0.9rem', textAlign: 'right', textTransform: 'uppercase', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                        <td colSpan="10" style={{ padding: '0.9rem', textAlign: 'right', textTransform: 'uppercase', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                                             Totales del Reporte ({filteredInvoices.length} documentos):
                                         </td>
                                         <td style={{ padding: '0.9rem', textAlign: 'right', color: 'var(--text-primary)', fontFamily: 'var(--font-code)', fontSize: '0.9rem' }}>
@@ -3513,10 +3833,10 @@ export function AccountsReceivableModal({
                                     </label>
                                     <input
                                         type="number"
-                                        step="0.0001"
-                                        min="0.0001"
+                                        step="0.01"
+                                        min="0.01"
                                         required
-                                        value={editingDoc.tasa || tasaBcv}
+                                        value={editingDoc.tasa || round2(tasaBcv)}
                                         onChange={(e) => handleEditFieldChange('tasa', e.target.value)}
                                         placeholder="Ej. 451.51"
                                         className="input-modern"
@@ -3617,11 +3937,11 @@ export function AccountsReceivableModal({
                                                     onChange={(e) => handleEditFieldChange('aplicaIva', e.target.checked)}
                                                 />
                                                 <span style={{ fontSize: '0.85rem', fontFamily: 'var(--font-code)', color: 'var(--text-primary)' }}>
-                                                    ${Number(editingDoc.ivaUsd || 0).toFixed(2)}
+                                                    ${formatNumberUs(editingDoc.ivaUsd || 0)}
                                                 </span>
                                             </div>
                                             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
-                                                Bs. {formatBs(round2(Number(editingDoc.ivaUsd || 0) * (Number(editingDoc.tasa) || tasaBcv)))}
+                                                {formatBs(round2(Number(editingDoc.ivaUsd || 0) * (Number(editingDoc.tasa) || tasaBcv)))}
                                             </div>
                                         </div>
                                     )}
@@ -3723,6 +4043,45 @@ export function AccountsReceivableModal({
                 onViewDetail={(doc) => setSelectedInvoiceDetail(doc)}
                 config={config}
                 currentUser={currentUser}
+            />
+
+            {/* ============================================================
+                MODAL DE MOVIMIENTOS & ABONOS POR DÍA CON CORRELATIVO (CTRL + P)
+            ============================================================ */}
+            <CxcMovementsModal
+                isOpen={isMovementsModalOpen}
+                onClose={() => {
+                    setIsMovementsModalOpen(false);
+                    setMovementsInitialDoc(null);
+                }}
+                documents={allDocuments}
+                collections={collections}
+                catalogCuentas={catalogCuentas}
+                config={config}
+                tasaBcv={tasaBcv}
+                currentUser={currentUser}
+                initialDocument={movementsInitialDoc}
+                onRegisterCollection={onRegisterCollection}
+                onSaveDocument={onSaveDocument}
+                onUpdateCollection={onUpdateCollection}
+                onUpdateLocalDoc={(factKey, overridePayload, newRestante) => {
+                    if (newRestante > 0.01) {
+                        setRecentlyPaidKeys(prev => {
+                            const next = new Set(prev);
+                            next.add(factKey);
+                            return next;
+                        });
+                    }
+                    setLocalDocOverrides(prev => ({
+                        ...prev,
+                        [factKey]: {
+                            ...overridePayload,
+                            fechaSincronizacion: new Date().toISOString(),
+                            updated_at: new Date().toISOString(),
+                            _localSavedAt: new Date().toISOString()
+                        }
+                    }));
+                }}
             />
 
             {/* ============================================================
@@ -3870,11 +4229,120 @@ export function AccountsReceivableModal({
                                                             <td style={{ padding: '0.45rem 0.65rem', color: 'var(--text-primary)' }}>{it.descripcion}</td>
                                                             <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center', color: 'var(--text-muted)' }}>{it.presentacion}</td>
                                                             <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center', fontWeight: 700 }}>{it.cantidad}</td>
-                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', color: 'var(--text-muted)' }}>{it.volumenTotal > 0 ? `${it.volumenTotal.toFixed(1)} L` : '-'}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', color: 'var(--text-muted)' }}>{it.volumenTotal > 0 ? `${formatUnitVe(it.volumenTotal)} L` : '-'}</td>
                                                             <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUsd(it.precioUsd)}</td>
                                                             <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#10b981' }}>{formatUsd(it.subtotalUsd)}</td>
                                                         </tr>
                                                     ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* Historial de Cobros Aplicados (vinculado desde profit_collections + historial local) */}
+                            {(() => {
+                                const linkedCollections = (collections || [])
+                                    .filter(col => doesCollectionMatchInvoice(col, selectedInvoiceDetail))
+                                    .map(col => {
+                                        const docEntries = Array.isArray(col.documentosAfectados) ? col.documentosAfectados : [];
+                                        const firstDocEntry = docEntries[0] || {};
+                                        const firstForma = Array.isArray(col.formasPago) && col.formasPago[0] ? col.formasPago[0] : {};
+                                        const cTasa = Number(col.tasa || selectedInvoiceDetail.tasa || tasaBcv || 1) || 1;
+                                        const rawUsd = Number(firstDocEntry.montoCobradoUsd ?? col.montoUsd ?? 0);
+                                        const rawBs = Number(firstDocEntry.montoCobrado ?? col.montoBs ?? 0);
+                                        const usd = (cTasa > 10 && rawUsd > 0 && Math.abs(rawUsd - rawBs) < 1)
+                                            ? round2(rawUsd / cTasa)
+                                            : round2(rawUsd || (cTasa > 0 ? rawBs / cTasa : 0));
+                                        const bs = (cTasa > 1 && usd > 0 && Math.abs(rawBs - usd) < 0.01)
+                                            ? round2(usd * cTasa)
+                                            : round2(rawBs || usd * cTasa);
+                                        return {
+                                            id: col.id || `col-${col.cobNum}`,
+                                            cobNum: col.cobNum || col.correlativo || 'COB',
+                                            fecha: col.fecha || col.fecCob || '',
+                                            cuentaNombre: col.cuentaNombre || firstForma.formaPago || 'Tesorería',
+                                            referencia: firstForma.referencia || col.referencia || '',
+                                            montoUsd: usd,
+                                            montoBs: bs,
+                                            tasa: cTasa,
+                                            tipoTasa: resolveRecordRateType(col, 'BCV'),
+                                            tasaPago: resolveEffectiveRateNumber(col, cTasa)
+                                        };
+                                    });
+                                const seenCobKeys = new Set(linkedCollections.map(c => String(c.cobNum || c.id).trim()));
+                                const localExtraCobros = (selectedInvoiceDetail.historialCobros || [])
+                                    .filter(hc => !seenCobKeys.has(String(hc.cobNum || hc.correlativo || hc.id || '').trim()));
+                                const allDetailCobros = [...linkedCollections, ...localExtraCobros];
+                                if (allDetailCobros.length === 0) return null;
+
+                                return (
+                                    <div style={{
+                                        background: 'var(--bg-surface)',
+                                        borderRadius: '12px',
+                                        border: '1px solid var(--border-glass)',
+                                        overflow: 'hidden'
+                                    }}>
+                                        <div style={{
+                                            padding: '0.6rem 0.9rem',
+                                            borderBottom: '1px solid var(--border-glass)',
+                                            fontSize: '0.76rem',
+                                            fontWeight: 800,
+                                            color: '#10b981',
+                                            textTransform: 'uppercase',
+                                            letterSpacing: '0.4px'
+                                        }}>
+                                            Cobros y Abonos Vinculados ({allDetailCobros.length})
+                                        </div>
+                                        <div style={{ overflowX: 'auto' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.74rem' }}>
+                                                <thead>
+                                                    <tr style={{ background: 'rgba(15, 23, 42, 0.35)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                                                        <th style={{ padding: '0.45rem 0.65rem' }}>Cobro #</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem' }}>Fecha</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem' }}>Cuenta / Forma</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>Clasif. Tasa</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'right' }}>Tasa</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem' }}>Ref.</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'right' }}>Monto ($)</th>
+                                                        <th style={{ padding: '0.45rem 0.65rem', textAlign: 'right' }}>Equiv. (Bs.)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {allDetailCobros.map((c, idx) => {
+                                                        const cRateType = resolveRecordRateType(c, 'BCV');
+                                                        const cRateMeta = resolveRateMeta(cRateType, 'BCV');
+                                                        const cRateNum = resolveEffectiveRateNumber(c, c.tasa || 0);
+                                                        return (
+                                                        <tr key={c.id || idx} style={{ borderTop: '1px solid var(--border-glass)' }}>
+                                                            <td style={{ padding: '0.45rem 0.65rem', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#60a5fa' }}>#{c.cobNum || c.correlativo || 'COB'}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem' }}>{formatDateShort(c.fecha)}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', color: 'var(--text-primary)' }}>{c.cuentaNombre || '—'}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
+                                                                <span style={{
+                                                                    display: 'inline-block',
+                                                                    padding: '0.1rem 0.4rem',
+                                                                    borderRadius: '4px',
+                                                                    fontSize: '0.66rem',
+                                                                    fontWeight: 800,
+                                                                    fontFamily: 'var(--font-code)',
+                                                                    background: cRateMeta.bg,
+                                                                    color: cRateMeta.color,
+                                                                    border: `1px solid ${cRateMeta.border}`
+                                                                }}>
+                                                                    {cRateMeta.badgeText}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                                                                {cRateType === 'USD' ? 'USD' : (cRateNum > 0 ? formatBs(cRateNum) : '—')}
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>{c.referencia || '—'}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#10b981' }}>{formatUsd(c.montoUsd)}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b' }}>{cRateType === 'USD' && !(Number(c.montoBs) > 0) ? 'Divisa USD' : formatBs(c.montoBs)}</td>
+                                                        </tr>
+                                                        );
+                                                    })}
                                                 </tbody>
                                             </table>
                                         </div>
@@ -3919,6 +4387,28 @@ export function AccountsReceivableModal({
                             </div>
 
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', paddingTop: '0.5rem', flexWrap: 'wrap' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const doc = selectedInvoiceDetail;
+                                        setSelectedInvoiceDetail(null);
+                                        setMovementsInitialDoc(doc);
+                                        setIsMovementsModalOpen(true);
+                                    }}
+                                    className="btn"
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        background: 'rgba(99, 102, 241, 0.2)',
+                                        color: '#a5b4fc',
+                                        border: '1px solid rgba(99, 102, 241, 0.45)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    <History size={14} />
+                                    <span>Movimientos / Abonos</span>
+                                </button>
                                 {selectedInvoiceDetail.tipoDoc === 'NOTA_ENTREGA' && (
                                     <button
                                         type="button"

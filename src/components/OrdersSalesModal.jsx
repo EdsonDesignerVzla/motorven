@@ -37,17 +37,25 @@ import {
   Hash,
   Check,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Pencil,
+  Save,
   Users,
   UserPlus
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
   calculateExpirationDate,
   formatDateVe,
   isCreditPaymentCondition,
-  decodeClientRequestMetadata
+  decodeClientRequestMetadata,
+  parseInvoiceDateInfo,
+  formatInvoiceDateTimeDisplay,
+  preserveDateWithTime,
+  toLocalYmd
 } from '../services/creditPolicyService';
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
@@ -64,11 +72,18 @@ import {
   pickPreferredLineItems
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
-import { getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
+import { calculateFiscalTaxes, resolveConfigIgtfOptions, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts, getEraScopedCanonicalDocKey, isLegacyPreNovInvoice } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
 import ClientsDirectoryModal from './ClientsDirectoryModal';
-import { saveSupabaseProfitInvoice, saveSupabaseNotification } from '../services/supabaseService';
+import { saveSupabaseProfitInvoice, saveSupabaseNotification, updateSupabaseInvoiceDocument } from '../services/supabaseService';
+
+const normalizeSearchText = (val) =>
+  String(val || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 
 const STATUS_CONFIG = {
   PENDIENTE: {
@@ -164,6 +179,7 @@ export default function OrdersSalesModal({
   initialOrder = null,
   onProceedToPOS,
   onSaveCxcDocument,
+  onUpdateInvoiceDocument,
   onSaveClient,
   onDeleteClient,
   onApproveClient,
@@ -197,14 +213,42 @@ export default function OrdersSalesModal({
 
   // Estados para TAB 6: Listado de Facturas (List View)
   const [invoiceConditionFilter, setInvoiceConditionFilter] = useState('ALL'); // 'ALL' | 'CONTADO' | 'CREDITO'
+  const [invoiceDocTypeFilter, setInvoiceDocTypeFilter] = useState('ALL'); // 'ALL' | 'FACTURA' | 'NOTA_ENTREGA'
   const [invoiceSearchQuery, setInvoiceSearchQuery] = useState('');
-  const [invoicePeriodFilter, setInvoicePeriodFilter] = useState('ALL'); // 'ALL' | 'TODAY' | 'WEEK' | 'MONTH'
+  const [invoicePeriodFilter, setInvoicePeriodFilter] = useState('ALL'); // 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK' | 'MONTH'
+  const [invoiceNumColFilter, setInvoiceNumColFilter] = useState('');
+  const [invoiceDateColFilter, setInvoiceDateColFilter] = useState('');
+  const [invoiceClientColFilter, setInvoiceClientColFilter] = useState('');
+  const [invoiceSellerColFilter, setInvoiceSellerColFilter] = useState('ALL');
+  const [invoiceCondColFilter, setInvoiceCondColFilter] = useState('ALL');
+  const [invoiceItemsColFilter, setInvoiceItemsColFilter] = useState('ALL'); // 'ALL' | 'MULTI' | 'WITH_LITERS'
+  const [invoiceMinUsdFilter, setInvoiceMinUsdFilter] = useState('');
+  const [invoiceMinBsFilter, setInvoiceMinBsFilter] = useState('');
+  const [showColumnFilters, setShowColumnFilters] = useState(true);
   const [invoiceSortField, setInvoiceSortField] = useState('fecha'); // 'factura' | 'fecha' | 'cliente' | 'rif' | 'vendedor' | 'condicion' | 'renglones' | 'totalUsd' | 'totalBs'
   const [invoiceSortDirection, setInvoiceSortDirection] = useState('desc'); // 'asc' | 'desc'
   const [invoiceToDelete, setInvoiceToDelete] = useState(null);
   const [deleteConfirmKeyword, setDeleteConfirmKeyword] = useState('');
   const [isDeletingInvoice, setIsDeletingInvoice] = useState(false);
-  const [localDeletedInvoiceKeys, setLocalDeletedInvoiceKeys] = useState(() => new Set());
+  const [localDeletedInvoiceKeys, setLocalDeletedInvoiceKeys] = useState(() => new Map());
+  const [editingInvoice, setEditingInvoice] = useState(null);
+  const [isSavingEditedInvoice, setIsSavingEditedInvoice] = useState(false);
+  const [editClientSearch, setEditClientSearch] = useState('');
+
+  const handleResetInvoiceFilters = () => {
+    setInvoiceConditionFilter('ALL');
+    setInvoiceDocTypeFilter('ALL');
+    setInvoiceSearchQuery('');
+    setInvoicePeriodFilter('ALL');
+    setInvoiceNumColFilter('');
+    setInvoiceDateColFilter('');
+    setInvoiceClientColFilter('');
+    setInvoiceSellerColFilter('ALL');
+    setInvoiceCondColFilter('ALL');
+    setInvoiceItemsColFilter('ALL');
+    setInvoiceMinUsdFilter('');
+    setInvoiceMinBsFilter('');
+  };
 
   const handleInvoiceSort = (field) => {
     if (invoiceSortField === field) {
@@ -309,43 +353,85 @@ export default function OrdersSalesModal({
 
   const tasaBcv = Number(config?.tasaDolar) || 827.73;
 
-  const buildSaleDocFromOrder = (order, cfg, tasa) => {
-    if (!order) return null;
-    const cfgTasa = Number(order.tasaDolar || cfg?.tasaDolar || tasa) || 827.73;
-    const rawItems = order.items || [];
-    const items = rawItems.map((it, idx) => {
+  /**
+   * Mapea los renglones de un pedido con su alícuota fiscal del inventario y calcula
+   * los totales tributarios consistentes con processSupabaseSale.
+   */
+  const computeOrderBillingFiscal = (order, paymentMethod, tasa) => {
+    const isOrdNE = isOrderNotaEntrega(order);
+    const metodoResolved = paymentMethod === 'CREDITO'
+      ? 'CREDITO'
+      : (paymentMethod || order?.metodoPagoFactura || order?.metodoPago || 'EFECTIVO_USD');
+    const isCredit =
+      isCreditPaymentCondition(order?.condicionPago, metodoResolved) ||
+      Number(order?.diasCredito || 0) > 0;
+    const effectiveCondicion = paymentMethod === 'CREDITO' ? 'CREDITO' : (order?.condicionPago || 'CONTADO');
+    const items = (order?.items || []).map((it, idx) => {
+      const prod = (safeProducts || []).find(
+        p => p && (p.id === it.articuloId || p.codigo === it.articuloId || p.codigo === it.codigo)
+      );
       const cant = Number(it.cantidad || 1);
       const precio = Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0);
-      const subtotalUsd = Number(it.totalUsd ?? it.subtotalUsd ?? (cant * precio));
+      const subtotalUsd = Number(it.totalUsd ?? it.subtotalUsd ?? lineSubtotal(cant, precio));
+      const aplicaIva = prod ? prod.aplicaIva !== false : it.aplicaIva !== false;
+      const alicuota =
+        it.tipoAlicuota && it.tipoAlicuota !== '16%'
+          ? it.tipoAlicuota
+          : (prod?.tipoAlicuota || (aplicaIva ? 'GENERAL_16' : 'EXENTO_0'));
       return {
-        codigo: it.articuloId || it.codigo || `LUB-${idx + 1}`,
-        descripcion: it.articuloDescripcion || it.descripcion || 'Lubricante Automotriz Oilstone',
+        articuloId: it.articuloId || prod?.id || '',
+        codigo: prod?.codigo || it.codigo || it.articuloId || `LUB-${idx + 1}`,
+        descripcion: it.articuloDescripcion || it.descripcion || prod?.descripcion || 'Lubricante Automotriz Oilstone',
         cantidad: cant,
         precioUsd: precio,
-        subtotalUsd: subtotalUsd,
-        tipoAlicuota: it.tipoAlicuota || '16%',
+        subtotalUsd,
+        aplicaIva,
+        tipoAlicuota: alicuota,
+        litrosPorUnidad: Number(it.litrosUnitarios || (prod ? resolveProductLitersPerUnit(prod) : 0)),
         litros: it.litrosTotales || (cant * (it.litrosPorUnidad || 1))
       };
     });
+    const taxes = calculateFiscalTaxes({
+      items,
+      tipoDoc: isOrdNE ? 'NOTA_ENTREGA' : 'FACTURA',
+      metodoPago: isCredit && metodoResolved === 'CREDITO' ? 'CREDITO' : metodoResolved,
+      condicionPago: isCredit ? 'CREDITO' : 'CONTADO',
+      tasaBcv: Number(tasa) || tasaBcv,
+      ...resolveConfigIgtfOptions(config)
+    });
+    return { isOrdNE, isCredit, effectiveCondicion, metodoResolved, items, taxes };
+  };
 
-    const isOrdNe =
-      order.tipoDoc === 'NOTA_ENTREGA' ||
-      order.tipo_doc === 'NOTA_ENTREGA' ||
-      order.modalidadVenta === 'OFICINA' ||
-      order.almacen === '02' ||
-      order.co_alma === '02' ||
-      String(order.numeroDoc || order.id || order.nroFactura || '').toUpperCase().startsWith('PED-NE') ||
-      String(order.nroFactura || order.numeroDoc || '').toUpperCase().startsWith('NE-');
-    const totUsd = Number(order.totalNetoUsd || order.totalUsd || 0);
-    const baseUsd = isOrdNe ? totUsd : (totUsd > 0 ? (totUsd / 1.16) : 0);
-    const ivaUsd = isOrdNe ? 0 : (totUsd - baseUsd);
-    const totBs = totUsd * cfgTasa;
-    const baseBs = baseUsd * cfgTasa;
-    const ivaBs = ivaUsd * cfgTasa;
+  const buildSaleDocFromOrder = (order, cfg, tasa) => {
+    if (!order) return null;
+    const cfgTasa = Number(order.tasaDolar || cfg?.tasaDolar || tasa) || 827.73;
+    const { isOrdNE: isOrdNe, isCredit, metodoResolved: metodoPagoResolved, items, taxes } =
+      computeOrderBillingFiscal(order, order.metodoPagoFactura || order.metodoPago, cfgTasa);
+
+    let baseUsd = 0;
+    let ivaUsd = 0;
+    let igtfUsd = 0;
+    let totUsd = Number(order.totalNetoUsd || order.totalUsd || 0);
+    if (isOrdNe) {
+      baseUsd = totUsd;
+    } else if (Number(order.ivaUsd || 0) > 0 && Number(order.totalBrutoUsd || 0) > 0) {
+      baseUsd = Number(order.totalBrutoUsd);
+      ivaUsd = Number(order.ivaUsd);
+      igtfUsd = Number(order.igtfUsd || 0);
+      totUsd = Number(order.totalNetoUsd || order.totalUsd || (baseUsd + ivaUsd + igtfUsd));
+    } else {
+      baseUsd = taxes.subtotalNetoUsd;
+      ivaUsd = taxes.totalIvaUsd;
+      igtfUsd = taxes.igtfUsd;
+      totUsd = taxes.totalFacturaUsd;
+    }
+    const totBs = Number((totUsd * cfgTasa).toFixed(2));
+    const baseBs = Number((baseUsd * cfgTasa).toFixed(2));
+    const ivaBs = Number((ivaUsd * cfgTasa).toFixed(2));
+    const igtfBs = Number((igtfUsd * cfgTasa).toFixed(2));
 
     const correlativo = String(order.nroFactura || order.numeroDoc || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
     const docNum = isOrdNe ? `NE-${correlativo}` : correlativo;
-    const isCredit = isOrdNe || order.condicionPago === 'CREDITO' || (typeof order.condicionPago === 'string' && (order.condicionPago.includes('CREDITO') || order.condicionPago.includes('DIAS')));
 
     return {
       id: docNum,
@@ -357,21 +443,25 @@ export default function OrdersSalesModal({
       clienteRif: order.clienteRif || 'J-00000000',
       clienteDireccion: order.direccionEntrega || order.clienteDireccion || '',
       fechaEmision: order.fechaFactura || order.fecha || new Date().toISOString(),
-      fechaVencimiento: order.fechaVencimiento || (isCredit ? calculateExpirationDate(order.fechaFactura || new Date(), resolveCreditDaysFromTerm(order.condicionPago)) : new Date().toISOString()),
-      condicionPago: order.condicionPago || 'CONTADO',
-      diasCredito: resolveCreditDaysFromTerm(order.condicionPago),
-      metodoPago: order.metodoPagoFactura || order.metodoPago || 'EFECTIVO USD',
+      fechaVencimiento: order.fechaVencimiento || (isCredit ? calculateExpirationDate(order.fechaFactura || new Date(), resolveCreditDaysFromTerm(order.condicionPago, 15, order.diasCredito)) : new Date().toISOString()),
+      condicionPago: order.condicionPago || (isCredit ? 'CREDITO' : 'CONTADO'),
+      diasCredito: isCredit ? resolveCreditDaysFromTerm(order.condicionPago, 15, order.diasCredito) : 0,
+      metodoPago: metodoPagoResolved,
       tasaDolar: cfgTasa,
       items,
+      subtotalUsd: baseUsd,
       baseGeneralUsd: baseUsd,
       baseGeneralBs: baseBs,
+      ivaUsd,
       ivaGeneralUsd: ivaUsd,
       ivaGeneralBs: ivaBs,
+      igtfUsd,
+      igtfBs,
       totalUsd: totUsd,
       totalBs: totBs,
-      saldoUsd: isCredit ? totUsd : 0,
-      saldoBs: isCredit ? totBs : 0,
-      estado: isCredit ? 'PENDIENTE' : 'PAGADO',
+      saldoUsd: Number(order.saldoUsd ?? totUsd),
+      saldoBs: Number(order.saldoUsd !== undefined ? Number(order.saldoUsd) * cfgTasa : totBs),
+      estado: Number(order.saldoUsd ?? totUsd) <= 0.01 ? 'PAGADO' : 'PENDIENTE',
       vendedor: order.vendedorId || 'Asesor Comercial'
     };
   };
@@ -406,12 +496,17 @@ export default function OrdersSalesModal({
     [clientRequests]
   );
   const filteredClientRequests = useMemo(() => {
-    const term = searchQuery.toLowerCase().trim();
+    const term = normalizeSearchText(searchQuery);
+    const rifTerm = term.replace(/[^a-z0-9]/g, '');
     return clientRequests.filter((r) => {
       if (clientReqFilter !== 'ALL' && r.status !== clientReqFilter) return false;
       if (!term) return true;
       return [r.nombre, r.rif, r.solicitudDoc, r.vendedorNombre, r.zonaNombre, r.telefono]
-        .some((v) => v && String(v).toLowerCase().includes(term));
+        .some((v) => {
+          if (!v) return false;
+          const norm = normalizeSearchText(v);
+          return norm.includes(term) || (rifTerm && norm.replace(/[^a-z0-9]/g, '').includes(rifTerm));
+        });
     });
   }, [clientRequests, clientReqFilter, searchQuery]);
 
@@ -1266,7 +1361,7 @@ export default function OrdersSalesModal({
       setIsSaving(true);
       const isNotaEntrega = modalidadVenta === 'OFICINA';
       const prefix = isNotaEntrega ? 'PED-NE' : 'PED-FF';
-      const orderId = `${prefix}-${Date.now().toString().slice(-6)}`;
+      const orderId = `${prefix}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
       const clientName = activeClientObj?.nombre || activeClientObj?.razonSocial || clientSearchText || 'Cliente General';
       const clientRif = activeClientObj?.rif || 'J-000000000';
 
@@ -1460,21 +1555,43 @@ export default function OrdersSalesModal({
 
   // Filtrado de pedidos según búsqueda, estatus y zona
   const filterOrders = (ordersList) => {
+    const rawTerm = normalizeSearchText(searchQuery);
+    const strippedNumTerm = rawTerm.replace(/^#/, '').trim();
+    const rifTerm = rawTerm.replace(/[^a-z0-9]/g, '');
     return ordersList.filter(ord => {
       if (!ord) return false;
-      const term = searchQuery.toLowerCase().trim();
       const matchSearch =
-        !term ||
-        String(ord.id || '').toLowerCase().includes(term) ||
-        String(ord.numeroDoc || '').toLowerCase().includes(term) ||
-        String(ord.clienteNombre || '').toLowerCase().includes(term) ||
-        String(ord.clienteRif || '').toLowerCase().includes(term) ||
-        String(ord.vendedorId || '').toLowerCase().includes(term);
+        !rawTerm ||
+        [
+          ord.id,
+          ord.numeroDoc,
+          ord.nroFactura,
+          ord.clienteNombre,
+          ord.cliente_nombre,
+          ord.clienteRif,
+          ord.cliente_rif,
+          ord.vendedorId,
+          ord.vendedorNombre,
+          ord.zonaNombre,
+          ord.condicionPago,
+          ord.observaciones
+        ].some((val) => {
+          if (!val) return false;
+          const norm = normalizeSearchText(val);
+          return (
+            norm.includes(rawTerm) ||
+            (strippedNumTerm && norm.includes(strippedNumTerm)) ||
+            (rifTerm && norm.replace(/[^a-z0-9]/g, '').includes(rifTerm))
+          );
+        });
 
       const matchStatus = statusFilter === 'ALL'
         ? (ord.status !== 'FACTURADO' && ord.status !== 'ANULADO')
         : ord.status === statusFilter;
-      const matchZone = zoneFilter === 'ALL' || ord.zonaVenta === zoneFilter;
+      const matchZone =
+        zoneFilter === 'ALL' ||
+        ord.zonaVenta === zoneFilter ||
+        String(ord.zonaVenta || '').startsWith(zoneFilter);
 
       return matchSearch && matchStatus && matchZone;
     });
@@ -1494,33 +1611,159 @@ export default function OrdersSalesModal({
   // TAB 6: LÓGICA DE DATOS PARA LISTADO DE FACTURAS (LIST VIEW)
   // =========================================================================
 
+  // Helpers uniformes para resolver campos de facturas / notas de entrega (Profit, Supabase, POS)
+  const resolveInvoiceTipoDoc = (inv) => {
+    if (!inv) return 'FACTURA';
+    const rawTipo = String(inv.tipoDoc || inv.tipo_doc || '').toUpperCase().trim();
+    const rawId = String(inv.id || '').trim().toUpperCase();
+    const rawNum = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.nroFactura || '').trim().toUpperCase();
+    if (
+      rawTipo === 'NOTA_ENTREGA' ||
+      rawTipo === 'N/E' ||
+      rawTipo === 'NE' ||
+      /^(NE-|NDE-)/.test(rawId) ||
+      /^(NE-|NDE-)/.test(rawNum)
+    ) {
+      return 'NOTA_ENTREGA';
+    }
+    return 'FACTURA';
+  };
+
+  const resolveInvoiceClientName = (inv) =>
+    String(
+      inv?.clienteNombre ||
+      inv?.cliente_nombre ||
+      inv?.cliente ||
+      inv?.cliDes ||
+      inv?.cli_des ||
+      'Cliente General'
+    ).trim() || 'Cliente General';
+
+  const resolveInvoiceClientRif = (inv) =>
+    String(
+      inv?.clienteRif ||
+      inv?.cliente_rif ||
+      inv?.rif ||
+      inv?.coCli ||
+      inv?.co_cli ||
+      'V-00000000-0'
+    ).trim() || 'V-00000000-0';
+
+  const resolveInvoiceSellerName = (inv) => {
+    if (!inv) return 'Caja Mostrador';
+    const namedCandidate = String(
+      inv.vendedorNombre ||
+      inv.vendedor_nombre ||
+      inv.venDes ||
+      inv.ven_des ||
+      inv.cajera ||
+      ''
+    ).trim();
+    const rawCandidate = String(inv.vendedor || inv.vendedorId || inv.co_ven || inv.coVen || '').trim();
+    const lookupCode = rawCandidate || namedCandidate;
+    if (lookupCode && Array.isArray(safeProfitSellers)) {
+      const matched = safeProfitSellers.find((s) => {
+        const co = String(s.coVen || s.id || '').trim().toLowerCase();
+        const nm = String(s.venDes || '').trim().toLowerCase();
+        const lc = lookupCode.toLowerCase();
+        return (co && co === lc) || (nm && nm === lc);
+      });
+      if (matched?.venDes) return matched.venDes;
+    }
+    return namedCandidate || rawCandidate || 'Caja Mostrador';
+  };
+
+  const resolveInvoiceTotalUsd = (inv) =>
+    Number(
+      inv?.totalUsd ??
+      inv?.total_usd ??
+      inv?.totNetoUsd ??
+      inv?.tot_neto_usd ??
+      inv?.totalNetoUsd ??
+      inv?.total ??
+      0
+    ) || 0;
+
+  const resolveInvoiceTotalBs = (inv) => {
+    const usd = resolveInvoiceTotalUsd(inv);
+    const rawBs = Number(
+      inv?.totalBs ??
+      inv?.total_bs ??
+      inv?.totNetoBs ??
+      inv?.tot_neto_bs ??
+      inv?.totalNeto ??
+      inv?.tot_neto ??
+      0
+    );
+    if (Number.isFinite(rawBs) && rawBs > 0) return rawBs;
+    const docTasa = Number(inv?.tasaDolar || inv?.tasa || 0) || tasaBcv;
+    return usd * docTasa;
+  };
+
+  const resolveInvoiceItemsAndLiters = (inv) => {
+    const list = Array.isArray(inv?.items)
+      ? inv.items
+      : (Array.isArray(inv?.renglones) ? inv.renglones : []);
+    const itemsCount = list.length || 1;
+    let totalLitros = Number(inv?.totalLitros || 0);
+    if (!(totalLitros > 0) && list.length > 0) {
+      totalLitros = list.reduce(
+        (sum, it) => sum + (Number(it?.litrosTotales ?? it?.volumenTotal ?? it?.litros ?? 0) || 0),
+        0
+      );
+    }
+    return { itemsCount, totalLitros: Number.isFinite(totalLitros) ? totalLitros : 0 };
+  };
+
   // Consolidación de todas las facturas del sistema (ventas locales, Supabase y Profit Plus)
   const allInvoices = useMemo(() => {
-    const canonicalInvoiceKey = (doc) => {
-      const rawTipo = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
-      const rawId = String(doc.id || '').trim().toUpperCase();
-      const rawNum = String(doc.numeroDoc || doc.factNum || doc.fact_num || doc.nroFactura || doc.id || '').trim().toUpperCase();
-      const isNe = rawTipo === 'NOTA_ENTREGA' || rawTipo === 'N/E' || rawTipo === 'NE' || /^(NE-|NDE-)/.test(rawId) || /^(NE-|NDE-)/.test(rawNum);
-      const digits = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-)/, '').replace(/^0+(?=\d)/, '');
-      return `${isNe ? 'NE' : 'FAC'}:${digits || rawNum}`;
-    };
+    const canonicalInvoiceKey = (doc) => getEraScopedCanonicalDocKey(doc);
 
     const byKey = new Map();
     const upsertDoc = (doc, sourceOrder) => {
       if (!doc) return;
       const rawKey = String(doc.numeroDoc || doc.factNum || doc.fact_num || doc.id || '').trim();
       if (!rawKey) return;
-      if (localDeletedInvoiceKeys.has(rawKey) || localDeletedInvoiceKeys.has(String(doc.id))) return;
       const cKey = canonicalInvoiceKey(doc);
+      const deletedAt =
+        localDeletedInvoiceKeys.get(cKey) ||
+        localDeletedInvoiceKeys.get(rawKey) ||
+        localDeletedInvoiceKeys.get(String(doc.id));
+      if (deletedAt) {
+        const docTs = Date.parse(doc.updated_at || doc.fechaSincronizacion || doc.created_at || doc.fechaEmision || doc.fec_emis || 0) || 0;
+        if (!docTs || docTs <= deletedAt + 2000) return;
+      }
       const existing = byKey.get(cKey);
       if (!existing) {
         byKey.set(cKey, doc);
         return;
       }
       const bestItems = pickPreferredLineItems(existing.items || existing.renglones, doc.items || doc.renglones);
-      byKey.set(cKey, sourceOrder === 'PROFIT'
+      const merged = sourceOrder === 'PROFIT'
         ? { ...doc, ...existing, items: bestItems }
-        : { ...existing, ...doc, items: bestItems });
+        : { ...existing, ...doc, items: bestItems };
+
+      // Conservar la marca de tiempo real (con hora) si una de las dos fuentes la tiene
+      const existingDateInfo = parseInvoiceDateInfo(existing);
+      const docDateInfo = parseInvoiceDateInfo(doc);
+      if (!parseInvoiceDateInfo(merged).hasTime) {
+        if (docDateInfo.hasTime && docDateInfo.fullIso) {
+          merged.fechaEmision = docDateInfo.fullIso;
+        } else if (existingDateInfo.hasTime && existingDateInfo.fullIso) {
+          merged.fechaEmision = existingDateInfo.fullIso;
+        }
+      }
+      if (!merged.updatedAt && (existing.updatedAt || doc.updatedAt || existing.updated_at || doc.updated_at)) {
+        merged.updatedAt = doc.updatedAt || doc.updated_at || existing.updatedAt || existing.updated_at;
+      }
+      if (!merged.vendedorNombre) {
+        merged.vendedorNombre = doc.vendedorNombre || existing.vendedorNombre || doc.venDes || existing.venDes || '';
+      }
+      if (!merged.numeroControl) {
+        merged.numeroControl = doc.numeroControl || existing.numeroControl || '';
+      }
+
+      byKey.set(cKey, merged);
     };
 
     // 1. Facturas de Profit Plus ERP (profitInvoices) y luego Ventas locales/Supabase (sales) fusionando renglones reales
@@ -1533,13 +1776,13 @@ export default function OrdersSalesModal({
 
     const list = Array.from(byKey.values());
 
-    // Ordenar de forma descendente por número correlativo / fecha de emisión
+    // Ordenar de forma descendente por fecha real de emisión y número correlativo
     return list.sort((a, b) => {
       const numA = parseInt(String(a.numeroDoc || a.factNum || a.id || '0').replace(/[^0-9]/g, ''), 10) || 0;
       const numB = parseInt(String(b.numeroDoc || b.factNum || b.id || '0').replace(/[^0-9]/g, ''), 10) || 0;
       if (numA !== numB) return numB - numA;
-      const dateA = new Date(a.fechaEmision || a.fecha || a.created_at || 0).getTime();
-      const dateB = new Date(b.fechaEmision || b.fecha || b.created_at || 0).getTime();
+      const dateA = parseInvoiceDateInfo(a).date?.getTime() || 0;
+      const dateB = parseInvoiceDateInfo(b).date?.getTime() || 0;
       return dateB - dateA;
     });
   }, [sales, profitInvoices, localDeletedInvoiceKeys]);
@@ -1624,11 +1867,12 @@ export default function OrdersSalesModal({
     if (!inv) return null;
     const correlativo = formatInvoiceCorrelativo(inv);
     const isCredit = checkIsCredit(inv);
+    const tipoDocNorm = resolveInvoiceTipoDoc(inv);
 
-    const totalUsd = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || inv.totalNetoUsd || inv.total || 0);
+    const totalUsd = resolveInvoiceTotalUsd(inv);
     const totalBsRaw = Number(inv.totalBs || inv.total_bs || inv.totNetoBs || inv.tot_neto_bs || inv.totalNeto || inv.tot_neto || 0);
     // Tasa propia del documento (Bs / USD); si no es deducible se usa la tasa configurada
-    const docTasa = Number(inv.tasaDolar) || (totalUsd > 0 && totalBsRaw > 0 ? totalBsRaw / totalUsd : 0) || tasaBcv;
+    const docTasa = Number(inv.tasaDolar || inv.tasa) || (totalUsd > 0 && totalBsRaw > 0 ? totalBsRaw / totalUsd : 0) || tasaBcv;
     const totalBs = totalBsRaw || totalUsd * docTasa;
 
     const resolvedLines = resolveDeliveryNoteLineItems({ ...inv, tasaDolar: docTasa }, safeProducts, docTasa);
@@ -1640,14 +1884,17 @@ export default function OrdersSalesModal({
 
     const ivaUsdRaw = Number(inv.ivaGeneralUsd ?? inv.ivaUsd ?? inv.iva_usd ?? NaN);
     const ivaUsd = Number.isFinite(ivaUsdRaw) ? ivaUsdRaw : (totalUsd - totalUsd / 1.16);
-    const baseUsd = Number(inv.baseGeneralUsd) || (totalUsd - ivaUsd);
+    const baseUsd = Number(inv.baseGeneralUsd ?? inv.subtotalUsd ?? inv.totBrutoUsd) || (totalUsd - ivaUsd);
     const ivaBsRaw = Number(inv.ivaGeneralBs ?? inv.ivaBs ?? inv.iva_bs ?? NaN);
 
-    const fechaEmision = inv.fechaEmision || inv.fec_emis || inv.fecha || inv.created_at || new Date().toISOString();
-    const fechaVencimiento = inv.fechaVencimiento || inv.fec_venc || null;
+    const emitInfo = parseInvoiceDateInfo(inv);
+    const fechaEmision = emitInfo.fullIso || new Date().toISOString();
+    const rawVenc = inv.fechaVencimiento || inv.fec_venc || null;
+    const vencInfo = rawVenc ? parseInvoiceDateInfo(rawVenc, fechaEmision) : null;
+    const fechaVencimiento = vencInfo?.fullIso || fechaEmision;
     let diasCredito = Number(inv.diasCredito || inv.dias_credito || 0);
-    if (isCredit && !diasCredito && fechaVencimiento) {
-      const diff = Math.round((new Date(fechaVencimiento) - new Date(fechaEmision)) / 86400000);
+    if (isCredit && !diasCredito && vencInfo?.date && emitInfo.date) {
+      const diff = Math.round((vencInfo.date - emitInfo.date) / 86400000);
       if (diff > 0) diasCredito = diff;
     }
     if (isCredit && !diasCredito) diasCredito = 7;
@@ -1657,28 +1904,30 @@ export default function OrdersSalesModal({
       ? ((rawCond.includes('CREDITO') || rawCond.includes('CRÉDITO')) ? (inv.condicionPago || inv.condicion_pago) : 'CREDITO')
       : (inv.condicionPago || inv.condicion_pago || 'CONTADO');
 
+    const cliName = resolveInvoiceClientName(inv);
+    const cliRif = resolveInvoiceClientRif(inv);
+
     return {
       ...inv,
       id: inv.id || correlativo,
       numeroDoc: correlativo,
       nroFactura: correlativo,
       numeroControl: inv.numeroControl || inv.nroControl || generateFiscalControlNumber(parseInt(correlativo, 10) || 1),
-      tipoDoc: inv.tipoDoc || 'FACTURA',
-      clienteNombre: inv.clienteNombre || inv.cliente || inv.cliDes || inv.cli_des || inv.cliente_nombre || 'Cliente General',
-      clienteRif: inv.clienteRif || inv.rif || inv.cliente_rif || inv.coCli || inv.co_cli || 'V-00000000-0',
+      tipoDoc: tipoDocNorm,
+      clienteNombre: cliName,
+      clienteRif: cliRif,
       clienteDireccion: (() => {
         const directAddr = inv.clienteDireccion || inv.dir_ent || inv.direccionEntrega || '';
         if (directAddr) return directAddr;
         const matched = safeClients.find(c =>
           (inv.clienteId && c.id === inv.clienteId) ||
-          (inv.clienteRif && c.rif === inv.clienteRif) ||
-          (inv.rif && c.rif === inv.rif) ||
-          ((inv.clienteNombre || inv.cliente) && (c.nombre || c.name)?.toLowerCase() === (inv.clienteNombre || inv.cliente)?.toLowerCase())
+          (cliRif && c.rif === cliRif) ||
+          (cliName && (c.nombre || c.name)?.toLowerCase() === cliName.toLowerCase())
         );
         return matched?.direccion || matched?.domicilioFiscal || matched?.direccion2 || '';
       })(),
       fechaEmision,
-      fechaVencimiento: fechaVencimiento || fechaEmision,
+      fechaVencimiento,
       condicionPago,
       diasCredito: isCredit ? diasCredito : 0,
       metodoPago: inv.metodoPago || inv.metodo_pago || (isCredit ? 'CREDITO' : 'EFECTIVO USD'),
@@ -1690,53 +1939,158 @@ export default function OrdersSalesModal({
       ivaGeneralBs: Number.isFinite(ivaBsRaw) ? ivaBsRaw : ivaUsd * docTasa,
       totalUsd,
       totalBs,
-      vendedor: inv.vendedor || inv.venDes || inv.vendedorId || inv.co_ven || 'Caja Mostrador'
+      vendedor: resolveInvoiceSellerName(inv)
     };
   };
+
+  // Lista única de vendedores / cajeros presentes para el selector de filtro
+  const invoiceSellerOptions = useMemo(() => {
+    const seen = new Set();
+    for (const inv of allInvoices) {
+      seen.add(resolveInvoiceSellerName(inv));
+    }
+    if (Array.isArray(safeProfitSellers)) {
+      for (const s of safeProfitSellers) {
+        if (s?.venDes) seen.add(String(s.venDes).trim());
+      }
+    }
+    return Array.from(seen).filter(Boolean).sort((a, b) => a.localeCompare(b, 'es'));
+  }, [allInvoices, safeProfitSellers]);
 
   // Filtrado y Ordenamiento de facturas para la tabla list view
   const filteredInvoices = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const todayYmd = toLocalYmd(today);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayYmd = toLocalYmd(yesterday);
+    const oneWeekAgo = new Date(today);
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const oneMonthAgo = new Date(today);
+    oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
+
+    const numColRaw = normalizeSearchText(invoiceNumColFilter).replace(/^#/, '').trim();
+    const numColDigits = numColRaw.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+    const clientColRaw = normalizeSearchText(invoiceClientColFilter);
+    const clientColRif = clientColRaw.replace(/[^a-z0-9]/g, '');
+    const minUsdVal = invoiceMinUsdFilter !== '' && !Number.isNaN(Number(invoiceMinUsdFilter)) ? Number(invoiceMinUsdFilter) : null;
+    const minBsVal = invoiceMinBsFilter !== '' && !Number.isNaN(Number(invoiceMinBsFilter)) ? Number(invoiceMinBsFilter) : null;
+
+    const searchTokens = normalizeSearchText(invoiceSearchQuery)
+      .split(/\s+/)
+      .filter(Boolean);
 
     const filtered = allInvoices.filter(inv => {
       if (!inv) return false;
 
-      // Filtro por Condición de Pago (Contado vs Crédito)
+      // 1. Condición de pago (Pills superiores)
       const isCredit = checkIsCredit(inv);
       if (invoiceConditionFilter === 'CONTADO' && isCredit) return false;
       if (invoiceConditionFilter === 'CREDITO' && !isCredit) return false;
 
-      // Filtro por Período
+      // 2. Filtro por tipo de documento (Factura vs Nota de Entrega)
+      const tipoDoc = resolveInvoiceTipoDoc(inv);
+      if (invoiceDocTypeFilter !== 'ALL' && tipoDoc !== invoiceDocTypeFilter) return false;
+
+      // 3. Filtro por período (usando fecha local sin desfase a medianoche UTC)
+      const dateInfo = parseInvoiceDateInfo(inv);
       if (invoicePeriodFilter !== 'ALL') {
-        const invDate = new Date(inv.fechaEmision || inv.fecha || inv.created_at || Date.now());
-        if (invoicePeriodFilter === 'TODAY') {
-          const invDay = new Date(invDate);
-          invDay.setHours(0, 0, 0, 0);
-          if (invDay.getTime() !== today.getTime()) return false;
-        } else if (invoicePeriodFilter === 'WEEK') {
-          const oneWeekAgo = new Date(today);
-          oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-          if (invDate < oneWeekAgo) return false;
-        } else if (invoicePeriodFilter === 'MONTH') {
-          const oneMonthAgo = new Date(today);
-          oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
-          if (invDate < oneMonthAgo) return false;
+        if (!dateInfo.date) return false;
+        if (invoicePeriodFilter === 'TODAY' && dateInfo.isoDateOnly !== todayYmd) return false;
+        if (invoicePeriodFilter === 'YESTERDAY' && dateInfo.isoDateOnly !== yesterdayYmd) return false;
+        if (invoicePeriodFilter === 'WEEK' && dateInfo.date < oneWeekAgo) return false;
+        if (invoicePeriodFilter === 'MONTH' && dateInfo.date < oneMonthAgo) return false;
+      }
+
+      // Pre-resolver valores para buscador y filtros de columna
+      const correlativo = formatInvoiceCorrelativo(inv);
+      const rawNum = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.nroFactura || inv.id || '').trim();
+      const nroControl = String(inv.numeroControl || inv.nroControl || '').trim();
+      const cliName = resolveInvoiceClientName(inv);
+      const cliRif = resolveInvoiceClientRif(inv);
+      const sellerName = resolveInvoiceSellerName(inv);
+      const rawSeller = String(inv.vendedor || inv.vendedorNombre || inv.venDes || inv.ven_des || inv.vendedorId || inv.co_ven || inv.cajera || '').trim();
+      const totalUsd = resolveInvoiceTotalUsd(inv);
+      const totalBs = resolveInvoiceTotalBs(inv);
+      const { itemsCount, totalLitros } = resolveInvoiceItemsAndLiters(inv);
+      const dias = Number(inv.diasCredito || inv.dias_credito || (isCredit ? 7 : 0));
+
+      // 4. Buscador principal multi-término (sin acentos, tolera # en correlativo y guiones en RIF)
+      if (searchTokens.length > 0) {
+        const hayText = normalizeSearchText(
+          [
+            correlativo,
+            correlativo.replace(/^0+(?=\d)/, ''),
+            rawNum,
+            nroControl,
+            tipoDoc === 'NOTA_ENTREGA' ? 'nota entrega ne' : 'factura',
+            cliName,
+            cliRif,
+            sellerName,
+            rawSeller,
+            isCredit ? `credito ${dias}d` : 'contado',
+            inv.metodoPago || inv.metodo_pago || '',
+            inv.observaciones || '',
+            dateInfo.isoDateOnly,
+            formatInvoiceDateTimeDisplay(inv)
+          ].join(' ')
+        );
+        const hayAlnum = hayText.replace(/[^a-z0-9]/g, '');
+
+        const allMatch = searchTokens.every((tk) => {
+          const cleanTk = tk.replace(/^#/, '');
+          const noZeroTk = cleanTk.replace(/^0+(?=\d)/, '');
+          const alnumTk = cleanTk.replace(/[^a-z0-9]/g, '');
+          return (
+            hayText.includes(tk) ||
+            (cleanTk && hayText.includes(cleanTk)) ||
+            (noZeroTk && hayText.includes(noZeroTk)) ||
+            (alnumTk && hayAlnum.includes(alnumTk))
+          );
+        });
+        if (!allMatch) return false;
+      }
+
+      // 5. Filtros individuales por columna
+      if (numColRaw) {
+        const numHay = normalizeSearchText(`${correlativo} ${rawNum} ${nroControl}`);
+        const numMatch = numHay.includes(numColRaw) || (numColDigits && numHay.includes(numColDigits));
+        if (!numMatch) return false;
+      }
+
+      if (invoiceDateColFilter && dateInfo.isoDateOnly !== invoiceDateColFilter) {
+        return false;
+      }
+
+      if (clientColRaw) {
+        const cliHay = normalizeSearchText(`${cliName} ${cliRif}`);
+        const cliAlnum = cliHay.replace(/[^a-z0-9]/g, '');
+        const cliMatch = cliHay.includes(clientColRaw) || (clientColRif && cliAlnum.includes(clientColRif));
+        if (!cliMatch) return false;
+      }
+
+      if (invoiceSellerColFilter !== 'ALL' && sellerName !== invoiceSellerColFilter) {
+        return false;
+      }
+
+      if (invoiceCondColFilter !== 'ALL') {
+        if (invoiceCondColFilter === 'CONTADO' && isCredit) return false;
+        if (invoiceCondColFilter === 'CREDITO' && !isCredit) return false;
+        if (invoiceCondColFilter.startsWith('DIAS_')) {
+          const expectedDays = Number(invoiceCondColFilter.replace('DIAS_', ''));
+          if (!isCredit || dias !== expectedDays) return false;
         }
       }
 
-      // Buscador
-      if (invoiceSearchQuery.trim()) {
-        const q = invoiceSearchQuery.toLowerCase().trim();
-        const correlativo = formatInvoiceCorrelativo(inv);
-        const rawNum = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.id || '').toLowerCase();
-        const cliName = String(inv.clienteNombre || inv.cliente || inv.cliDes || inv.cli_des || '').toLowerCase();
-        const cliRif = String(inv.clienteRif || inv.rif || inv.coCli || inv.co_cli || '').toLowerCase();
-        const vendedor = String(inv.vendedor || inv.venDes || inv.ven_des || '').toLowerCase();
-
-        const match = correlativo.includes(q) || rawNum.includes(q) || cliName.includes(q) || cliRif.includes(q) || vendedor.includes(q);
-        if (!match) return false;
+      if (invoiceItemsColFilter !== 'ALL') {
+        if (invoiceItemsColFilter === 'WITH_LITERS' && !(totalLitros > 0)) return false;
+        if (invoiceItemsColFilter === 'MULTI' && !(itemsCount > 1)) return false;
+        if (invoiceItemsColFilter === 'SINGLE' && itemsCount !== 1) return false;
       }
+
+      if (minUsdVal !== null && totalUsd < minUsdVal) return false;
+      if (minBsVal !== null && totalBs < minBsVal) return false;
 
       return true;
     });
@@ -1744,28 +2098,25 @@ export default function OrdersSalesModal({
     const getSortValue = (inv) => {
       switch (invoiceSortField) {
         case 'factura':
-          return String(formatInvoiceCorrelativo(inv) || inv.numeroDoc || inv.factNum || '');
-        case 'fecha': {
-          const rawD = inv.fechaEmision || inv.fecha || inv.created_at;
-          const t = rawD ? new Date(rawD).getTime() : 0;
-          return Number.isNaN(t) ? 0 : t;
-        }
+          return parseInt(String(formatInvoiceCorrelativo(inv)).replace(/[^0-9]/g, ''), 10) || 0;
+        case 'fecha':
+          return parseInvoiceDateInfo(inv).date?.getTime() || 0;
         case 'cliente':
-          return String(inv.clienteNombre || inv.cliente || inv.cliDes || 'Cliente General').toLowerCase();
+          return resolveInvoiceClientName(inv).toLowerCase();
         case 'rif':
-          return String(inv.clienteRif || inv.rif || inv.coCli || '').toLowerCase();
+          return resolveInvoiceClientRif(inv).toLowerCase();
         case 'vendedor':
-          return String(inv.vendedor || inv.venDes || inv.cajera || 'Caja Mostrador').toLowerCase();
+          return resolveInvoiceSellerName(inv).toLowerCase();
         case 'condicion':
-          return checkIsCredit(inv) ? (Number(inv.diasCredito || 7)) : 0;
-        case 'renglones':
-          return (inv.items || inv.renglones || []).length || 1;
-        case 'totalUsd':
-          return Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.total || 0);
-        case 'totalBs': {
-          const u = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.total || 0);
-          return Number(inv.totalBs || inv.total_bs || (u * tasaBcv));
+          return checkIsCredit(inv) ? (Number(inv.diasCredito || inv.dias_credito || 7)) : 0;
+        case 'renglones': {
+          const { itemsCount, totalLitros } = resolveInvoiceItemsAndLiters(inv);
+          return itemsCount * 100000 + totalLitros;
         }
+        case 'totalUsd':
+          return resolveInvoiceTotalUsd(inv);
+        case 'totalBs':
+          return resolveInvoiceTotalBs(inv);
         default:
           return 0;
       }
@@ -1774,16 +2125,40 @@ export default function OrdersSalesModal({
     return [...filtered].sort((a, b) => {
       const valA = getSortValue(a);
       const valB = getSortValue(b);
+      let cmp = 0;
       if (typeof valA === 'string' && typeof valB === 'string') {
-        return invoiceSortDirection === 'asc'
+        cmp = invoiceSortDirection === 'asc'
           ? valA.localeCompare(valB, 'es', { numeric: true })
           : valB.localeCompare(valA, 'es', { numeric: true });
+      } else {
+        if (valA < valB) cmp = invoiceSortDirection === 'asc' ? -1 : 1;
+        else if (valA > valB) cmp = invoiceSortDirection === 'asc' ? 1 : -1;
       }
-      if (valA < valB) return invoiceSortDirection === 'asc' ? -1 : 1;
-      if (valA > valB) return invoiceSortDirection === 'asc' ? 1 : -1;
-      return 0;
+      if (cmp !== 0) return cmp;
+      // Desempate por N° correlativo descendente
+      const numA = parseInt(String(formatInvoiceCorrelativo(a)).replace(/[^0-9]/g, ''), 10) || 0;
+      const numB = parseInt(String(formatInvoiceCorrelativo(b)).replace(/[^0-9]/g, ''), 10) || 0;
+      return invoiceSortDirection === 'asc' ? numA - numB : numB - numA;
     });
-  }, [allInvoices, invoiceConditionFilter, invoicePeriodFilter, invoiceSearchQuery, invoiceSortField, invoiceSortDirection, tasaBcv]);
+  }, [
+    allInvoices,
+    invoiceConditionFilter,
+    invoiceDocTypeFilter,
+    invoicePeriodFilter,
+    invoiceSearchQuery,
+    invoiceNumColFilter,
+    invoiceDateColFilter,
+    invoiceClientColFilter,
+    invoiceSellerColFilter,
+    invoiceCondColFilter,
+    invoiceItemsColFilter,
+    invoiceMinUsdFilter,
+    invoiceMinBsFilter,
+    invoiceSortField,
+    invoiceSortDirection,
+    tasaBcv,
+    safeProfitSellers
+  ]);
 
   // Métricas y KPIs consolidados de facturación
   const invoiceKpis = useMemo(() => {
@@ -1796,7 +2171,7 @@ export default function OrdersSalesModal({
 
     for (const inv of allInvoices) {
       const isCredit = checkIsCredit(inv);
-      const montoUsd = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.tot_neto_usd || inv.total || 0);
+      const montoUsd = resolveInvoiceTotalUsd(inv);
       totalNetoUsd += montoUsd;
       if (isCredit) {
         creditoCount++;
@@ -1817,10 +2192,246 @@ export default function OrdersSalesModal({
     };
   }, [allInvoices]);
 
+  // Abrir modal de edición de datos de Factura o Nota de Entrega
+  const handleOpenEditInvoice = (inv) => {
+    if (!inv) return;
+    const correlativo = formatInvoiceCorrelativo(inv);
+    const tipoDocNorm = resolveInvoiceTipoDoc(inv);
+    const isCredit = checkIsCredit(inv);
+    const dateInfo = parseInvoiceDateInfo(inv);
+    const emitDateObj = dateInfo.date || new Date();
+    const fechaEmisionDate = dateInfo.isoDateOnly || toLocalYmd(emitDateObj);
+    const hh = String(emitDateObj.getHours()).padStart(2, '0');
+    const mm = String(emitDateObj.getMinutes()).padStart(2, '0');
+    const ss = String(emitDateObj.getSeconds()).padStart(2, '0');
+    const fechaEmisionTime = `${hh}:${mm}:${ss}`;
+
+    const diasCredito = isCredit ? (Number(inv.diasCredito || inv.dias_credito) || 15) : 0;
+    const rawVenc = inv.fechaVencimiento || inv.fec_venc || '';
+    const vencInfo = rawVenc ? parseInvoiceDateInfo(rawVenc) : null;
+    const fechaVencimientoDate = isCredit
+      ? (vencInfo?.isoDateOnly || calculateExpirationDate(fechaEmisionDate, diasCredito))
+      : fechaEmisionDate;
+
+    const totalUsd = resolveInvoiceTotalUsd(inv);
+    const totalBsRaw = resolveInvoiceTotalBs(inv);
+    const docTasa = Number(inv.tasaDolar || inv.tasa) || (totalUsd > 0 && totalBsRaw > 0 ? Number((totalBsRaw / totalUsd).toFixed(4)) : tasaBcv);
+    const ivaUsdRaw = Number(inv.ivaUsd ?? inv.iva_usd ?? inv.ivaGeneralUsd ?? 0);
+    const subtotalUsdRaw = Number(inv.subtotalUsd ?? inv.totBrutoUsd ?? inv.tot_bruto_usd ?? inv.baseGeneralUsd ?? (totalUsd - ivaUsdRaw));
+    const abonosUsdRaw = Number(inv.abonosUsd ?? inv.abonos_usd ?? (isCredit ? 0 : totalUsd));
+
+    const resolvedLines = resolveDeliveryNoteLineItems({ ...inv, tasaDolar: docTasa }, safeProducts, docTasa);
+    const editableItems = resolvedLines.map((it, i) => ({
+      id: it.id || it.articuloId || `ITEM-${i + 1}`,
+      articuloId: it.articuloId || it.codigo || '',
+      codigo: it.codigo || it.articuloId || '',
+      descripcion: it.descripcion || it.articuloDescripcion || 'Lubricante Motorven',
+      cantidad: Number(it.cantidad || 1),
+      precioUsd: Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0),
+      subtotalUsd: Number(it.subtotalUsd ?? it.totalUsd ?? 0),
+      litros: Number(it.litros ?? it.volumenTotal ?? it.litrosTotales ?? 0)
+    }));
+
+    setEditClientSearch('');
+    setEditingInvoice({
+      _originalDoc: inv,
+      id: inv.id || '',
+      tipoDoc: tipoDocNorm,
+      numeroDoc: correlativo,
+      numeroControl: inv.numeroControl || inv.nroControl || generateFiscalControlNumber(parseInt(correlativo, 10) || 1),
+      fechaEmisionDate,
+      fechaEmisionTime,
+      condicionPago: isCredit ? 'CREDITO' : 'CONTADO',
+      diasCredito: String(diasCredito),
+      fechaVencimientoDate,
+      metodoPago: inv.metodoPago || inv.metodo_pago || (isCredit ? 'CREDITO' : 'EFECTIVO_USD'),
+      clienteId: inv.clienteId || inv.coCli || inv.co_cli || '',
+      clienteNombre: resolveInvoiceClientName(inv),
+      clienteRif: resolveInvoiceClientRif(inv),
+      clienteDireccion: inv.clienteDireccion || inv.dir_ent || inv.direccionEntrega || '',
+      clienteTelefono: inv.clienteTelefono || inv.telefono || '',
+      vendedor: resolveInvoiceSellerName(inv),
+      tasaDolar: docTasa.toFixed(2),
+      subtotalUsd: Number.isFinite(subtotalUsdRaw) ? subtotalUsdRaw.toFixed(2) : totalUsd.toFixed(2),
+      ivaUsd: Number.isFinite(ivaUsdRaw) ? ivaUsdRaw.toFixed(2) : '0.00',
+      totalUsd: totalUsd.toFixed(2),
+      totalBs: totalBsRaw.toFixed(2),
+      abonosUsd: Number.isFinite(abonosUsdRaw) ? abonosUsdRaw.toFixed(2) : '0.00',
+      observaciones: inv.observaciones || inv.comentario || '',
+      items: editableItems
+    });
+  };
+
+  // Guardar cambios editados de Factura o Nota de Entrega (sin afectar inventario)
+  const handleSaveEditedInvoice = async (e) => {
+    if (e?.preventDefault) e.preventDefault();
+    if (!editingInvoice || isSavingEditedInvoice) return;
+
+    const cleanNumDigits = String(editingInvoice.numeroDoc || '').replace(/[^0-9]/g, '');
+    const cleanNum = cleanNumDigits ? cleanNumDigits.slice(-6).padStart(6, '0') : String(editingInvoice.numeroDoc || '').trim();
+    if (!cleanNum) {
+      notify.error('Debe indicar un número de correlativo válido.');
+      return;
+    }
+
+    const orig = editingInvoice._originalDoc || {};
+    const origNum = formatInvoiceCorrelativo(orig);
+    const origTipo = resolveInvoiceTipoDoc(orig);
+    const targetTipo = editingInvoice.tipoDoc || 'FACTURA';
+
+    // Validar que no exista otro documento diferente (misma serie/era) con el mismo correlativo y tipo
+    const origIsLegacy = isLegacyPreNovInvoice(orig);
+    const duplicate = allInvoices.find((other) => {
+      if (!other || other === orig) return false;
+      if (orig.id && other.id && String(other.id) === String(orig.id)) return false;
+      return (
+        formatInvoiceCorrelativo(other) === cleanNum &&
+        resolveInvoiceTipoDoc(other) === targetTipo &&
+        isLegacyPreNovInvoice(other) === origIsLegacy
+      );
+    });
+    if (duplicate && (cleanNum !== origNum || targetTipo !== origTipo)) {
+      notify.error(`Ya existe ${targetTipo === 'NOTA_ENTREGA' ? 'una Nota de Entrega' : 'una Factura'} con el correlativo #${cleanNum}.`);
+      return;
+    }
+
+    // Construir fecha/hora exacta de emisión preservando hora local
+    let emitIso = '';
+    const dParts = String(editingInvoice.fechaEmisionDate || '').split('-').map(Number);
+    const tParts = String(editingInvoice.fechaEmisionTime || '12:00:00').split(':').map(Number);
+    if (dParts.length === 3 && dParts.every((n) => Number.isFinite(n))) {
+      const [y, m, d] = dParts;
+      const hh = Number.isFinite(tParts[0]) ? tParts[0] : 12;
+      const mm = Number.isFinite(tParts[1]) ? tParts[1] : 0;
+      const ss = Number.isFinite(tParts[2]) ? tParts[2] : 0;
+      const localDt = new Date(y, m - 1, d, hh, mm, ss, 0);
+      if (!Number.isNaN(localDt.getTime())) {
+        emitIso = localDt.toISOString();
+      }
+    }
+    if (!emitIso) {
+      emitIso = preserveDateWithTime(editingInvoice.fechaEmisionDate || new Date());
+    }
+
+    const isCredit = editingInvoice.condicionPago === 'CREDITO';
+    const dias = isCredit ? Math.max(1, parseInt(editingInvoice.diasCredito || '15', 10) || 15) : 0;
+    const vencDateStr = editingInvoice.fechaVencimientoDate || (isCredit ? calculateExpirationDate(editingInvoice.fechaEmisionDate, dias) : editingInvoice.fechaEmisionDate);
+    const vencIso = preserveDateWithTime(vencDateStr, emitIso);
+
+    const tasaVal = Math.max(0.01, Number(editingInvoice.tasaDolar) || tasaBcv);
+    const subtotalUsdVal = Math.max(0, Number(editingInvoice.subtotalUsd) || 0);
+    const ivaUsdVal = Math.max(0, Number(editingInvoice.ivaUsd) || 0);
+    const totalUsdVal = Math.max(0, Number(editingInvoice.totalUsd) || (subtotalUsdVal + ivaUsdVal));
+    const totalBsVal = Math.max(0, Number(editingInvoice.totalBs) || Number((totalUsdVal * tasaVal).toFixed(2)));
+    const abonosUsdVal = isCredit ? Math.min(totalUsdVal, Math.max(0, Number(editingInvoice.abonosUsd) || 0)) : totalUsdVal;
+    const saldoUsdVal = isCredit ? Math.max(0, Number((totalUsdVal - abonosUsdVal).toFixed(2))) : 0;
+    const abonosBsVal = Number((abonosUsdVal * tasaVal).toFixed(2));
+    const saldoBsVal = Number((saldoUsdVal * tasaVal).toFixed(2));
+
+    const matchedSeller = (safeProfitSellers || []).find(
+      (s) =>
+        String(s.venDes || '').trim().toLowerCase() === String(editingInvoice.vendedor || '').trim().toLowerCase() ||
+        String(s.coVen || '').trim().toLowerCase() === String(editingInvoice.vendedor || '').trim().toLowerCase()
+    );
+
+    const newId =
+      targetTipo === 'NOTA_ENTREGA'
+        ? `NE-${cleanNum}`
+        : cleanNum;
+
+    const cleanItems = (editingInvoice.items || []).map((it) => {
+      const cant = Math.max(0, Number(it.cantidad) || 0);
+      const precio = Math.max(0, Number(it.precioUsd) || 0);
+      const sub = Number(it.subtotalUsd) > 0 ? Number(it.subtotalUsd) : Number((cant * precio).toFixed(2));
+      return {
+        ...it,
+        cantidad: cant,
+        precioUsd: precio,
+        subtotalUsd: sub,
+        totalUsd: sub
+      };
+    });
+
+    if (origTipo !== targetTipo && cleanItems.length > 0) {
+      const targetWhCheck = validateWarehouseStockForDocument({
+        items: cleanItems,
+        products: safeProducts,
+        tipoDoc: targetTipo,
+        almacen: targetTipo === 'NOTA_ENTREGA' ? '02' : '01',
+        modalidadVenta: targetTipo === 'NOTA_ENTREGA' ? 'OFICINA' : 'MOSTRADOR'
+      });
+      if (!targetWhCheck.isValid) {
+        notify.error(`No se puede cambiar a ${targetTipo === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'}: ${targetWhCheck.message}`);
+        return;
+      }
+    }
+
+    const updatedPayload = {
+      ...orig,
+      id: newId,
+      factNum: cleanNum,
+      fact_num: cleanNum,
+      numeroDoc: cleanNum,
+      nroFactura: cleanNum,
+      numeroControl: String(editingInvoice.numeroControl || '').trim() || generateFiscalControlNumber(parseInt(cleanNum, 10) || 1),
+      tipoDoc: targetTipo,
+      almacen: targetTipo === 'NOTA_ENTREGA' ? '02' : (orig.almacen || '01'),
+      fechaEmision: emitIso,
+      fec_emis: emitIso,
+      fechaVencimiento: vencIso,
+      fec_venc: vencIso,
+      diasCredito: dias,
+      condicionPago: isCredit ? 'CREDITO' : 'CONTADO',
+      metodoPago: editingInvoice.metodoPago || (isCredit ? 'CREDITO' : 'EFECTIVO_USD'),
+      clienteId: editingInvoice.clienteId || orig.clienteId || `CLI-${cleanNum}`,
+      clienteNombre: String(editingInvoice.clienteNombre || '').trim() || 'Cliente General',
+      clienteRif: String(editingInvoice.clienteRif || '').trim() || 'V-00000000-0',
+      clienteDireccion: String(editingInvoice.clienteDireccion || '').trim(),
+      clienteTelefono: String(editingInvoice.clienteTelefono || '').trim(),
+      vendedor: matchedSeller?.venDes || String(editingInvoice.vendedor || '').trim() || 'Caja Mostrador',
+      vendedorNombre: matchedSeller?.venDes || String(editingInvoice.vendedor || '').trim() || 'Caja Mostrador',
+      vendedorId: matchedSeller?.coVen || orig.vendedorId || '',
+      tasa: tasaVal,
+      tasaDolar: tasaVal,
+      totBrutoUsd: subtotalUsdVal,
+      subtotalUsd: subtotalUsdVal,
+      ivaUsd: ivaUsdVal,
+      totNetoUsd: totalUsdVal,
+      totalUsd: totalUsdVal,
+      totBrutoBs: Number((subtotalUsdVal * tasaVal).toFixed(2)),
+      ivaBs: Number((ivaUsdVal * tasaVal).toFixed(2)),
+      totNetoBs: totalBsVal,
+      totalBs: totalBsVal,
+      abonosUsd: abonosUsdVal,
+      abonosBs: abonosBsVal,
+      saldoUsd: saldoUsdVal,
+      saldoBs: saldoBsVal,
+      observaciones: String(editingInvoice.observaciones || '').trim(),
+      items: cleanItems,
+      anulada: false,
+      saldado: saldoUsdVal <= 0.01
+    };
+
+    try {
+      setIsSavingEditedInvoice(true);
+      const saver = onUpdateInvoiceDocument || updateSupabaseInvoiceDocument;
+      await saver(orig, updatedPayload);
+      notify.success(
+        `${targetTipo === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${cleanNum} actualizada correctamente`
+      );
+      setEditingInvoice(null);
+    } catch (err) {
+      console.error('Error actualizando documento:', err);
+      notify.error('Error al actualizar el documento: ' + (err?.message || err));
+    } finally {
+      setIsSavingEditedInvoice(false);
+    }
+  };
+
   // Imprimir factura individual con correlativo secuencial
   const handlePrintIndividualInvoice = (inv) => {
     const correlativo = formatInvoiceCorrelativo(inv);
-    const isNe = inv.tipoDoc === 'NOTA_ENTREGA' || inv.tipo_doc === 'NOTA_ENTREGA' || String(inv.factNum || inv.numeroDoc || '').toUpperCase().startsWith('NE');
+    const isNe = resolveInvoiceTipoDoc(inv) === 'NOTA_ENTREGA';
     const saleForPrint = {
       ...inv,
       numeroDoc: correlativo,
@@ -1872,11 +2483,14 @@ export default function OrdersSalesModal({
         await onDeleteSale(invoiceToDelete);
       }
       setLocalDeletedInvoiceKeys(prev => {
-        const next = new Set(prev);
-        next.add(key);
-        if (invoiceToDelete.id) next.add(String(invoiceToDelete.id));
-        if (invoiceToDelete.numeroDoc) next.add(String(invoiceToDelete.numeroDoc));
-        if (invoiceToDelete.factNum) next.add(String(invoiceToDelete.factNum));
+        const next = new Map(prev);
+        const nowTs = Date.now();
+        const cKey = getEraScopedCanonicalDocKey(invoiceToDelete);
+        if (cKey) next.set(cKey, nowTs);
+        next.set(key, nowTs);
+        if (invoiceToDelete.id) next.set(String(invoiceToDelete.id), nowTs);
+        if (invoiceToDelete.numeroDoc) next.set(String(invoiceToDelete.numeroDoc), nowTs);
+        if (invoiceToDelete.factNum) next.set(String(invoiceToDelete.factNum), nowTs);
         return next;
       });
       notify.success(`Factura #${factNum} eliminada de la base de datos con éxito`);
@@ -3008,7 +3622,7 @@ export default function OrdersSalesModal({
                             {formatUsd(rowTotalUsd)}
                           </div>
                           <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', fontFamily: 'var(--font-tech)' }}>
-                            {rowLitros.toFixed(1)} Lts
+                            {formatUnitVe(rowLitros)} Lts
                           </div>
                         </div>
 
@@ -3064,7 +3678,7 @@ export default function OrdersSalesModal({
                       Volumen Despacho
                     </div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--motorven-gold)' }}>
-                      {newOrderCalculations.totalLitros.toFixed(1)} Litros
+                      {formatUnitVe(newOrderCalculations.totalLitros)} Litros
                     </div>
                   </div>
 
@@ -3389,7 +4003,7 @@ export default function OrdersSalesModal({
 
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0, 0, 0, 0.2)', padding: '6px 10px', borderRadius: '8px' }}>
                             <span style={{ fontSize: '0.75rem', color: 'var(--motorven-gold)', fontWeight: 700 }}>
-                              🛢️ {Number(ord.totalLitros || 0).toFixed(1)} Lts
+                              🛢️ {formatUnitVe(ord.totalLitros || 0)} Lts
                             </span>
                             <span style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
                               {formatUsd(ord.totalNetoUsd || ord.totalUsd)}
@@ -3546,14 +4160,21 @@ export default function OrdersSalesModal({
                                 try {
                                   setIsSaving(true);
                                   if (isFacturado) {
+                                    const ordDocKey = ord.nroFactura
+                                      ? getEraScopedCanonicalDocKey({
+                                          numeroDoc: ord.nroFactura,
+                                          tipoDoc: isOrderNotaEntrega(ord) ? 'NOTA_ENTREGA' : (ord.tipoDocumento || ord.tipoDoc || 'FACTURA'),
+                                          fechaEmision: ord.fechaFacturacion || ord.fecha
+                                        })
+                                      : '';
                                     const linkedSale = (sales || []).find(s =>
                                       s.pedidoOrigenId === ord.id ||
-                                      s.numeroDoc === ord.nroFactura ||
-                                      s.id === ord.facturaId ||
-                                      (ord.nroFactura && s.numeroDoc && String(s.numeroDoc).includes(ord.nroFactura))
+                                      (ord.facturaId && s.id === ord.facturaId) ||
+                                      (ord.nroFactura && s.numeroDoc === ord.nroFactura) ||
+                                      (ordDocKey && getEraScopedCanonicalDocKey(s) === ordDocKey)
                                     );
                                     if (linkedSale && onDeleteSale) {
-                                      await onDeleteSale(linkedSale.id);
+                                      await onDeleteSale(linkedSale);
                                     }
                                   }
                                   if (onDeleteOrder) {
@@ -3802,7 +4423,7 @@ export default function OrdersSalesModal({
                                   </td>
                                   <td style={{ textAlign: 'center', fontWeight: 700 }}>{it.cantidad}</td>
                                   <td style={{ textAlign: 'right', color: 'var(--motorven-gold)' }}>
-                                    {Number(it.litrosTotales || (it.cantidad * 11.35)).toFixed(1)} L
+                                    {formatUnitVe(it.litrosTotales || (it.cantidad * 11.35))} L
                                   </td>
                                   <td style={{ textAlign: 'right' }}>{formatUsd(it.precioUnitarioUsd)}</td>
                                   <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--semaforo-verde)' }}>
@@ -3820,19 +4441,38 @@ export default function OrdersSalesModal({
                       <div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>VOLUMEN TOTAL</div>
                         <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--motorven-gold)' }}>
-                          {Number(selectedOrder.totalLitros || 0).toFixed(1)} Lts
+                          {formatUnitVe(selectedOrder.totalLitros || 0)} Lts
                         </div>
                       </div>
 
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>TOTAL NETO ($ USD)</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
-                          {formatUsd(selectedOrder.totalNetoUsd || selectedOrder.totalUsd)}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          {formatBs((Number(selectedOrder.totalNetoUsd) || 0) * tasaBcv)}
-                        </div>
-                      </div>
+                      {(() => {
+                        const { isOrdNE: isOrdNEBox, taxes: boxTaxes } = computeOrderBillingFiscal(selectedOrder, billingPaymentMethod, tasaBcv);
+                        const showBilledTotal = selectedOrder.status === 'FACTURADO' && Number(selectedOrder.totalNetoUsd || selectedOrder.totalUsd || 0) > 0;
+                        const displayTotalUsd = showBilledTotal
+                          ? Number(selectedOrder.totalNetoUsd || selectedOrder.totalUsd || 0)
+                          : boxTaxes.totalFacturaUsd;
+                        return (
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              {isOrdNEBox
+                                ? 'TOTAL NETO EXENTO ($ USD)'
+                                : (showBilledTotal ? 'TOTAL FACTURADO ($ USD)' : 'TOTAL A FACTURAR ($ USD)')}
+                            </div>
+                            {!isOrdNEBox && !showBilledTotal && (
+                              <div style={{ fontSize: '0.70rem', color: 'var(--text-muted)' }}>
+                                Base {formatUsd(boxTaxes.subtotalNetoUsd)} + IVA {formatUsd(boxTaxes.totalIvaUsd)}
+                                {boxTaxes.igtfUsd > 0 ? ` + IGTF ${formatUsd(boxTaxes.igtfUsd)}` : ''}
+                              </div>
+                            )}
+                            <div style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--semaforo-verde)' }}>
+                              {formatUsd(displayTotalUsd)}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {formatBs(displayTotalUsd * tasaBcv)}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -3974,73 +4614,88 @@ export default function OrdersSalesModal({
                                     setFeedbackMsg({ type: 'error', text: currentCheck.message });
                                     return;
                                   }
+                                  if (String(selectedOrder.status || '').toUpperCase() === 'FACTURADO') {
+                                    notify.warning(`El pedido #${selectedOrder.numeroDoc || selectedOrder.id} ya figura como FACTURADO${selectedOrder.nroFactura ? ` (Factura #${selectedOrder.nroFactura})` : ''}.`);
+                                    return;
+                                  }
+                                  const existingLinkedSale = (sales || []).find(s =>
+                                    s &&
+                                    s.pedidoOrigenId &&
+                                    s.pedidoOrigenId === selectedOrder.id &&
+                                    !['ANULADA', 'ANULADO'].includes(String(s.estado || '').toUpperCase())
+                                  );
+                                  if (existingLinkedSale) {
+                                    notify.warning(`Este pedido ya tiene emitida la factura #${existingLinkedSale.numeroDoc || existingLinkedSale.id}.`);
+                                    return;
+                                  }
                                   setIsSaving(true);
                                   try {
                                     const nextInvoiceNum = isOrdNotaEntrega
                                       ? getNextNotaEntregaCorrelativo(sales, profitInvoices)
                                       : getNextInvoiceCorrelativo(sales, profitInvoices);
-                                    if (!isOrdNotaEntrega) {
-                                      commitInvoiceCorrelativo(nextInvoiceNum);
-                                      setCorrelativoRefreshKey(k => k + 1);
-                                    } else {
-                                      commitNotaEntregaCorrelativo(nextInvoiceNum);
-                                      setCorrelativoRefreshKey(k => k + 1);
+                                    const {
+                                      isCredit,
+                                      effectiveCondicion: effectiveCondicionPago,
+                                      items: billingItems,
+                                      taxes: billingTaxes
+                                    } = computeOrderBillingFiscal(selectedOrder, billingPaymentMethod, tasaBcv);
+                                    const billingNowIso = new Date().toISOString();
+
+                                    let saleResult = null;
+                                    if (onProcessSale) {
+                                      saleResult = await onProcessSale({
+                                        preserveOriginOrderOnSale: true,
+                                        orderId: selectedOrder.id,
+                                        pedidoOrigenId: selectedOrder.id,
+                                        pedidoOrigenDoc: selectedOrder.numeroDoc || selectedOrder.id,
+                                        tipoDoc: isOrdNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+                                        almacen: isOrdNotaEntrega ? '02' : '01',
+                                        numeroDoc: nextInvoiceNum,
+                                        fechaEmision: billingNowIso,
+                                        clienteId: selectedOrder.clienteId,
+                                        clienteNombre: selectedOrder.clienteNombre,
+                                        clienteRif: selectedOrder.clienteRif,
+                                        clienteDireccion: selectedOrder.direccionEntrega,
+                                        vendedor: selectedOrder.vendedorNombre || selectedOrder.vendedorId,
+                                        vendedorId: selectedOrder.vendedorId,
+                                        vendedorNombre: selectedOrder.vendedorNombre || '',
+                                        items: billingItems,
+                                        subtotalUsd: billingTaxes.subtotalNetoUsd,
+                                        ivaUsd: billingTaxes.totalIvaUsd,
+                                        igtfUsd: billingTaxes.igtfUsd,
+                                        totalUsd: billingTaxes.totalFacturaUsd,
+                                        totalBs: billingTaxes.totalFacturaBs,
+                                        saldoUsd: isOrdNotaEntrega ? billingTaxes.subtotalNetoUsd : billingTaxes.totalFacturaUsd,
+                                        saldoBs: isOrdNotaEntrega ? billingTaxes.subtotalNetoBs : billingTaxes.totalFacturaBs,
+                                        metodoPago: billingPaymentMethod === 'CREDITO' ? 'CREDITO' : billingPaymentMethod,
+                                        condicionPago: effectiveCondicionPago,
+                                        diasCredito: isCredit ? resolveCreditDaysFromTerm(effectiveCondicionPago, 15, selectedOrder.diasCredito) : 0
+                                      });
                                     }
-                              const isCredit = isOrdNotaEntrega || isCreditPaymentCondition(selectedOrder.condicionPago, billingPaymentMethod);
-                              const totNeto = Number(selectedOrder.totalNetoUsd) || 0;
-                              const totBs = totNeto * tasaBcv;
 
-                              let saleResult = null;
-                              if (onProcessSale) {
-                                saleResult = await onProcessSale({
-                                  preserveOriginOrderOnSale: true,
-                                  orderId: selectedOrder.id,
-                                  pedidoOrigenId: selectedOrder.id,
-                                  pedidoOrigenDoc: selectedOrder.numeroDoc || selectedOrder.id,
-                                  tipoDoc: isOrdNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
-                                  almacen: isOrdNotaEntrega ? '02' : '01',
-                                  numeroDoc: nextInvoiceNum,
-                                  clienteId: selectedOrder.clienteId,
-                                  clienteNombre: selectedOrder.clienteNombre,
-                                  clienteRif: selectedOrder.clienteRif,
-                                  clienteDireccion: selectedOrder.direccionEntrega,
-                                  vendedor: selectedOrder.vendedorId,
-                                  vendedorId: selectedOrder.vendedorId,
-                                  items: (selectedOrder.items || []).map(it => {
-                                    const precio = Number(it.precioUnitarioUsd ?? it.precioUsd ?? 0);
-                                    const cant = Number(it.cantidad || 1);
-                                    return {
-                                      articuloId: it.articuloId,
-                                      codigo: it.articuloId,
-                                      descripcion: it.articuloDescripcion,
-                                      cantidad: cant,
-                                      precioUsd: precio,
-                                      subtotalUsd: Number(it.totalUsd ?? it.subtotalUsd ?? lineSubtotal(cant, precio)),
-                                      litros: it.litrosTotales
+                                    const invoiceNum = saleResult?.numeroDoc || nextInvoiceNum;
+                                    if (!isOrdNotaEntrega) {
+                                      commitInvoiceCorrelativo(invoiceNum);
+                                    } else {
+                                      commitNotaEntregaCorrelativo(invoiceNum);
+                                    }
+                                    setCorrelativoRefreshKey(k => k + 1);
+
+                                    const billedOrder = {
+                                      ...selectedOrder,
+                                      status: 'FACTURADO',
+                                      nroFactura: invoiceNum,
+                                      facturaId: saleResult?.id || undefined,
+                                      fechaFactura: billingNowIso,
+                                      cajera: currentUser?.nombre || 'Caja Principal',
+                                      metodoPagoFactura: billingPaymentMethod,
+                                      totalBrutoUsd: saleResult?.subtotalUsd ?? billingTaxes.subtotalNetoUsd,
+                                      ivaUsd: saleResult?.ivaUsd ?? billingTaxes.totalIvaUsd,
+                                      igtfUsd: saleResult?.igtfUsd ?? billingTaxes.igtfUsd,
+                                      totalNetoUsd: saleResult?.totalUsd ?? billingTaxes.totalFacturaUsd,
+                                      totalUsd: saleResult?.totalUsd ?? billingTaxes.totalFacturaUsd,
+                                      saldoUsd: saleResult?.saldoUsd ?? (isCredit ? (saleResult?.totalUsd ?? billingTaxes.totalFacturaUsd) : 0)
                                     };
-                                  }),
-                                  subtotalUsd: totNeto,
-                                  ivaUsd: 0,
-                                  totalUsd: totNeto,
-                                  totalBs: totBs,
-                                  saldoUsd: isCredit ? totNeto : 0,
-                                  saldoBs: isCredit ? totBs : 0,
-                                  metodoPago: billingPaymentMethod,
-                                  condicionPago: selectedOrder.condicionPago || 'CONTADO',
-                                  diasCredito: resolveCreditDaysFromTerm(selectedOrder.condicionPago)
-                                });
-                              }
-
-                              const invoiceNum = saleResult?.numeroDoc || nextInvoiceNum;
-
-                              const billedOrder = {
-                                ...selectedOrder,
-                                status: 'FACTURADO',
-                                nroFactura: invoiceNum,
-                                fechaFactura: new Date().toISOString(),
-                                cajera: currentUser?.nombre || 'Caja Principal',
-                                metodoPagoFactura: billingPaymentMethod
-                              };
 
                               if (onSaveOrder) {
                                 await onSaveOrder(billedOrder);
@@ -4316,14 +4971,21 @@ export default function OrdersSalesModal({
 
                           try {
                             setIsSaving(true);
+                            const selDocKey = selectedOrder.nroFactura
+                              ? getEraScopedCanonicalDocKey({
+                                  numeroDoc: selectedOrder.nroFactura,
+                                  tipoDoc: isOrderNotaEntrega(selectedOrder) ? 'NOTA_ENTREGA' : (selectedOrder.tipoDocumento || selectedOrder.tipoDoc || 'FACTURA'),
+                                  fechaEmision: selectedOrder.fechaFacturacion || selectedOrder.fecha
+                                })
+                              : '';
                             const linkedSale = (sales || []).find(s =>
                               s.pedidoOrigenId === selectedOrder.id ||
-                              s.numeroDoc === selectedOrder.nroFactura ||
-                              s.id === selectedOrder.facturaId ||
-                              (selectedOrder.nroFactura && s.numeroDoc && String(s.numeroDoc).includes(selectedOrder.nroFactura))
+                              (selectedOrder.facturaId && s.id === selectedOrder.facturaId) ||
+                              (selectedOrder.nroFactura && s.numeroDoc === selectedOrder.nroFactura) ||
+                              (selDocKey && getEraScopedCanonicalDocKey(s) === selDocKey)
                             );
                             if (linkedSale && onDeleteSale) {
-                              await onDeleteSale(linkedSale.id);
+                              await onDeleteSale(linkedSale);
                             }
                             if (onDeleteOrder) {
                               await onDeleteOrder(selectedOrder.id);
@@ -4463,7 +5125,7 @@ export default function OrdersSalesModal({
                                 <td style={{ padding: '6px 8px' }}>{it.articuloDescripcion}</td>
                                 <td style={{ padding: '6px 8px', textAlign: 'center' }}>{resolveProductUnit(it, 'Caja')}</td>
                                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 800 }}>{it.cantidad}</td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{Number(it.litrosTotales || (it.cantidad * 11.35)).toFixed(1)} L</td>
+                                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{formatUnitVe(it.litrosTotales || (it.cantidad * 11.35))} L</td>
                                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{formatUsd(it.precioUnitarioUsd)}</td>
                                 <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800 }}>{formatUsd(it.totalUsd)}</td>
                               </tr>
@@ -4494,7 +5156,7 @@ export default function OrdersSalesModal({
 
                         <div style={{ textAlign: 'right', minWidth: '180px' }}>
                           <div style={{ fontSize: '0.8rem', color: '#475569' }}>
-                            TOTAL LITROS: <strong>{Number(selectedOrder?.totalLitros || 0).toFixed(1)} L</strong>
+                            TOTAL LITROS: <strong>{formatUnitVe(selectedOrder?.totalLitros || 0)} L</strong>
                           </div>
                           <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#002b7a' }}>
                             TOTAL: {formatUsd(selectedOrder?.totalNetoUsd || selectedOrder?.totalUsd || 0)}
@@ -4649,7 +5311,7 @@ export default function OrdersSalesModal({
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
                                 <span style={{ color: '#64748b' }}>Tasa Oficial BCV:</span>
-                                <strong style={{ color: '#d97706' }}>Bs. {tasaBcv.toFixed(2)} / USD</strong>
+                                <strong style={{ color: '#d97706' }}>{formatBs(tasaBcv)} / USD</strong>
                               </div>
                             </div>
                           </div>
@@ -4993,7 +5655,7 @@ export default function OrdersSalesModal({
                               <input
                                 type="number"
                                 min="0"
-                                step="50"
+                                step="0.01"
                                 className="form-control form-control-sm"
                                 value={editLimite}
                                 onChange={(e) => setClientReqOverrides((prev) => ({ ...prev, [req.id]: { ...prev[req.id], limiteCreditoUsd: e.target.value } }))}
@@ -5115,496 +5777,838 @@ export default function OrdersSalesModal({
               </div>
 
               {/* BARRA DE FILTROS & ACCIONES */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '12px',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
-                  padding: '12px 16px',
-                  borderRadius: '12px',
-                  border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))'
-                }}
-              >
-                {/* Botones de filtro: Todas, Contado, Crédito */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '8px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setInvoiceConditionFilter('ALL')}
-                    style={{
-                      padding: '5px 12px',
-                      borderRadius: '6px',
-                      fontSize: '0.78rem',
-                      fontWeight: 700,
-                      border: 'none',
-                      cursor: 'pointer',
-                      background: invoiceConditionFilter === 'ALL' ? 'var(--brand-blue, #2563eb)' : 'transparent',
-                      color: invoiceConditionFilter === 'ALL' ? '#ffffff' : 'var(--text-muted)'
-                    }}
-                  >
-                    Todas ({invoiceKpis.totalFacturas})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInvoiceConditionFilter('CONTADO')}
-                    style={{
-                      padding: '5px 12px',
-                      borderRadius: '6px',
-                      fontSize: '0.78rem',
-                      fontWeight: 700,
-                      border: 'none',
-                      cursor: 'pointer',
-                      background: invoiceConditionFilter === 'CONTADO' ? 'var(--semaforo-verde, #10b981)' : 'transparent',
-                      color: invoiceConditionFilter === 'CONTADO' ? '#ffffff' : 'var(--text-muted)'
-                    }}
-                  >
-                    🟢 Contado ({invoiceKpis.contadoCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInvoiceConditionFilter('CREDITO')}
-                    style={{
-                      padding: '5px 12px',
-                      borderRadius: '6px',
-                      fontSize: '0.78rem',
-                      fontWeight: 700,
-                      border: 'none',
-                      cursor: 'pointer',
-                      background: invoiceConditionFilter === 'CREDITO' ? '#8b5cf6' : 'transparent',
-                      color: invoiceConditionFilter === 'CREDITO' ? '#ffffff' : 'var(--text-muted)'
-                    }}
-                  >
-                    🔵 Crédito ({invoiceKpis.creditoCount})
-                  </button>
-                </div>
+              {(() => {
+                const hasActiveFilters = Boolean(
+                  invoiceConditionFilter !== 'ALL' ||
+                  invoiceDocTypeFilter !== 'ALL' ||
+                  invoiceSearchQuery.trim() ||
+                  invoicePeriodFilter !== 'ALL' ||
+                  invoiceNumColFilter.trim() ||
+                  invoiceDateColFilter ||
+                  invoiceClientColFilter.trim() ||
+                  invoiceSellerColFilter !== 'ALL' ||
+                  invoiceCondColFilter !== 'ALL' ||
+                  invoiceItemsColFilter !== 'ALL' ||
+                  invoiceMinUsdFilter !== '' ||
+                  invoiceMinBsFilter !== ''
+                );
 
-                {/* Buscador de facturas */}
-                <div style={{ flex: 1, minWidth: '220px', position: 'relative' }}>
-                  <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="Buscar por N° factura (ej: 000000), cliente, RIF o vendedor..."
-                    value={invoiceSearchQuery}
-                    onChange={(e) => setInvoiceSearchQuery(e.target.value)}
-                    style={{ paddingLeft: '32px', fontSize: '0.82rem', width: '100%' }}
-                  />
-                </div>
+                const renderSortArrow = (field) => {
+                  if (invoiceSortField === field) {
+                    return invoiceSortDirection === 'asc'
+                      ? <ArrowUp size={12} color="var(--neon-cyan, #38bdf8)" />
+                      : <ArrowDown size={12} color="var(--neon-cyan, #38bdf8)" />;
+                  }
+                  return <ArrowUpDown size={12} style={{ opacity: 0.55 }} />;
+                };
 
-                {/* Filtro por fecha */}
-                <div style={{ minWidth: '150px' }}>
-                  <select
-                    className="form-control"
-                    value={invoicePeriodFilter}
-                    onChange={(e) => setInvoicePeriodFilter(e.target.value)}
-                    style={{ fontSize: '0.82rem' }}
-                  >
-                    <option value="ALL">Todos los Períodos</option>
-                    <option value="TODAY">Hoy</option>
-                    <option value="WEEK">Últimos 7 días</option>
-                    <option value="MONTH">Últimos 30 días</option>
-                  </select>
-                </div>
+                const filterInputStyle = {
+                  width: '100%',
+                  fontSize: '0.72rem',
+                  padding: '4px 7px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-glass, rgba(255,255,255,0.14))',
+                  background: isDark ? 'rgba(15, 23, 42, 0.85)' : '#ffffff',
+                  color: 'var(--text-primary)',
+                  outline: 'none'
+                };
 
-                {/* Botón Cargar a Cobranzas (CxC) */}
-                <button
-                  type="button"
-                  onClick={() => setShowCxcInvoiceModal(true)}
-                  className="btn btn-sm"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '0.80rem',
-                    padding: '7px 14px',
-                    background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-                    color: '#ffffff',
-                    fontWeight: 800,
-                    borderRadius: '8px',
-                    border: 'none',
-                    boxShadow: '0 2px 10px rgba(16, 185, 129, 0.3)',
-                    cursor: 'pointer'
-                  }}
-                  title="Cargar Factura o Nota de Entrega editable a Cobranzas (CxC) para cuadrar facturas de noviembre"
-                >
-                  <Plus size={15} color="#ffffff" />
-                  <span>+ Nueva Factura / N.E. (Cobranzas)</span>
-                </button>
+                return (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: '10px',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
+                        padding: '12px 16px',
+                        borderRadius: '12px',
+                        border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))'
+                      }}
+                    >
+                      {/* Botones de filtro: Todas, Contado, Crédito */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setInvoiceConditionFilter('ALL')}
+                          style={{
+                            padding: '5px 10px',
+                            borderRadius: '6px',
+                            fontSize: '0.76rem',
+                            fontWeight: 700,
+                            border: 'none',
+                            cursor: 'pointer',
+                            background: invoiceConditionFilter === 'ALL' ? 'var(--brand-blue, #2563eb)' : 'transparent',
+                            color: invoiceConditionFilter === 'ALL' ? '#ffffff' : 'var(--text-muted)'
+                          }}
+                        >
+                          Todas ({invoiceKpis.totalFacturas})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInvoiceConditionFilter('CONTADO')}
+                          style={{
+                            padding: '5px 10px',
+                            borderRadius: '6px',
+                            fontSize: '0.76rem',
+                            fontWeight: 700,
+                            border: 'none',
+                            cursor: 'pointer',
+                            background: invoiceConditionFilter === 'CONTADO' ? 'var(--semaforo-verde, #10b981)' : 'transparent',
+                            color: invoiceConditionFilter === 'CONTADO' ? '#ffffff' : 'var(--text-muted)'
+                          }}
+                        >
+                          🟢 Contado ({invoiceKpis.contadoCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInvoiceConditionFilter('CREDITO')}
+                          style={{
+                            padding: '5px 10px',
+                            borderRadius: '6px',
+                            fontSize: '0.76rem',
+                            fontWeight: 700,
+                            border: 'none',
+                            cursor: 'pointer',
+                            background: invoiceConditionFilter === 'CREDITO' ? '#8b5cf6' : 'transparent',
+                            color: invoiceConditionFilter === 'CREDITO' ? '#ffffff' : 'var(--text-muted)'
+                          }}
+                        >
+                          🔵 Crédito ({invoiceKpis.creditoCount})
+                        </button>
+                      </div>
 
-                {/* Botón de Imprimir Reporte General */}
-                <button
-                  type="button"
-                  onClick={handlePrintGeneralInvoicesReport}
-                  className="btn btn-print-report"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '0.80rem',
-                    padding: '7px 14px',
-                    background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
-                    color: '#ffffff',
-                    fontWeight: 700,
-                    borderRadius: '8px'
-                  }}
-                  title="Descargar Reporte Oficial de Facturación en PDF"
-                >
-                  <Printer size={15} color="#ffffff" />
-                  <span>Imprimir Reporte General</span>
-                </button>
-              </div>
+                      {/* Filtro de Tipo de Documento */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '8px' }}>
+                        {[
+                          { id: 'ALL', label: 'Todos' },
+                          { id: 'FACTURA', label: 'Facturas' },
+                          { id: 'NOTA_ENTREGA', label: 'Notas Entrega' }
+                        ].map((dt) => (
+                          <button
+                            key={dt.id}
+                            type="button"
+                            onClick={() => setInvoiceDocTypeFilter(dt.id)}
+                            style={{
+                              padding: '5px 9px',
+                              borderRadius: '6px',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              border: 'none',
+                              cursor: 'pointer',
+                              background: invoiceDocTypeFilter === dt.id ? '#0284c7' : 'transparent',
+                              color: invoiceDocTypeFilter === dt.id ? '#ffffff' : 'var(--text-muted)'
+                            }}
+                          >
+                            {dt.label}
+                          </button>
+                        ))}
+                      </div>
 
-              {/* TABLA LIST VIEW DE FACTURAS */}
-              <div
-                style={{
-                  background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
-                  border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))',
-                  borderRadius: '14px',
-                  overflow: 'hidden'
-                }}
-              >
-                <div style={{ overflowX: 'auto', maxHeight: '650px' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.82rem' }}>
-                    <thead style={{
-                      position: 'sticky',
-                      top: 0,
-                      background: isDark ? '#0c152e' : '#f1f5f9',
-                      zIndex: 2,
-                      borderBottom: '1px solid var(--border-glass)'
-                    }}>
-                      <tr>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'factura' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('factura')}
-                          title="Ordenar por N° de Factura"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <span>N° FACTURA</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'fecha' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('fecha')}
-                          title="Ordenar por Fecha y Hora"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <span>FECHA & HORA</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: (invoiceSortField === 'cliente' || invoiceSortField === 'rif') ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('cliente')}
-                          title="Ordenar por Cliente / Razón Social"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span>CLIENTE / RAZÓN SOCIAL</span>
-                            <ArrowUpDown size={12} />
-                            <span
-                              onClick={(e) => { e.stopPropagation(); handleInvoiceSort('rif'); }}
-                              title="Ordenar por RIF"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '2px',
-                                fontSize: '0.66rem',
-                                padding: '1px 5px',
-                                borderRadius: '4px',
-                                background: invoiceSortField === 'rif' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.06)',
-                                color: invoiceSortField === 'rif' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)'
-                              }}
-                            >
-                              RIF <ArrowUpDown size={10} />
-                            </span>
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'vendedor' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('vendedor')}
-                          title="Ordenar por Asesor / Caja"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <span>ASESOR / CAJA</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'condicion' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('condicion')}
-                          title="Ordenar por Condición de Pago"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                            <span>CONDICIÓN</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'renglones' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('renglones')}
-                          title="Ordenar por Renglones / Litros"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                            <span>RENGLONES / LTS</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'totalUsd' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('totalUsd')}
-                          title="Ordenar por Total USD"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
-                            <span>TOTAL USD</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th
-                          style={{ padding: '0.85rem 1rem', color: invoiceSortField === 'totalBs' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={() => handleInvoiceSort('totalBs')}
-                          title="Ordenar por Total Bs. (BCV)"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
-                            <span>TOTAL BS. (BCV)</span>
-                            <ArrowUpDown size={12} />
-                          </div>
-                        </th>
-                        <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center' }}>ACCIONES</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredInvoices.length === 0 ? (
-                        <tr>
-                          <td colSpan={9} style={{ padding: '3.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                            <ReceiptText size={44} style={{ opacity: 0.3, margin: '0 auto 10px' }} />
-                            <div style={{ fontSize: '0.98rem', fontWeight: 700 }}>No se encontraron facturas registradas.</div>
-                            <div style={{ fontSize: '0.80rem', marginTop: '4px' }}>Emite facturas desde el POS Mostrador o desde Facturación en Caja.</div>
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredInvoices.map((inv, idx) => {
-                          const correlativo = formatInvoiceCorrelativo(inv);
-                          const isCredit = checkIsCredit(inv);
-                          const totalUsdVal = Number(inv.totalUsd || inv.total_usd || inv.totNetoUsd || inv.total || 0);
-                          const totalBsVal = Number(inv.totalBs || inv.total_bs || (totalUsdVal * tasaBcv));
-                          const itemsCount = (inv.items || inv.renglones || []).length || 1;
-                          const totalLitros = Number(inv.totalLitros || 0);
-                          const rawDate = inv.fechaEmision || inv.fecha || inv.created_at;
-                          const dateFormatted = rawDate ? new Date(rawDate).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }) : 'N/A';
-                          const cliName = inv.clienteNombre || inv.cliente || inv.cliDes || 'Cliente General';
-                          const cliRif = inv.clienteRif || inv.rif || inv.coCli || 'V-00000000-0';
-                          const sellerName = inv.vendedor || inv.venDes || inv.cajera || 'Caja Mostrador';
+                      {/* Buscador de facturas */}
+                      <div style={{ flex: 1, minWidth: '220px', position: 'relative' }}>
+                        <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                        <input
+                          type="text"
+                          className="form-control"
+                          placeholder="Buscar por N° factura (ej: 080583), cliente, RIF o vendedor..."
+                          value={invoiceSearchQuery}
+                          onChange={(e) => setInvoiceSearchQuery(e.target.value)}
+                          style={{ paddingLeft: '32px', paddingRight: invoiceSearchQuery ? '30px' : '12px', fontSize: '0.82rem', width: '100%' }}
+                        />
+                        {invoiceSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setInvoiceSearchQuery('')}
+                            title="Limpiar búsqueda"
+                            style={{
+                              position: 'absolute',
+                              right: '8px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--text-muted)',
+                              cursor: 'pointer',
+                              padding: '2px'
+                            }}
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
 
-                          return (
-                            <tr
-                              key={inv.id || inv.numeroDoc || idx}
-                              style={{
-                                borderBottom: '1px solid var(--border-glass, rgba(255, 255, 255, 0.05))',
-                                transition: 'background 0.15s ease'
-                              }}
-                              onMouseEnter={(e) => e.currentTarget.style.background = isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)'}
-                              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                            >
-                              {/* N° FACTURA */}
-                              <td style={{ padding: '0.85rem 1rem', whiteSpace: 'nowrap' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {/* Filtro por fecha */}
+                      <div style={{ minWidth: '145px' }}>
+                        <select
+                          className="form-control"
+                          value={invoicePeriodFilter}
+                          onChange={(e) => setInvoicePeriodFilter(e.target.value)}
+                          style={{ fontSize: '0.80rem' }}
+                        >
+                          <option value="ALL">Todos los Períodos</option>
+                          <option value="TODAY">Hoy</option>
+                          <option value="YESTERDAY">Ayer</option>
+                          <option value="WEEK">Últimos 7 días</option>
+                          <option value="MONTH">Últimos 30 días</option>
+                        </select>
+                      </div>
+
+                      {/* Botón Mostrar/Ocultar Filtros de Columna */}
+                      <button
+                        type="button"
+                        onClick={() => setShowColumnFilters(prev => !prev)}
+                        className="btn btn-sm"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontSize: '0.76rem',
+                          padding: '7px 11px',
+                          borderRadius: '8px',
+                          background: showColumnFilters ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255,255,255,0.06)',
+                          color: showColumnFilters ? '#38bdf8' : 'var(--text-secondary)',
+                          border: `1px solid ${showColumnFilters ? 'rgba(56, 189, 248, 0.4)' : 'var(--border-glass)'}`,
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                        title="Mostrar u ocultar barra de filtros individuales por columna"
+                      >
+                        <Filter size={14} />
+                        <span>Filtros</span>
+                      </button>
+
+                      {/* Botón Cargar a Cobranzas (CxC) */}
+                      <button
+                        type="button"
+                        onClick={() => setShowCxcInvoiceModal(true)}
+                        className="btn btn-sm"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '0.80rem',
+                          padding: '7px 14px',
+                          background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                          color: '#ffffff',
+                          fontWeight: 800,
+                          borderRadius: '8px',
+                          border: 'none',
+                          boxShadow: '0 2px 10px rgba(16, 185, 129, 0.3)',
+                          cursor: 'pointer'
+                        }}
+                        title="Cargar Factura o Nota de Entrega editable a Cobranzas (CxC)"
+                      >
+                        <Plus size={15} color="#ffffff" />
+                        <span>+ Nueva Factura / N.E. (Cobranzas)</span>
+                      </button>
+
+                      {/* Botón de Imprimir Reporte General */}
+                      <button
+                        type="button"
+                        onClick={handlePrintGeneralInvoicesReport}
+                        className="btn btn-print-report"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '0.80rem',
+                          padding: '7px 14px',
+                          background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
+                          color: '#ffffff',
+                          fontWeight: 700,
+                          borderRadius: '8px'
+                        }}
+                        title="Descargar Reporte Oficial de Facturación en PDF"
+                      >
+                        <Printer size={15} color="#ffffff" />
+                        <span>Imprimir Reporte General</span>
+                      </button>
+                    </div>
+
+                    {hasActiveFilters && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '10px',
+                          padding: '6px 12px',
+                          marginTop: '8px',
+                          borderRadius: '8px',
+                          background: 'rgba(56, 189, 248, 0.08)',
+                          border: '1px solid rgba(56, 189, 248, 0.25)',
+                          fontSize: '0.78rem'
+                        }}
+                      >
+                        <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                          Mostrando <strong style={{ color: 'var(--neon-cyan, #38bdf8)' }}>{filteredInvoices.length}</strong> de <strong>{allInvoices.length}</strong> documentos registrados
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleResetInvoiceFilters}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            background: 'rgba(239, 68, 68, 0.14)',
+                            color: '#f87171',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            borderRadius: '6px',
+                            padding: '3px 10px',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <X size={12} />
+                          <span>Limpiar Todos los Filtros</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* PANEL DEDICADO DE FILTROS POR COLUMNA (FUERA DEL THEAD PARA EVITAR SUPERPOSICIONES) */}
+                    {showColumnFilters && (
+                      <div
+                        style={{
+                          marginTop: '10px',
+                          padding: '12px 14px',
+                          borderRadius: '12px',
+                          background: isDark ? 'rgba(12, 21, 46, 0.85)' : '#f8fafc',
+                          border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.1))',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                          gap: '10px',
+                          alignItems: 'end'
+                        }}
+                      >
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            N° / Control
+                          </label>
+                          <input
+                            type="text"
+                            value={invoiceNumColFilter}
+                            onChange={(e) => setInvoiceNumColFilter(e.target.value)}
+                            placeholder="Ej: 000002 o N.E."
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Fecha Exacta
+                          </label>
+                          <input
+                            type="date"
+                            value={invoiceDateColFilter}
+                            onChange={(e) => setInvoiceDateColFilter(e.target.value)}
+                            style={{ ...filterInputStyle, padding: '5px 9px', fontSize: '0.76rem' }}
+                            title="Filtrar por fecha exacta de emisión"
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Cliente / RIF
+                          </label>
+                          <input
+                            type="text"
+                            value={invoiceClientColFilter}
+                            onChange={(e) => setInvoiceClientColFilter(e.target.value)}
+                            placeholder="Nombre o RIF..."
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Asesor / Caja
+                          </label>
+                          <select
+                            value={invoiceSellerColFilter}
+                            onChange={(e) => setInvoiceSellerColFilter(e.target.value)}
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem' }}
+                          >
+                            <option value="ALL">Todos los asesores</option>
+                            {invoiceSellerOptions.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Condición
+                          </label>
+                          <select
+                            value={invoiceCondColFilter}
+                            onChange={(e) => setInvoiceCondColFilter(e.target.value)}
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem' }}
+                          >
+                            <option value="ALL">Todas</option>
+                            <option value="CONTADO">Contado</option>
+                            <option value="CREDITO">Crédito (Todas)</option>
+                            <option value="DIAS_7">Crédito 7D</option>
+                            <option value="DIAS_15">Crédito 15D</option>
+                            <option value="DIAS_21">Crédito 21D</option>
+                            <option value="DIAS_30">Crédito 30D</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Renglones / Lts
+                          </label>
+                          <select
+                            value={invoiceItemsColFilter}
+                            onChange={(e) => setInvoiceItemsColFilter(e.target.value)}
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem' }}
+                          >
+                            <option value="ALL">Todos</option>
+                            <option value="WITH_LITERS">Con Litros (&gt;0 L)</option>
+                            <option value="MULTI">Varios (&gt;1 art)</option>
+                            <option value="SINGLE">1 Renglón</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Mínimo USD ($)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={invoiceMinUsdFilter}
+                            onChange={(e) => setInvoiceMinUsdFilter(e.target.value)}
+                            placeholder="Ej: 100"
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem', textAlign: 'right' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Mínimo Bs.
+                          </label>
+                          <input
+                            type="number"
+                            step="1"
+                            min="0"
+                            value={invoiceMinBsFilter}
+                            onChange={(e) => setInvoiceMinBsFilter(e.target.value)}
+                            placeholder="Ej: 50000"
+                            style={{ ...filterInputStyle, padding: '6px 9px', fontSize: '0.76rem', textAlign: 'right' }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TABLA LIST VIEW DE FACTURAS */}
+                    <div
+                      style={{
+                        background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
+                        border: '1px solid var(--border-glass, rgba(255, 255, 255, 0.08))',
+                        borderRadius: '14px',
+                        overflow: 'hidden',
+                        marginTop: '10px'
+                      }}
+                    >
+                      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '620px', position: 'relative' }}>
+                        <table style={{ width: '100%', minWidth: '1080px', borderCollapse: 'separate', borderSpacing: 0, textAlign: 'left', fontSize: '0.82rem' }}>
+                          <thead>
+                            <tr>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'factura' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('factura')}
+                                title="Ordenar por N° de Factura"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <span>N° FACTURA</span>
+                                  {renderSortArrow('factura')}
+                                </div>
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'fecha' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('fecha')}
+                                title="Ordenar por Fecha y Hora"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <span>FECHA & HORA</span>
+                                  {renderSortArrow('fecha')}
+                                </div>
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: (invoiceSortField === 'cliente' || invoiceSortField === 'rif') ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('cliente')}
+                                title="Ordenar por Cliente / Razón Social"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span>CLIENTE / RAZÓN SOCIAL</span>
+                                  {renderSortArrow('cliente')}
                                   <span
-                                    style={{
-                                      fontFamily: 'var(--font-code, monospace)',
-                                      fontWeight: 800,
-                                      fontSize: '0.88rem',
-                                      color: 'var(--neon-cyan, #0284c7)',
-                                      background: isDark ? 'rgba(0, 240, 255, 0.1)' : '#e0f2fe',
-                                      padding: '3px 8px',
-                                      borderRadius: '6px',
-                                      border: '1px solid rgba(0, 240, 255, 0.3)'
-                                    }}
-                                  >
-                                    #{correlativo}
-                                  </span>
-                                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                                    {inv.tipoDoc || 'FACT'}
-                                  </span>
-                                </div>
-                              </td>
-
-                              {/* FECHA & HORA */}
-                              <td style={{ padding: '0.85rem 1rem', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                                <div style={{ fontSize: '0.80rem' }}>{dateFormatted}</div>
-                              </td>
-
-                              {/* CLIENTE */}
-                              <td style={{ padding: '0.85rem 1rem' }}>
-                                <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.84rem' }}>
-                                  {cliName}
-                                </div>
-                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                                  {cliRif}
-                                </div>
-                              </td>
-
-                              {/* VENDEDOR */}
-                              <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)' }}>
-                                <div style={{ fontSize: '0.80rem', fontWeight: 600 }}>{sellerName}</div>
-                              </td>
-
-                              {/* CONDICIÓN */}
-                              <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                {isCredit ? (
-                                  <span
+                                    onClick={(e) => { e.stopPropagation(); handleInvoiceSort('rif'); }}
+                                    title="Ordenar por RIF"
                                     style={{
                                       display: 'inline-flex',
                                       alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '3px 9px',
-                                      borderRadius: '6px',
-                                      fontSize: '0.72rem',
-                                      fontWeight: 800,
-                                      background: 'rgba(139, 92, 246, 0.15)',
-                                      color: '#a78bfa',
-                                      border: '1px solid rgba(139, 92, 246, 0.35)'
+                                      gap: '2px',
+                                      fontSize: '0.66rem',
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      background: invoiceSortField === 'rif' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.06)',
+                                      color: invoiceSortField === 'rif' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)'
                                     }}
                                   >
-                                    <Clock size={12} />
-                                    CRÉDITO ({inv.diasCredito || 7}D)
+                                    RIF {renderSortArrow('rif')}
                                   </span>
-                                ) : (
-                                  <span
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '3px 9px',
-                                      borderRadius: '6px',
-                                      fontSize: '0.72rem',
-                                      fontWeight: 800,
-                                      background: 'rgba(16, 185, 129, 0.15)',
-                                      color: '#10b981',
-                                      border: '1px solid rgba(16, 185, 129, 0.35)'
-                                    }}
-                                  >
-                                    <CheckCircle2 size={12} />
-                                    CONTADO
-                                  </span>
-                                )}
-                              </td>
-
-                              {/* RENGLONES / LTS */}
-                              <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                                  {itemsCount} art{itemsCount > 1 ? 's' : ''}
-                                  {totalLitros > 0 && ` • ${totalLitros.toFixed(1)} L`}
-                                </span>
-                              </td>
-
-                              {/* TOTAL USD */}
-                              <td style={{ padding: '0.85rem 1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                <div style={{ fontWeight: 800, color: 'var(--semaforo-verde)', fontSize: '0.88rem' }}>
-                                  {formatUsd(totalUsdVal)}
                                 </div>
-                              </td>
-
-                              {/* TOTAL BS */}
-                              <td style={{ padding: '0.85rem 1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                <div style={{ fontSize: '0.80rem', color: 'var(--motorven-gold)', fontWeight: 600 }}>
-                                  {formatBs(totalBsVal)}
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'vendedor' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('vendedor')}
+                                title="Ordenar por Asesor / Caja"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <span>ASESOR / CAJA</span>
+                                  {renderSortArrow('vendedor')}
                                 </div>
-                              </td>
-
-                              {/* ACCIONES */}
-                              <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                  {/* Botón Imprimir Factura Oficial con Correlativo */}
-                                  <button
-                                    type="button"
-                                    onClick={() => handlePrintIndividualInvoice(inv)}
-                                    className="btn btn-sm"
-                                    style={{
-                                      background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
-                                      color: '#ffffff',
-                                      border: 'none',
-                                      borderRadius: '6px',
-                                      padding: '5px 10px',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      fontWeight: 700,
-                                      fontSize: '0.74rem',
-                                      cursor: 'pointer',
-                                      boxShadow: '0 2px 6px rgba(30, 64, 175, 0.3)'
-                                    }}
-                                    title={`Imprimir Factura Oficial N° #${correlativo} en formato SENIAT`}
-                                  >
-                                    <Printer size={13} color="#ffffff" />
-                                    <span>Imprimir</span>
-                                  </button>
-
-                                  {/* Botón Ver Documento / Modal */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setInvoiceModalSale(buildPrintableInvoice(inv));
-                                      setShowInvoiceModal(true);
-                                    }}
-                                    className="btn btn-sm"
-                                    style={{
-                                      background: 'rgba(255, 255, 255, 0.08)',
-                                      color: 'var(--text-primary)',
-                                      border: '1px solid var(--border-glass)',
-                                      borderRadius: '6px',
-                                      padding: '5px 9px',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      fontWeight: 700,
-                                      fontSize: '0.74rem',
-                                      cursor: 'pointer'
-                                    }}
-                                    title="Ver vista previa del documento / Ticket térmico 80mm o carta"
-                                  >
-                                    <Eye size={13} />
-                                    <span>Ver</span>
-                                  </button>
-
-                                  {/* Botón Eliminar con Doble Seguridad (Solo Administradores) */}
-                                  {isAdmin && (
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'condicion' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('condicion')}
+                                title="Ordenar por Condición de Pago"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                                  <span>CONDICIÓN</span>
+                                  {renderSortArrow('condicion')}
+                                </div>
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'renglones' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('renglones')}
+                                title="Ordenar por Renglones / Litros"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                                  <span>RENGLONES / LTS</span>
+                                  {renderSortArrow('renglones')}
+                                </div>
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'totalUsd' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('totalUsd')}
+                                title="Ordenar por Total USD"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                                  <span>TOTAL USD</span>
+                                  {renderSortArrow('totalUsd')}
+                                </div>
+                              </th>
+                              <th
+                                style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: invoiceSortField === 'totalBs' ? 'var(--neon-cyan, #38bdf8)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'right', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                                onClick={() => handleInvoiceSort('totalBs')}
+                                title="Ordenar por Total Bs. (BCV)"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                                  <span>TOTAL BS. (BCV)</span>
+                                  {renderSortArrow('totalBs')}
+                                </div>
+                              </th>
+                              <th style={{ position: 'sticky', top: 0, zIndex: 4, background: isDark ? '#0c152e' : '#f1f5f9', borderBottom: '1px solid var(--border-glass)', padding: '0.85rem 0.85rem', color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.72rem', textAlign: 'center', whiteSpace: 'nowrap' }}>ACCIONES</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredInvoices.length === 0 ? (
+                              <tr>
+                                <td colSpan={9} style={{ padding: '3.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                  <ReceiptText size={44} style={{ opacity: 0.3, margin: '0 auto 10px' }} />
+                                  <div style={{ fontSize: '0.98rem', fontWeight: 700 }}>No se encontraron facturas con los criterios seleccionados.</div>
+                                  <div style={{ fontSize: '0.80rem', marginTop: '4px' }}>
+                                    {hasActiveFilters
+                                      ? 'Prueba limpiando los filtros o ajustando tu búsqueda.'
+                                      : 'Emite facturas desde el POS Mostrador o desde Facturación en Caja.'}
+                                  </div>
+                                  {hasActiveFilters && (
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setInvoiceToDelete(inv);
-                                        setDeleteConfirmKeyword('');
-                                      }}
-                                      className="btn btn-sm"
+                                      onClick={handleResetInvoiceFilters}
                                       style={{
-                                        background: 'rgba(239, 68, 68, 0.12)',
-                                        color: '#ef4444',
-                                        border: '1px solid rgba(239, 68, 68, 0.35)',
-                                        borderRadius: '6px',
-                                        padding: '5px 9px',
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '4px',
+                                        marginTop: '12px',
+                                        padding: '6px 14px',
+                                        borderRadius: '8px',
+                                        border: '1px solid rgba(56, 189, 248, 0.4)',
+                                        background: 'rgba(56, 189, 248, 0.15)',
+                                        color: '#38bdf8',
+                                        fontSize: '0.80rem',
                                         fontWeight: 700,
-                                        fontSize: '0.74rem',
                                         cursor: 'pointer'
                                       }}
-                                      title="Eliminar factura de la base de datos (Requiere doble factor de confirmación)"
                                     >
-                                      <Trash2 size={13} />
-                                      <span>Eliminar</span>
+                                      Restablecer Filtros
                                     </button>
                                   )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredInvoices.map((inv, idx) => {
+                                const correlativo = formatInvoiceCorrelativo(inv);
+                                const tipoDocNorm = resolveInvoiceTipoDoc(inv);
+                                const isCredit = checkIsCredit(inv);
+                                const totalUsdVal = resolveInvoiceTotalUsd(inv);
+                                const totalBsVal = resolveInvoiceTotalBs(inv);
+                                const { itemsCount, totalLitros } = resolveInvoiceItemsAndLiters(inv);
+                                const dateFormatted = formatInvoiceDateTimeDisplay(inv);
+                                const cliName = resolveInvoiceClientName(inv);
+                                const cliRif = resolveInvoiceClientRif(inv);
+                                const sellerName = resolveInvoiceSellerName(inv);
+
+                                return (
+                                  <tr
+                                    key={inv.id || inv.numeroDoc || idx}
+                                    style={{
+                                      borderBottom: '1px solid var(--border-glass, rgba(255, 255, 255, 0.05))',
+                                      transition: 'background 0.15s ease'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                  >
+                                    {/* N° FACTURA */}
+                                    <td style={{ padding: '0.85rem 0.85rem', whiteSpace: 'nowrap' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span
+                                          style={{
+                                            fontFamily: 'var(--font-code, monospace)',
+                                            fontWeight: 800,
+                                            fontSize: '0.88rem',
+                                            color: 'var(--neon-cyan, #0284c7)',
+                                            background: isDark ? 'rgba(0, 240, 255, 0.1)' : '#e0f2fe',
+                                            padding: '3px 8px',
+                                            borderRadius: '6px',
+                                            border: '1px solid rgba(0, 240, 255, 0.3)'
+                                          }}
+                                        >
+                                          #{correlativo}
+                                        </span>
+                                        <span
+                                          style={{
+                                            fontSize: '0.66rem',
+                                            fontWeight: 700,
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            color: tipoDocNorm === 'NOTA_ENTREGA' ? '#f59e0b' : 'var(--text-muted)',
+                                            background: tipoDocNorm === 'NOTA_ENTREGA' ? 'rgba(245, 158, 11, 0.12)' : 'transparent',
+                                            textTransform: 'uppercase'
+                                          }}
+                                        >
+                                          {tipoDocNorm}
+                                        </span>
+                                      </div>
+                                    </td>
+
+                                    {/* FECHA & HORA */}
+                                    <td style={{ padding: '0.85rem 0.85rem', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
+                                      <div style={{ fontSize: '0.80rem' }}>{dateFormatted}</div>
+                                    </td>
+
+                                    {/* CLIENTE */}
+                                    <td style={{ padding: '0.85rem 0.85rem' }}>
+                                      <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.84rem' }}>
+                                        {cliName}
+                                      </div>
+                                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                                        {cliRif}
+                                      </div>
+                                    </td>
+
+                                    {/* VENDEDOR */}
+                                    <td style={{ padding: '0.85rem 0.85rem', color: 'var(--text-secondary)' }}>
+                                      <div style={{ fontSize: '0.80rem', fontWeight: 600 }}>{sellerName}</div>
+                                    </td>
+
+                                    {/* CONDICIÓN */}
+                                    <td style={{ padding: '0.85rem 0.85rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                      {isCredit ? (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '3px 9px',
+                                            borderRadius: '6px',
+                                            fontSize: '0.72rem',
+                                            fontWeight: 800,
+                                            background: 'rgba(139, 92, 246, 0.15)',
+                                            color: '#a78bfa',
+                                            border: '1px solid rgba(139, 92, 246, 0.35)'
+                                          }}
+                                        >
+                                          <Clock size={12} />
+                                          CRÉDITO ({inv.diasCredito || 7}D)
+                                        </span>
+                                      ) : (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '3px 9px',
+                                            borderRadius: '6px',
+                                            fontSize: '0.72rem',
+                                            fontWeight: 800,
+                                            background: 'rgba(16, 185, 129, 0.15)',
+                                            color: '#10b981',
+                                            border: '1px solid rgba(16, 185, 129, 0.35)'
+                                          }}
+                                        >
+                                          <CheckCircle2 size={12} />
+                                          CONTADO
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* RENGLONES / LTS */}
+                                    <td style={{ padding: '0.85rem 0.85rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                                        {itemsCount} art{itemsCount > 1 ? 's' : ''}
+                                        {totalLitros > 0 && ` • ${formatUnitVe(totalLitros)} L`}
+                                      </span>
+                                    </td>
+
+                                    {/* TOTAL USD */}
+                                    <td style={{ padding: '0.85rem 0.85rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                      <div style={{ fontWeight: 800, color: 'var(--semaforo-verde)', fontSize: '0.88rem' }}>
+                                        {formatUsd(totalUsdVal)}
+                                      </div>
+                                    </td>
+
+                                    {/* TOTAL BS */}
+                                    <td style={{ padding: '0.85rem 0.85rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                      <div style={{ fontSize: '0.80rem', color: 'var(--motorven-gold)', fontWeight: 600 }}>
+                                        {formatBs(totalBsVal)}
+                                      </div>
+                                    </td>
+
+                                    {/* ACCIONES */}
+                                    <td style={{ padding: '0.85rem 0.85rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                                        {/* Botón Imprimir Factura Oficial con Correlativo */}
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePrintIndividualInvoice(inv)}
+                                          className="btn btn-sm"
+                                          style={{
+                                            background: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
+                                            color: '#ffffff',
+                                            border: 'none',
+                                            borderRadius: '6px',
+                                            padding: '5px 9px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            fontWeight: 700,
+                                            fontSize: '0.74rem',
+                                            cursor: 'pointer',
+                                            boxShadow: '0 2px 6px rgba(30, 64, 175, 0.3)'
+                                          }}
+                                          title={`Imprimir ${tipoDocNorm === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${correlativo}`}
+                                        >
+                                          <Printer size={13} color="#ffffff" />
+                                          <span>Imprimir</span>
+                                        </button>
+
+                                        {/* Botón Ver Documento / Modal */}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setInvoiceModalSale(buildPrintableInvoice(inv));
+                                            setShowInvoiceModal(true);
+                                          }}
+                                          className="btn btn-sm"
+                                          style={{
+                                            background: 'rgba(255, 255, 255, 0.08)',
+                                            color: 'var(--text-primary)',
+                                            border: '1px solid var(--border-glass)',
+                                            borderRadius: '6px',
+                                            padding: '5px 8px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            fontWeight: 700,
+                                            fontSize: '0.74rem',
+                                            cursor: 'pointer'
+                                          }}
+                                          title="Ver vista previa del documento / Ticket térmico 80mm o carta"
+                                        >
+                                          <Eye size={13} />
+                                          <span>Ver</span>
+                                        </button>
+
+                                        {/* Botón Editar Datos de Factura / Nota de Entrega */}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenEditInvoice(inv)}
+                                          className="btn btn-sm"
+                                          style={{
+                                            background: 'rgba(245, 158, 11, 0.14)',
+                                            color: '#f59e0b',
+                                            border: '1px solid rgba(245, 158, 11, 0.38)',
+                                            borderRadius: '6px',
+                                            padding: '5px 8px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            fontWeight: 700,
+                                            fontSize: '0.74rem',
+                                            cursor: 'pointer'
+                                          }}
+                                          title={`Editar correlativo, fecha/hora, cliente, vendedor y montos de #${correlativo}`}
+                                        >
+                                          <Pencil size={13} />
+                                          <span>Editar</span>
+                                        </button>
+
+                                        {/* Botón Eliminar con Doble Seguridad (Solo Administradores) */}
+                                        {isAdmin && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setInvoiceToDelete(inv);
+                                              setDeleteConfirmKeyword('');
+                                            }}
+                                            className="btn btn-sm"
+                                            style={{
+                                              background: 'rgba(239, 68, 68, 0.12)',
+                                              color: '#ef4444',
+                                              border: '1px solid rgba(239, 68, 68, 0.35)',
+                                              borderRadius: '6px',
+                                              padding: '5px 8px',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              fontWeight: 700,
+                                              fontSize: '0.74rem',
+                                              cursor: 'pointer'
+                                            }}
+                                            title="Eliminar factura de la base de datos (Requiere doble factor de confirmación)"
+                                          >
+                                            <Trash2 size={13} />
+                                            <span>Eliminar</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* MODAL DE ELIMINACIÓN CON DOBLE SEGURIDAD PARA FACTURAS */}
               {invoiceToDelete && (
@@ -5814,6 +6818,722 @@ export default function OrdersSalesModal({
                       </button>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* MODAL EDICIÓN DE FACTURA / NOTA DE ENTREGA */}
+              {editingInvoice && (
+                <div
+                  style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(5, 10, 24, 0.85)',
+                    backdropFilter: 'blur(8px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 99999,
+                    padding: '1rem'
+                  }}
+                  onClick={() => !isSavingEditedInvoice && setEditingInvoice(null)}
+                >
+                  <form
+                    onSubmit={handleSaveEditedInvoice}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      width: '100%',
+                      maxWidth: '880px',
+                      maxHeight: '92vh',
+                      overflowY: 'auto',
+                      background: isDark ? '#0c142b' : '#ffffff',
+                      border: '1.5px solid rgba(245, 158, 11, 0.45)',
+                      borderRadius: '16px',
+                      padding: '1.35rem 1.5rem',
+                      boxShadow: '0 24px 60px rgba(0, 0, 0, 0.55)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem'
+                    }}
+                  >
+                    {/* Header del Modal */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>
+                          <Pencil size={18} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                            Editar {editingInvoice.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #{editingInvoice.numeroDoc}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            Modifica correlativo, fecha/hora de emisión, cliente, condición de pago o montos (sin alterar inventario).
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isSavingEditedInvoice}
+                        onClick={() => setEditingInvoice(null)}
+                        style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+
+                    {/* 1. Identificación y Fecha/Hora de Emisión */}
+                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '0.95rem' }}>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.65rem' }}>
+                        1. Correlativo, Tipo de Documento y Fecha / Hora de Emisión
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Tipo Documento</label>
+                          <select
+                            className="form-control"
+                            value={editingInvoice.tipoDoc}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, tipoDoc: e.target.value }))}
+                            style={{ fontSize: '0.82rem' }}
+                          >
+                            <option value="FACTURA">FACTURA FISCAL</option>
+                            <option value="NOTA_ENTREGA">NOTA DE ENTREGA (N.E.)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>N° Correlativo</label>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <input
+                              type="text"
+                              className="form-control"
+                              value={editingInvoice.numeroDoc}
+                              onChange={(e) => setEditingInvoice(prev => ({ ...prev, numeroDoc: e.target.value }))}
+                              placeholder="080583"
+                              required
+                              style={{ fontFamily: 'var(--font-code)', fontWeight: 800, fontSize: '0.84rem' }}
+                            />
+                            <button
+                              type="button"
+                              title="Regenerar N° Control según este correlativo"
+                              onClick={() => {
+                                const digits = String(editingInvoice.numeroDoc || '').replace(/[^0-9]/g, '');
+                                const padded = digits ? digits.slice(-6).padStart(6, '0') : editingInvoice.numeroDoc;
+                                setEditingInvoice(prev => ({
+                                  ...prev,
+                                  numeroDoc: padded,
+                                  numeroControl: generateFiscalControlNumber(parseInt(padded, 10) || 1)
+                                }));
+                              }}
+                              style={{ padding: '0 8px', borderRadius: '6px', border: '1px solid var(--border-glass)', background: 'rgba(56,189,248,0.12)', color: '#38bdf8', fontSize: '0.70rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                            >
+                              6 dígitos
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>N° Control Fiscal</label>
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={editingInvoice.numeroControl}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, numeroControl: e.target.value }))}
+                            placeholder="00-080583"
+                            style={{ fontFamily: 'var(--font-code)', fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Fecha de Emisión</label>
+                          <input
+                            type="date"
+                            className="form-control"
+                            value={editingInvoice.fechaEmisionDate}
+                            onChange={(e) => {
+                              const newDate = e.target.value;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                fechaEmisionDate: newDate,
+                                fechaVencimientoDate: prev.condicionPago === 'CREDITO'
+                                  ? calculateExpirationDate(newDate, parseInt(prev.diasCredito || '15', 10) || 15)
+                                  : newDate
+                              }));
+                            }}
+                            required
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Hora Exacta Emisión</label>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <input
+                              type="time"
+                              step="1"
+                              className="form-control"
+                              value={editingInvoice.fechaEmisionTime}
+                              onChange={(e) => setEditingInvoice(prev => ({ ...prev, fechaEmisionTime: e.target.value }))}
+                              style={{ fontSize: '0.82rem' }}
+                            />
+                            <button
+                              type="button"
+                              title="Establecer fecha y hora actual"
+                              onClick={() => {
+                                const now = new Date();
+                                const todayStr = toLocalYmd(now);
+                                const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+                                setEditingInvoice(prev => ({
+                                  ...prev,
+                                  fechaEmisionDate: todayStr,
+                                  fechaEmisionTime: timeStr,
+                                  fechaVencimientoDate: prev.condicionPago === 'CREDITO'
+                                    ? calculateExpirationDate(todayStr, parseInt(prev.diasCredito || '15', 10) || 15)
+                                    : todayStr
+                                }));
+                              }}
+                              style={{ padding: '0 8px', borderRadius: '6px', border: '1px solid var(--border-glass)', background: 'rgba(16,185,129,0.14)', color: '#10b981', fontSize: '0.70rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                            >
+                              Ahora
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 2. Cliente, Asesor y Condición de Pago */}
+                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '0.95rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
+                          2. Cliente, Asesor / Caja y Condición Comercial
+                        </span>
+                        <div style={{ position: 'relative', minWidth: '240px' }}>
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={editClientSearch}
+                            onChange={(e) => setEditClientSearch(e.target.value)}
+                            placeholder="Buscar cliente registrado para reemplazar..."
+                            style={{ fontSize: '0.76rem', padding: '4px 8px' }}
+                          />
+                          {editClientSearch.trim().length >= 2 && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                maxHeight: '180px',
+                                overflowY: 'auto',
+                                background: isDark ? '#0f172a' : '#ffffff',
+                                border: '1px solid var(--border-glass)',
+                                borderRadius: '8px',
+                                zIndex: 20,
+                                marginTop: '4px',
+                                boxShadow: '0 10px 25px rgba(0,0,0,0.4)'
+                              }}
+                            >
+                              {safeClients
+                                .filter((c) => {
+                                  const q = normalizeSearchText(editClientSearch);
+                                  return normalizeSearchText(`${c.nombre || c.name} ${c.rif || ''}`).includes(q);
+                                })
+                                .slice(0, 8)
+                                .map((c) => (
+                                  <button
+                                    key={c.id || c.rif || c.nombre}
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingInvoice(prev => ({
+                                        ...prev,
+                                        clienteId: c.id || prev.clienteId,
+                                        clienteNombre: c.nombre || c.name || prev.clienteNombre,
+                                        clienteRif: c.rif || prev.clienteRif,
+                                        clienteDireccion: c.direccion || c.domicilioFiscal || prev.clienteDireccion,
+                                        clienteTelefono: c.telefono || prev.clienteTelefono
+                                      }));
+                                      setEditClientSearch('');
+                                    }}
+                                    style={{
+                                      width: '100%',
+                                      textAlign: 'left',
+                                      padding: '7px 10px',
+                                      background: 'transparent',
+                                      border: 'none',
+                                      borderBottom: '1px solid rgba(255,255,255,0.06)',
+                                      color: 'var(--text-primary)',
+                                      fontSize: '0.76rem',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 700 }}>{c.nombre || c.name}</div>
+                                    <div style={{ fontSize: '0.70rem', color: 'var(--text-muted)' }}>{c.rif}</div>
+                                  </button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                        <div style={{ gridColumn: 'span 2' }}>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Cliente / Razón Social</label>
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={editingInvoice.clienteNombre}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, clienteNombre: e.target.value }))}
+                            required
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>RIF / C.I.</label>
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={editingInvoice.clienteRif}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, clienteRif: e.target.value }))}
+                            required
+                            style={{ fontSize: '0.82rem', fontFamily: 'var(--font-code)' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Asesor / Caja</label>
+                          <input
+                            type="text"
+                            list="edit-invoice-sellers-list"
+                            className="form-control"
+                            value={editingInvoice.vendedor}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, vendedor: e.target.value }))}
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                          <datalist id="edit-invoice-sellers-list">
+                            <option value="Caja Mostrador" />
+                            <option value="Oficina" />
+                            {invoiceSellerOptions.map((s) => (
+                              <option key={s} value={s} />
+                            ))}
+                          </datalist>
+                        </div>
+
+                        <div style={{ gridColumn: 'span 2' }}>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Dirección Fiscal / Entrega</label>
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={editingInvoice.clienteDireccion}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, clienteDireccion: e.target.value }))}
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Teléfono</label>
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={editingInvoice.clienteTelefono}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, clienteTelefono: e.target.value }))}
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Condición de Pago</label>
+                          <select
+                            className="form-control"
+                            value={editingInvoice.condicionPago}
+                            onChange={(e) => {
+                              const cond = e.target.value;
+                              const isCred = cond === 'CREDITO';
+                              const dias = isCred ? (parseInt(editingInvoice.diasCredito || '15', 10) || 15) : 0;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                condicionPago: cond,
+                                diasCredito: String(dias),
+                                metodoPago: isCred ? 'CREDITO' : (prev.metodoPago === 'CREDITO' ? 'EFECTIVO_USD' : prev.metodoPago),
+                                fechaVencimientoDate: isCred
+                                  ? calculateExpirationDate(prev.fechaEmisionDate, dias)
+                                  : prev.fechaEmisionDate
+                              }));
+                            }}
+                            style={{ fontSize: '0.82rem' }}
+                          >
+                            <option value="CONTADO">CONTADO</option>
+                            <option value="CREDITO">CRÉDITO</option>
+                          </select>
+                        </div>
+
+                        {editingInvoice.condicionPago === 'CREDITO' && (
+                          <>
+                            <div>
+                              <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Días de Crédito</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="180"
+                                className="form-control"
+                                value={editingInvoice.diasCredito}
+                                onChange={(e) => {
+                                  const d = parseInt(e.target.value || '1', 10) || 1;
+                                  setEditingInvoice(prev => ({
+                                    ...prev,
+                                    diasCredito: e.target.value,
+                                    fechaVencimientoDate: calculateExpirationDate(prev.fechaEmisionDate, d)
+                                  }));
+                                }}
+                                style={{ fontSize: '0.82rem' }}
+                              />
+                            </div>
+
+                            <div>
+                              <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Fecha Vencimiento</label>
+                              <input
+                                type="date"
+                                className="form-control"
+                                value={editingInvoice.fechaVencimientoDate}
+                                onChange={(e) => setEditingInvoice(prev => ({ ...prev, fechaVencimientoDate: e.target.value }))}
+                                style={{ fontSize: '0.82rem' }}
+                              />
+                            </div>
+                          </>
+                        )}
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Método de Pago</label>
+                          <select
+                            className="form-control"
+                            value={editingInvoice.metodoPago}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, metodoPago: e.target.value }))}
+                            style={{ fontSize: '0.82rem' }}
+                          >
+                            <option value="EFECTIVO_USD">EFECTIVO USD</option>
+                            <option value="ZELLE">ZELLE</option>
+                            <option value="PAGO_MOVIL">PAGO MÓVIL BS</option>
+                            <option value="TRANSFERENCIA_BS">TRANSFERENCIA BS</option>
+                            <option value="TRANSFERENCIA_USD">TRANSFERENCIA USD</option>
+                            <option value="TARJETA">PUNTO DE VENTA</option>
+                            <option value="MIXTO">PAGO MIXTO</option>
+                            <option value="CREDITO">CRÉDITO</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3. Montos, Tasa BCV y Observaciones */}
+                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '0.95rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
+                          3. Totales, Tasa BCV y Observaciones
+                        </span>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const itemsSub = (editingInvoice.items || []).reduce((acc, it) => acc + (Number(it.cantidad || 0) * Number(it.precioUsd || 0)), 0);
+                              const iva = Number(editingInvoice.ivaUsd) || 0;
+                              const tasa = Number(editingInvoice.tasaDolar) || tasaBcv;
+                              const tot = itemsSub + iva;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                subtotalUsd: itemsSub.toFixed(2),
+                                totalUsd: tot.toFixed(2),
+                                totalBs: (tot * tasa).toFixed(2)
+                              }));
+                            }}
+                            style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid var(--border-glass)', background: 'rgba(56,189,248,0.12)', color: '#38bdf8', fontSize: '0.70rem', fontWeight: 700, cursor: 'pointer' }}
+                          >
+                            Recalcular desde Renglones
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const sub = Number(editingInvoice.subtotalUsd) || 0;
+                              const iva = Number((sub * 0.16).toFixed(2));
+                              const tasa = Number(editingInvoice.tasaDolar) || tasaBcv;
+                              const tot = sub + iva;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                ivaUsd: iva.toFixed(2),
+                                totalUsd: tot.toFixed(2),
+                                totalBs: (tot * tasa).toFixed(2)
+                              }));
+                            }}
+                            style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid var(--border-glass)', background: 'rgba(139,92,246,0.14)', color: '#a78bfa', fontSize: '0.70rem', fontWeight: 700, cursor: 'pointer' }}
+                          >
+                            Aplicar IVA 16%
+                          </button>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))', gap: '10px' }}>
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Tasa BCV</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            className="form-control"
+                            value={editingInvoice.tasaDolar}
+                            onChange={(e) => {
+                              const t = e.target.value;
+                              const numT = Number(t) || 0;
+                              const totU = Number(editingInvoice.totalUsd) || 0;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                tasaDolar: t,
+                                totalBs: numT > 0 ? (totU * numT).toFixed(2) : prev.totalBs
+                              }));
+                            }}
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Subtotal USD</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="form-control"
+                            value={editingInvoice.subtotalUsd}
+                            onChange={(e) => {
+                              const sub = e.target.value;
+                              const tot = (Number(sub) || 0) + (Number(editingInvoice.ivaUsd) || 0);
+                              const tasa = Number(editingInvoice.tasaDolar) || tasaBcv;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                subtotalUsd: sub,
+                                totalUsd: tot.toFixed(2),
+                                totalBs: (tot * tasa).toFixed(2)
+                              }));
+                            }}
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>IVA USD</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="form-control"
+                            value={editingInvoice.ivaUsd}
+                            onChange={(e) => {
+                              const iva = e.target.value;
+                              const tot = (Number(editingInvoice.subtotalUsd) || 0) + (Number(iva) || 0);
+                              const tasa = Number(editingInvoice.tasaDolar) || tasaBcv;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                ivaUsd: iva,
+                                totalUsd: tot.toFixed(2),
+                                totalBs: (tot * tasa).toFixed(2)
+                              }));
+                            }}
+                            style={{ fontSize: '0.82rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--semaforo-verde)', display: 'block', marginBottom: '4px' }}>Total USD</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="form-control"
+                            value={editingInvoice.totalUsd}
+                            onChange={(e) => {
+                              const tot = e.target.value;
+                              const tasa = Number(editingInvoice.tasaDolar) || tasaBcv;
+                              setEditingInvoice(prev => ({
+                                ...prev,
+                                totalUsd: tot,
+                                totalBs: ((Number(tot) || 0) * tasa).toFixed(2)
+                              }));
+                            }}
+                            style={{ fontSize: '0.82rem', fontWeight: 800 }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--motorven-gold)', display: 'block', marginBottom: '4px' }}>Total Bs.</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="form-control"
+                            value={editingInvoice.totalBs}
+                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, totalBs: e.target.value }))}
+                            style={{ fontSize: '0.82rem', fontWeight: 700 }}
+                          />
+                        </div>
+
+                        {editingInvoice.condicionPago === 'CREDITO' && (
+                          <div>
+                            <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Abonos USD</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              className="form-control"
+                              value={editingInvoice.abonosUsd}
+                              onChange={(e) => setEditingInvoice(prev => ({ ...prev, abonosUsd: e.target.value }))}
+                              style={{ fontSize: '0.82rem' }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ marginTop: '10px' }}>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Observaciones / Notas del Documento</label>
+                        <input
+                          type="text"
+                          className="form-control"
+                          value={editingInvoice.observaciones}
+                          onChange={(e) => setEditingInvoice(prev => ({ ...prev, observaciones: e.target.value }))}
+                          placeholder="Observación opcional..."
+                          style={{ fontSize: '0.82rem' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 4. Renglones / Artículos */}
+                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '0.95rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
+                          4. Renglones ({(editingInvoice.items || []).length})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingInvoice(prev => ({
+                              ...prev,
+                              items: [
+                                ...(prev.items || []),
+                                { id: `ITEM-${Date.now()}`, codigo: '', articuloId: '', descripcion: 'Artículo Lubricante', cantidad: 1, precioUsd: 0, subtotalUsd: 0, litros: 0 }
+                              ]
+                            }));
+                          }}
+                          style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.4)', background: 'rgba(16,185,129,0.14)', color: '#10b981', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          + Agregar Renglón
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '170px', overflowY: 'auto' }}>
+                        {(editingInvoice.items || []).map((it, rIdx) => (
+                          <div key={it.id || rIdx} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 70px 85px 85px 28px', gap: '6px', alignItems: 'center' }}>
+                            <input
+                              type="text"
+                              className="form-control"
+                              value={it.codigo || it.articuloId || ''}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditingInvoice(prev => ({
+                                  ...prev,
+                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, codigo: v, articuloId: v } : row)
+                                }));
+                              }}
+                              placeholder="Código"
+                              style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                            />
+                            <input
+                              type="text"
+                              className="form-control"
+                              value={it.descripcion || ''}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditingInvoice(prev => ({
+                                  ...prev,
+                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, descripcion: v } : row)
+                                }));
+                              }}
+                              placeholder="Descripción"
+                              style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                            />
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              className="form-control"
+                              value={it.cantidad}
+                              onChange={(e) => {
+                                const q = Number(e.target.value) || 0;
+                                setEditingInvoice(prev => ({
+                                  ...prev,
+                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, cantidad: q, subtotalUsd: Number((q * (Number(row.precioUsd) || 0)).toFixed(2)) } : row)
+                                }));
+                              }}
+                              placeholder="Cant"
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
+                            />
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              className="form-control"
+                              value={it.precioUsd}
+                              onChange={(e) => {
+                                const p = Number(e.target.value) || 0;
+                                setEditingInvoice(prev => ({
+                                  ...prev,
+                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, precioUsd: p, subtotalUsd: Number(((Number(row.cantidad) || 0) * p).toFixed(2)) } : row)
+                                }));
+                              }}
+                              placeholder="Precio $"
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
+                            />
+                            <div style={{ fontSize: '0.76rem', fontWeight: 700, textAlign: 'right', color: 'var(--semaforo-verde)' }}>
+                              {formatUsd((Number(it.cantidad) || 0) * (Number(it.precioUsd) || 0))}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setEditingInvoice(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== rIdx) }))}
+                              style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: '6px', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
+                              title="Quitar renglón"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '0.5rem', borderTop: '1px solid var(--border-glass)' }}>
+                      <button
+                        type="button"
+                        disabled={isSavingEditedInvoice}
+                        onClick={() => setEditingInvoice(null)}
+                        className="btn btn-sm"
+                        style={{ padding: '8px 16px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border-glass)', color: 'var(--text-primary)', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingEditedInvoice}
+                        className="btn btn-sm"
+                        style={{
+                          padding: '8px 20px',
+                          borderRadius: '8px',
+                          background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                          border: 'none',
+                          color: '#ffffff',
+                          fontWeight: 800,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          cursor: 'pointer',
+                          boxShadow: '0 4px 14px rgba(245, 158, 11, 0.35)'
+                        }}
+                      >
+                        <Save size={15} />
+                        <span>{isSavingEditedInvoice ? 'Guardando cambios...' : 'Guardar Cambios'}</span>
+                      </button>
+                    </div>
+                  </form>
                 </div>
               )}
             </div>
@@ -6810,6 +8530,7 @@ export default function OrdersSalesModal({
           sellers={profitSellers}
           config={config}
           suggestedCorrelativo={currentNextCorrelativo}
+          existingInvoices={allInvoices}
         />
 
         {/* MODAL: CARTERA MAESTRA DE CLIENTES */}

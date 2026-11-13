@@ -35,7 +35,7 @@ import {
   Activity,
   Bell
 } from 'lucide-react';
-import { formatBs, formatUsd } from '../services/formatService';
+import { formatBs, formatUsd, formatNumberUs, formatNumberVe } from '../services/formatService';
 import { canModifyRates, getRoleMeta, isMasterOrGerencia, isMasterAdmin, canAccessModule } from '../services/authService';
 import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails, getActiveBackendUrl, setCustomBackendUrl, discoverActiveBackendUrl } from '../services/supabaseService';
 import { subscribeSyncStatus, flushSyncQueue } from '../services/offlineSyncService';
@@ -470,7 +470,7 @@ export default function HeaderBar({
           await onUpdateTasaKeystone(val);
         }
         setShowKeystoneModal(false);
-        notify.success(`Tasa Keystone guardada exitosamente: ${val.toFixed(2)} Bs./USD`);
+        notify.success(`Tasa Keystone guardada exitosamente: ${formatNumberVe(val)} Bs./USD`);
       } catch (err) {
         console.error(err);
         notify.error('Error al guardar la tasa Keystone.');
@@ -1399,7 +1399,7 @@ export default function HeaderBar({
                             textAlign: 'center'
                           }}
                         >
-                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>${usd} USD</div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>${formatNumberUs(usd)} USD</div>
                           <div style={{ fontSize: '0.74rem', color: 'var(--motorven-cyan, #00f0ff)', fontWeight: 800, fontFamily: 'var(--font-code)', marginTop: '2px' }}>
                             {formatBs(valBs)}
                           </div>
@@ -1607,7 +1607,7 @@ export default function HeaderBar({
                         textAlign: 'center'
                       }}
                     >
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>${usd} USD</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>${formatNumberUs(usd)} USD</div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--motorven-gold, #f59e0b)', fontWeight: 800, fontFamily: 'var(--font-code)', marginTop: '2px' }}>
                         {formatBs(bsVal)}
                       </div>

@@ -25,8 +25,18 @@ import {
   Layers,
   ArrowRightLeft
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, round2 } from '../services/formatService';
 import { generateCashflowPDF, generateExpenseVoucherPDF } from '../services/pdfReportService';
+import {
+  matchesCashDesk,
+  matchesBankAccount,
+  applyTreasuryBalanceDelta,
+  resolveExchangeRates,
+  computeBankAccountValuation,
+  computeBankBalancesSummary,
+  computeCashDesksSummary,
+  validateSufficientTreasuryBalance
+} from '../utils/treasuryAccountUtils';
 import { useNotification } from '../context/NotificationContext';
 
 // Calcula el siguiente código correlativo CAJA-XX comenzando desde CAJA-01
@@ -60,8 +70,6 @@ const getNextBankCorrelative = (accounts = []) => {
 };
 
 export default function CashBankModal({
-  isOpen,
-  onClose,
   cashDesks = [],
   bankAccounts = [],
   cashMovements = [],
@@ -71,22 +79,31 @@ export default function CashBankModal({
   onUpdateBankAccount,
   onDeleteBankAccount,
   config = {},
-  currentUser
+  currentUser,
+  initialTab = 'cajas'
 }) {
   const notify = useNotification();
-  const [activeTab, setActiveTab] = useState('cajas'); // 'cajas' | 'bancos' | 'movimientos' | 'arqueo'
-  const [searchFilter, setSearchFilter] = useState('');
-  const [bankFilter, setBankFilter] = useState('ALL');
-  
-  // Estado para nuevo movimiento de caja
+  const [activeTab, setActiveTab] = useState(initialTab || 'cajas'); // 'cajas' | 'bancos' | 'movimientos' | 'arqueo'
+  const [bankSearch, setBankSearch] = useState('');
+  const [movSearch, setMovSearch] = useState('');
+
+  // Estado para nuevo movimiento de caja / banco / transferencia
   const [showNewMovForm, setShowNewMovForm] = useState(false);
+  const [movAccountKind, setMovAccountKind] = useState('CAJA'); // 'CAJA' | 'BANCO'
   const [selectedDeskId, setSelectedDeskId] = useState('');
-  const [movType, setMovType] = useState('EGRESO'); // 'INGRESO' | 'EGRESO'
+  const [selectedBankId, setSelectedBankId] = useState('');
+  const [movTransferDestKind, setMovTransferDestKind] = useState('BANCO'); // 'CAJA' | 'BANCO'
+  const [movTransferDestId, setMovTransferDestId] = useState('');
+  const [movType, setMovType] = useState('EGRESO'); // 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA'
   const [movConcept, setMovConcept] = useState('');
   const [movMontoUsd, setMovMontoUsd] = useState('');
   const [movMontoBs, setMovMontoBs] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Estado para arqueo interactivo
+  const [arqueoDeskId, setArqueoDeskId] = useState('');
+  const [lastArqueoActa, setLastArqueoActa] = useState(null);
 
   // Estado para crear / editar caja registradora
   const [showCajaForm, setShowCajaForm] = useState(false);
@@ -138,47 +155,32 @@ export default function CashBankModal({
     bsEfectivo: 0
   });
 
-  const tasaBcv = Number(config?.tasaDolar) || 827.73;
-  const tasaKeystone = tasaBcv > 100
-    ? (config?.tasaKeystone && Number(config.tasaKeystone) > 100 ? Number(config.tasaKeystone) : Math.round(tasaBcv * 1.03 * 100) / 100)
-    : (config?.tasaKeystone ? Number(config.tasaKeystone) : 38.50);
+  const { tasaBcv, tasaKeystone } = useMemo(() => resolveExchangeRates(config), [config]);
 
-  // Totales de Efectivo en Cajas
-  const totalCajasUsd = useMemo(() => {
-    return (cashDesks || []).reduce((acc, c) => acc + Number(c.saldoUsd || c.saldo_usd || 0), 0);
-  }, [cashDesks]);
+  const cashSummary = useMemo(
+    () => computeCashDesksSummary(cashDesks, { tasaDolar: tasaBcv, tasaKeystone }),
+    [cashDesks, tasaBcv, tasaKeystone]
+  );
+  const totalCajasUsd = cashSummary.totalUsd;
+  const totalCajasBs = cashSummary.totalBs;
 
-  const totalCajasBs = useMemo(() => {
-    return (cashDesks || []).reduce((acc, c) => acc + Number(c.saldoBs || c.saldo_bs || 0), 0);
-  }, [cashDesks]);
-
-  // Totales en Bancos (Tasa Keystone)
-  const totalBancosBs = useMemo(() => {
-    return (bankAccounts || []).reduce((acc, b) => acc + Number(b.saldoBs || b.saldo_bs || 0), 0);
-  }, [bankAccounts]);
-
-  const totalBancosUsd = useMemo(() => {
-    return (bankAccounts || []).reduce((acc, b) => {
-      const bs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
-      const usd = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
-      if (bs !== 0 && tasaKeystone > 0) {
-        if (Math.abs(usd * tasaKeystone - bs) < 0.05) return acc + usd;
-        return acc + (bs / tasaKeystone);
-      }
-      return acc + usd;
-    }, 0);
-  }, [bankAccounts, tasaKeystone]);
+  const bankSummary = useMemo(
+    () => computeBankBalancesSummary(bankAccounts, { tasaDolar: tasaBcv, tasaKeystone }),
+    [bankAccounts, tasaBcv, tasaKeystone]
+  );
+  const totalBancosBs = bankSummary.totalBs;
+  const totalBancosUsd = bankSummary.totalUsd;
 
   // Total Consolidado
-  const totalConsolidadoUsd = totalCajasUsd + totalBancosUsd;
-  const totalConsolidadoBs = totalCajasBs + totalBancosBs;
+  const totalConsolidadoUsd = round2(totalCajasUsd + totalBancosUsd);
+  const totalConsolidadoBs = round2(totalCajasBs + totalBancosBs);
 
   // Filtrado de bancos
   const filteredBankAccounts = useMemo(() => {
     let list = Array.isArray(bankAccounts) ? [...bankAccounts] : [];
-    if (searchFilter.trim()) {
-      const q = searchFilter.toLowerCase();
-      list = list.filter(b => 
+    if (bankSearch.trim()) {
+      const q = bankSearch.toLowerCase();
+      list = list.filter(b =>
         (b.bancoNombre || b.banco_nombre || '').toLowerCase().includes(q) ||
         (b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.').toLowerCase().includes(q) ||
         (b.numCta || b.num_cta || '').toLowerCase().includes(q) ||
@@ -187,21 +189,45 @@ export default function CashBankModal({
       );
     }
     return list;
-  }, [bankAccounts, searchFilter]);
+  }, [bankAccounts, bankSearch]);
 
   // Filtrado de movimientos
   const filteredMovements = useMemo(() => {
     let list = Array.isArray(cashMovements) ? [...cashMovements] : [];
-    if (searchFilter.trim()) {
-      const q = searchFilter.toLowerCase();
-      list = list.filter(m => 
+    if (movSearch.trim()) {
+      const q = movSearch.toLowerCase();
+      list = list.filter(m =>
         (m.concepto || '').toLowerCase().includes(q) ||
         (m.usuario || '').toLowerCase().includes(q) ||
-        (m.tipo || '').toLowerCase().includes(q)
+        (m.tipo || '').toLowerCase().includes(q) ||
+        (m.metodoPago || m.metodo || '').toLowerCase().includes(q) ||
+        (m.cuentaNombre || m.cajaOBanco || '').toLowerCase().includes(q)
       );
     }
     return list;
-  }, [cashMovements, searchFilter]);
+  }, [cashMovements, movSearch]);
+
+  // Selección de caja física para arqueo (evita mezclar cajas digitales como Zelle/Binance)
+  const effectiveArqueoDesk = useMemo(() => {
+    if (!Array.isArray(cashDesks) || cashDesks.length === 0) return null;
+    if (arqueoDeskId) {
+      const match = cashDesks.find(d => matchesCashDesk(d, arqueoDeskId));
+      if (match) return match;
+    }
+    const physicalUsdDesk = cashDesks.find(d => {
+      const desc = String(d?.descripcion || d?.desCaja || '').toUpperCase();
+      return String(d?.moneda || '').toUpperCase() === 'USD'
+        && !desc.includes('ZELLE')
+        && !desc.includes('USDT')
+        && !desc.includes('USDC')
+        && !desc.includes('BINANCE')
+        && !desc.includes('KONTIGO');
+    });
+    return physicalUsdDesk || cashDesks[0];
+  }, [cashDesks, arqueoDeskId]);
+
+  const arqueoSystemUsd = Number(effectiveArqueoDesk?.saldoUsd ?? effectiveArqueoDesk?.saldo_usd ?? cashSummary.physicalUsd ?? 0);
+  const arqueoSystemBs = Number(effectiveArqueoDesk?.saldoBs ?? effectiveArqueoDesk?.saldo_bs ?? cashSummary.physicalBs ?? 0);
 
   // Conteo físico del arqueo
   const arqueoTotalUsd = useMemo(() => {
@@ -216,10 +242,99 @@ export default function CashBankModal({
   }, [denomCounts]);
 
   const arqueoTotalBs = Number(denomCounts.bsEfectivo || 0);
-  const arqueoDiferenciaUsd = arqueoTotalUsd - totalCajasUsd;
-  const arqueoDiferenciaBs = arqueoTotalBs - totalCajasBs;
+  const arqueoDiferenciaUsd = round2(arqueoTotalUsd - arqueoSystemUsd);
+  const arqueoDiferenciaBs = round2(arqueoTotalBs - arqueoSystemBs);
 
-  // Registrar movimiento
+  const handleRegisterArqueo = async ({ applyAdjustment = false } = {}) => {
+    if (!effectiveArqueoDesk) {
+      notify.warning('No hay una caja seleccionada para auditar.');
+      return;
+    }
+    const isBsDesk = String(effectiveArqueoDesk.moneda || '').toUpperCase() === 'BS';
+    const diffUsd = arqueoDiferenciaUsd;
+    const diffBs = arqueoDiferenciaBs;
+    const relevantDiff = isBsDesk ? diffBs : diffUsd;
+
+    const acta = {
+      fecha: new Date().toISOString(),
+      cajaId: effectiveArqueoDesk.id || effectiveArqueoDesk.coCaja,
+      cajaNombre: effectiveArqueoDesk.descripcion,
+      moneda: effectiveArqueoDesk.moneda || 'USD',
+      contadoUsd: arqueoTotalUsd,
+      sistemaUsd: arqueoSystemUsd,
+      diferenciaUsd: diffUsd,
+      contadoBs: arqueoTotalBs,
+      sistemaBs: arqueoSystemBs,
+      diferenciaBs: diffBs,
+      ajustado: applyAdjustment && Math.abs(relevantDiff) >= 0.01,
+      auditor: currentUser?.nombre || currentUser?.username || 'Auditor'
+    };
+
+    try {
+      setIsSubmitting(true);
+      if (applyAdjustment && Math.abs(relevantDiff) >= 0.01) {
+        const adjType = relevantDiff > 0 ? 'INGRESO' : 'EGRESO';
+        const absUsd = isBsDesk
+          ? (tasaBcv > 0 ? round2(Math.abs(diffBs) / tasaBcv) : Math.abs(diffUsd))
+          : round2(Math.abs(diffUsd));
+        const absBs = isBsDesk
+          ? round2(Math.abs(diffBs))
+          : round2(absUsd * tasaBcv);
+
+        if (adjType === 'EGRESO') {
+          const check = validateSufficientTreasuryBalance(effectiveArqueoDesk, {
+            deltaUsd: -absUsd,
+            deltaBs: -absBs,
+            label: effectiveArqueoDesk.descripcion
+          });
+          if (!check.ok) {
+            notify.error(check.message);
+            return;
+          }
+        }
+
+        if (onAddMovement) {
+          await onAddMovement({
+            id: `ARQ-${Date.now()}`,
+            fecha: new Date().toISOString(),
+            tipo: adjType,
+            categoria: 'ARQUEO_AJUSTE',
+            concepto: `Ajuste por Arqueo (${effectiveArqueoDesk.coCaja || effectiveArqueoDesk.descripcion}): ${adjType === 'INGRESO' ? 'Sobrante' : 'Faltante'}`,
+            montoUsd: absUsd,
+            monto_usd: absUsd,
+            montoBs: absBs,
+            monto_bs: absBs,
+            metodo: isBsDesk ? 'EFECTIVO_BS' : 'EFECTIVO_USD',
+            metodoPago: isBsDesk ? 'EFECTIVO_BS' : 'EFECTIVO_USD',
+            cuentaId: effectiveArqueoDesk.id || effectiveArqueoDesk.coCaja,
+            cajaId: effectiveArqueoDesk.id || effectiveArqueoDesk.coCaja,
+            cuentaNombre: effectiveArqueoDesk.descripcion,
+            cajaOBanco: effectiveArqueoDesk.descripcion,
+            tasa: tasaBcv,
+            usuario: acta.auditor
+          });
+        }
+        if (onUpdateCashDesk) {
+          const deltaUsd = relevantDiff > 0 ? absUsd : -absUsd;
+          const deltaBs = relevantDiff > 0 ? absBs : -absBs;
+          await onUpdateCashDesk(applyTreasuryBalanceDelta(effectiveArqueoDesk, { deltaUsd, deltaBs, clampZero: false }));
+        }
+      }
+      setLastArqueoActa(acta);
+      notify.success(
+        applyAdjustment && Math.abs(relevantDiff) >= 0.01
+          ? `Arqueo registrado y saldo ajustado en ${effectiveArqueoDesk.descripcion}.`
+          : `Acta de arqueo registrada para ${effectiveArqueoDesk.descripcion}.`
+      );
+    } catch (err) {
+      console.error(err);
+      notify.error('Error al registrar el arqueo: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Registrar movimiento o transferencia interna
   const handleSaveMovement = async (e) => {
     e.preventDefault();
     if (!movConcept.trim()) {
@@ -233,42 +348,172 @@ export default function CashBankModal({
       return;
     }
 
+    const effectiveUsd = montoUsd > 0 ? round2(montoUsd) : (tasaBcv > 0 ? round2(montoBs / tasaBcv) : 0);
+    const effectiveBs = montoBs > 0 ? round2(montoBs) : round2(effectiveUsd * tasaBcv);
+    const operatorName = currentUser?.nombre || currentUser?.username || 'Cajero';
+
+    const sourceRecord = movAccountKind === 'CAJA'
+      ? cashDesks.find(d => matchesCashDesk(d, selectedDeskId))
+      : bankAccounts.find(b => matchesBankAccount(b, selectedBankId));
+
+    if ((movAccountKind === 'BANCO' || movType === 'TRANSFERENCIA') && !sourceRecord) {
+      notify.warning(`Seleccione ${movAccountKind === 'CAJA' ? 'la caja' : 'la cuenta bancaria'} afectada.`);
+      return;
+    }
+
+    if (movType === 'TRANSFERENCIA') {
+      const destRecord = movTransferDestKind === 'CAJA'
+        ? cashDesks.find(d => matchesCashDesk(d, movTransferDestId))
+        : bankAccounts.find(b => matchesBankAccount(b, movTransferDestId));
+      if (!destRecord) {
+        notify.warning('Seleccione la cuenta o caja destino de la transferencia interna.');
+        return;
+      }
+      const sameAccount = movAccountKind === movTransferDestKind
+        && String(sourceRecord.id || sourceRecord.coCaja || sourceRecord.codCta) === String(destRecord.id || destRecord.coCaja || destRecord.codCta);
+      if (sameAccount) {
+        notify.warning('La cuenta origen y destino no pueden ser la misma.');
+        return;
+      }
+      const balCheck = validateSufficientTreasuryBalance(sourceRecord, {
+        deltaUsd: -effectiveUsd,
+        deltaBs: -effectiveBs,
+        label: sourceRecord.descripcion || sourceRecord.bancoNombre
+      });
+      if (!balCheck.ok) {
+        notify.error(balCheck.message);
+        return;
+      }
+
+      try {
+        setIsSubmitting(true);
+        const nowIso = new Date().toISOString();
+        const originLabel = sourceRecord.descripcion || sourceRecord.bancoNombre || sourceRecord.id;
+        const destLabel = destRecord.descripcion || destRecord.bancoNombre || destRecord.id;
+
+        if (movAccountKind === 'CAJA' && onUpdateCashDesk) {
+          await onUpdateCashDesk(applyTreasuryBalanceDelta(sourceRecord, { deltaUsd: -effectiveUsd, deltaBs: -effectiveBs, clampZero: false, nowIso }));
+        } else if (movAccountKind === 'BANCO' && onUpdateBankAccount) {
+          await onUpdateBankAccount(applyTreasuryBalanceDelta(sourceRecord, { deltaUsd: -effectiveUsd, deltaBs: -effectiveBs, clampZero: false, nowIso }));
+        }
+
+        if (movTransferDestKind === 'CAJA' && onUpdateCashDesk) {
+          await onUpdateCashDesk(applyTreasuryBalanceDelta(destRecord, { deltaUsd: effectiveUsd, deltaBs: effectiveBs, clampZero: false, nowIso }));
+        } else if (movTransferDestKind === 'BANCO' && onUpdateBankAccount) {
+          await onUpdateBankAccount(applyTreasuryBalanceDelta(destRecord, { deltaUsd: effectiveUsd, deltaBs: effectiveBs, clampZero: false, nowIso }));
+        }
+
+        if (onAddMovement) {
+          await onAddMovement({
+            id: `TRF-OUT-${Date.now()}`,
+            fecha: nowIso,
+            tipo: 'EGRESO',
+            categoria: 'TRANSFERENCIA_INTERNA',
+            concepto: `Transferencia a ${destLabel}: ${movConcept.trim()}`,
+            montoUsd: effectiveUsd,
+            monto_usd: effectiveUsd,
+            montoBs: effectiveBs,
+            monto_bs: effectiveBs,
+            metodo: movMetodo,
+            metodoPago: movMetodo,
+            cuentaId: sourceRecord.id || sourceRecord.coCaja || sourceRecord.codCta,
+            cajaId: movAccountKind === 'CAJA' ? (sourceRecord.id || sourceRecord.coCaja) : null,
+            cuentaNombre: originLabel,
+            cajaOBanco: originLabel,
+            tasa: tasaBcv,
+            usuario: operatorName
+          });
+          await onAddMovement({
+            id: `TRF-IN-${Date.now() + 1}`,
+            fecha: nowIso,
+            tipo: 'INGRESO',
+            categoria: 'TRANSFERENCIA_INTERNA',
+            concepto: `Transferencia desde ${originLabel}: ${movConcept.trim()}`,
+            montoUsd: effectiveUsd,
+            monto_usd: effectiveUsd,
+            montoBs: effectiveBs,
+            monto_bs: effectiveBs,
+            metodo: movMetodo,
+            metodoPago: movMetodo,
+            cuentaId: destRecord.id || destRecord.coCaja || destRecord.codCta,
+            cajaId: movTransferDestKind === 'CAJA' ? (destRecord.id || destRecord.coCaja) : null,
+            cuentaNombre: destLabel,
+            cajaOBanco: destLabel,
+            tasa: tasaBcv,
+            usuario: operatorName
+          });
+        }
+
+        setMovConcept('');
+        setMovMontoUsd('');
+        setMovMontoBs('');
+        setShowNewMovForm(false);
+        notify.success(`Transferencia interna registrada (${originLabel} → ${destLabel}).`);
+      } catch (err) {
+        console.error(err);
+        notify.error('Error al registrar transferencia: ' + (err.message || 'Error desconocido'));
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
+    if (movType === 'EGRESO' && sourceRecord) {
+      const balCheck = validateSufficientTreasuryBalance(sourceRecord, {
+        deltaUsd: -effectiveUsd,
+        deltaBs: -effectiveBs,
+        label: sourceRecord.descripcion || sourceRecord.bancoNombre
+      });
+      if (!balCheck.ok) {
+        notify.error(balCheck.message);
+        return;
+      }
+    }
+
     try {
       setIsSubmitting(true);
+      const nowIso = new Date().toISOString();
+      const targetLabel = sourceRecord ? (sourceRecord.descripcion || sourceRecord.bancoNombre || sourceRecord.id) : 'Caja General';
+      const targetId = sourceRecord ? (sourceRecord.id || sourceRecord.coCaja || sourceRecord.codCta) : '';
       const newMov = {
         id: `MOV-${Date.now()}`,
-        fecha: new Date().toISOString(),
+        fecha: nowIso,
         tipo: movType,
+        categoria: movType === 'INGRESO' ? 'DEPOSITO_MANUAL' : 'GASTO_OPERATIVO',
         concepto: movConcept.trim(),
-        monto_usd: montoUsd,
-        monto_bs: montoBs > 0 ? montoBs : (montoUsd * tasaBcv),
+        montoUsd: effectiveUsd,
+        monto_usd: effectiveUsd,
+        montoBs: effectiveBs,
+        monto_bs: effectiveBs,
         metodo: movMetodo,
-        usuario: currentUser?.nombre || currentUser?.username || 'Cajero'
+        metodoPago: movMetodo,
+        cuentaId: targetId,
+        cajaId: movAccountKind === 'CAJA' ? targetId : null,
+        cuentaNombre: targetLabel,
+        cajaOBanco: targetLabel,
+        tasa: tasaBcv,
+        usuario: operatorName
       };
+
+      if (sourceRecord) {
+        const deltaUsd = movType === 'INGRESO' ? effectiveUsd : -effectiveUsd;
+        const deltaBs = movType === 'INGRESO' ? effectiveBs : -effectiveBs;
+        if (movAccountKind === 'CAJA' && onUpdateCashDesk) {
+          await onUpdateCashDesk(applyTreasuryBalanceDelta(sourceRecord, { deltaUsd, deltaBs, clampZero: false, nowIso }));
+        } else if (movAccountKind === 'BANCO' && onUpdateBankAccount) {
+          await onUpdateBankAccount(applyTreasuryBalanceDelta(sourceRecord, { deltaUsd, deltaBs, clampZero: false, nowIso }));
+        }
+      }
 
       if (onAddMovement) {
         await onAddMovement(newMov);
-      }
-
-      // Si se seleccionó una caja específica, actualizar su saldo
-      if (selectedDeskId && onUpdateCashDesk) {
-        const targetDesk = cashDesks.find(d => d.id === selectedDeskId);
-        if (targetDesk) {
-          const deltaUsd = movType === 'INGRESO' ? montoUsd : -montoUsd;
-          const deltaBs = movType === 'INGRESO' ? montoBs : -montoBs;
-          await onUpdateCashDesk({
-            ...targetDesk,
-            saldoUsd: Math.max(0, Number(targetDesk.saldoUsd || targetDesk.saldo_usd || 0) + deltaUsd),
-            saldoBs: Math.max(0, Number(targetDesk.saldoBs || targetDesk.saldo_bs || 0) + deltaBs)
-          });
-        }
       }
 
       setMovConcept('');
       setMovMontoUsd('');
       setMovMontoBs('');
       setShowNewMovForm(false);
-      notify.success('Movimiento registrado en caja chica exitosamente');
+      notify.success('Movimiento registrado correctamente');
     } catch (err) {
       console.error(err);
       notify.error('Error al registrar movimiento: ' + (err.message || 'Error desconocido'));
@@ -319,6 +564,14 @@ export default function CashBankModal({
     if (!cleanDesc) {
       notify.warning('Por favor ingrese el nombre o descripción de la caja');
       return;
+    }
+
+    if (!editingCajaId) {
+      const duplicate = cashDesks.find(d => matchesCashDesk(d, cleanCode));
+      if (duplicate) {
+        notify.warning(`Ya existe una caja con el código ${cleanCode} (${duplicate.descripcion}).`);
+        return;
+      }
     }
 
     const parsedUsd = Math.max(0, parseFloat(cajaForm.saldoUsd) || 0);
@@ -405,37 +658,10 @@ export default function CashBankModal({
     const code = b.codCta || b.cod_cta || '01';
     const id = b.id || `CTA-${code}`;
     const holder = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
-    const rawBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
-    const rawUsd = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
+    const valuation = computeBankAccountValuation(b, { tasaDolar: tasaBcv, tasaKeystone });
 
-    let sBs = rawBs;
-    let sUsd = rawUsd;
-    if (tasaKeystone > 0) {
-      if (Math.abs(rawUsd * tasaKeystone - rawBs) < 0.05) {
-        sBs = rawBs;
-        sUsd = rawUsd;
-      } else if (rawUsd !== 0 && Math.abs(rawUsd * tasaBcv - rawBs) < 1) {
-        sUsd = rawUsd;
-        sBs = Number((rawUsd * tasaKeystone).toFixed(2));
-      } else if (rawBs !== 0) {
-        sBs = rawBs;
-        sUsd = Number((rawBs / tasaKeystone).toFixed(2));
-      } else if (rawUsd !== 0) {
-        sUsd = rawUsd;
-        sBs = Number((rawUsd * tasaKeystone).toFixed(2));
-      }
-    }
-
-    setEditingBankId(id);
-    setBankForm({
-      codCta: code,
-      bancoNombre: b.bancoNombre || b.banco_nombre || '',
-      cuentaANombreDe: holder,
-      numCta: b.numCta || b.num_cta || '',
-      moneda: b.moneda || 'BS',
-      saldoBs: String(Number(sBs.toFixed(2))),
-      saldoUsd: String(Number(sUsd.toFixed(2)))
-    });
+    setShowBankForm(false);
+    setEditingBankId(null);
     setInlineBankEditId(id);
     setInlineBankDraft({
       id,
@@ -444,10 +670,9 @@ export default function CashBankModal({
       cuentaANombreDe: holder,
       numCta: b.numCta || b.num_cta || '',
       moneda: b.moneda || 'BS',
-      saldoBs: String(Number(sBs.toFixed(2))),
-      saldoUsd: String(Number(sUsd.toFixed(2)))
+      saldoBs: String(round2(valuation.bs)),
+      saldoUsd: String(round2(valuation.usd))
     });
-    setShowBankForm(true);
   };
 
   const handleSaveBankRecord = async (recordData, isInline = false) => {
@@ -461,17 +686,25 @@ export default function CashBankModal({
       return;
     }
 
+    if (!isInline && !editingBankId) {
+      const duplicate = bankAccounts.find(b => matchesBankAccount(b, cleanCode));
+      if (duplicate) {
+        notify.warning(`Ya existe una cuenta bancaria con el código ${cleanCode} (${duplicate.bancoNombre || duplicate.banco_nombre}).`);
+        return;
+      }
+    }
+
     const hasBs = recordData.saldoBs !== undefined && recordData.saldoBs !== '';
     const hasUsd = recordData.saldoUsd !== undefined && recordData.saldoUsd !== '';
     const rawBsVal = hasBs ? (parseFloat(recordData.saldoBs) || 0) : 0;
     const rawUsdVal = hasUsd ? (parseFloat(recordData.saldoUsd) || 0) : 0;
 
     const parsedBs = hasBs
-      ? rawBsVal
-      : (hasUsd && tasaKeystone > 0 ? Number((rawUsdVal * tasaKeystone).toFixed(2)) : 0);
+      ? round2(rawBsVal)
+      : (hasUsd && tasaBcv > 0 ? round2(rawUsdVal * tasaBcv) : 0);
     const parsedUsd = hasUsd
-      ? rawUsdVal
-      : (tasaKeystone > 0 ? Number((parsedBs / tasaKeystone).toFixed(2)) : 0);
+      ? round2(rawUsdVal)
+      : (tasaBcv > 0 ? round2(parsedBs / tasaBcv) : 0);
 
     try {
       setIsSubmitting(true);
@@ -993,7 +1226,7 @@ export default function CashBankModal({
                             const numUsd = parseFloat(valUsd);
                             const calcBs = (valUsd === '' || valUsd === '-' || isNaN(numUsd))
                               ? ''
-                              : (tasaKeystone > 0 ? (numUsd * tasaKeystone).toFixed(2) : '0.00');
+                              : (tasaBcv > 0 ? (numUsd * tasaBcv).toFixed(2) : '0.00');
                             setCajaForm(prev => ({
                               ...prev,
                               saldoUsd: valUsd,
@@ -1020,7 +1253,7 @@ export default function CashBankModal({
                             const numBs = parseFloat(valBs);
                             const calcUsd = (valBs === '' || valBs === '-' || isNaN(numBs))
                               ? ''
-                              : (tasaKeystone > 0 ? (numBs / tasaKeystone).toFixed(2) : '0.00');
+                              : (tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : '0.00');
                             setCajaForm(prev => ({
                               ...prev,
                               saldoBs: valBs,
@@ -1073,10 +1306,10 @@ export default function CashBankModal({
                   boxShadow: 'var(--shadow-card)'
                 }}>
                   <h4 style={{ margin: '0 0 1rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Registrar Entrada / Salida de Efectivo
+                    Registrar Entrada, Salida o Transferencia Interna de Tesorería
                   </h4>
                   <form onSubmit={handleSaveMovement}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
                       <div>
                         <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
                           Tipo de Operación
@@ -1089,23 +1322,132 @@ export default function CashBankModal({
                         >
                           <option value="EGRESO">Egreso / Gasto Operativo</option>
                           <option value="INGRESO">Ingreso / Depósito Efectivo</option>
+                          <option value="TRANSFERENCIA">Transferencia Interna (Caja ↔ Banco)</option>
                         </select>
                       </div>
 
                       <div>
                         <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                          Caja Afectada
+                          {movType === 'TRANSFERENCIA' ? 'Origen (Tipo)' : 'Tipo de Cuenta'}
                         </label>
                         <select
                           className="filter-select"
-                          value={selectedDeskId}
-                          onChange={(e) => setSelectedDeskId(e.target.value)}
+                          value={movAccountKind}
+                          onChange={(e) => {
+                            setMovAccountKind(e.target.value);
+                            setSelectedDeskId('');
+                            setSelectedBankId('');
+                          }}
                           style={{ width: '100%' }}
                         >
-                          <option value="">Caja General (No específica)</option>
-                          {cashDesks.map(d => (
-                            <option key={d.id} value={d.id}>{d.coCaja || d.co_caja} - {d.descripcion}</option>
-                          ))}
+                          <option value="CAJA">Caja Operativa</option>
+                          <option value="BANCO">Cuenta Bancaria</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          {movType === 'TRANSFERENCIA'
+                            ? (movAccountKind === 'CAJA' ? 'Caja Origen *' : 'Banco Origen *')
+                            : (movAccountKind === 'CAJA' ? 'Caja Afectada' : 'Cuenta Bancaria *')}
+                        </label>
+                        {movAccountKind === 'CAJA' ? (
+                          <select
+                            className="filter-select"
+                            value={selectedDeskId}
+                            onChange={(e) => setSelectedDeskId(e.target.value)}
+                            style={{ width: '100%' }}
+                            required={movType === 'TRANSFERENCIA'}
+                          >
+                            <option value="">{movType === 'TRANSFERENCIA' ? '-- Seleccionar Caja --' : 'Caja General (Solo Registro)'}</option>
+                            {cashDesks.map(d => (
+                              <option key={d.id || d.coCaja} value={d.id || d.coCaja}>
+                                {d.coCaja || d.co_caja} - {d.descripcion} ({d.moneda === 'BS' ? formatBs(d.saldoBs ?? d.saldo_bs ?? 0) : formatUsd(d.saldoUsd ?? d.saldo_usd ?? 0)})
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <select
+                            className="filter-select"
+                            value={selectedBankId}
+                            onChange={(e) => setSelectedBankId(e.target.value)}
+                            style={{ width: '100%' }}
+                            required
+                          >
+                            <option value="">-- Seleccionar Cuenta Bancaria --</option>
+                            {bankAccounts.map(b => (
+                              <option key={b.id || b.codCta} value={b.id || b.codCta}>
+                                {b.codCta || b.cod_cta} - {b.bancoNombre || b.banco_nombre} ({formatBs(b.saldoBs ?? b.saldo_bs ?? 0)})
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      {movType === 'TRANSFERENCIA' && (
+                        <>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                              Destino (Tipo)
+                            </label>
+                            <select
+                              className="filter-select"
+                              value={movTransferDestKind}
+                              onChange={(e) => {
+                                setMovTransferDestKind(e.target.value);
+                                setMovTransferDestId('');
+                              }}
+                              style={{ width: '100%' }}
+                            >
+                              <option value="BANCO">Cuenta Bancaria</option>
+                              <option value="CAJA">Caja Operativa</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                              {movTransferDestKind === 'CAJA' ? 'Caja Destino *' : 'Banco Destino *'}
+                            </label>
+                            <select
+                              className="filter-select"
+                              value={movTransferDestId}
+                              onChange={(e) => setMovTransferDestId(e.target.value)}
+                              style={{ width: '100%' }}
+                              required
+                            >
+                              <option value="">-- Seleccionar Destino --</option>
+                              {(movTransferDestKind === 'CAJA' ? cashDesks : bankAccounts).map(acc => {
+                                const accId = acc.id || acc.coCaja || acc.codCta;
+                                const accLabel = movTransferDestKind === 'CAJA'
+                                  ? `${acc.coCaja || acc.co_caja} - ${acc.descripcion}`
+                                  : `${acc.codCta || acc.cod_cta} - ${acc.bancoNombre || acc.banco_nombre}`;
+                                return (
+                                  <option key={accId} value={accId}>{accLabel}</option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        </>
+                      )}
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                          Método de Pago / Canal
+                        </label>
+                        <select
+                          className="filter-select"
+                          value={movMetodo}
+                          onChange={(e) => setMovMetodo(e.target.value)}
+                          style={{ width: '100%' }}
+                        >
+                          <option value="EFECTIVO_USD">Efectivo Divisas ($)</option>
+                          <option value="EFECTIVO_BS">Efectivo Bolívares (Bs.)</option>
+                          <option value="TRANSFERENCIA">Transferencia Bancaria</option>
+                          <option value="PAGO_MOVIL">Pago Móvil</option>
+                          <option value="ZELLE">Zelle USD</option>
+                          <option value="USDT">Binance USDT</option>
+                          <option value="USDC">Kontigo USDC</option>
+                          <option value="PUNTO_DE_VENTA">Punto de Venta</option>
                         </select>
                       </div>
 
@@ -1116,13 +1458,19 @@ export default function CashBankModal({
                         <input
                           type="number"
                           step="0.01"
+                          min="0"
                           placeholder="0.00"
                           className="input-modern"
                           value={movMontoUsd}
                           onChange={(e) => {
-                            setMovMontoUsd(e.target.value);
-                            const val = parseFloat(e.target.value) || 0;
-                            if (val > 0) setMovMontoBs((val * tasaBcv).toFixed(2));
+                            const rawVal = e.target.value;
+                            setMovMontoUsd(rawVal);
+                            const val = parseFloat(rawVal);
+                            if (rawVal === '' || isNaN(val) || val <= 0) {
+                              setMovMontoBs('');
+                            } else {
+                              setMovMontoBs((val * tasaBcv).toFixed(2));
+                            }
                           }}
                           style={{ width: '100%' }}
                         />
@@ -1130,15 +1478,25 @@ export default function CashBankModal({
 
                       <div>
                         <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                          Monto Bs (Equivalente)
+                          Monto Bs (BCV: {formatBs(tasaBcv)})
                         </label>
                         <input
                           type="number"
                           step="0.01"
+                          min="0"
                           placeholder="0.00"
                           className="input-modern"
                           value={movMontoBs}
-                          onChange={(e) => setMovMontoBs(e.target.value)}
+                          onChange={(e) => {
+                            const rawVal = e.target.value;
+                            setMovMontoBs(rawVal);
+                            const valBs = parseFloat(rawVal);
+                            if (rawVal === '' || isNaN(valBs) || valBs <= 0) {
+                              setMovMontoUsd('');
+                            } else if (tasaBcv > 0) {
+                              setMovMontoUsd((valBs / tasaBcv).toFixed(2));
+                            }
+                          }}
                           style={{ width: '100%' }}
                         />
                       </div>
@@ -1265,7 +1623,8 @@ export default function CashBankModal({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setSelectedDeskId(desk.id);
+                                  setMovAccountKind('CAJA');
+                                  setSelectedDeskId(desk.id || desk.coCaja);
                                   setShowNewMovForm(true);
                                   setShowCajaForm(false);
                                 }}
@@ -1394,18 +1753,37 @@ export default function CashBankModal({
                           borderRadius: '10px',
                           marginBottom: '1rem'
                         }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible USD:</span>
-                            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                              {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
-                            </span>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente Bs:</span>
-                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                              {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
-                            </span>
-                          </div>
+                          {desk.moneda === 'BS' ? (
+                            <>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible Bs.:</span>
+                                <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                  {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente USD:</span>
+                                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                  {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible USD:</span>
+                                <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                  {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente Bs:</span>
+                                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                  {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
+                                </span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -1437,8 +1815,8 @@ export default function CashBankModal({
                   <input
                     type="text"
                     placeholder="Buscar por institución bancaria, cuenta a nombre de, número de cuenta o código..."
-                    value={searchFilter}
-                    onChange={(e) => setSearchFilter(e.target.value)}
+                    value={bankSearch}
+                    onChange={(e) => setBankSearch(e.target.value)}
                     className="input-modern"
                     style={{ width: '100%', paddingLeft: '2.4rem' }}
                   />
@@ -1502,7 +1880,7 @@ export default function CashBankModal({
                         color: '#38bdf8',
                         border: '1px solid rgba(56, 189, 248, 0.35)'
                       }}>
-                        Tasa KEY: {formatBs(tasaKeystone)}
+                        Tasa BCV: {formatBs(tasaBcv)}
                       </span>
                     </h4>
                     <button
@@ -1652,7 +2030,7 @@ export default function CashBankModal({
                             const numBs = parseFloat(valBs);
                             const calcUsd = (valBs === '' || valBs === '-' || isNaN(numBs))
                               ? ''
-                              : (tasaKeystone > 0 ? (numBs / tasaKeystone).toFixed(2) : '0.00');
+                              : (tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : '0.00');
                             setBankForm(prev => ({
                               ...prev,
                               saldoBs: valBs,
@@ -1683,7 +2061,7 @@ export default function CashBankModal({
                             const numUsd = parseFloat(valUsd);
                             const calcBs = (valUsd === '' || valUsd === '-' || isNaN(numUsd))
                               ? ''
-                              : (tasaKeystone > 0 ? (numUsd * tasaKeystone).toFixed(2) : '0.00');
+                              : (tasaBcv > 0 ? (numUsd * tasaBcv).toFixed(2) : '0.00');
                             setBankForm(prev => ({
                               ...prev,
                               saldoUsd: valUsd,
@@ -1756,11 +2134,9 @@ export default function CashBankModal({
                       const code = b.codCta || b.cod_cta || String(idx + 1).padStart(2, '0');
                       const rowId = b.id || `CTA-${code}`;
                       const isEditingRow = inlineBankEditId === rowId && inlineBankDraft;
-                      const saldoBs = Number(b.saldoBs ?? b.saldo_bs ?? 0);
-                      const rawUsd = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
-                      const saldoUsd = (saldoBs !== 0 && tasaKeystone > 0)
-                        ? (Math.abs(rawUsd * tasaKeystone - saldoBs) < 0.05 ? rawUsd : Number((saldoBs / tasaKeystone).toFixed(2)))
-                        : rawUsd;
+                      const valuation = computeBankAccountValuation(b, { tasaDolar: tasaBcv, tasaKeystone });
+                      const saldoBs = valuation.bs;
+                      const saldoUsd = valuation.usd;
                       const isNegative = saldoBs < 0;
                       const titularNombre = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
 
@@ -1909,7 +2285,7 @@ export default function CashBankModal({
                                   const nBs = parseFloat(vBs);
                                   const calcUsd = (vBs === '' || vBs === '-' || isNaN(nBs))
                                     ? ''
-                                    : (tasaKeystone > 0 ? (nBs / tasaKeystone).toFixed(2) : '0.00');
+                                    : (tasaBcv > 0 ? (nBs / tasaBcv).toFixed(2) : '0.00');
                                   setInlineBankDraft(prev => ({
                                     ...prev,
                                     saldoBs: vBs,
@@ -1947,7 +2323,7 @@ export default function CashBankModal({
                                   const nUsd = parseFloat(vUsd);
                                   const calcBs = (vUsd === '' || vUsd === '-' || isNaN(nUsd))
                                     ? ''
-                                    : (tasaKeystone > 0 ? (nUsd * tasaKeystone).toFixed(2) : '0.00');
+                                    : (tasaBcv > 0 ? (nUsd * tasaBcv).toFixed(2) : '0.00');
                                   setInlineBankDraft(prev => ({
                                     ...prev,
                                     saldoUsd: vUsd,
@@ -2405,13 +2781,33 @@ export default function CashBankModal({
           {/* 3. PESTAÑA: ARQUEO DE CAJA */}
           {activeTab === 'arqueo' && (
             <div>
-              <div style={{ marginBottom: '1.25rem' }}>
-                <h3 style={{ margin: '0 0 0.35rem', fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  Arqueo de Efectivo Físico & Conciliación
-                </h3>
-                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  Ingrese la cantidad de billetes en efectivo contados físicamente para comparar automáticamente contra el saldo del sistema.
-                </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div>
+                  <h3 style={{ margin: '0 0 0.35rem', fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    Arqueo de Efectivo Físico & Conciliación
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Seleccione la caja física a auditar e ingrese billetes USD y efectivo Bs para comparar contra su saldo en sistema.
+                  </p>
+                </div>
+
+                <div style={{ minWidth: '280px' }}>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                    Caja a Auditar
+                  </label>
+                  <select
+                    className="filter-select"
+                    value={effectiveArqueoDesk?.id || effectiveArqueoDesk?.coCaja || ''}
+                    onChange={(e) => setArqueoDeskId(e.target.value)}
+                    style={{ width: '100%' }}
+                  >
+                    {cashDesks.map(d => (
+                      <option key={d.id || d.coCaja} value={d.id || d.coCaja}>
+                        {d.coCaja || d.co_caja} - {d.descripcion} ({d.moneda === 'BS' ? formatBs(d.saldoBs ?? d.saldo_bs ?? 0) : formatUsd(d.saldoUsd ?? d.saldo_usd ?? 0)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
@@ -2423,7 +2819,7 @@ export default function CashBankModal({
                   border: '1px solid var(--border-glass)'
                 }}>
                   <h4 style={{ margin: '0 0 1rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                    Conteo de Denominaciones USD
+                    Conteo de Denominaciones USD y Efectivo Bs
                   </h4>
 
                   <div style={{ display: 'grid', gap: '0.75rem' }}>
@@ -2446,7 +2842,7 @@ export default function CashBankModal({
                           className="input-modern"
                           style={{ width: '80px', textAlign: 'center' }}
                           value={denomCounts[den.key] || ''}
-                          onChange={(e) => setDenomCounts({ ...denomCounts, [den.key]: parseInt(e.target.value) || 0 })}
+                          onChange={(e) => setDenomCounts({ ...denomCounts, [den.key]: parseInt(e.target.value, 10) || 0 })}
                         />
                         <span style={{ width: '90px', textAlign: 'right', fontWeight: 600, fontSize: '0.88rem', color: 'var(--brand-blue)' }}>
                           {formatUsd((denomCounts[den.key] || 0) * den.val)}
@@ -2474,7 +2870,7 @@ export default function CashBankModal({
                   </div>
                 </div>
 
-                {/* Resumen de Diferencias */}
+                {/* Resumen de Diferencias USD & Bs */}
                 <div style={{
                   background: 'var(--bg-surface)',
                   padding: '1.25rem',
@@ -2486,18 +2882,28 @@ export default function CashBankModal({
                 }}>
                   <div>
                     <h4 style={{ margin: '0 0 1rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                      Resultado del Arqueo
+                      Resultado del Arqueo — {effectiveArqueoDesk?.descripcion || 'Caja Seleccionada'}
                     </h4>
 
-                    <div style={{ display: 'grid', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
                       <div style={{ background: 'var(--bg-card-glass)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-glass)' }}>
-                        <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Físico Contado USD:</span>
-                        <span style={{ fontSize: '1.25rem', fontWeight: 700, color: '#059669' }}>{formatUsd(arqueoTotalUsd)}</span>
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Físico Contado USD:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 700, color: '#059669' }}>{formatUsd(arqueoTotalUsd)}</span>
                       </div>
 
                       <div style={{ background: 'var(--bg-card-glass)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-glass)' }}>
-                        <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Saldo en Sistema USD:</span>
-                        <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>{formatUsd(totalCajasUsd)}</span>
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Físico Contado Bs:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 700, color: '#059669' }}>{formatBs(arqueoTotalBs)}</span>
+                      </div>
+
+                      <div style={{ background: 'var(--bg-card-glass)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-glass)' }}>
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Saldo en Sistema USD:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>{formatUsd(arqueoSystemUsd)}</span>
+                      </div>
+
+                      <div style={{ background: 'var(--bg-card-glass)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-glass)' }}>
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Saldo en Sistema Bs:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>{formatBs(arqueoSystemBs)}</span>
                       </div>
 
                       <div style={{
@@ -2506,9 +2912,9 @@ export default function CashBankModal({
                         borderRadius: '8px',
                         border: `1px solid ${Math.abs(arqueoDiferenciaUsd) < 0.01 ? '#10b981' : '#e60012'}`
                       }}>
-                        <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Diferencia USD:</span>
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Diferencia USD:</span>
                         <span style={{
-                          fontSize: '1.25rem',
+                          fontSize: '1.15rem',
                           fontWeight: 700,
                           color: Math.abs(arqueoDiferenciaUsd) < 0.01 ? '#059669' : '#dc2626'
                         }}>
@@ -2516,14 +2922,48 @@ export default function CashBankModal({
                           {Math.abs(arqueoDiferenciaUsd) < 0.01 && ' (Cuadrado)'}
                         </span>
                       </div>
+
+                      <div style={{
+                        background: Math.abs(arqueoDiferenciaBs) < 0.01 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(230, 0, 18, 0.08)',
+                        padding: '0.85rem',
+                        borderRadius: '8px',
+                        border: `1px solid ${Math.abs(arqueoDiferenciaBs) < 0.01 ? '#10b981' : '#e60012'}`
+                      }}>
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Diferencia Bs:</span>
+                        <span style={{
+                          fontSize: '1.15rem',
+                          fontWeight: 700,
+                          color: Math.abs(arqueoDiferenciaBs) < 0.01 ? '#059669' : '#dc2626'
+                        }}>
+                          {formatBs(arqueoDiferenciaBs)}
+                          {Math.abs(arqueoDiferenciaBs) < 0.01 && ' (Cuadrado)'}
+                        </span>
+                      </div>
                     </div>
+
+                    {lastArqueoActa && (
+                      <div style={{ marginTop: '0.9rem', padding: '0.65rem 0.85rem', borderRadius: '8px', background: 'rgba(2, 132, 199, 0.08)', border: '1px solid rgba(2, 132, 199, 0.25)', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        Último arqueo registrado: <strong>{lastArqueoActa.cajaNombre}</strong> ({new Date(lastArqueoActa.fecha).toLocaleTimeString()}) por {lastArqueoActa.auditor}.
+                      </div>
+                    )}
                   </div>
 
-                  <div style={{ marginTop: '1.5rem' }}>
+                  <div style={{ marginTop: '1.25rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.65rem' }}>
                     <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleRegisterArqueo({ applyAdjustment: true })}
+                      className="btn btn-primary"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.45rem', padding: '0.75rem' }}
+                    >
+                      <Save size={16} />
+                      Guardar Arqueo / Ajustar
+                    </button>
+                    <button
+                      type="button"
                       onClick={handlePrint}
                       className="btn btn-print-report"
-                      style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.75rem' }}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.75rem' }}
                     >
                       <Printer size={16} color="#ffffff" />
                       Imprimir Reporte
@@ -2542,9 +2982,9 @@ export default function CashBankModal({
                   <Search size={16} className="search-icon" />
                   <input
                     type="text"
-                    placeholder="Buscar por concepto o usuario..."
-                    value={searchFilter}
-                    onChange={(e) => setSearchFilter(e.target.value)}
+                    placeholder="Buscar por concepto, método, caja/banco o usuario..."
+                    value={movSearch}
+                    onChange={(e) => setMovSearch(e.target.value)}
                     className="input-modern"
                     style={{ width: '100%', paddingLeft: '2.4rem' }}
                   />
@@ -2567,6 +3007,7 @@ export default function CashBankModal({
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Fecha</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Tipo</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Concepto</th>
+                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Cuenta / Método</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Usuario</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto USD</th>
                         <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto Bs</th>
@@ -2576,6 +3017,10 @@ export default function CashBankModal({
                     <tbody>
                       {filteredMovements.map((m, idx) => {
                         const isIngreso = m.tipo === 'INGRESO';
+                        const movUsd = Number(m.montoUsd ?? m.monto_usd ?? 0);
+                        const movBs = Number(m.montoBs ?? m.monto_bs ?? 0);
+                        const accountLabel = m.cuentaNombre || m.cuenta_nombre || m.cajaOBanco || m.caja_o_banco || m.metodoPago || m.metodo || 'Efectivo';
+                        const methodLabel = m.metodoPago || m.metodo_pago || m.metodo || '';
                         return (
                           <tr
                             key={m.id || idx}
@@ -2606,14 +3051,20 @@ export default function CashBankModal({
                             <td style={{ padding: '0.85rem 1rem', fontWeight: 500, color: 'var(--text-primary)' }}>
                               {m.concepto}
                             </td>
+                            <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              <div style={{ fontWeight: 600 }}>{accountLabel}</div>
+                              {methodLabel && methodLabel !== accountLabel && (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{methodLabel}</div>
+                              )}
+                            </td>
                             <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)' }}>
                               {m.usuario || 'Sistema'}
                             </td>
                             <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 700, color: isIngreso ? '#059669' : '#dc2626' }}>
-                              {formatUsd(Number(m.monto_usd || 0))}
+                              {formatUsd(movUsd)}
                             </td>
                             <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)' }}>
-                              {formatBs(Number(m.monto_bs || 0))}
+                              {formatBs(movBs)}
                             </td>
                             <td style={{ padding: '0.85rem 1rem', textAlign: 'center' }}>
                               <button

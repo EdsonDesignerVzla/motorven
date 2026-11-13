@@ -1,3 +1,5 @@
+import { formatNumberUs } from './formatService.js';
+
 export const CREDIT_APPROVERS_CATALOG = [
   {
     category: 'GERENCIA GENERAL & DIRECCIÓN',
@@ -104,13 +106,145 @@ export function isCreditPaymentCondition(condicionPago, metodoPago = '') {
   return resolveCreditDaysFromTerm(term) > 0 || term.includes('CREDITO') || term.includes('CRÉDITO') || term.includes('DIAS');
 }
 
+export function toLocalYmd(dateObj) {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Resuelve fecha y hora real de emisión de una factura o nota de entrega sin desplazar
+ * fechas YYYY-MM-DD / medianoche UTC a las 8:00 p. m. del día anterior en zona UTC-4.
+ */
+export function parseInvoiceDateInfo(invOrDate, fallbackTimestamp = null) {
+  const isObj = invOrDate && typeof invOrDate === 'object' && !(invOrDate instanceof Date);
+  const rawDate = isObj
+    ? (invOrDate.fechaEmision || invOrDate.fec_emis || invOrDate.fecha || invOrDate.created_at || invOrDate.createdAt || null)
+    : invOrDate;
+  const fallback = isObj
+    ? (fallbackTimestamp || invOrDate.updatedAt || invOrDate.updated_at || invOrDate.fechaSincronizacion || invOrDate.fecha_sincronizacion || invOrDate.createdAt || invOrDate.created_at || null)
+    : fallbackTimestamp;
+
+  if (!rawDate) {
+    return { date: null, hasTime: false, isoDateOnly: '', fullIso: '' };
+  }
+
+  if (rawDate instanceof Date) {
+    if (Number.isNaN(rawDate.getTime())) {
+      return { date: null, hasTime: false, isoDateOnly: '', fullIso: '' };
+    }
+    return {
+      date: rawDate,
+      hasTime: true,
+      isoDateOnly: toLocalYmd(rawDate),
+      fullIso: rawDate.toISOString()
+    };
+  }
+
+  const rawStr = String(rawDate).trim();
+  const dateOnlyMatch = rawStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const midnightUtcMatch = rawStr.match(/^(\d{4})-(\d{2})-(\d{2})T00:00:00(?:\.000)?(?:Z|[+-]00:00)?$/i);
+  const dateMatch = dateOnlyMatch || midnightUtcMatch;
+
+  if (dateMatch) {
+    const [, yStr, mStr, dStr] = dateMatch;
+    const y = Number(yStr);
+    const m = Number(mStr);
+    const d = Number(dStr);
+    const isoDateOnly = `${yStr}-${mStr}-${dStr}`;
+
+    if (fallback) {
+      const fbStr = String(fallback).trim();
+      const isBatchImport = Boolean(midnightUtcMatch && isoDateOnly < '2026-11-01' && fbStr.startsWith('2026-10-27T20:12:'));
+      if (!isBatchImport) {
+        const fbDate = fallback instanceof Date ? fallback : new Date(fbStr);
+        if (!Number.isNaN(fbDate.getTime())) {
+          const isFbMidnightUtc = /T00:00:00(?:\.000)?(?:Z|[+-]00:00)?$/i.test(fbStr) || /^\d{4}-\d{2}-\d{2}$/.test(fbStr);
+          if (!isFbMidnightUtc) {
+            const combined = new Date(y, m - 1, d, fbDate.getHours(), fbDate.getMinutes(), fbDate.getSeconds(), fbDate.getMilliseconds());
+            return {
+              date: combined,
+              hasTime: true,
+              isoDateOnly,
+              fullIso: combined.toISOString()
+            };
+          }
+        }
+      }
+    }
+
+    const localNoon = new Date(y, m - 1, d, 12, 0, 0, 0);
+    return {
+      date: localNoon,
+      hasTime: false,
+      isoDateOnly,
+      fullIso: localNoon.toISOString()
+    };
+  }
+
+  const parsed = new Date(rawStr);
+  if (Number.isNaN(parsed.getTime())) {
+    return { date: null, hasTime: false, isoDateOnly: '', fullIso: '' };
+  }
+  return {
+    date: parsed,
+    hasTime: true,
+    isoDateOnly: toLocalYmd(parsed),
+    fullIso: parsed.toISOString()
+  };
+}
+
+/**
+ * Formatea fecha y hora de emisión de una factura para UI (sin mostrar 8:00 p. m. falso)
+ */
+export function formatInvoiceDateTimeDisplay(invOrDate) {
+  const info = parseInvoiceDateInfo(invOrDate);
+  if (!info.date) return 'N/A';
+  if (info.hasTime) {
+    return info.date.toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' });
+  }
+  return info.date.toLocaleDateString('es-VE', { dateStyle: 'short' });
+}
+
+/**
+ * Conserva el timestamp completo si ya tiene hora real; si recibe solo YYYY-MM-DD,
+ * combina esa fecha con la hora de referencia (o la hora actual) para no truncar a 00:00 UTC.
+ */
+export function preserveDateWithTime(dateInput, refTimeInput = null) {
+  const refDate = refTimeInput ? new Date(refTimeInput) : new Date();
+  const safeRef = Number.isNaN(refDate.getTime()) ? new Date() : refDate;
+  if (!dateInput) return safeRef.toISOString();
+  if (dateInput instanceof Date) {
+    return Number.isNaN(dateInput.getTime()) ? safeRef.toISOString() : dateInput.toISOString();
+  }
+  const str = String(dateInput).trim();
+  const dateOnlyMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    const [, yStr, mStr, dStr] = dateOnlyMatch;
+    const combined = new Date(
+      Number(yStr),
+      Number(mStr) - 1,
+      Number(dStr),
+      safeRef.getHours(),
+      safeRef.getMinutes(),
+      safeRef.getSeconds(),
+      safeRef.getMilliseconds()
+    );
+    return combined.toISOString();
+  }
+  const parsed = new Date(str);
+  return Number.isNaN(parsed.getTime()) ? safeRef.toISOString() : parsed.toISOString();
+}
+
 /**
  * Formatea una fecha en formato DD/MM/YYYY (Venezuela)
  */
 export function formatDateVe(dateInput) {
   if (!dateInput) return '—';
-  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
-  if (Number.isNaN(d.getTime())) return '—';
+  const info = parseInvoiceDateInfo(dateInput);
+  const d = info.date || (dateInput instanceof Date ? dateInput : new Date(dateInput));
+  if (!d || Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('es-VE', {
     day: '2-digit',
     month: '2-digit',
@@ -327,7 +461,7 @@ export function evaluateClientCreditPolicy({
   } else if (dosCombinadas) {
     motivo = `Cliente posee documentos combinados pendientes (${facturasPendientes.length} factura y ${notasEntregaPendientes.length} nota de entrega).`;
   } else if (excedeLimiteCredito) {
-    motivo = `El monto de la operación ($${Number(montoOrdenUsd).toFixed(2)}) supera el cupo de crédito disponible ($${creditoDisponibleUsd.toFixed(2)}).`;
+    motivo = `El monto de la operación ($${formatNumberUs(montoOrdenUsd)}) supera el cupo de crédito disponible ($${formatNumberUs(creditoDisponibleUsd)}).`;
   } else {
     motivo = 'Cliente solvente. Cumple con las políticas comerciales para despacho a crédito.';
   }

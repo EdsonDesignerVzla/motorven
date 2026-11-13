@@ -21,7 +21,7 @@ import {
   Clock,
   ExternalLink
 } from 'lucide-react';
-import { formatBs, formatUsd } from '../services/formatService';
+import { formatBs, formatNumberVe, formatUsd } from '../services/formatService';
 import {
   buildLibroVentasRows,
   buildLibroComprasRows,
@@ -755,7 +755,7 @@ export default function TaxReportsView({
                           <td>{s.clienteNombre} <br/><small className="text-muted">{s.clienteRif}</small></td>
                           <td><span className="badge badge-warning">{s.metodoPago || 'DIVISAS_EFECTIVO'}</span></td>
                           <td>{formatUsd(baseDivisas)}</td>
-                          <td><code>{tasa.toFixed(2)}</code></td>
+                          <td><code>{formatNumberVe(tasa)}</code></td>
                           <td>{formatBs(baseBs)}</td>
                           <td style={{ fontWeight: 700, color: 'var(--accent-amber)' }}>{formatUsd(s.igtfUsd || 0)}</td>
                           <td style={{ fontWeight: 800, color: 'var(--accent-amber)' }}>{formatBs(s.igtfBs || (s.igtfUsd * tasa))}</td>
@@ -1134,7 +1134,7 @@ export default function TaxReportsView({
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                 <span style={{ color: 'var(--text-muted)' }}>Tasa Oficial de Liquidación:</span>
-                <span style={{ fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)', fontWeight: 700 }}>Bs. {corteXActual.tasaBcv.toFixed(2)} / USD</span>
+                <span style={{ fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)', fontWeight: 700 }}>{formatBs(corteXActual.tasaBcv)} / USD</span>
               </div>
             </div>
 

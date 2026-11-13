@@ -24,7 +24,7 @@ import {
   ExternalLink,
   Building
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { formatUsd, formatBs, formatNumberUs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { generateInventoryPDF } from '../services/pdfReportService';
 import OilstoneProductImage from './OilstoneProductImage';
 
@@ -234,7 +234,7 @@ export default function SmartReorderMatrixModal({
     
     let pedidoListado = '';
     itemsParaComprar.forEach((item, index) => {
-      pedidoListado += (index + 1) + '. *' + item.codigo + '* | ' + item.descripcion + '\n   • Cantidad: *' + item.cantidadSugeridaCajas + ' ' + resolveProductUnit(item, 'Caja') + '* (~' + item.cantidadSugeridaLitros.toFixed(1) + ' L)\n   • Costo Ref: $ ' + (item.costoUsd ? item.costoUsd.toFixed(2) : '0.00') + ' USD | Subtotal: $ ' + item.inversionSugeridaUsd.toFixed(2) + ' USD\n\n';
+      pedidoListado += (index + 1) + '. *' + item.codigo + '* | ' + item.descripcion + '\n   • Cantidad: *' + formatUnitVe(item.cantidadSugeridaCajas, 0) + ' ' + resolveProductUnit(item, 'Caja') + '* (~' + formatUnitVe(item.cantidadSugeridaLitros) + ' L)\n   • Costo Ref: ' + formatUsd(item.costoUsd || 0) + ' USD | Subtotal: ' + formatUsd(item.inversionSugeridaUsd) + ' USD\n\n';
     });
 
     return '🏭 *SOLICITUD DE REPOSICIÓN & ORDEN DE COMPRA DE LUBRICANTES*\n' +
@@ -243,8 +243,8 @@ export default function SmartReorderMatrixModal({
       '🎯 *Meta de Cobertura:* ' + targetCoverageDays + ' días (Lead Time estimado: ' + leadTimeDays + ' días)\n\n' +
       '📦 *Detalle de Productos Requeridos:*\n' +
       pedidoListado +
-      '💵 *Presupuesto Estimado:* *$ ' + summaryKpis.totalInversionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD*\n' +
-      '🇻🇪 *Equivalente en Bs. (Tasa BCV ' + tasaBcv.toFixed(2) + '):* *Bs. ' + summaryKpis.totalInversionBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '*\n\n' +
+      '💵 *Presupuesto Estimado:* *' + formatUsd(summaryKpis.totalInversionUsd) + ' USD*\n' +
+      '🇻🇪 *Equivalente en Bs. (Tasa BCV ' + formatBs(tasaBcv) + '):* *' + formatBs(summaryKpis.totalInversionBs) + '*\n\n' +
       'Agradecemos confirmar disponibilidad de lote, tiempo de despacho y emisión de factura proforma para coordinar pago.';
   }, [reorderMatrixData, config, targetCoverageDays, leadTimeDays, summaryKpis, tasaBcv]);
 
@@ -456,10 +456,10 @@ export default function SmartReorderMatrixModal({
               <span className="badge badge-warning" style={{ fontSize: '0.62rem' }}>Volumen</span>
             </div>
             <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.4rem', fontWeight: 900, color: 'var(--motorven-gold)', marginTop: '2px' }}>
-              {summaryKpis.totalLitrosSugeridos.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} Litros
+              {formatUnitVe(summaryKpis.totalLitrosSugeridos)} Litros
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              ~ {summaryKpis.totalCajasSugeridas.toLocaleString()} Cajas / Tambores
+              ~ {formatUnitVe(summaryKpis.totalCajasSugeridas, 0)} Cajas / Tambores
             </div>
           </div>
 
@@ -644,19 +644,19 @@ export default function SmartReorderMatrixModal({
 
                           <td style={{ textAlign: 'center' }}>
                             <div style={{ fontWeight: 800, fontFamily: 'var(--font-tech)', fontSize: '0.95rem' }}>
-                              {item.stockDisponible} <span style={{ fontSize: '0.68rem', fontWeight: 400 }}>{resolveProductUnit(item, 'Caja')}</span>
+                              {formatUnitVe(item.stockDisponible, 0)} <span style={{ fontSize: '0.68rem', fontWeight: 400 }}>{resolveProductUnit(item, 'Caja')}</span>
                             </div>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                              {item.litrosDisponibles.toFixed(1)} L
+                              {formatUnitVe(item.litrosDisponibles)} L
                             </div>
                           </td>
 
                           <td style={{ textAlign: 'center' }}>
                             <div style={{ fontWeight: 700, fontFamily: 'var(--font-code)' }}>
-                              {item.consumoDiarioCajas.toFixed(2)} Caj/d
+                              {formatUnitVe(item.consumoDiarioCajas)} Caj/d
                             </div>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                              ~ {item.consumoDiarioLitros.toFixed(1)} L/día
+                              ~ {formatUnitVe(item.consumoDiarioLitros)} L/día
                             </div>
                           </td>
 
@@ -704,10 +704,10 @@ export default function SmartReorderMatrixModal({
                             {isNeedPurchase ? (
                               <div>
                                 <div style={{ fontWeight: 900, fontFamily: 'var(--font-tech)', fontSize: '0.95rem', color: 'var(--semaforo-verde)' }}>
-                                  + {item.cantidadSugeridaCajas} {resolveProductUnit(item, 'Caja')}
+                                  + {formatUnitVe(item.cantidadSugeridaCajas, 0)} {resolveProductUnit(item, 'Caja')}
                                 </div>
                                 <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                                  ~ {item.cantidadSugeridaLitros.toFixed(1)} L
+                                  ~ {formatUnitVe(item.cantidadSugeridaLitros)} L
                                 </div>
                               </div>
                             ) : (
@@ -922,7 +922,7 @@ export default function SmartReorderMatrixModal({
                 </div>
                 <div>
                   <span style={{ color: '#64748b', display: 'block', fontSize: '0.7rem', textTransform: 'uppercase' }}>Volumen Estimado:</span>
-                  <strong style={{ color: '#002b7a', fontSize: '0.95rem' }}>{summaryKpis.totalLitrosSugeridos.toFixed(1)} Litros</strong>
+                  <strong style={{ color: '#002b7a', fontSize: '0.95rem' }}>{formatUnitVe(summaryKpis.totalLitrosSugeridos)} Litros</strong>
                 </div>
               </div>
 
@@ -950,10 +950,10 @@ export default function SmartReorderMatrixModal({
                         {item.cantidadSugeridaCajas} {resolveProductUnit(item, 'Caja')}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace' }}>
-                        ${(item.costoUsd || 0).toFixed(2)}
+                        ${formatNumberUs(item.costoUsd || 0)}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, fontFamily: 'monospace' }}>
-                        ${item.inversionSugeridaUsd.toFixed(2)}
+                        ${formatNumberUs(item.inversionSugeridaUsd)}
                       </td>
                     </tr>
                   ))}

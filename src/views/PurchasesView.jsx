@@ -28,6 +28,7 @@ import {
   Warehouse
 } from 'lucide-react';
 import { formatUsd, formatBs, getProductWarehouseStocks } from '../services/formatService';
+import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber } from '../utils/rateClassificationUtils';
 import {
   validateRif,
   generateVatRetentionVoucherNumber
@@ -62,6 +63,7 @@ export default function PurchasesView({
   onSavePurchaseOrder,
   onSaveGoodsReceipt,
   onSavePaymentOrder,
+  onOpenCxpModule,
   currentUser,
   profitSuppliers = [],
   profitPurchases = [],
@@ -193,15 +195,19 @@ export default function PurchasesView({
 
   // KPIs Generales del Módulo de Compras y Proveedores
   const kpis = useMemo(() => {
-    const totalComprasUsd = profitPurchases.reduce((acc, p) => acc + (p.totNetoUsd || 0), 0);
-    const totalComprasBs = profitPurchases.reduce((acc, p) => acc + (p.totNetoBs || 0), 0);
-    const totalCxPUsd = profitAccountsPayable.reduce((acc, d) => acc + (d.saldoUsd || 0), 0);
-    const totalCxPBs = profitAccountsPayable.reduce((acc, d) => acc + (d.saldoBs || 0), 0);
-    const totalPagadoUsd = profitSupplierPayments.reduce((acc, p) => acc + (p.montoUsd || 0), 0);
-    const totalPagadoBs = profitSupplierPayments.reduce((acc, p) => acc + (p.montoBs || 0), 0);
+    const activePurchases = (profitPurchases || []).filter(p => p && !p.anulada && !p.anulado);
+    const activeCxP = (profitAccountsPayable || []).filter(d => d && !d.anulado);
+    const activePayments = (profitSupplierPayments || []).filter(p => p && !p.anulado);
+
+    const totalComprasUsd = activePurchases.reduce((acc, p) => acc + (p.totNetoUsd || 0), 0);
+    const totalComprasBs = activePurchases.reduce((acc, p) => acc + (p.totNetoBs || 0), 0);
+    const totalCxPUsd = activeCxP.reduce((acc, d) => acc + (d.saldoUsd || 0), 0);
+    const totalCxPBs = activeCxP.reduce((acc, d) => acc + (d.saldoBs || 0), 0);
+    const totalPagadoUsd = activePayments.reduce((acc, p) => acc + (p.montoUsd || 0), 0);
+    const totalPagadoBs = activePayments.reduce((acc, p) => acc + (p.montoBs || 0), 0);
 
     const now = new Date();
-    const cxpVencidaUsd = profitAccountsPayable
+    const cxpVencidaUsd = activeCxP
       .filter(d => d.fechaVencimiento && new Date(d.fechaVencimiento) < now && d.saldoUsd > 0.01)
       .reduce((acc, d) => acc + d.saldoUsd, 0);
 
@@ -209,7 +215,7 @@ export default function PurchasesView({
 
     return {
       totalProveedores: profitSuppliers.length || suppliers.length || 5,
-      totalComprasCount: profitPurchases.length,
+      totalComprasCount: activePurchases.length,
       totalComprasUsd,
       totalComprasBs,
       totalCxPUsd,
@@ -218,7 +224,7 @@ export default function PurchasesView({
       cxpVencidaUsd,
       totalPagadoUsd,
       totalPagadoBs,
-      totalPagosCount: profitSupplierPayments.length
+      totalPagosCount: activePayments.length
     };
   }, [profitSuppliers, profitPurchases, profitAccountsPayable, profitSupplierPayments, suppliers]);
 
@@ -283,7 +289,7 @@ export default function PurchasesView({
   const filteredCxP = useMemo(() => {
     const now = new Date();
     return (profitAccountsPayable || []).filter(d => {
-      if (!d) return false;
+      if (!d || d.anulado) return false;
       const q = searchQuery.toLowerCase().trim();
       const matchQuery = !q ||
         String(d.nroDoc || '').toLowerCase().includes(q) ||
@@ -307,10 +313,10 @@ export default function PurchasesView({
   // Filtrado de Pagos a Proveedores
   const filteredPayments = useMemo(() => {
     return (profitSupplierPayments || []).filter(p => {
-      if (!p) return false;
+      if (!p || p.anulado) return false;
       const q = searchQuery.toLowerCase().trim();
       return !q ||
-        String(p.pagoNum || '').includes(q) ||
+        String(p.pagoNum || '').toLowerCase().includes(q) ||
         (p.provNombre && String(p.provNombre).toLowerCase().includes(q)) ||
         (p.descrip && String(p.descrip).toLowerCase().includes(q)) ||
         (p.coProv && String(p.coProv).toLowerCase().includes(q));
@@ -687,7 +693,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <Calendar size={16} /> Cuentas por Pagar (CxP) ({profitAccountsPayable.length})
+          <Calendar size={16} /> Cuentas por Pagar (CxP) ({(profitAccountsPayable || []).filter(d => d && !d.anulado).length})
         </button>
 
         <button
@@ -1102,6 +1108,7 @@ export default function PurchasesView({
                   <th style={{ textAlign: 'right' }}>SALDO PENDIENTE ($)</th>
                   <th style={{ textAlign: 'right' }}>SALDO (BS.)</th>
                   <th style={{ textAlign: 'center' }}>VENCIMIENTO</th>
+                  {onOpenCxpModule && <th style={{ textAlign: 'center' }}>ACCIÓN</th>}
                 </tr>
               </thead>
               <tbody>
@@ -1136,12 +1143,25 @@ export default function PurchasesView({
                             {isSolvente ? 'SOLVENTE' : isVencido ? 'VENCIDA' : 'AL DÍA'}
                           </span>
                         </td>
+                        {onOpenCxpModule && (
+                          <td style={{ textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              className={`btn ${isSolvente ? 'btn-secondary' : 'btn-primary'}`}
+                              style={{ padding: '0.28rem 0.6rem', fontSize: '0.72rem', fontWeight: 700 }}
+                              onClick={() => onOpenCxpModule(doc)}
+                              title="Gestionar / Registrar pago en módulo CxP"
+                            >
+                              {isSolvente ? 'Ver en CxP' : 'Pagar en CxP'}
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan="9" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                    <td colSpan={onOpenCxpModule ? 10 : 9} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
                       No se encontraron documentos CxP con los filtros seleccionados.
                     </td>
                   </tr>
@@ -1165,13 +1185,18 @@ export default function PurchasesView({
                   <th>DESCRIPCIÓN / CONCEPTO</th>
                   <th style={{ textAlign: 'right' }}>MONTO ($ USD)</th>
                   <th style={{ textAlign: 'right' }}>MONTO (BS.)</th>
-                  <th style={{ textAlign: 'right' }}>TASA BCV</th>
+                  <th style={{ textAlign: 'center' }}>CLASIFICACIÓN TASA</th>
+                  <th style={{ textAlign: 'right' }}>TASA DEL PAGO</th>
                   <th style={{ textAlign: 'center' }}>ESTADO</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredPayments.length > 0 ? (
-                  filteredPayments.map((p) => (
+                  filteredPayments.map((p) => {
+                    const pRateType = resolveRecordRateType(p, 'BCV');
+                    const pRateMeta = resolveRateMeta(pRateType, 'BCV');
+                    const pTasa = resolveEffectiveRateNumber(p, 0);
+                    return (
                     <tr key={p.id}>
                       <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>
                         #{p.pagoNum}
@@ -1188,10 +1213,25 @@ export default function PurchasesView({
                         {formatUsd(p.montoUsd)}
                       </td>
                       <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
-                        {formatBs(p.montoBs)}
+                        {pRateType === 'USD' && !(Number(p.montoBs) > 0) ? 'Divisa USD' : formatBs(p.montoBs)}
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span style={{
+                          display: 'inline-block',
+                          padding: '0.16rem 0.48rem',
+                          borderRadius: '6px',
+                          fontSize: '0.68rem',
+                          fontWeight: 800,
+                          fontFamily: 'var(--font-code)',
+                          background: pRateMeta.bg,
+                          color: pRateMeta.color,
+                          border: `1px solid ${pRateMeta.border}`
+                        }}>
+                          {pRateMeta.badgeText}
+                        </span>
                       </td>
                       <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.75rem' }}>
-                        Bs. {p.tasa?.toFixed(2)}
+                        {pRateType === 'USD' ? 'Divisa USD' : (pTasa > 0 ? formatBs(pTasa) : '—')}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <span className={`badge ${p.anulado ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.68rem' }}>
@@ -1199,10 +1239,11 @@ export default function PurchasesView({
                         </span>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 ) : (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                    <td colSpan="9" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
                       No hay registros de pagos y abonos para mostrar.
                     </td>
                   </tr>

@@ -10,6 +10,8 @@
  * - Código Orgánico Tributario (COT)
  */
 
+import { round2, formatUsd, formatBs, formatNumberUs } from './formatService.js';
+
 // ==============================================================================
 // 1. VALIDACIÓN FISCAL DE DOCUMENTOS DE IDENTIDAD TRIBUTARIA (RIF Y CÉDULA)
 // ==============================================================================
@@ -235,10 +237,7 @@ export const validateRifOrCedula = validateDocumentNumber;
  * Redondeo financiero estándar a 2 decimales (Half-Up).
  * Evita errores de coma flotante de IEEE 754.
  */
-export const roundTo2Decimals = (num) => {
-  if (isNaN(num) || num === null || num === undefined) return 0;
-  return Math.round((Number(num) + Number.EPSILON) * 100) / 100;
-};
+export const roundTo2Decimals = round2;
 
 /**
  * Alícuotas impositivas oficiales según la Ley del IVA de Venezuela.
@@ -259,7 +258,19 @@ export const ALICUOTAS_IVA = {
  * @param {number} tasaBcv - Cotización oficial del BCV (Bs. / USD)
  * @param {number} porcentajeRetencionIva - Porcentaje de retención del agente (0, 75 o 100)
  * @param {number} porcentajeRetencionIslr - Porcentaje de retención de ISLR (ej. 2)
+ * @param {boolean} esSujetoPasivoEspecial - Si el emisor percibe IGTF como Sujeto Pasivo Especial
+ * @param {number} porcentajeIgtf - Alícuota IGTF configurable (por defecto 3%)
  */
+export const resolveConfigIgtfOptions = (config = {}) => {
+  const parsedRate =
+    config?.igtfPorcentaje !== undefined && config?.igtfPorcentaje !== null
+      ? Number(config.igtfPorcentaje)
+      : 3;
+  const porcentajeIgtf = Number.isFinite(parsedRate) ? Math.max(0, parsedRate) : 3;
+  const esSujetoPasivoEspecial = config?.esSujetoPasivoEspecial !== false && porcentajeIgtf > 0;
+  return { esSujetoPasivoEspecial, porcentajeIgtf };
+};
+
 export const calculateFiscalTaxes = ({
   items = [],
   tipoDoc = 'FACTURA',
@@ -268,7 +279,8 @@ export const calculateFiscalTaxes = ({
   tasaBcv = 827.73,
   porcentajeRetencionIva = 75.00,
   porcentajeRetencionIslr = 2.00,
-  esSujetoPasivoEspecial = true
+  esSujetoPasivoEspecial = true,
+  porcentajeIgtf = 3.00
 }) => {
   const tasa = Number(tasaBcv) > 0 ? Number(tasaBcv) : 827.73;
   const isNotaEntrega = String(tipoDoc || '').trim().toUpperCase() === 'NOTA_ENTREGA';
@@ -319,13 +331,15 @@ export const calculateFiscalTaxes = ({
   const ivaAdicionalUsd = isNotaEntrega ? 0 : roundTo2Decimals(baseAdicionalUsd * 0.31);
   const totalIvaUsd = isNotaEntrega ? 0 : roundTo2Decimals(ivaGeneralUsd + ivaReducidoUsd + ivaAdicionalUsd);
 
-  // Percepción de IGTF (3%)
+  // Percepción de IGTF (configurable, por defecto 3%)
   // Aplica sobre pagos en divisas o criptomonedas no soberanas (no aplica en Notas de Entrega)
+  const parsedIgtfRate = Number(porcentajeIgtf);
+  const effectiveIgtfRate = Number.isFinite(parsedIgtfRate) ? Math.max(0, parsedIgtfRate) : 3;
   const esPagoEnDivisas = ['EFECTIVO_USD', 'ZELLE', 'USDT', 'DIVISAS'].includes(metodoPago);
-  const aplicaIgtf = !isNotaEntrega && esSujetoPasivoEspecial && esPagoEnDivisas && condicionPago === 'CONTADO';
+  const aplicaIgtf = !isNotaEntrega && esSujetoPasivoEspecial && effectiveIgtfRate > 0 && esPagoEnDivisas && condicionPago === 'CONTADO';
 
   const baseIgtfUsd = aplicaIgtf ? roundTo2Decimals(subtotalNetoUsd + totalIvaUsd) : 0;
-  const igtfUsd = aplicaIgtf ? roundTo2Decimals(baseIgtfUsd * 0.03) : 0;
+  const igtfUsd = aplicaIgtf ? roundTo2Decimals(baseIgtfUsd * (effectiveIgtfRate / 100)) : 0;
 
   const totalFacturaUsd = roundTo2Decimals(subtotalNetoUsd + totalIvaUsd + igtfUsd);
 
@@ -399,6 +413,33 @@ export const calculateFiscalTaxes = ({
 // 3. GENERADOR DE CORRELATIVOS Y NÚMEROS DE CONTROL FISCAL
 // ==============================================================================
 
+export const INVOICE_SERIES_RESET_DATE = '2026-11-01';
+
+/**
+ * Determina si una factura pertenece al lote histórico previo al reinicio de serie (antes del 01/11/2026).
+ * Las Notas de Entrega, Crédito y Débito mantienen su serie continua y nunca se marcan como LEGACY.
+ * @param {object} doc
+ * @returns {boolean}
+ */
+export const isLegacyPreNovInvoice = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  const rawTipo = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
+  const rawId = String(doc.id || '').trim();
+  const rawNum = String(doc.numeroDoc ?? doc.numero_doc ?? doc.factNum ?? doc.fact_num ?? '').trim();
+  if (rawTipo === 'NOTA_ENTREGA' || /^(NE-|NDE-|NC-|ND-)/i.test(rawId) || /^(NE-|NDE-|NC-|ND-)/i.test(rawNum)) {
+    return false;
+  }
+  const rawDateStr = String(doc.fechaEmision || doc.fec_emis || doc.fecha_emision || doc.fecha || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawDateStr)) {
+    return rawDateStr.slice(0, 10) < INVOICE_SERIES_RESET_DATE;
+  }
+  const fallbackTsStr = String(doc.updated_at || doc.created_at || doc.fecha_sincronizacion || doc.fechaSincronizacion || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(fallbackTsStr)) {
+    return fallbackTsStr.slice(0, 10) < INVOICE_SERIES_RESET_DATE;
+  }
+  return !doc._customCreated && /^fac-[1-9]\d{0,3}$/.test(rawId);
+};
+
 /**
  * Normaliza cualquier documento o referencia fiscal a una clave canónica
  * independiente de prefijos (FAC-/NE-/NC-/ND-) y ceros a la izquierda.
@@ -436,6 +477,22 @@ export const getCanonicalDocKey = (docOrNum, explicitTipoDoc = '') => {
   return `${family}:${digits || base}`;
 };
 
+/**
+ * Clave canónica consciente de serie/era: separa la serie histórica previa a noviembre 2026 (:LEGACY)
+ * de la serie reiniciada a partir de 000000 para evitar sobrescrituras o colisiones cruzadas.
+ * @param {object|string|number} docOrNum
+ * @param {string} [explicitTipoDoc]
+ * @returns {string}
+ */
+export const getEraScopedCanonicalDocKey = (docOrNum, explicitTipoDoc = '') => {
+  const baseKey = getCanonicalDocKey(docOrNum, explicitTipoDoc);
+  if (!baseKey) return '';
+  if (baseKey.startsWith('FAC:') && typeof docOrNum === 'object' && isLegacyPreNovInvoice(docOrNum)) {
+    return `${baseKey}:LEGACY`;
+  }
+  return baseKey;
+};
+
 const pickBestLineItems = (a, b) => {
   const arrA = Array.isArray(a) ? a : [];
   const arrB = Array.isArray(b) ? b : [];
@@ -445,7 +502,7 @@ const pickBestLineItems = (a, b) => {
 };
 
 /**
- * Deduplica un arreglo de documentos (ventas o profit_invoices) por clave canónica,
+ * Deduplica un arreglo de documentos (ventas o profit_invoices) por clave canónica de serie,
  * fusionando campos útiles (renglones no vacíos, número formateado y última actualización).
  * @param {Array} docs
  * @returns {Array}
@@ -455,7 +512,7 @@ export const dedupeCanonicalDocs = (docs = []) => {
   const map = new Map();
   for (const doc of docs) {
     if (!doc) continue;
-    const cKey = getCanonicalDocKey(doc);
+    const cKey = getEraScopedCanonicalDocKey(doc);
     if (!cKey) continue;
     const existing = map.get(cKey);
     if (!existing) {
@@ -513,7 +570,7 @@ export const getNextInvoiceCorrelativo = (sales = [], extraDocs = []) => {
   } catch (_) {}
 
   let highest = -1;
-  const usedFacturaNums = new Set();
+  const usedActiveFacturaNums = new Set();
   let maxLowSeries = -1;
   const list = [...(Array.isArray(sales) ? sales : []), ...(Array.isArray(extraDocs) ? extraDocs : [])];
 
@@ -529,29 +586,38 @@ export const getNextInvoiceCorrelativo = (sales = [], extraDocs = []) => {
     if (digitsOnly) {
       const val = parseInt(digitsOnly, 10);
       if (!isNaN(val) && val >= 0 && val <= 999999) {
-        usedFacturaNums.add(val);
-        if (val < 400 && val > maxLowSeries) {
-          maxLowSeries = val;
-        }
-        // Valid correlativo en la serie activa iniciada desde 000000 (aislando semillas demo >= 1000)
-        if (val < 50000 && (val < 1000 || highest > 900) && val > highest) {
-          highest = val;
+        const rawDateStr = String(s.fechaEmision || s.fec_emis || s.fecha || s.created_at || '').trim();
+        const isLegacyProfitBatch =
+          (/^fac-[1-9]\d{0,3}$/i.test(rawId) && (!rawDateStr || rawDateStr.slice(0, 10) < INVOICE_SERIES_RESET_DATE)) ||
+          (/^\d{4}-\d{2}-\d{2}/.test(rawDateStr) && rawDateStr.slice(0, 10) < INVOICE_SERIES_RESET_DATE);
+
+        if (!isLegacyProfitBatch) {
+          usedActiveFacturaNums.add(val);
+          if (val < 400 && val > maxLowSeries) {
+            maxLowSeries = val;
+          }
+          // Valid correlativo en la serie activa iniciada desde 000000 (aislando semillas demo >= 1000)
+          if (val < 50000 && (val < 1000 || highest > 900) && val > highest) {
+            highest = val;
+          }
         }
       }
     }
   });
 
-  // 1. Si el usuario reinició o fijó explícitamente el correlativo (evitando colisión con otra PC)
+  // 1. Si el usuario reinició o fijó explícitamente el correlativo (evitando colisión con otra PC en la serie activa)
   try {
     const forcedSeq = localStorage.getItem('sm_invoice_correlativo_force');
+    const isManualOverride = localStorage.getItem('sm_invoice_correlativo_manual') === 'true';
     if (forcedSeq !== null && forcedSeq !== '') {
       const forcedVal = parseInt(forcedSeq, 10);
       if (!isNaN(forcedVal) && forcedVal >= 0 && forcedVal <= 999999) {
         let candidate = forcedVal;
-        if (forcedVal < 400 && maxLowSeries >= forcedVal) {
+        if (!isManualOverride && maxLowSeries >= forcedVal) {
           candidate = maxLowSeries + 1;
         }
-        while (usedFacturaNums.has(candidate) && candidate < 999999) {
+        // Evitar colisión contra la serie activa (>= nov-2026); el histórico Profit (< nov-2026) va en serie separada
+        while (usedActiveFacturaNums.has(candidate) && candidate < 999999) {
           candidate++;
         }
         return String(candidate).padStart(6, '0');
@@ -570,7 +636,7 @@ export const getNextInvoiceCorrelativo = (sales = [], extraDocs = []) => {
   } catch (_) {}
 
   let nextVal = highest >= 0 ? highest + 1 : 0;
-  while (usedFacturaNums.has(nextVal) && nextVal < 999999) {
+  while (usedActiveFacturaNums.has(nextVal) && nextVal < 999999) {
     nextVal++;
   }
   return String(nextVal).padStart(6, '0');
@@ -734,8 +800,10 @@ export const setInvoiceCorrelativo = (startAt = 0) => {
   const num = typeof startAt === 'number' ? startAt : (parseInt(String(startAt).replace(/[^0-9]/g, ''), 10) || 0);
   const safeNum = Math.max(0, Math.min(999999, isNaN(num) ? 0 : num));
   try {
+    localStorage.setItem('sm_invoice_correlativo_zero_init', 'true');
     localStorage.setItem('sm_invoice_correlativo_force', String(safeNum));
     localStorage.setItem('sm_invoice_correlativo_seq', String(safeNum));
+    localStorage.setItem('sm_invoice_correlativo_manual', 'true');
   } catch (_) {}
   return String(safeNum).padStart(6, '0');
 };
@@ -744,6 +812,193 @@ export const setInvoiceCorrelativo = (startAt = 0) => {
  * Alias de compatibilidad para inicializar correlativo
  */
 export const resetInvoiceCorrelativo = setInvoiceCorrelativo;
+
+// ==============================================================================
+// CORRELATIVO DE MOVIMIENTOS Y REPORTE DE ABONOS EN CUENTAS POR COBRAR (CxC)
+// ==============================================================================
+
+const CXC_MOV_SERIES_CUTOFF_MS = new Date('2026-11-01T00:00:00Z').getTime();
+
+const collectUsedCxcMovementNumbers = (collections = [], docs = []) => {
+  const usedModernNums = new Set();
+  const usedModernStrings = new Set();
+
+  const registerMov = (rawCode, fechaStr) => {
+    if (!rawCode && rawCode !== 0) return;
+    const rawStr = String(rawCode).trim();
+    if (!rawStr) return;
+    const isModernFormat =
+      /^(MOV-|COB-)/i.test(rawStr) ||
+      (/^0\d{5,}$/.test(rawStr));
+    const parsedTime = fechaStr ? Date.parse(fechaStr) : NaN;
+    const isModernDate = !isNaN(parsedTime) && parsedTime >= CXC_MOV_SERIES_CUTOFF_MS;
+    if (!isModernFormat && !isModernDate) return;
+
+    const digitsMatch = rawStr.match(/\d+/);
+    if (digitsMatch) {
+      const n = parseInt(digitsMatch[0], 10);
+      if (!isNaN(n) && n >= 0) {
+        usedModernNums.add(n);
+        usedModernStrings.add(String(n).padStart(6, '0'));
+      }
+    }
+  };
+
+  (collections || []).forEach((c) => {
+    if (!c || c.anulado) return;
+    registerMov(c.correlativo ?? c.cobNum ?? c.cob_num, c.fecha || c.fec_cob || c.fechaCobro || c.fechaSincronizacion);
+  });
+
+  (docs || []).forEach((d) => {
+    const hist = Array.isArray(d?.historialCobros) ? d.historialCobros : [];
+    hist.forEach((h) => {
+      if (!h) return;
+      registerMov(h.correlativo ?? h.cobNum, h.fecha);
+    });
+  });
+
+  return { usedModernNums, usedModernStrings };
+};
+
+/**
+ * Calcula el próximo correlativo secuencial (6 dígitos) para movimientos/abonos CxC.
+ * Respeta fijación manual o continúa automáticamente evitando colisiones.
+ */
+export const getNextCxcMovementCorrelativo = (collections = [], docs = []) => {
+  const { usedModernNums, usedModernStrings } = collectUsedCxcMovementNumbers(collections, docs);
+  let highestModern = 0;
+  usedModernNums.forEach((n) => {
+    if (n > highestModern) highestModern = n;
+  });
+
+  let nextVal = null;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const forced = localStorage.getItem('sm_cxc_mov_correlativo_force');
+      const isManual = localStorage.getItem('sm_cxc_mov_correlativo_manual') === 'true';
+      const stored = localStorage.getItem('sm_cxc_mov_correlativo_seq');
+
+      if (forced !== null && forced !== '') {
+        const fVal = parseInt(forced, 10);
+        if (!isNaN(fVal) && fVal >= 1) {
+          nextVal = isManual ? fVal : Math.max(fVal, highestModern + 1);
+        }
+      } else if (stored !== null && stored !== '') {
+        const sVal = parseInt(stored, 10);
+        if (!isNaN(sVal) && sVal >= 1) {
+          nextVal = Math.max(sVal, highestModern + 1);
+        }
+      }
+    }
+  } catch (_) {}
+
+  if (nextVal === null) {
+    nextVal = highestModern + 1;
+  }
+
+  let candidate = Math.max(1, Math.min(999999, nextVal));
+  let guard = 0;
+  while (usedModernStrings.has(String(candidate).padStart(6, '0')) && guard < 500) {
+    candidate = candidate >= 999999 ? 1 : candidate + 1;
+    guard++;
+  }
+
+  return String(candidate).padStart(6, '0');
+};
+
+/**
+ * Confirma y avanza el correlativo de movimientos CxC luego de guardar un abono.
+ */
+export const commitCxcMovementCorrelativo = (correlativo) => {
+  try {
+    const val = parseInt(String(correlativo || '').replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(val) && val >= 1 && typeof localStorage !== 'undefined') {
+      const nextSeq = String(val >= 999999 ? 1 : val + 1);
+      localStorage.setItem('sm_cxc_mov_correlativo_seq', nextSeq);
+      localStorage.setItem('sm_cxc_mov_correlativo_force', nextSeq);
+    }
+  } catch (_) {}
+};
+
+/**
+ * Fija manualmente el próximo correlativo de movimientos CxC.
+ */
+export const setCxcMovementCorrelativo = (startAt = 1) => {
+  const num = typeof startAt === 'number'
+    ? startAt
+    : parseInt(String(startAt || '').replace(/[^0-9]/g, ''), 10);
+  const safeNum = Math.max(1, Math.min(999999, isNaN(num) ? 1 : num));
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('sm_cxc_mov_correlativo_force', String(safeNum));
+      localStorage.setItem('sm_cxc_mov_correlativo_seq', String(safeNum));
+      localStorage.setItem('sm_cxc_mov_correlativo_manual', 'true');
+    }
+  } catch (_) {}
+  return String(safeNum).padStart(6, '0');
+};
+
+/**
+ * Restaura la secuencia automática de correlativos de movimientos CxC.
+ */
+export const clearCxcMovementCorrelativoForce = () => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('sm_cxc_mov_correlativo_force');
+      localStorage.removeItem('sm_cxc_mov_correlativo_seq');
+      localStorage.removeItem('sm_cxc_mov_correlativo_manual');
+    }
+  } catch (_) {}
+};
+
+/**
+ * Obtiene el correlativo actual del Reporte Impreso de Movimientos CxC (6 dígitos).
+ */
+export const getCxcMovementReportCorrelativo = () => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem('sm_cxc_mov_report_seq');
+      if (stored !== null && stored !== '') {
+        const val = parseInt(stored, 10);
+        if (!isNaN(val) && val >= 1) {
+          return String(Math.min(999999, val)).padStart(6, '0');
+        }
+      }
+    }
+  } catch (_) {}
+  return '000001';
+};
+
+/**
+ * Fija manualmente el correlativo del Reporte Impreso de Movimientos CxC.
+ */
+export const setCxcMovementReportCorrelativo = (startAt = 1) => {
+  const num = typeof startAt === 'number'
+    ? startAt
+    : parseInt(String(startAt || '').replace(/[^0-9]/g, ''), 10);
+  const safeNum = Math.max(1, Math.min(999999, isNaN(num) ? 1 : num));
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('sm_cxc_mov_report_seq', String(safeNum));
+    }
+  } catch (_) {}
+  return String(safeNum).padStart(6, '0');
+};
+
+/**
+ * Avanza al siguiente número de correlativo del Reporte Impreso de Movimientos CxC.
+ */
+export const commitCxcMovementReportCorrelativo = (currentVal) => {
+  try {
+    const val = parseInt(String(currentVal || '').replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(val) && val >= 1 && typeof localStorage !== 'undefined') {
+      const nextSeq = val >= 999999 ? 1 : val + 1;
+      localStorage.setItem('sm_cxc_mov_report_seq', String(nextSeq));
+      return String(nextSeq).padStart(6, '0');
+    }
+  } catch (_) {}
+  return getCxcMovementReportCorrelativo();
+};
 
 /**
  * Genera el Número de Comprobante de Retención de IVA de 14 dígitos.
@@ -1245,7 +1500,7 @@ export const formatFiscalTicketText = (closure, config = {}) => {
     pad('FECHA DE EMISIÓN:', fechaStr),
     pad('HORA DE EMISIÓN:', horaStr),
     pad('CAJERO / OPERADOR:', closure.usuarioNombre || 'ADMINISTRACIÓN'),
-    pad('TASA OFICIAL BCV:', `Bs. ${Number(closure.tasaBcv || 827.73).toFixed(2)}`),
+    pad('TASA OFICIAL BCV:', formatBs(closure.tasaBcv || 827.73)),
     dash,
     center('RANGO DE DOCUMENTOS EMITIDOS'),
     dash,
@@ -1267,8 +1522,8 @@ export const formatFiscalTicketText = (closure, config = {}) => {
     pad('TOTAL DÉBITO FISCAL:', `Bs. ${Number(closure.totalDebitoFiscalBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
     pad('PERCEPCIÓN IGTF (3%):', `Bs. ${Number(closure.totalIgtfBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
     sep,
-    pad('TOTAL FACTURADO (VES):', `Bs. ${Number(closure.totalVentasBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
-    pad('REF. DÓLARES (USD):', `$ ${Number(closure.totalVentasUsd || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
+    pad('TOTAL FACTURADO (VES):', formatBs(closure.totalVentasBs || 0)),
+    pad('REF. DÓLARES (USD):', formatUsd(closure.totalVentasUsd || 0)),
     sep,
     center('DESGLOSE POR MEDIOS DE PAGO'),
     dash,
@@ -1366,7 +1621,7 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
     pad('HORA DE EMISIÓN:', horaStr),
     pad('VENDEDOR / CAJERO:', sale.vendedor || 'CAJA MOSTRADOR'),
     pad('CONDICIÓN:', `${sale.condicionPago || 'CONTADO'} (${sale.metodoPago || 'EFECTIVO USD'})`),
-    pad('TASA OFICIAL BCV:', `Bs. ${Number(sale.tasaDolar || safeConfig.tasaDolar || 827.73).toFixed(2)}`),
+    pad('TASA OFICIAL BCV:', formatBs(sale.tasaDolar || safeConfig.tasaDolar || 827.73)),
     dash,
     center('DATOS DEL ADQUIRENTE / RECEPTOR'),
     dash,
@@ -1379,10 +1634,10 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
 
   (sale.items || []).forEach(item => {
     const desc = `${item.cantidad}x ${item.descripcion || item.codigo || 'LUBRICANTE'} [${item.tipoAlicuota || 'G 16%'}]`;
-    const totUsd = `$ ${Number(item.subtotalUsd || (item.cantidad * item.precioUsd) || 0).toFixed(2)}`;
+    const totUsd = formatUsd(item.subtotalUsd || (item.cantidad * item.precioUsd) || 0);
     if (desc.length > 30) {
       lines.push(desc.substring(0, 42));
-      lines.push(pad(`   @ $${Number(item.precioUsd || 0).toFixed(2)}`, totUsd));
+      lines.push(pad(`   @ $${formatNumberUs(item.precioUsd || 0)}`, totUsd));
     } else {
       lines.push(pad(desc, totUsd));
     }
@@ -1424,8 +1679,8 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
 
   lines.push(
     sep,
-    pad('TOTAL FACTURA (USD):', `$ ${Number(sale.totalUsd || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
-    pad('TOTAL A PAGAR (VES):', `Bs. ${Number(sale.totalBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
+    pad('TOTAL FACTURA (USD):', formatUsd(sale.totalUsd || 0)),
+    pad('TOTAL A PAGAR (VES):', formatBs(sale.totalBs || 0)),
     sep,
     center('DOCUMENTO FISCAL VENEZUELA'),
     center('GRACIAS POR SU COMPRA'),

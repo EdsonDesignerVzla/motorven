@@ -13,7 +13,13 @@ import {
   getOrders as getStorageOrders,
   getProducts as getStorageProducts,
   saveProduct as saveStorageProduct,
-  getSales as getStorageSales
+  getSales as getStorageSales,
+  getCashMovements as getStorageCashMovements,
+  deleteStorageSale,
+  getClients as getStorageClients,
+  saveClient as saveStorageClient,
+  getConfig as getStorageConfig,
+  updateConfig as updateStorageConfig
 } from '../services/storageService.js';
 import {
   resolveUnitPrice,
@@ -28,8 +34,27 @@ import {
   calculateExpirationDate
 } from '../services/creditPolicyService.js';
 import {
+  markCxcDocDeleted,
+  isCxcEntryDeleted,
+  sanitizeCxcDeletedDocsStorage,
+  unmarkCxcDeletedDoc,
+  mapOrderToDb,
+  mapOrderFromDb,
+  buildProfitInvoicePayloadFromSale
+} from '../services/supabaseService.js';
+import { consolidateClientReceivables } from '../utils/cxcUtils.js';
+import { buildAccountingEntries, computeGeneralLedger } from '../services/accountingService.js';
+import {
+  inferTreasuryAccountKind,
+  matchesCashDesk,
+  matchesBankAccount,
+  applyTreasuryBalanceDelta
+} from '../utils/treasuryAccountUtils.js';
+import {
   calculateFiscalTaxes,
+  validateRif,
   getNextInvoiceCorrelativo,
+  setInvoiceCorrelativo,
   generateFiscalControlNumber
 } from '../services/fiscalService.js';
 
@@ -662,6 +687,285 @@ assert.doesNotThrow(() => {
 }, 'Actualizaciones de estado FACTURADO/ANULADO deben permitirse aunque el stock actual del SKU sea 0');
 
 console.log('  ✓ Bloqueo estricto de Factura (Alm 01), Nota de Entrega (Alm 02) y Pedidos con stock 0 100% OK.');
+
+// 9.12 Regresión Crítica: Nota de Entrega CONTADO vs CRÉDITO (ambas van a CxC, sin ingreso directo a Caja) y no-quema de correlativo en error
+saveStorageClient({ id: 'CLI-NE-CASH', codigo: 'CLI-NE-CASH', nombre: 'Cliente Contado NE', rif: 'J-88800011-1', saldoDeudorUsd: 0 });
+const cashBeforeNe = getStorageCashMovements().length;
+const neContado = saveStorageSale({
+  tipoDoc: 'NOTA_ENTREGA',
+  condicionPago: 'CONTADO',
+  metodoPago: 'EFECTIVO_USD',
+  diasCredito: 0,
+  clienteId: 'CLI-NE-CASH',
+  clienteNombre: 'Cliente Contado NE',
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40, litrosPorUnidad: 12 }]
+});
+assert.strictEqual(neContado.estado, 'PENDIENTE', 'Nota de Entrega CONTADO debe quedar PENDIENTE (en CxC)');
+assert.strictEqual(neContado.saldoUsd, 40, 'Nota de Entrega CONTADO debe conservar saldoUsd === 40 en CxC');
+assert.strictEqual(neContado.condicionPago, 'CONTADO', 'Nota de Entrega CONTADO debe conservar condicionPago CONTADO');
+assert.strictEqual(getStorageCashMovements().length, cashBeforeNe, 'Nota de Entrega CONTADO NO debe registrar ingreso directo en Caja');
+assert.strictEqual(getStorageClients().find(c => c.id === 'CLI-NE-CASH')?.saldoDeudorUsd, 40, 'Nota de Entrega CONTADO debe sumar $40 a la deuda CxC del cliente');
+
+const neCredito = saveStorageSale({
+  tipoDoc: 'NOTA_ENTREGA',
+  condicionPago: 'CREDITO',
+  metodoPago: 'CREDITO',
+  diasCredito: 15,
+  clienteId: 'CLI-NE-CRED',
+  clienteNombre: 'Cliente Crédito NE',
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40, litrosPorUnidad: 12 }]
+});
+assert.strictEqual(neCredito.estado, 'PENDIENTE', 'Nota de Entrega a CRÉDITO debe quedar PENDIENTE');
+assert.ok(neCredito.saldoUsd > 0, 'Nota de Entrega a CRÉDITO debe conservar saldo pendiente');
+
+setInvoiceCorrelativo('000777');
+const beforeFailedCorrel = getNextInvoiceCorrelativo([], []);
+assert.strictEqual(beforeFailedCorrel, '000777', 'Correlativo fijado inicialmente en 000777');
+assert.throws(
+  () => saveStorageSale({
+    tipoDoc: 'FACTURA',
+    numeroDoc: beforeFailedCorrel,
+    items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 40 }]
+  }),
+  (err) => err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK'
+);
+assert.strictEqual(
+  getNextInvoiceCorrelativo([], []),
+  '000777',
+  'Un error de stock al facturar NO debe consumir/quemar el correlativo'
+);
+console.log('  ✓ Regresión crítica: NE Contado vs Crédito y preservación de correlativo tras error 100% OK.');
+
+// 9.13 Regresión Alta: Retención 0% respetada, Factura CONTADO -> CxC sin caja directa y reversión al eliminar
+saveStorageClient({ id: 'CLI-RET-0', codigo: 'CLI-RET-0', nombre: 'Cliente Sin Retención', rif: 'J-88800022-2', saldoDeudorUsd: 0 });
+const cashBeforeRetZero = getStorageCashMovements().length;
+const saleRetZero = saveStorageSale({
+  tipoDoc: 'FACTURA',
+  condicionPago: 'CONTADO',
+  metodoPago: 'TRANSFERENCIA_BS',
+  porcentajeRetencionIva: 0,
+  clienteId: 'CLI-RET-0',
+  clienteNombre: 'Cliente Sin Retención',
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 100, aplicaIva: true, litrosPorUnidad: 12 }]
+});
+assert.strictEqual(saleRetZero.retencionIvaBs, 0, 'Porcentaje de retención 0% debe respetarse sin forzar 75%');
+assert.strictEqual(saleRetZero.estado, 'PENDIENTE', 'Factura CONTADO debe generarse PENDIENTE hacia CxC');
+assert.strictEqual(saleRetZero.saldoUsd, 116, 'Factura CONTADO debe generar saldoUsd igual al total ($116)');
+assert.strictEqual(getStorageCashMovements().length, cashBeforeRetZero, 'Factura CONTADO NO debe crear movimiento directo en Caja');
+assert.strictEqual(getStorageClients().find(c => c.id === 'CLI-RET-0')?.saldoDeudorUsd, 116, 'Factura CONTADO debe sumar deuda CxC del cliente');
+deleteStorageSale(saleRetZero);
+assert.strictEqual(getStorageClients().find(c => c.id === 'CLI-RET-0')?.saldoDeudorUsd, 0, 'Eliminar Factura CONTADO pendiente debe revertir la deuda CxC del cliente a 0');
+
+saveStorageClient({ id: 'CLI-DEL-CRED', codigo: 'CLI-DEL-CRED', nombre: 'Cliente Borrado Crédito', rif: 'J-99900011-1', saldoDeudorUsd: 50 });
+const credSaleForDel = saveStorageSale({
+  tipoDoc: 'FACTURA',
+  condicionPago: 'CREDITO',
+  metodoPago: 'CREDITO',
+  diasCredito: 15,
+  clienteId: 'CLI-DEL-CRED',
+  clienteNombre: 'Cliente Borrado Crédito',
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 100, aplicaIva: true, litrosPorUnidad: 12 }]
+});
+const debtAfterSale = getStorageClients().find(c => c.id === 'CLI-DEL-CRED')?.saldoDeudorUsd;
+assert.strictEqual(Number(debtAfterSale.toFixed(2)), 166, 'Saldo cliente debe subir de 50 a 166');
+deleteStorageSale(credSaleForDel);
+const debtAfterDelete = getStorageClients().find(c => c.id === 'CLI-DEL-CRED')?.saldoDeudorUsd;
+assert.strictEqual(Number(debtAfterDelete.toFixed(2)), 50, 'Eliminar venta a crédito debe revertir la deuda del cliente a 50');
+console.log('  ✓ Regresión alta: Retención 0% respetada y reversión de caja/saldo al eliminar 100% OK.');
+
+// 9.14 Regresión Media: saveSale debe respetar config.igtfPorcentaje=0 / esSujetoPasivoEspecial=false
+console.log('9.14 Verificando respeto de config.igtfPorcentaje / esSujetoPasivoEspecial en saveSale...');
+const prevCfgIgtf = getStorageConfig();
+updateStorageConfig({ igtfPorcentaje: 0 });
+const saleZeroIgtf = saveStorageSale({
+  tipoDoc: 'FACTURA',
+  condicionPago: 'CONTADO',
+  metodoPago: 'EFECTIVO_USD',
+  clienteId: 'CLI-ZERO-IGTF',
+  clienteNombre: 'Cliente Sin IGTF Config',
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 100, aplicaIva: true, litrosPorUnidad: 12 }],
+  skipStockAdjustment: true
+});
+assert.strictEqual(saleZeroIgtf.igtfUsd, 0, 'Con igtfPorcentaje=0 en config no debe calcular IGTF');
+assert.strictEqual(saleZeroIgtf.totalUsd, 116, 'Total con IVA 16% y IGTF 0% debe ser $116');
+deleteStorageSale(saleZeroIgtf);
+updateStorageConfig({
+  igtfPorcentaje: prevCfgIgtf?.igtfPorcentaje ?? 3,
+  esSujetoPasivoEspecial: prevCfgIgtf?.esSujetoPasivoEspecial
+});
+console.log('  ✓ Regresión media: IGTF configurable desde config respetado al 100%.');
+
+// 9.15 Regresión tombstones CxC (signum_cxc_deleted_docs_v1): no ocultar correlativo recreado posteriormente en otra PC ni cruzar eras
+console.log('9.15 Verificando tombstones CxC con invalidación temporal y por era...');
+const oldDoc6 = { id: '000006', numeroDoc: '000006', tipoDoc: 'FACTURA', fechaEmision: '2026-11-12T10:00:00.000Z', updated_at: new Date(Date.now() - 60000).toISOString() };
+markCxcDocDeleted(oldDoc6);
+const delSetNow = new Set(sanitizeCxcDeletedDocsStorage());
+assert.strictEqual(isCxcEntryDeleted(oldDoc6, delSetNow), true, 'El documento borrado antiguo debe permanecer oculto');
+const legacyDoc6 = { id: 'fac-6', factNum: '6', tipoDoc: 'FACTURA', fec_emis: '2026-03-01T00:00:00.000Z', updated_at: new Date(Date.now() - 60000).toISOString() };
+assert.strictEqual(isCxcEntryDeleted(legacyDoc6, delSetNow), false, 'Borrar 000006 moderno no debe ocultar fac-6 histórico');
+const recreatedDoc6 = { id: '000006', numeroDoc: '000006', tipoDoc: 'FACTURA', fechaEmision: new Date(Date.now() + 10000).toISOString(), updated_at: new Date(Date.now() + 10000).toISOString() };
+assert.strictEqual(isCxcEntryDeleted(recreatedDoc6, delSetNow), false, 'Si otra caja vuelve a emitir 000006 después del borrado, no debe quedar oculto');
+unmarkCxcDeletedDoc(recreatedDoc6);
+console.log('  ✓ Tombstones CxC con invalidación temporal y por era verificados 100% OK.');
+
+// 9.16 Regresión Tesorería: Emparejamiento de Bancos en Bs (CTA-04 <-> 04) y Cajas en Bs (caja-03 <-> CAJA-03) + deltas USD/Bs
+console.log('9.16 Verificando emparejamiento y suma de saldos USD/Bs en bancos y cajas...');
+const sampleBank04 = { id: 'CTA-04', codCta: '04', bancoNombre: 'BANCO PLAZA', moneda: 'BS', saldoBs: 2947.79, saldoUsd: 2.94 };
+const sampleBank01 = { id: 'CTA-01', codCta: '01', bancoNombre: 'BANESCO', moneda: 'BS', saldoBs: 1000, saldoUsd: 1 };
+const sampleCaja03 = { id: 'caja-03', coCaja: 'CAJA-03', descripcion: 'Caja Efectivo Bs (Valencia)', moneda: 'BS', saldoBs: 500, saldoUsd: 0.55 };
+
+assert.strictEqual(inferTreasuryAccountKind({ key: 'BANCO:04', rawId: '04', codCta: '04' }), 'BANCO');
+assert.strictEqual(inferTreasuryAccountKind({ key: 'CAJA:caja-03', rawId: 'caja-03', coCaja: 'CAJA-03' }), 'CAJA');
+assert.strictEqual(matchesBankAccount(sampleBank04, { rawId: '04', bankId: 'CTA-04', codCta: '04' }), true);
+assert.strictEqual(matchesBankAccount(sampleBank04, '04'), true);
+assert.strictEqual(matchesBankAccount(sampleBank01, '04'), false);
+assert.strictEqual(matchesCashDesk(sampleCaja03, 'CAJA-03'), true);
+assert.strictEqual(matchesCashDesk(sampleCaja03, { rawId: 'caja-03', coCaja: 'CAJA-03' }), true);
+
+const updatedBank04 = applyTreasuryBalanceDelta(sampleBank04, { deltaUsd: 123.00, deltaBs: 111144.15 });
+assert.strictEqual(updatedBank04.saldoBs, 114091.94, 'Banco Plaza debe sumar exactamente Bs. 111,144.15 sin pérdida de redondeo');
+assert.strictEqual(updatedBank04.saldo_bs, 114091.94);
+assert.strictEqual(updatedBank04.saldoActual, 114091.94);
+assert.strictEqual(updatedBank04.saldoUsd, 125.94);
+
+const updatedCaja03 = applyTreasuryBalanceDelta(sampleCaja03, { deltaUsd: 10.00, deltaBs: 9116.20 });
+assert.strictEqual(updatedCaja03.saldoBs, 9616.20, 'Caja Efectivo Bs debe sumar exactamente Bs. 9,116.20');
+assert.strictEqual(updatedCaja03.saldoUsd, 10.55);
+console.log('  ✓ Emparejamiento de bancos y cajas en Bs con deltas exactos verificados 100% OK.');
+
+// 9.17 Regresión Preventa Móvil: Persistencia de campos Preventa, IVA 16% Fiscal vs Exento NE y validación RIF SENIAT
+console.log('9.17 Verificando persistencia de campos Preventa, IVA 16% y RIF SENIAT...');
+const preventaSample = {
+  id: 'PED-FF-TEST917',
+  numeroDoc: 'PED-FF-TEST917',
+  modalidadVenta: 'PREVENTA',
+  tipoDoc: 'FACTURA',
+  almacen: '01',
+  almacenId: '01',
+  clienteId: 'CLI-001',
+  clienteNombre: 'Cliente Preventa Fiscal',
+  clienteRif: 'J-31115365-9',
+  vendedorId: 'Manuel Rosales',
+  vendedorCoVen: 'V07',
+  condicionPago: '15_DIAS',
+  diasCredito: 15,
+  creditOverrideApproved: true,
+  creditOverrideAuthorizer: 'Gerencia General',
+  creditOverrideJustification: 'Cliente VIP al día',
+  tasaCambio: 911.62,
+  subtotalUsd: 100,
+  baseImponibleUsd: 100,
+  aplicaIva: true,
+  ivaPorcentaje: 16,
+  ivaUsd: 16,
+  totalUsd: 116,
+  status: 'APROBADO',
+  items: [{ articuloId: 'LUB-1', cantidad: 2, precioUnitarioUsd: 50, totalUsd: 100, tipoAlicuota: 'GENERAL_16', aplicaIva: true }]
+};
+const dbRow = mapOrderToDb(preventaSample);
+const restoredOrder = mapOrderFromDb(dbRow);
+assert.strictEqual(restoredOrder.modalidadVenta, 'PREVENTA', 'modalidadVenta debe preservarse al recargar');
+assert.strictEqual(restoredOrder.vendedorCoVen, 'V07', 'vendedorCoVen debe preservarse al recargar');
+assert.strictEqual(restoredOrder.creditOverrideApproved, true, 'creditOverrideApproved debe preservarse al recargar');
+assert.strictEqual(restoredOrder.creditOverrideAuthorizer, 'Gerencia General', 'creditOverrideAuthorizer debe preservarse al recargar');
+assert.strictEqual(restoredOrder.creditOverrideJustification, 'Cliente VIP al día', 'creditOverrideJustification debe preservarse al recargar');
+assert.strictEqual(restoredOrder.aplicaIva, true);
+assert.strictEqual(restoredOrder.ivaUsd, 16);
+assert.strictEqual(restoredOrder.totalUsd, 116);
+
+const fiscalQuote = calculateFiscalTaxes({
+  items: [{ cantidad: 2, precioUsd: 50, tipoAlicuota: 'GENERAL_16', aplicaIva: true }],
+  tipoDoc: 'FACTURA',
+  metodoPago: 'TRANSFERENCIA_BS',
+  condicionPago: 'CONTADO',
+  tasaBcv: 911.62
+});
+assert.strictEqual(fiscalQuote.subtotalNetoUsd, 100);
+assert.strictEqual(fiscalQuote.totalIvaUsd, 16);
+assert.strictEqual(fiscalQuote.totalFacturaUsd, 116);
+
+const notaQuote = calculateFiscalTaxes({
+  items: [{ cantidad: 2, precioUsd: 50, tipoAlicuota: 'GENERAL_16', aplicaIva: true }],
+  tipoDoc: 'NOTA_ENTREGA',
+  metodoPago: 'TRANSFERENCIA_BS',
+  condicionPago: 'CONTADO',
+  tasaBcv: 911.62
+});
+assert.strictEqual(notaQuote.totalIvaUsd, 0);
+assert.strictEqual(notaQuote.totalFacturaUsd, 100);
+
+assert.strictEqual(validateRif('V-12825819').isValid, false, 'RIF incompleto sin dígito verificador debe ser rechazado');
+assert.strictEqual(validateRif('J-31115365-9').isValid, true, 'RIF SENIAT válido debe aprobarse');
+console.log('  ✓ Persistencia Preventa, IVA 16% y validación RIF SENIAT verificados 100% OK.');
+
+// 9.18 Regresión Facturas y Notas de Entrega CONTADO -> CxC (sin ingreso directo a Caja)
+console.log('9.18 Verificando Facturas y Notas de Entrega CONTADO en payload CxC, consolidación y contabilidad...');
+saveStorageClient({ id: 'CLI-CONTADO-CXC', codigo: 'CLI-CONTADO-CXC', nombre: 'Cliente Contado CxC', rif: 'J-77700011-9', saldoDeudorUsd: 0 });
+const cashBeforeContadoCxc = getStorageCashMovements().length;
+
+const factContadoSale = saveStorageSale({
+  tipoDoc: 'FACTURA',
+  condicionPago: 'CONTADO',
+  metodoPago: 'EFECTIVO_USD',
+  diasCredito: 0,
+  clienteId: 'CLI-CONTADO-CXC',
+  clienteNombre: 'Cliente Contado CxC',
+  clienteRif: 'J-77700011-9',
+  items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 100, aplicaIva: true, litrosPorUnidad: 12 }]
+});
+assert.strictEqual(factContadoSale.estado, 'PENDIENTE');
+assert.ok(factContadoSale.saldoUsd > 100, 'Factura contado debe conservar saldo pendiente (incl. IVA/IGTF)');
+assert.strictEqual(getStorageCashMovements().length, cashBeforeContadoCxc, 'Factura contado no debe generar cash_movement directo');
+
+const neContadoSale = saveStorageSale({
+  tipoDoc: 'NOTA_ENTREGA',
+  condicionPago: 'CONTADO',
+  metodoPago: 'EFECTIVO_USD',
+  diasCredito: 0,
+  clienteId: 'CLI-CONTADO-CXC',
+  clienteNombre: 'Cliente Contado CxC',
+  clienteRif: 'J-77700011-9',
+  items: [{ articuloId: 'TEST-SKU-ALM02', codigo: 'SKU-ONLY-02', cantidad: 1, precioUsd: 50, litrosPorUnidad: 12 }]
+});
+assert.strictEqual(neContadoSale.estado, 'PENDIENTE');
+assert.strictEqual(neContadoSale.saldoUsd, 50);
+assert.strictEqual(getStorageCashMovements().length, cashBeforeContadoCxc, 'NE contado no debe generar cash_movement directo');
+
+const factPayloadCxc = buildProfitInvoicePayloadFromSale(factContadoSale, 'OF');
+assert.strictEqual(factPayloadCxc.status, 'PENDIENTE');
+assert.strictEqual(factPayloadCxc.abonosUsd, 0);
+assert.strictEqual(factPayloadCxc.saldoUsd, factContadoSale.saldoUsd);
+assert.strictEqual(factPayloadCxc.condicionPago, 'CONTADO');
+
+const nePayloadCxc = buildProfitInvoicePayloadFromSale(neContadoSale, 'OF');
+assert.strictEqual(nePayloadCxc.status, 'PENDIENTE');
+assert.strictEqual(nePayloadCxc.abonosUsd, 0);
+assert.strictEqual(nePayloadCxc.saldoUsd, 50);
+
+// Verificar consolidación CxC tanto desde sales como desde profitInvoices
+const consolidatedFromSales = consolidateClientReceivables({
+  clients: [],
+  profitInvoices: [],
+  sales: [factContadoSale, neContadoSale],
+  tasaBcv: 911.62
+});
+assert.strictEqual(consolidatedFromSales.length, 1, 'Cliente contado debe aparecer en cartera activa CxC desde sales');
+assert.strictEqual(
+  Number(consolidatedFromSales[0].saldoUsd.toFixed(2)),
+  Number((factContadoSale.saldoUsd + 50).toFixed(2)),
+  'CxC consolidado debe sumar Factura contado + NE contado'
+);
+
+// Verificar que contabilidad asienta CxC (1.01.03.001) y NO Caja directa (1.01.01.002)
+const contadoCxcEntries = buildAccountingEntries({
+  profitInvoices: [factPayloadCxc, nePayloadCxc],
+  cashMovements: [],
+  tasa: 911.62
+});
+const contadoCxcGl = computeGeneralLedger(contadoCxcEntries);
+assert.strictEqual(contadoCxcGl.accountsByCode['1.01.01.002'], undefined, 'Facturación contado hacia CxC NO debe debitar Caja Divisas');
+assert.ok((contadoCxcGl.accountsByCode['1.01.03.001']?.saldoFinalUsd || 0) > 150, 'Facturación contado debe debitar CxC Comerciales (1.01.03.001)');
+console.log('  ✓ Facturas y NE de Contado -> CxC sin caja directa verificadas al 100% OK.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS ETAPAS DEL FLUJO DE VENTA Y MEJORAS 1 & 2 AL 100% ---');

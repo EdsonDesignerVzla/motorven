@@ -16,6 +16,7 @@ import {
   ZoomIn
 } from 'lucide-react';
 import { canApproveClients, getClientApprovalStatus } from '../services/authService';
+import { formatNumberUs } from '../services/formatService';
 import { resolveClientContributorType } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import ImagePreviewLightbox from './ImagePreviewLightbox';
@@ -430,7 +431,7 @@ export default function ClientApprovalsModal({
 
                   {status === 'APROBADO' && c.aprobadoPor && (
                     <div style={{ fontSize: '0.74rem', color: '#34d399' }}>
-                      Aprobado por <strong>{c.aprobadoPor}</strong> · {formatDateTime(c.fechaAprobacion)} · Límite: ${Number(c.limiteCreditoUsd || 0).toFixed(2)} ({Number(c.diasCredito || 0)} días)
+                      Aprobado por <strong>{c.aprobadoPor}</strong> · {formatDateTime(c.fechaAprobacion)} · Límite: ${formatNumberUs(c.limiteCreditoUsd || 0)} ({Number(c.diasCredito || 0)} días)
                     </div>
                   )}
 
@@ -455,7 +456,7 @@ export default function ClientApprovalsModal({
                           <input
                             type="number"
                             min="0"
-                            step="10"
+                            step="0.01"
                             value={draft.limiteCreditoUsd}
                             onChange={e => updateDraft(c, 'limiteCreditoUsd', e.target.value)}
                             className="form-control"

@@ -1,32 +1,9 @@
 /**
- * Servicio de datos en tiempo real - SIGNUM MOTORVEN
- * La conexion con Profit Plus 2K8 fue ELIMINADA. Supabase es la unica fuente de verdad.
- * Las funciones legadas se conservan como stubs sin red para no romper las importaciones.
+ * Servicio de suscripción en tiempo real - SIGNUM MOTORVEN
+ * Canalizado exclusivamente sobre Supabase + realtimeSyncBridge.
  */
 import { supabase } from './supabaseService.js';
 import { subscribeToRealtimeSync } from './realtimeSyncBridge.js';
-
-const DISCONNECTED_MSG = 'Conexion con Profit Plus eliminada. Supabase es la unica fuente de datos.';
-const disconnected = (extra = {}) => ({ success: false, disconnected: true, error: DISCONNECTED_MSG, ...extra });
-
-export async function getProfitBridgeStatus() {
-  return {
-    isAvailable: false,
-    driveOnline: false,
-    driveHealth: 'OFFLINE',
-    dbHealth: 'DISCONNECTED',
-    server: null,
-    database: null,
-    isSyncing: false,
-    lastSyncTime: null,
-    lastSyncStats: null
-  };
-}
-
-export async function getProfitRealtimeProducts() { return null; }
-export async function getProfitRealtimeClients() { return null; }
-export async function getProfitDashboardKPIs() { return null; }
-export async function triggerProfitSync() { return disconnected(); }
 
 /**
  * Suscribe la aplicación a eventos de TIEMPO REAL (Realtime) en Supabase
@@ -140,18 +117,22 @@ export function subscribeToRealtimeChanges({
     }
   }, { ignoreSelfEvents: true });
 
-  // 2. Mantener canal WebSocket nativo de Supabase por compatibilidad si se conecta a Supabase Cloud
+  // 2. Mantener canal WebSocket nativo únicamente cuando se apunte a Supabase Cloud (*.supabase.co);
+  // el servidor propio usa SSE (/realtime/v1/events) + Delta Polling (/realtime/v1/changes), evitando errores 502 WS.
   let channel = null;
   try {
-    channel = supabase
-      .channel('signum-profit-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
-        const handler = tableCallbacks[payload?.table];
-        if (typeof handler === 'function') {
-          scheduleHandler(String(payload?.table), handler, payload);
-        }
-      })
-      .subscribe();
+    const backendHost = String(supabase?.supabaseUrl || '').toLowerCase();
+    if (backendHost.includes('.supabase.co')) {
+      channel = supabase
+        .channel('signum-profit-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
+          const handler = tableCallbacks[payload?.table];
+          if (typeof handler === 'function') {
+            scheduleHandler(String(payload?.table), handler, payload);
+          }
+        })
+        .subscribe();
+    }
   } catch (_) {}
 
   return () => {
@@ -165,30 +146,3 @@ export function subscribeToRealtimeChanges({
     }
   };
 }
-
-export async function fetchProfitEndpoint(endpointPath) {
-  return { success: false, status: 0, statusText: 'DISCONNECTED', timeMs: 0, url: endpointPath, error: DISCONNECTED_MSG };
-}
-
-export async function writeProfitUser() { return disconnected({ queued: false }); }
-export async function writeProfitSeller() { return disconnected({ queued: false }); }
-export async function writeProfitProduct() { return disconnected({ queued: false }); }
-export async function writeProfitClient() { return disconnected({ queued: false }); }
-export async function compareProfitEntity() { return disconnected(); }
-export async function writeProfitSale() { return disconnected({ queued: false }); }
-export async function writeProfitOrder() { return disconnected({ queued: false }); }
-export async function writeProfitPurchase() { return disconnected({ queued: false }); }
-export async function writeProfitSupplier() { return disconnected({ queued: false }); }
-export async function writeProfitCashMovement() { return disconnected({ queued: false }); }
-
-export async function getAllProfitDatabases() {
-  return { success: true, source: 'disconnected', serverInfo: null, databases: [] };
-}
-export async function getProfitDatabaseTables(dbName) { return disconnected({ database: dbName }); }
-export async function getProfitDatabaseTableData() { return disconnected(); }
-export async function executeProfitDatabaseQuery() { return disconnected(); }
-export async function getProfitTableColumns() { return disconnected(); }
-export async function saveProfitDatabaseRecord() { return disconnected(); }
-export async function deleteProfitDatabaseRecord() { return disconnected(); }
-export async function createProfitDatabaseBackup() { return disconnected(); }
-export async function getProfitDatabaseBackups() { return { success: false, backups: [] }; }

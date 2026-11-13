@@ -24,10 +24,25 @@ import {
   RefreshCw,
   Wallet
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatNumberUs } from '../services/formatService';
 import { generateAccountsPayablePDF, generateThirdPartyStatementPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import { soundFX } from '../services/soundService';
+import {
+  buildCxpCompositeKey,
+  buildCxpStableId,
+  doesPayableMatchDocument,
+  doesSupplierPaymentMatchPayable
+} from '../utils/cxpUtils';
+import {
+  normalizeRateType,
+  getAllowedRateTypesForDoc,
+  resolveDefaultRateValue,
+  resolveRateMeta,
+  resolveRecordRateType,
+  resolveEffectiveRateNumber,
+  RATE_TYPE_META
+} from '../utils/rateClassificationUtils';
 
 // Helpers de fechas y redondeo
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
@@ -305,12 +320,9 @@ const buildPayableSearchString = (p) => {
 };
 
 export default function AccountsPayableModal({
-  isOpen,
-  onClose,
   accountsPayable = [],
   profitAccountsPayable = [],
   suppliers = [],
-  profitSuppliers = [],
   bankAccounts = [],
   cashDesks = [],
   supplierPayments = [],
@@ -369,11 +381,18 @@ export default function AccountsPayableModal({
   // PARTE A: Estado del formulario para registrar pago a proveedor
   const [pagoDocKey, setPagoDocKey] = useState('');
   const [pagoDocSearch, setPagoDocSearch] = useState('');
-  const [pagoTasa, setPagoTasa] = useState(String(tasaKeystone));
+  const [pagoTipoTasa, setPagoTipoTasa] = useState('BCV');
+  const [pagoTasa, setPagoTasa] = useState(round2(tasaBcv).toFixed(2));
 
   useEffect(() => {
-    setPagoTasa(String(tasaKeystone));
-  }, [tasaKeystone]);
+    if (pagoTipoTasa === 'BCV') {
+      setPagoTasa(round2(tasaBcv).toFixed(2));
+    } else if (pagoTipoTasa === 'KEYSTONE') {
+      setPagoTasa(round2(tasaKeystone).toFixed(2));
+    } else if (pagoTipoTasa === 'USD') {
+      setPagoTasa('1.00');
+    }
+  }, [pagoTipoTasa, tasaBcv, tasaKeystone]);
   const [pagoFecha, setPagoFecha] = useState(getTodayIso());
   const [pagoCuentaKey, setPagoCuentaKey] = useState('');
   const [pagoMontoUsd, setPagoMontoUsd] = useState('');
@@ -413,9 +432,9 @@ export default function AccountsPayableModal({
       });
     }
     if (Array.isArray(bankAccounts) && bankAccounts.length > 0) {
-      bankAccounts.forEach(b => {
+      bankAccounts.forEach((b, idx) => {
         if (!b) return;
-        const key = `BANCO-${b.id || b.codCta || Math.random()}`;
+        const key = `BANCO-${b.id || b.codCta || b.numCta || idx}`;
         const label = `${b.banco || b.nombre || 'Banco'} (${b.numCta ? '...' + String(b.numCta).slice(-4) : 'Cta'}) • ${formatUsd(b.saldoUsd || 0)}`;
         list.push({
           key,
@@ -439,8 +458,8 @@ export default function AccountsPayableModal({
     return list;
   }, [cashDesks, bankAccounts]);
 
-  // Preseleccionar primera cuenta si no hay ninguna
-  useMemo(() => {
+  // Preseleccionar primera cuenta si no hay ninguna (useEffect para evitar setState en render)
+  useEffect(() => {
     if (!pagoCuentaKey && catalogCuentas.length > 0) {
       setPagoCuentaKey(catalogCuentas[0].key);
     }
@@ -474,17 +493,26 @@ export default function AccountsPayableModal({
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const getOverrideForPayable = (doc) => {
+      if (!doc) return null;
+      const idKey = String(doc.id || '').trim();
+      const compKey = buildCxpCompositeKey(doc);
+      const cand = (idKey && localDocOverrides[idKey]) || (compKey && localDocOverrides[compKey]) || null;
+      if (!cand) return null;
+      if (cand._deleted) return cand;
+      return doesPayableMatchDocument(doc, cand) ? cand : null;
+    };
+
     return targetPayables
       .filter(p => {
         if (!p) return false;
-        const pKey = String(p.id || p.nroDoc || p.nro_doc || '');
-        if (localDocOverrides[pKey]?._deleted) return false;
+        const ov = getOverrideForPayable(p);
+        if (ov?._deleted) return false;
         if (p?.anulado) return false;
         return true;
       })
       .map(p => {
-        const pKey = String(p.id || p.nroDoc || p.nro_doc || '');
-        const override = localDocOverrides[pKey] || {};
+        const override = getOverrideForPayable(p) || {};
         const merged = { ...p, ...override };
         const pTs = Date.parse(p.updated_at || p.fechaSincronizacion || p.fecha_sincronizacion || '') || 0;
         const ovTs = Date.parse(override?._localSavedAt || override?.updated_at || override?.fechaSincronizacion || '') || 0;
@@ -505,7 +533,6 @@ export default function AccountsPayableModal({
         const abonosUsd = rawAbonosVal !== undefined && rawAbonosVal !== null
           ? round2(Number(rawAbonosVal))
           : Math.max(0, round2(montoNetUsd - saldoUsd));
-        const abonosBs = round2(abonosUsd * tasaKeystone);
 
         // Fechas
         const fecEmis = resolved.fechaEmision || resolved.fec_emis;
@@ -527,14 +554,13 @@ export default function AccountsPayableModal({
           else tramo = 'OVER_30';
         }
 
-        // Historial de pagos específicos
-        const matchingPayments = (supplierPayments || []).filter(pay => {
-          if (!pay) return false;
-          const matchProv = (pay.provRif && provRif && String(pay.provRif).trim() === String(provRif).trim()) ||
-            (pay.provNombre && provNombre && String(pay.provNombre).trim().toLowerCase() === String(provNombre).trim().toLowerCase());
-          const matchDoc = pay.descrip && pay.descrip.includes(nroDoc);
-          return matchProv || matchDoc;
-        });
+        const resolvedDocId = buildCxpStableId({ ...resolved, tipoDoc, nroDoc, provRif });
+        const docContext = { ...resolved, id: resolvedDocId, tipoDoc, nroDoc, provNombre, provRif };
+
+        // Historial de pagos específicos: requiere coincidencia de proveedor Y referencia al documento
+        const matchingPayments = (supplierPayments || []).filter(pay =>
+          !pay?.anulado && doesSupplierPaymentMatchPayable(pay, docContext)
+        );
 
         const docTasa = Number(resolved.tasa || 0) > 10 ? Number(resolved.tasa) : tasaKeystone;
         const resolvedNetBs = Number(resolved.montoNetBs || resolved.monto_net_bs || 0);
@@ -544,7 +570,7 @@ export default function AccountsPayableModal({
 
         return {
           ...resolved,
-          id: resolved.id || `CXP-${tipoDoc}-${nroDoc}-${provRif}`,
+          id: resolvedDocId,
           tipoDoc,
           tipoDocLabel: getDocTypeLabel(tipoDoc),
           nroDoc,
@@ -556,6 +582,9 @@ export default function AccountsPayableModal({
           fechaVencimientoIso: toIsoDateInput(fecVenc),
           diasCredito: Number(resolved.diasCredito ?? resolved.dias_credito ?? 15),
           tasa: docTasa,
+          tipoTasa: resolveRecordRateType(resolved, isFiscalInvoiceType(tipoDoc) ? 'BCV' : 'KEYSTONE'),
+          tasaPago: resolveEffectiveRateNumber(resolved, docTasa),
+          monedaPago: resolved.monedaPago || resolved.moneda_pago || (String(resolved.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
           montoNetUsd: round2(montoNetUsd),
           montoNetBs: displayNetBs,
           abonosUsd,
@@ -588,11 +617,25 @@ export default function AccountsPayableModal({
     });
   }, [payableDocsWithBalance, pagoDocSearch]);
 
-  // Documento actualmente seleccionado en Parte A
+  // Documento actualmente seleccionado en Parte A (evita colisión por nroDoc entre proveedores)
   const selectedPagoDoc = useMemo(() => {
     if (!pagoDocKey) return null;
-    return processedPayables.find(p => String(p.id) === String(pagoDocKey) || String(p.nroDoc) === String(pagoDocKey)) || null;
+    const keyStr = String(pagoDocKey).trim();
+    return processedPayables.find(p => String(p.id) === keyStr || buildCxpCompositeKey(p) === keyStr) || null;
   }, [processedPayables, pagoDocKey]);
+
+  const isSelectedPagoFiscal = selectedPagoDoc ? isFiscalInvoiceType(selectedPagoDoc.tipoDoc) : false;
+  const allowedPagoRateTypes = useMemo(() => getAllowedRateTypesForDoc(selectedPagoDoc?.tipoDoc || 'NE'), [selectedPagoDoc?.tipoDoc]);
+
+  useEffect(() => {
+    if (!selectedPagoDoc) return;
+    const defaultType = isFiscalInvoiceType(selectedPagoDoc.tipoDoc)
+      ? 'BCV'
+      : normalizeRateType(selectedPagoDoc.tipoTasa, { tipoDoc: selectedPagoDoc.tipoDoc, fallback: 'KEYSTONE' });
+    setPagoTipoTasa(defaultType);
+    const defaultRate = resolveDefaultRateValue(defaultType, { tasaBcv, tasaKeystone, customRate: selectedPagoDoc.tasaPago || selectedPagoDoc.tasa });
+    setPagoTasa(round2(defaultRate).toFixed(2));
+  }, [selectedPagoDoc?.id, tasaBcv, tasaKeystone]);
 
   // Filtrado de la tabla principal (Parte B)
   const filteredPayables = useMemo(() => {
@@ -719,19 +762,52 @@ export default function AccountsPayableModal({
   // Handlers de Parte A: Selección y Registro de Pago a Proveedor
   // ========================================================================
   const handleSelectDocForPago = (docIdentifier) => {
-    const doc = processedPayables.find(d => String(d.id) === String(docIdentifier) || String(d.nroDoc) === String(docIdentifier));
+    const keyStr = String(docIdentifier || '').trim();
+    if (!keyStr) {
+      setPagoDocKey('');
+      setPagoMontoUsd('');
+      setPagoMontoBs('');
+      setPagoObservaciones('');
+      return;
+    }
+    const doc = processedPayables.find(d => String(d.id) === keyStr || buildCxpCompositeKey(d) === keyStr);
     if (doc) {
-      setPagoDocKey(doc.id || doc.nroDoc);
-      const rate = Number(pagoTasa) > 0 ? Number(pagoTasa) : tasaKeystone;
+      setPagoDocKey(doc.id);
+      const nextRateType = isFiscalInvoiceType(doc.tipoDoc)
+        ? 'BCV'
+        : normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: 'KEYSTONE' });
+      const rate = resolveDefaultRateValue(nextRateType, { tasaBcv, tasaKeystone, customRate: doc.tasaPago || doc.tasa });
+      setPagoTipoTasa(nextRateType);
+      setPagoTasa(round2(rate).toFixed(2));
       const rest = round2(doc.saldoUsd);
       setPagoMontoUsd(String(rest.toFixed(2)));
-      setPagoMontoBs(String(round2(rest * rate).toFixed(2)));
+      setPagoMontoBs(nextRateType === 'USD' ? '0.00' : String(round2(rest * rate).toFixed(2)));
       setPagoObservaciones(`Abono a ${doc.tipoDoc} #${doc.nroDoc} - ${doc.provNombre}`);
 
       // Desplazamiento suave al formulario de Parte A
       if (parteARef.current) {
         parteARef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
+    }
+  };
+
+  const handlePagoTipoTasaChange = (nextTypeRaw) => {
+    const nextType = normalizeRateType(nextTypeRaw, {
+      tipoDoc: selectedPagoDoc?.tipoDoc,
+      fallback: 'BCV'
+    });
+    setPagoTipoTasa(nextType);
+    const nextRate = resolveDefaultRateValue(nextType, {
+      tasaBcv,
+      tasaKeystone,
+      customRate: Number(pagoTasa) > 10 ? Number(pagoTasa) : tasaKeystone
+    });
+    setPagoTasa(round2(nextRate).toFixed(2));
+    const usd = Number(pagoMontoUsd);
+    if (nextType === 'USD') {
+      setPagoMontoBs('0.00');
+    } else if (!isNaN(usd) && pagoMontoUsd !== '' && nextRate > 0) {
+      setPagoMontoBs(String(round2(usd * nextRate).toFixed(2)));
     }
   };
 
@@ -809,61 +885,86 @@ export default function AccountsPayableModal({
     }
 
     if (abonoUsd > round2(selectedPagoDoc.saldoUsd + 0.01)) {
-      const msg = `El monto a pagar ($${abonoUsd.toFixed(2)}) no puede superar el saldo pendiente ($${selectedPagoDoc.saldoUsd.toFixed(2)}).`;
+      const msg = `El monto a pagar ($${formatNumberUs(abonoUsd)}) no puede superar el saldo pendiente ($${formatNumberUs(selectedPagoDoc.saldoUsd)}).`;
       setPagoFeedback({ type: 'error', message: msg });
       notify.warning(msg);
       return;
     }
 
+    const normalizedPagoRateType = normalizeRateType(pagoTipoTasa, {
+      tipoDoc: selectedPagoDoc.tipoDoc,
+      monedaPago: pagoTipoTasa === 'USD' ? 'USD' : 'BS',
+      fallback: isSelectedPagoFiscal ? 'BCV' : 'KEYSTONE'
+    });
+    const isDirectUsdPago = normalizedPagoRateType === 'USD';
     const effectiveAbonoUsd = Math.min(abonoUsd, selectedPagoDoc.saldoUsd);
-    const effectiveAbonoBs = round2(effectiveAbonoUsd * tasaNum);
+    const effectiveAbonoBs = isDirectUsdPago ? 0 : round2(effectiveAbonoUsd * tasaNum);
     const nuevoSaldoUsd = round2(Math.max(0, selectedPagoDoc.saldoUsd - effectiveAbonoUsd));
-    const nuevoSaldoBs = round2(nuevoSaldoUsd * tasaNum);
+    const refRateForDoc = isDirectUsdPago ? (Number(selectedPagoDoc.tasaPago || selectedPagoDoc.tasa || tasaBcv) || 1) : tasaNum;
+    const nuevoSaldoBs = round2(nuevoSaldoUsd * refRateForDoc);
     const nuevoAbonosUsd = round2((selectedPagoDoc.abonosUsd || 0) + effectiveAbonoUsd);
 
     setIsSavingPago(true);
+    let overrideBackup = null;
+    const docId = String(selectedPagoDoc.id || buildCxpStableId(selectedPagoDoc)).trim();
+    const docCompKey = buildCxpCompositeKey(selectedPagoDoc);
+
     try {
-      const docKey = String(selectedPagoDoc.id || selectedPagoDoc.nroDoc);
+      const pagoIdSuffix = `${Date.now().toString().slice(-6)}`;
       const pagoRecord = {
-        id: `PAG-${Date.now().toString().slice(-6)}`,
-        pagoNum: `PAG-${Date.now().toString().slice(-6)}`,
+        id: `PAG-${pagoIdSuffix}`,
+        pagoNum: `PAG-${pagoIdSuffix}`,
         fechaPago: pagoFecha,
-        coProv: selectedPagoDoc.provRif,
+        coProv: selectedPagoDoc.coProv || selectedPagoDoc.provRif,
         provNombre: selectedPagoDoc.provNombre,
         provRif: selectedPagoDoc.provRif,
         montoUsd: effectiveAbonoUsd,
         montoBs: effectiveAbonoBs,
-        tasa: tasaNum,
-        moneda: cuentaObj.moneda === 'USD' ? 'US$' : 'BS',
+        tasa: isDirectUsdPago ? 1 : tasaNum,
+        tipoTasa: normalizedPagoRateType,
+        tasaPago: isDirectUsdPago ? 1 : tasaNum,
+        monedaPago: isDirectUsdPago ? 'USD' : 'BS',
+        moneda: isDirectUsdPago ? 'US$' : (cuentaObj.moneda === 'USD' ? 'US$' : 'BS'),
         cuentaId: cuentaObj.id,
         cuentaNombre: cuentaObj.nombre,
         accountType: cuentaObj.accountType,
         referencia: pagoReferencia.trim(),
         descrip: pagoObservaciones.trim() || `Pago ${selectedPagoDoc.tipoDoc} #${selectedPagoDoc.nroDoc} - ${selectedPagoDoc.provNombre}`,
+        documentosAfectados: [{
+          docId,
+          nroDoc: selectedPagoDoc.nroDoc,
+          tipoDoc: selectedPagoDoc.tipoDoc,
+          abonoUsd: effectiveAbonoUsd
+        }],
         anulado: false
       };
 
       const savedAtIso = new Date().toISOString();
       const updatedPayablePayload = {
         ...selectedPagoDoc,
+        id: docId,
         saldoUsd: nuevoSaldoUsd,
         saldoBs: nuevoSaldoBs,
         abonosUsd: nuevoAbonosUsd,
-        tasa: tasaNum,
+        tasa: refRateForDoc,
+        tipoTasa: normalizedPagoRateType,
+        tasaPago: isDirectUsdPago ? 1 : tasaNum,
+        monedaPago: isDirectUsdPago ? 'USD' : 'BS',
         historialPagos: [pagoRecord, ...(selectedPagoDoc.historialPagos || [])],
         fechaSincronizacion: savedAtIso,
         updated_at: savedAtIso,
         _localSavedAt: savedAtIso
       };
 
-      // 1. Actualización inmediata local
-      setLocalDocOverrides(prev => ({
-        ...prev,
-        [docKey]: updatedPayablePayload,
-        [selectedPagoDoc.nroDoc]: updatedPayablePayload
-      }));
+      // 1. Actualización local indexada por ID y clave compuesta (nunca por nroDoc suelto), con rollback ante fallo
+      setLocalDocOverrides(prev => {
+        overrideBackup = prev;
+        const next = { ...prev, [docId]: updatedPayablePayload };
+        if (docCompKey) next[docCompKey] = updatedPayablePayload;
+        return next;
+      });
 
-      // 2. Persistir en Supabase y Caja/Bancos
+      // 2. Persistir atómicamente en Supabase y Caja/Bancos
       if (onRegisterPayment) {
         await onRegisterPayment({
           updatedDoc: updatedPayablePayload,
@@ -887,6 +988,9 @@ export default function AccountsPayableModal({
         setPagoDocKey('');
       }
     } catch (err) {
+      if (overrideBackup) {
+        setLocalDocOverrides(overrideBackup);
+      }
       console.error('Error al registrar pago CxP:', err);
       soundFX.error();
       const errMsg = 'Ocurrió un error al registrar el pago: ' + (err.message || 'Error del servidor');
@@ -919,7 +1023,7 @@ export default function AccountsPayableModal({
       fechaVencimientoIso: toIsoDateInput(vencDate),
       diasCredito: 15,
       monedaIngreso: 'US$',
-      tasaCambio: String(defaultRate),
+      tasaCambio: round2(defaultRate).toFixed(2),
       exentoIva: false,
       baseImponibleUsd: '0.00',
       baseImponibleBs: '0.00',
@@ -974,7 +1078,7 @@ export default function AccountsPayableModal({
       fechaVencimientoIso: p.fechaVencimientoIso || getTodayIso(),
       diasCredito: Number(p.diasCredito || 15),
       monedaIngreso,
-      tasaCambio: String(docRate),
+      tasaCambio: round2(docRate).toFixed(2),
       exentoIva,
       baseImponibleUsd: baseUsd.toFixed(2),
       baseImponibleBs: baseBs.toFixed(2),
@@ -1062,8 +1166,15 @@ export default function AccountsPayableModal({
     const ivaBs = isFact && !editingPayable.exentoIva ? round2(Number(editingPayable.ivaBs || ivaUsd * docTasa)) : 0;
     const provRif = String(editingPayable.provRif || 'J-00000000').trim().toUpperCase();
 
+    const payloadId = buildCxpStableId({
+      id: editingPayable.id,
+      tipoDoc: editingPayable.tipoDoc,
+      nroDoc,
+      provRif
+    });
+
     const payload = {
-      id: editingPayable.id || `CXP-${editingPayable.tipoDoc}-${nroDoc}-${provRif.replace(/[^A-Za-z0-9]/g, '')}`,
+      id: payloadId,
       tipoDoc: editingPayable.tipoDoc,
       nroDoc,
       coProv: provRif,
@@ -1095,16 +1206,15 @@ export default function AccountsPayableModal({
       updated_at: savedAtIso,
       _localSavedAt: savedAtIso
     };
+    const compKey = buildCxpCompositeKey(payload);
 
     setIsSavingPayable(true);
+    let overrideBackup = null;
     try {
       setLocalDocOverrides(prev => {
-        const next = { ...prev };
-        if (editingPayable.originalNroDoc && editingPayable.originalNroDoc !== nroDoc) {
-          next[editingPayable.originalNroDoc] = { _deleted: true };
-        }
-        next[payload.id] = overridePayload;
-        next[nroDoc] = overridePayload;
+        overrideBackup = prev;
+        const next = { ...prev, [payload.id]: overridePayload };
+        if (compKey) next[compKey] = overridePayload;
         return next;
       });
 
@@ -1114,7 +1224,7 @@ export default function AccountsPayableModal({
 
       soundFX.success();
       if (saldoUsd <= 0.01) {
-        if (pagoDocKey === payload.id || pagoDocKey === nroDoc) {
+        if (pagoDocKey === payload.id || (compKey && pagoDocKey === compKey)) {
           setPagoDocKey('');
           setPagoMontoUsd('');
           setPagoMontoBs('');
@@ -1125,6 +1235,9 @@ export default function AccountsPayableModal({
       }
       setEditingPayable(null);
     } catch (err) {
+      if (overrideBackup) {
+        setLocalDocOverrides(overrideBackup);
+      }
       console.error('Error guardando documento CxP:', err);
       soundFX.error();
       notify.error('No se pudo guardar el documento: ' + (err.message || 'Error del servidor'));
@@ -1141,16 +1254,19 @@ export default function AccountsPayableModal({
       return;
     }
 
-    const docKey = String(p.id || p.nroDoc).trim();
+    const docKey = String(p.id || buildCxpStableId(p)).trim();
+    const compKey = buildCxpCompositeKey(p);
     setDeletingKey(docKey);
+    let overrideBackup = null;
     try {
-      setLocalDocOverrides(prev => ({
-        ...prev,
-        [docKey]: { _deleted: true },
-        [p.nroDoc]: { _deleted: true }
-      }));
+      setLocalDocOverrides(prev => {
+        overrideBackup = prev;
+        const next = { ...prev, [docKey]: { _deleted: true } };
+        if (compKey) next[compKey] = { _deleted: true };
+        return next;
+      });
 
-      if (pagoDocKey === docKey || pagoDocKey === p.nroDoc) {
+      if (pagoDocKey === docKey || (compKey && pagoDocKey === compKey)) {
         setPagoDocKey('');
         setPagoMontoUsd('');
         setPagoMontoBs('');
@@ -1163,6 +1279,9 @@ export default function AccountsPayableModal({
       soundFX.success();
       notify.success(`Documento ${p.tipoDoc} #${p.nroDoc} eliminado de Cuentas por Pagar.`);
     } catch (err) {
+      if (overrideBackup) {
+        setLocalDocOverrides(overrideBackup);
+      }
       console.error('Error al eliminar documento CxP:', err);
       soundFX.error();
       notify.error('Error al eliminar: ' + (err.message || 'Error del servidor'));
@@ -1304,7 +1423,7 @@ export default function AccountsPayableModal({
             onClick={() => generateThirdPartyStatementPDF({
               entity: {
                 nombre: supplierFilter === 'ALL' ? 'Todos los Proveedores (Cartera Filtrada)' : supplierFilter,
-                rif: filteredPayables[0]?.rif || ''
+                rif: supplierFilter === 'ALL' ? 'Múltiples RIFs' : (filteredPayables[0]?.provRif || filteredPayables[0]?.rif || '')
               },
               entityType: 'SUPPLIER',
               documents: filteredPayables.map(p => ({
@@ -1312,7 +1431,8 @@ export default function AccountsPayableModal({
                 numeroDoc: p.nroDoc,
                 fecha: p.fechaEmision,
                 fechaVencimiento: p.fechaVencimiento,
-                totalUsd: p.montoTotalUsd,
+                totalUsd: p.montoNetUsd,
+                totNetoUsd: p.montoNetUsd,
                 restanteUsd: p.saldoUsd
               })),
               config,
@@ -1588,7 +1708,7 @@ export default function AccountsPayableModal({
                     <option value="">— Seleccione documento a pagar ({searchedPayableDocs.length} pendientes) —</option>
                     {searchedPayableDocs.map(doc => (
                       <option key={doc.id} value={doc.id}>
-                        {doc.tipoDoc} #{doc.nroDoc} • {doc.provNombre.slice(0, 24)} • RIF: {doc.provRif} • Saldo: ${doc.saldoUsd.toFixed(2)}
+                        {doc.tipoDoc} #{doc.nroDoc} • {doc.provNombre.slice(0, 24)} • RIF: {doc.provRif} • Saldo: ${formatNumberUs(doc.saldoUsd)}
                       </option>
                     ))}
                   </>
@@ -1596,22 +1716,57 @@ export default function AccountsPayableModal({
               </select>
             </div>
 
-            {/* Campo: TASA (Decimal, multimoneda) */}
+            {/* Campo: CLASIFICACIÓN DE TASA + TASA DE PAGO */}
+            <div style={{ minWidth: '210px' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                Clasificación de Tasa * {isSelectedPagoFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(Fiscal: Solo BCV/USD)</span>}
+              </label>
+              <select
+                value={pagoTipoTasa}
+                onChange={(e) => handlePagoTipoTasaChange(e.target.value)}
+                className="select-modern"
+                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: RATE_TYPE_META[pagoTipoTasa]?.color || '#10b981' }}
+              >
+                {allowedPagoRateTypes.map((rt) => (
+                  <option key={rt} value={rt}>
+                    {RATE_TYPE_META[rt]?.label || rt}
+                    {rt === 'BCV' ? ` (Bs. ${tasaBcv.toFixed(2)})` : rt === 'KEYSTONE' ? ` (Bs. ${tasaKeystone.toFixed(2)})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div>
               <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                Tasa (Bs/USD) *
+                {pagoTipoTasa === 'USD' ? 'Moneda Directa' : 'Tasa del Pago (Bs/USD) *'}
               </label>
-              <input
-                type="number"
-                step="0.0001"
-                min="0.0001"
-                required
-                value={pagoTasa}
-                onChange={(e) => handleTasaChange(e.target.value)}
-                placeholder="Ej. 899.27"
-                className="input-modern"
-                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: '#10b981' }}
-              />
+              {pagoTipoTasa === 'USD' ? (
+                <div className="input-modern" style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: '#22c55e', fontFamily: 'var(--font-code)' }}>
+                  Divisa Directa USD ($1 = $1)
+                </div>
+              ) : (
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  required
+                  readOnly={pagoTipoTasa !== 'EDITABLE'}
+                  value={pagoTasa}
+                  onChange={(e) => handleTasaChange(e.target.value)}
+                  placeholder="Ej. 899.27"
+                  className="input-modern"
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem 0.85rem',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    fontFamily: 'var(--font-code)',
+                    color: '#10b981',
+                    opacity: pagoTipoTasa !== 'EDITABLE' ? 0.88 : 1,
+                    cursor: pagoTipoTasa !== 'EDITABLE' ? 'not-allowed' : 'text'
+                  }}
+                />
+              )}
             </div>
 
             {/* Campo: FECHA (Date, default hoy) */}
@@ -1881,7 +2036,7 @@ export default function AccountsPayableModal({
                 onChange={(e) => setStatusFilter(e.target.value)}
                 style={{ minWidth: '170px' }}
               >
-                <option value="ALL">Todos los Estados ({processedPayables.length})</option>
+                <option value="ALL">Todos los Estados ({countStats.all})</option>
                 <option value="VIGENTE">Solo Por Vencer (Al Día)</option>
                 <option value="VENCIDO">Todas las Vencidas</option>
                 <option value="SOLVENTE">Solo Solventes (Pagadas)</option>
@@ -2079,6 +2234,8 @@ export default function AccountsPayableModal({
                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Emisión</th>
                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Vencimiento</th>
                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Estatus / Vencimiento</th>
+                    <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center' }}>Clasificación Tasa</th>
+                    <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Tasa Pago</th>
                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto Original</th>
                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Abonos</th>
                     <th style={{ padding: '0.85rem 0.9rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo Pendiente</th>
@@ -2190,6 +2347,33 @@ export default function AccountsPayableModal({
                           )}
                         </td>
 
+                        {/* 5b. Clasificación Tasa */}
+                        <td style={{ padding: '0.85rem 0.9rem', textAlign: 'center' }}>
+                          {(() => {
+                            const rateMeta = resolveRateMeta(p.tipoTasa, 'BCV');
+                            return (
+                              <span style={{
+                                display: 'inline-block',
+                                padding: '0.18rem 0.5rem',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 800,
+                                fontFamily: 'var(--font-code)',
+                                background: rateMeta.bg,
+                                color: rateMeta.color,
+                                border: `1px solid ${rateMeta.border}`
+                              }}>
+                                {rateMeta.badgeText}
+                              </span>
+                            );
+                          })()}
+                        </td>
+
+                        {/* 5c. Tasa Aplicada */}
+                        <td style={{ padding: '0.85rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                          {p.tipoTasa === 'USD' ? 'USD Directo' : formatBs(resolveEffectiveRateNumber(p, tasaKeystone))}
+                        </td>
+
                         {/* 6. Monto Original */}
                         <td style={{ padding: '0.85rem 0.9rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
                           <div>{formatUsd(p.montoNetUsd)}</div>
@@ -2299,7 +2483,7 @@ export default function AccountsPayableModal({
                 </tbody>
                 <tfoot style={{ background: 'var(--bg-table-header)' }}>
                   <tr>
-                    <td colSpan={5} style={{ padding: '0.75rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                    <td colSpan={7} style={{ padding: '0.75rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
                       TOTALES DEL REPORTE ({filteredPayables.length} DOCUMENTOS):
                     </td>
                     <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--text-primary)' }}>
@@ -2490,20 +2674,45 @@ export default function AccountsPayableModal({
                           <th style={{ padding: '0.5rem 0.65rem' }}>Fecha</th>
                           <th style={{ padding: '0.5rem 0.65rem' }}>N° Pago / Ref</th>
                           <th style={{ padding: '0.5rem 0.65rem' }}>Cuenta / Origen</th>
+                          <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>Clasificación Tasa</th>
+                          <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right' }}>Tasa del Pago</th>
                           <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right' }}>Monto USD</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedPayableDetail.historialPagos.map((hp, hIdx) => (
-                          <tr key={hp.id || hIdx} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                            <td style={{ padding: '0.5rem 0.65rem', fontFamily: 'var(--font-code)' }}>{hp.fechaPago ? formatDateShort(hp.fechaPago) : 'Hoy'}</td>
-                            <td style={{ padding: '0.5rem 0.65rem' }}>{hp.pagoNum || hp.referencia || 'Pago S/N'}</td>
-                            <td style={{ padding: '0.5rem 0.65rem' }}>{hp.cuentaNombre || hp.accountType || 'Caja / Banco'}</td>
-                            <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontWeight: 700, color: '#10b981', fontFamily: 'var(--font-code)' }}>
-                              {formatUsd(hp.montoUsd)}
-                            </td>
-                          </tr>
-                        ))}
+                        {selectedPayableDetail.historialPagos.map((hp, hIdx) => {
+                          const hpRateType = resolveRecordRateType(hp, 'BCV');
+                          const hpRateMeta = resolveRateMeta(hpRateType, 'BCV');
+                          const hpTasa = resolveEffectiveRateNumber(hp, 0);
+                          return (
+                            <tr key={hp.id || hIdx} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                              <td style={{ padding: '0.5rem 0.65rem', fontFamily: 'var(--font-code)' }}>{hp.fechaPago ? formatDateShort(hp.fechaPago) : 'Hoy'}</td>
+                              <td style={{ padding: '0.5rem 0.65rem' }}>{hp.pagoNum || hp.referencia || 'Pago S/N'}</td>
+                              <td style={{ padding: '0.5rem 0.65rem' }}>{hp.cuentaNombre || hp.accountType || 'Caja / Banco'}</td>
+                              <td style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>
+                                <span style={{
+                                  display: 'inline-block',
+                                  padding: '0.12rem 0.45rem',
+                                  borderRadius: '5px',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 800,
+                                  fontFamily: 'var(--font-code)',
+                                  background: hpRateMeta.bg,
+                                  color: hpRateMeta.color,
+                                  border: `1px solid ${hpRateMeta.border}`
+                                }}>
+                                  {hpRateMeta.badgeText}
+                                </span>
+                              </td>
+                              <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                                {hpRateType === 'USD' ? 'Divisa USD' : (hpTasa > 0 ? formatBs(hpTasa) : '—')}
+                              </td>
+                              <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontWeight: 700, color: '#10b981', fontFamily: 'var(--font-code)' }}>
+                                {formatUsd(hp.montoUsd)}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -2805,8 +3014,8 @@ export default function AccountsPayableModal({
                     <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#34d399' }}>Tasa Bs/USD:</span>
                     <input
                       type="number"
-                      step="0.0001"
-                      min="0.0001"
+                      step="0.01"
+                      min="0.01"
                       required
                       value={editingPayable.tasaCambio}
                       onChange={(e) => handleEditFieldChange('tasaCambio', e.target.value)}

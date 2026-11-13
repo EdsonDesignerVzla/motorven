@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   FilePlus2,
@@ -22,11 +22,11 @@ import {
   Layers,
   ArrowRight
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, round2 } from '../services/formatService';
+import { preserveDateWithTime } from '../services/creditPolicyService';
 import { useNotification } from '../context/NotificationContext';
 import { REAL_PROFIT_SELLERS } from '../data/supabaseRealData';
-
-const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
+import { getEraScopedCanonicalDocKey, commitInvoiceCorrelativo, commitNotaEntregaCorrelativo } from '../services/fiscalService';
 
 const normalizeIsoDateOnly = (d) => {
   if (!d) return '';
@@ -72,9 +72,11 @@ export default function CxcInvoiceCreationModal({
   clients = [],
   sellers = [],
   config = {},
-  suggestedCorrelativo = '000001'
+  suggestedCorrelativo = '000001',
+  existingInvoices = []
 }) {
   const notify = useNotification();
+  const wasOpenRef = useRef(false);
 
   // Tasa actual de configuración
   const tasaBcvDefault = Number(config?.tasaDolar) || 899.27;
@@ -107,7 +109,7 @@ export default function CxcInvoiceCreationModal({
   const [isExento, setIsExento] = useState(false);
   const [ivaUsd, setIvaUsd] = useState('16.00');
   const [totalUsd, setTotalUsd] = useState('116.00');
-  const [tasa, setTasa] = useState(String(tasaBcvDefault));
+  const [tasa, setTasa] = useState(round2(tasaBcvDefault).toFixed(2));
 
   // Cobranzas y CxC
   const [abonosUsd, setAbonosUsd] = useState('0.00');
@@ -117,49 +119,69 @@ export default function CxcInvoiceCreationModal({
   const [keepOpenAfterSave, setKeepOpenAfterSave] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Inicializar o sugerir correlativo al abrir
+  // Inicializar o sugerir correlativo al abrir, y limpiar estado al cerrar para evitar reutilizar correlativo anterior
   useEffect(() => {
-    if (isOpen) {
-      if (initialData) {
-        const nextTipo = initialData.tipoDoc || 'FACTURA';
-        setTipoDoc(nextTipo);
-        setFactNum(initialData.factNum || initialData.factura || initialData.numeroDoc || '');
-        setNumeroControl(initialData.numeroControl || '');
-        const emis = normalizeIsoDateOnly(initialData.fechaEmision || initialData.fecha) || '2026-11-15';
-        const rawDc = Number(initialData.diasCredito ?? initialData.dias_credito);
-        const dc = rawDc > 0 ? rawDc : 15;
-        const rawVenc = normalizeIsoDateOnly(initialData.fechaVencimiento || initialData.fecha_vencimiento);
-        const venc = (rawVenc && rawVenc !== emis) ? rawVenc : addDaysToIso(emis, dc);
-        const calculatedDc = diffDaysIso(emis, venc);
-        setFechaEmision(emis);
-        setDiasCredito(calculatedDc > 0 ? calculatedDc : dc);
-        setFechaVencimiento(venc);
+    if (!isOpen) {
+      if (wasOpenRef.current) {
+        wasOpenRef.current = false;
+        setTipoDoc('FACTURA');
+        setFactNum('');
+        setNumeroControl('');
+        setClienteSearch('');
+        setShowClientDropdown(false);
+        setClienteCodigo('');
+        setClienteRif('');
+        setClienteNombre('');
+        setClienteDireccion('');
+        setClienteTelefono('');
+        setAbonosUsd('0.00');
+        setIsExento(false);
+        setIsSaving(false);
+      }
+      return;
+    }
 
-        setClienteCodigo(initialData.clienteId || initialData.cliente_id || '');
-        setClienteRif(initialData.clienteRif || initialData.cliente_rif || initialData.rif || '');
-        setClienteNombre(initialData.clienteNombre || initialData.cliente || '');
-        setClienteDireccion(initialData.clienteDireccion || initialData.direccion || '');
-        setClienteTelefono(initialData.clienteTelefono || initialData.telefono || '');
-        if (initialData.vendedorId || initialData.vendedor) {
-          handleSellerSelect(initialData.vendedorId || initialData.vendedor);
-        }
-        const neto = Number(initialData.totNetoUsd ?? initialData.totalUsd ?? 100);
-        const bruto = Number(initialData.totBrutoUsd ?? initialData.subtotalUsd ?? neto);
-        setPrecioDivisas(bruto.toFixed(2));
-        setIsExento(Boolean(initialData.isExento || nextTipo === 'NOTA_ENTREGA'));
-        setIvaUsd(Number(initialData.ivaUsd ?? 0).toFixed(2));
-        setTotalUsd(neto.toFixed(2));
-        setAbonosUsd(Number(initialData.abonosUsd ?? 0).toFixed(2));
-        setObservaciones(initialData.observaciones || '');
+    const justOpened = !wasOpenRef.current;
+    wasOpenRef.current = true;
+
+    if (initialData) {
+      const nextTipo = initialData.tipoDoc || 'FACTURA';
+      setTipoDoc(nextTipo);
+      setFactNum(initialData.factNum || initialData.factura || initialData.numeroDoc || '');
+      setNumeroControl(initialData.numeroControl || '');
+      const emis = normalizeIsoDateOnly(initialData.fechaEmision || initialData.fecha) || '2026-11-15';
+      const rawDc = Number(initialData.diasCredito ?? initialData.dias_credito);
+      const dc = rawDc > 0 ? rawDc : 15;
+      const rawVenc = normalizeIsoDateOnly(initialData.fechaVencimiento || initialData.fecha_vencimiento);
+      const venc = (rawVenc && rawVenc !== emis) ? rawVenc : addDaysToIso(emis, dc);
+      const calculatedDc = diffDaysIso(emis, venc);
+      setFechaEmision(emis);
+      setDiasCredito(calculatedDc > 0 ? calculatedDc : dc);
+      setFechaVencimiento(venc);
+
+      setClienteCodigo(initialData.clienteId || initialData.cliente_id || '');
+      setClienteRif(initialData.clienteRif || initialData.cliente_rif || initialData.rif || '');
+      setClienteNombre(initialData.clienteNombre || initialData.cliente || '');
+      setClienteDireccion(initialData.clienteDireccion || initialData.direccion || '');
+      setClienteTelefono(initialData.clienteTelefono || initialData.telefono || '');
+      if (initialData.vendedorId || initialData.vendedor) {
+        handleSellerSelect(initialData.vendedorId || initialData.vendedor);
+      }
+      const neto = Number(initialData.totNetoUsd ?? initialData.totalUsd ?? 100);
+      const bruto = Number(initialData.totBrutoUsd ?? initialData.subtotalUsd ?? neto);
+      setPrecioDivisas(bruto.toFixed(2));
+      setIsExento(Boolean(initialData.isExento || nextTipo === 'NOTA_ENTREGA'));
+      setIvaUsd(Number(initialData.ivaUsd ?? 0).toFixed(2));
+      setTotalUsd(neto.toFixed(2));
+      setAbonosUsd(Number(initialData.abonosUsd ?? 0).toFixed(2));
+      setObservaciones(initialData.observaciones || '');
+    } else if (justOpened || !factNum) {
+      const nextCorr = suggestedCorrelativo || '000001';
+      if (tipoDoc === 'NOTA_ENTREGA') {
+        setFactNum(`NE-${nextCorr}`);
       } else {
-        if (!factNum) {
-          if (tipoDoc === 'NOTA_ENTREGA') {
-            setFactNum(`NE-${suggestedCorrelativo || '000001'}`);
-          } else {
-            setFactNum(suggestedCorrelativo || '000001');
-            setNumeroControl(`00-${suggestedCorrelativo || '000001'}`);
-          }
-        }
+        setFactNum(nextCorr);
+        setNumeroControl(`00-${nextCorr}`);
       }
     }
   }, [isOpen, initialData, suggestedCorrelativo, tipoDoc]);
@@ -357,9 +379,35 @@ export default function CxcInvoiceCreationModal({
 
     try {
       const isNotaEntrega = tipoDoc === 'NOTA_ENTREGA';
-      const docId = isNotaEntrega
-        ? (cleanNum.toUpperCase().startsWith('NE-') ? cleanNum : `NE-${cleanNum}`)
-        : (cleanNum.toUpperCase().startsWith('FAC-') ? cleanNum : `FAC-${cleanNum}`);
+      const strippedNum = cleanNum.replace(/^(FAC-|FACT-|INV-)/i, '').trim();
+      const normalizedNum = /^\d+$/.test(strippedNum) && strippedNum.length < 6
+        ? strippedNum.padStart(6, '0')
+        : strippedNum;
+      const canonicalFactNum = isNotaEntrega
+        ? (normalizedNum.toUpperCase().startsWith('NE-') ? normalizedNum : `NE-${normalizedNum}`)
+        : normalizedNum;
+      const initialFactNorm = String(initialData?.factNum || initialData?.factura || initialData?.numeroDoc || '')
+        .replace(/^(FAC-|FACT-|INV-)/i, '').trim();
+      const docId = (initialData?.id && initialFactNorm === normalizedNum && (initialData?.tipoDoc || 'FACTURA') === tipoDoc)
+        ? initialData.id
+        : canonicalFactNum;
+
+      // Proteger contra sobrescritura accidental de un documento existente con el mismo correlativo/serie
+      if (!initialData && Array.isArray(existingInvoices) && existingInvoices.length > 0) {
+        const candidateKey = getEraScopedCanonicalDocKey({
+          id: docId,
+          factNum: canonicalFactNum,
+          numeroDoc: canonicalFactNum,
+          tipoDoc,
+          fechaEmision: fechaEmision || '2026-11-15'
+        });
+        const duplicateDoc = existingInvoices.find((inv) => inv && getEraScopedCanonicalDocKey(inv) === candidateKey);
+        if (duplicateDoc) {
+          notify.error(`Ya existe ${isNotaEntrega ? 'una Nota de Entrega' : 'una Factura Fiscal'} con el correlativo #${canonicalFactNum}. Use otro correlativo para evitar sobrescribir el documento existente.`);
+          setIsSaving(false);
+          return;
+        }
+      }
 
       // Garantizar cálculo consistente de fecha de vencimiento y días de crédito
       let finalDiasCredito = diasCredito === '' ? 15 : Math.max(0, Number(diasCredito || 0));
@@ -376,14 +424,15 @@ export default function CxcInvoiceCreationModal({
         }
       }
 
+      const fechaEmisionWithTime = preserveDateWithTime(fechaEmision, initialData?.fechaEmision || initialData?.fec_emis);
       const payload = {
         id: docId,
-        factNum: cleanNum,
-        originalFactNum: cleanNum,
+        factNum: canonicalFactNum,
+        originalFactNum: canonicalFactNum,
         numeroControl: numeroControl || `00-${cleanNum.replace(/\D/g, '').padStart(6, '0')}`,
         tipoDoc,
-        fechaEmision: fechaEmision,
-        fec_emis: fechaEmision,
+        fechaEmision: fechaEmisionWithTime,
+        fec_emis: fechaEmisionWithTime,
         fechaVencimiento: finalFechaVenc,
         fec_venc: finalFechaVenc,
         diasCredito: finalDiasCredito,
@@ -454,6 +503,14 @@ export default function CxcInvoiceCreationModal({
         await onSaveDocument(payload);
       }
 
+      if (!initialData) {
+        if (isNotaEntrega) {
+          commitNotaEntregaCorrelativo(canonicalFactNum);
+        } else {
+          commitInvoiceCorrelativo(canonicalFactNum);
+        }
+      }
+
       notify.success(
         `¡${isNotaEntrega ? 'Nota de Entrega' : 'Factura Fiscal'} #${cleanNum} guardada y subida a Cobranzas (CxC) exitosamente!`
       );
@@ -479,6 +536,13 @@ export default function CxcInvoiceCreationModal({
           setFechaVencimiento(addDaysToIso(fechaEmision, effectiveDc));
         }
       } else {
+        setFactNum('');
+        setNumeroControl('');
+        setClienteNombre('');
+        setClienteCodigo('');
+        setClienteRif('');
+        setClienteDireccion('');
+        setClienteTelefono('');
         if (onClose) onClose();
       }
     } catch (err) {
@@ -1247,8 +1311,8 @@ export default function CxcInvoiceCreationModal({
                 </label>
                 <input
                   type="number"
-                  step="0.0001"
-                  min="0.0001"
+                  step="0.01"
+                  min="0.01"
                   required
                   value={tasa}
                   onChange={(e) => setTasa(e.target.value)}

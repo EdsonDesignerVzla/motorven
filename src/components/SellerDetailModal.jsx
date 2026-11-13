@@ -19,7 +19,7 @@ import {
   Navigation,
   Compass
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateSellersPDF } from '../services/pdfReportService';
 import SellerAvatar from './SellerAvatar';
 
@@ -199,10 +199,10 @@ export default function SellerDetailModal({
                 Volumen Despachado
               </div>
               <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-tech)', marginTop: '2px' }}>
-                {totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 1 })} L
+                {formatUnitVe(totalLitros)} L
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                ≈ {totalCajas.toFixed(1)} Cajas Eq.
+                ≈ {formatUnitVe(totalCajas)} Cajas Eq.
               </div>
             </div>
 
@@ -215,7 +215,7 @@ export default function SellerDetailModal({
               }}
             >
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
-                Meta Comercial ({metaLitros.toLocaleString()} L)
+                Meta Comercial ({formatUnitVe(metaLitros, 0)} L)
               </div>
               <div style={{ fontSize: '1.35rem', fontWeight: 800, color: cumplimientoPct >= 100 ? 'var(--semaforo-verde)' : 'var(--motorven-gold)', fontFamily: 'var(--font-tech)', marginTop: '2px' }}>
                 {cumplimientoPct}%

@@ -24,7 +24,7 @@ import {
   Building,
   RefreshCw
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatNumberUs, formatUnitVe } from '../services/formatService';
 import { generateProfitabilityPDF } from '../services/pdfReportService';
 
 export default function OperationalPandLModal({
@@ -485,10 +485,10 @@ export default function OperationalPandLModal({
               <span className="badge badge-warning" style={{ fontSize: '0.62rem' }}>Unitario</span>
             </div>
             <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.4rem', fontWeight: 900, color: 'var(--motorven-gold)', marginTop: '2px' }}>
-              $ {financialData.utilidadPorLitroUsd.toFixed(3)} / L
+              {formatUsd(financialData.utilidadPorLitroUsd)} / L
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              Sobre {financialData.baseLitrosVendidos.toLocaleString('en-US', { maximumFractionDigits: 0 })} L despachados
+              Sobre {formatUnitVe(financialData.baseLitrosVendidos)} L despachados
             </div>
           </div>
 
@@ -739,13 +739,13 @@ export default function OperationalPandLModal({
                           {line.nombre}
                         </div>
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          {line.cajas.toFixed(0)} Cajas registradas
+                          {formatUnitVe(line.cajas, 0)} Cajas registradas
                         </div>
                       </td>
 
                       <td style={{ textAlign: 'center' }}>
                         <div style={{ fontWeight: 700, fontFamily: 'var(--font-tech)' }}>
-                          {line.litros.toLocaleString('en-US', { maximumFractionDigits: 0 })} L
+                          {formatUnitVe(line.litros)} L
                         </div>
                       </td>
 
@@ -788,7 +788,7 @@ export default function OperationalPandLModal({
                   <tr style={{ background: 'var(--bg-table-header)', fontWeight: 800 }}>
                     <td>TOTAL CONSOLIDADO:</td>
                     <td style={{ textAlign: 'center', fontFamily: 'var(--font-tech)' }}>
-                      {financialData.baseLitrosVendidos.toLocaleString('en-US', { maximumFractionDigits: 0 })} L
+                      {formatUnitVe(financialData.baseLitrosVendidos)} L
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>
                       {formatUsd(financialData.facturadoAjustadoUsd)}
@@ -895,7 +895,7 @@ export default function OperationalPandLModal({
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '4px' }}>
                       <span style={{ fontWeight: 600 }}>Costo de Flete Logístico ($/L):</span>
-                      <strong style={{ color: '#0284c7' }}>${freightPerLiterUsd.toFixed(2)} USD / L</strong>
+                      <strong style={{ color: '#0284c7' }}>${formatNumberUs(freightPerLiterUsd)} USD / L</strong>
                     </div>
                     <input
                       type="range"
@@ -1032,7 +1032,7 @@ export default function OperationalPandLModal({
                     PL-{new Date().toISOString().slice(0, 10).replace(/-/g, '')}
                   </div>
                   <div style={{ fontSize: '0.8rem', color: '#475569' }}>
-                    Fecha: {new Date().toLocaleDateString('es-VE')} | Tasa BCV: Bs. {tasaBcv.toFixed(2)}
+                    Fecha: {new Date().toLocaleDateString('es-VE')} | Tasa BCV: {formatBs(tasaBcv)}
                   </div>
                 </div>
               </div>

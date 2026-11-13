@@ -18,7 +18,7 @@ import {
   Tag,
   Printer
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateProfitabilityPDF } from '../services/pdfReportService';
 
 export default function SkuProfitabilityModal({
@@ -246,10 +246,10 @@ export default function SkuProfitabilityModal({
                 <Package size={14} color="#f59e0b" />
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '0.25rem' }}>
-                {stock} <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>cajas / unid</span>
+                {formatUnitVe(stock, 0)} <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>cajas / unid</span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                {(stock * litrosPorUnidad).toLocaleString('es-VE')} Litros en Almacén
+                {formatUnitVe(stock * litrosPorUnidad)} Litros en Almacén
               </div>
             </div>
           </div>
@@ -281,7 +281,7 @@ export default function SkuProfitabilityModal({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <input
                     type="number"
-                    step="0.50"
+                    step="0.01"
                     min={costoUsd}
                     value={simulatedPrice}
                     onChange={(e) => setSimulatedPrice(parseFloat(e.target.value) || 0)}
@@ -329,7 +329,7 @@ export default function SkuProfitabilityModal({
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Volumen Colocado:</span>
-                  <span style={{ fontWeight: 700, color: '#3b82f6' }}>{totalLitrosVendidos.toFixed(1)} Litros</span>
+                  <span style={{ fontWeight: 700, color: '#3b82f6' }}>{formatUnitVe(totalLitrosVendidos)} Litros</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Facturación Neta:</span>
@@ -377,7 +377,7 @@ export default function SkuProfitabilityModal({
                     >
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '170px' }}>
                         <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{cli.cliente}</div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{cli.totalCant} cajas • {cli.totalLitros.toFixed(0)} L</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{formatUnitVe(cli.totalCant, 0)} cajas • {formatUnitVe(cli.totalLitros)} L</div>
                       </div>
                       <div style={{ fontWeight: 800, color: '#10b981' }}>
                         {formatUsd(cli.totalUsd)}

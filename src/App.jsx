@@ -1,4 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  inferTreasuryAccountKind,
+  matchesCashDesk,
+  matchesBankAccount,
+  applyTreasuryBalanceDelta,
+  resolveTreasuryTargetForPaymentMethod,
+  resolveExchangeRates
+} from './utils/treasuryAccountUtils';
+import { normalizeRateType } from './utils/rateClassificationUtils';
 import { ShieldAlert, Smartphone } from 'lucide-react';
 import Navigation from './components/Navigation';
 import HeaderBar from './components/HeaderBar';
@@ -101,6 +110,7 @@ import {
   saveSupabaseProfitCollection,
   getSupabaseProfitInvoices,
   saveSupabaseProfitInvoice,
+  updateSupabaseInvoiceDocument,
   getSupabaseProfitSuppliers,
   getSupabaseProfitPurchases,
   getSupabaseProfitAccountsPayable,
@@ -144,6 +154,7 @@ import {
   saveSupabaseGoodsReceiptNote,
   getSupabaseProfitPaymentOrdersMerged,
   saveSupabaseProfitPaymentOrder,
+  saveSupabaseProfitPurchase,
   saveSupabaseProfitWarehouseTransfer,
   saveSupabaseProfitInventoryAdjustment,
   saveSupabaseProfitCustomerReturn,
@@ -159,7 +170,7 @@ import {
   flushSyncQueue,
   getPendingSyncCount
 } from './services/offlineSyncService';
-import { formatBs } from './services/formatService';
+import { formatBs, formatNumberUs } from './services/formatService';
 import { deleteStorageOrder, deleteStorageSale } from './services/storageService';
 import {
   getActiveUser,
@@ -174,12 +185,19 @@ import {
   DEFAULT_USERS,
   sortUsersByHierarchy
 } from './services/authService';
+import { subscribeToRealtimeChanges } from './services/profitService';
+import { doesPayableMatchDocument, doProvidersMatch } from './utils/cxpUtils';
 import {
-  subscribeToRealtimeChanges,
-  triggerProfitSync
-} from './services/profitService';
+  inferCxcDocType,
+  normalizeCollectionWriteAmounts
+} from './utils/cxcUtils';
 import { subscribeToRealtimeSync, broadcastReconcileChange, getRealtimeClientId } from './services/realtimeSyncBridge';
-import { getCanonicalDocKey } from './services/fiscalService';
+import {
+  getCanonicalDocKey,
+  getEraScopedCanonicalDocKey,
+  commitInvoiceCorrelativo,
+  commitNotaEntregaCorrelativo
+} from './services/fiscalService';
 
 
 function MainApp() {
@@ -335,6 +353,14 @@ function MainApp() {
   });
   const [profitBankAccounts, setProfitBankAccounts] = useState(() => REAL_PROFIT_BANK_ACCOUNTS || []);
   const [profitCashDesks, setProfitCashDesks] = useState(() => REAL_PROFIT_CASH_DESKS || []);
+  const profitBankAccountsRef = useRef(profitBankAccounts);
+  const profitCashDesksRef = useRef(profitCashDesks);
+  useEffect(() => {
+    profitBankAccountsRef.current = profitBankAccounts;
+  }, [profitBankAccounts]);
+  useEffect(() => {
+    profitCashDesksRef.current = profitCashDesks;
+  }, [profitCashDesks]);
   const [profitCollections, setProfitCollections] = useState(() => REAL_PROFIT_COLLECTIONS || []);
   const [profitInvoices, setProfitInvoices] = useState(() => REAL_PROFIT_INVOICES || []);
   const [profitSuppliers, setProfitSuppliers] = useState(() => REAL_PROFIT_SUPPLIERS || []);
@@ -816,15 +842,15 @@ function MainApp() {
           return;
         }
         if (action === 'DELETE') {
-          const targetCanon = getCanonicalDocKey(item || key, item?.tipoDoc || item?.tipo_doc || '');
-          const targetKey = String(key || item?.id || item?.factNum || item?.numeroDoc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-          const targetId = String(key || item?.id || '').trim();
+          const targetTipo = inferCxcDocType(item || key);
+          const targetCanon = getCanonicalDocKey(item || key, item?.tipoDoc || item?.tipo_doc || targetTipo);
+          const targetId = String(item?.id || (typeof key === 'string' && !/^\d+$/.test(key) ? key : '') || '').trim();
           setProfitInvoices(prev => (prev || []).filter(f => {
-            const fNum = String(f.factNum ?? f.fact_num ?? f.numeroDoc ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
+            if (!f) return false;
             const fId = String(f.id ?? '').trim();
             const fCanon = getCanonicalDocKey(f);
-            if (targetCanon && fCanon && fCanon === targetCanon) return false;
-            return (targetKey ? fNum !== targetKey : true) && (targetId ? fId !== targetId : true);
+            if (targetCanon && fCanon) return fCanon !== targetCanon;
+            return targetId ? fId !== targetId : true;
           }));
           return;
         }
@@ -1008,7 +1034,7 @@ function MainApp() {
               notify.info(
                 isClientReq
                   ? `🆕 ¡Nueva solicitud de cliente en Flujo Comercial! ${item.clienteNombre || 'Cliente'} (${item.clienteRif || ''}) - Vendedor: ${item.vendedorNombre || item.vendedorId || ''}`
-                  : `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${Number(item.totalUsd || 0).toFixed(2)})`,
+                  : `🔔 ¡Nueva orden en Caja! #${item.numeroDoc || item.id} (${item.clienteNombre || 'Cliente'} - $${formatNumberUs(item.totalUsd || 0)})`,
                 { duration: 6000 }
               );
             }
@@ -1318,7 +1344,7 @@ function MainApp() {
 
     const timer = setTimeout(async () => {
       try {
-        const tasa = Number(config?.tasaDolar) || 827.73;
+        const { tasaBcv: tasa } = resolveExchangeRates(config);
         const expiringClients = [];
         for (const cl of clients) {
           if (!cl || cl.inactivo) continue;
@@ -1354,7 +1380,7 @@ function MainApp() {
               severidad: summary.diasRestantesMin === 0 ? 'critica' : 'advertencia',
               modulo: 'cxc',
               titulo: `Crédito por vencer (${summary.diasRestantesMin === 0 ? 'HOY' : `${summary.diasRestantesMin} día(s)`}): ${client.nombre || client.rif}`,
-              mensaje: `Al cliente ${client.nombre || ''} (${client.rif || ''}) le falta(n) ${summary.diasRestantesMin} día(s) para finalizar su crédito (${summary.docProximoVencer || 'Documento abierto'}, saldo $${Number(summary.evalPolicy?.saldoDeudorUsd || 0).toFixed(2)}).`,
+              mensaje: `Al cliente ${client.nombre || ''} (${client.rif || ''}) le falta(n) ${summary.diasRestantesMin} día(s) para finalizar su crédito (${summary.docProximoVencer || 'Documento abierto'}, saldo $${formatNumberUs(summary.evalPolicy?.saldoDeudorUsd || 0)}).`,
               destinatario_rol: 'VENTAS',
               destinatario_usuario: client.vendedorAsignado || 'ALL',
               origen: 'MONITOR_CREDITO',
@@ -1669,7 +1695,7 @@ function MainApp() {
       },
       onPaymentOrdersChange: async () => {
         console.log('⚡ [Realtime] Recargando órdenes de pago Profit...');
-        const updatedOrders = await getSupabaseProfitPaymentOrders();
+        const updatedOrders = await getSupabaseProfitPaymentOrdersMerged();
         if (updatedOrders) setProfitPaymentOrders(updatedOrders);
       },
       onIslrWithholdingsChange: async () => {
@@ -1707,11 +1733,13 @@ function MainApp() {
   // Función para forzar sincronización y recarga inmediata desde Supabase
   const handleSyncProfit = async () => {
     try {
-      // 1. Intentar llamar al puente si está activo
-      await triggerProfitSync().catch(() => {});
-      // 2. Recargar inmediatamente los datos más recientes desde Supabase
+      // 0. Empujar primero operaciones locales pendientes para evitar sobrescribirlas al recargar
+      if (getPendingSyncCount() > 0) {
+        await flushSyncQueue().catch(() => {});
+      }
+      // 1. Recargar inmediatamente los datos más recientes desde Supabase
       const [
-        latestProds, latestClis, latestOrds, latestBnks, latestCobs, latestFacs,
+        latestProds, latestClis, latestOrds, latestBnks, latestCobs, latestFacs, latestSales,
         latestSups, latestPurs, latestCxp, latestPays, latestSellers, latestZones, latestTrans,
         latestReturns, latestAju, latestTra, latestIslr, latestBen, latestOrders, latestWithholdings,
         latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs
@@ -1722,6 +1750,7 @@ function MainApp() {
         getSupabaseProfitBankAccounts(),
         getSupabaseProfitCollections(),
         getSupabaseProfitInvoices(),
+        getSupabaseSales(),
         getSupabaseProfitSuppliers(),
         getSupabaseProfitPurchases(),
         getSupabaseProfitAccountsPayable(),
@@ -1734,7 +1763,7 @@ function MainApp() {
         getSupabaseProfitWarehouseTransfers(),
         getSupabaseProfitIslrConcepts(),
         getSupabaseProfitBeneficiaries(),
-        getSupabaseProfitPaymentOrders(),
+        getSupabaseProfitPaymentOrdersMerged(),
         getSupabaseProfitIslrWithholdings(),
         getSupabaseProfitAuditTrails(),
         getSupabaseProfitWarehouses(),
@@ -1748,6 +1777,7 @@ function MainApp() {
       if (latestBnks) setProfitBankAccounts(latestBnks);
       if (latestCobs) setProfitCollections(latestCobs);
       if (latestFacs) setProfitInvoices(latestFacs);
+      if (latestSales) setSalesState(latestSales);
       if (latestSups) setProfitSuppliers(latestSups);
       if (latestPurs) setProfitPurchases(latestPurs);
       if (latestCxp) setProfitAccountsPayable(latestCxp);
@@ -2107,11 +2137,16 @@ function MainApp() {
     try {
       const newSale = await processSupabaseSale(saleData);
 
-      // Asegurar incorporación inmediata de la nueva venta sin re-descargar 5 tablas completas
+      // Asegurar incorporación inmediata de la nueva venta en sales y profitInvoices sin re-descargar 5 tablas completas
       if (newSale && (newSale.id || newSale.numeroDoc)) {
+        const newCanonKey = getEraScopedCanonicalDocKey(newSale);
+        const sKey = String(newSale.numeroDoc || newSale.id || '').trim();
         setSalesState(prev => {
-          const sKey = String(newSale.numeroDoc || newSale.id || '').trim();
-          const idx = prev.findIndex(s => String(s.id || '').trim() === String(newSale.id || '').trim() || (sKey && String(s.numeroDoc || '').trim() === sKey));
+          const idx = prev.findIndex(s =>
+            (newCanonKey && getEraScopedCanonicalDocKey(s) === newCanonKey) ||
+            String(s.id || '').trim() === String(newSale.id || '').trim() ||
+            (sKey && String(s.numeroDoc || '').trim() === sKey && String(s.tipoDoc || 'FACTURA') === String(newSale.tipoDoc || 'FACTURA'))
+          );
           if (idx >= 0) {
             const next = [...prev];
             next[idx] = { ...next[idx], ...newSale };
@@ -2119,28 +2154,139 @@ function MainApp() {
           }
           return [newSale, ...prev];
         });
+
+        const tipoUpper = String(newSale.tipoDoc || 'FACTURA').toUpperCase().trim();
+        if (tipoUpper !== 'NOTA_CREDITO' && tipoUpper !== 'COTIZACION') {
+          const isNeDoc = tipoUpper === 'NOTA_ENTREGA';
+          const netoUsd = isNeDoc ? Number(newSale.subtotalUsd || newSale.totalUsd || 0) : Number(newSale.totalUsd || 0);
+          const estadoUpper = String(newSale.estado || '').toUpperCase().trim();
+          const isSettledSale = estadoUpper === 'PAGADO' || estadoUpper === 'PAGADA' || estadoUpper === 'COBRADA';
+          const goesToReceivables = !isSettledSale && (
+            Number(newSale.diasCredito || 0) > 0 ||
+            estadoUpper === 'PENDIENTE' ||
+            tipoUpper === 'FACTURA' ||
+            tipoUpper === 'NOTA_ENTREGA'
+          );
+          const saldoVal = goesToReceivables
+            ? Number(newSale.saldoUsd !== undefined && Number(newSale.saldoUsd) > 0 ? newSale.saldoUsd : netoUsd)
+            : 0;
+          const previewInv = {
+            id: newSale.id,
+            factNum: newSale.numeroDoc,
+            numeroDoc: newSale.numeroDoc,
+            numeroControl: newSale.numeroControl,
+            tipoDoc: newSale.tipoDoc,
+            condicionPago: newSale.condicionPago,
+            clienteId: newSale.clienteId,
+            clienteNombre: newSale.clienteNombre,
+            clienteRif: newSale.clienteRif,
+            vendedorId: saleData.vendedorId || 'OF',
+            vendedorNombre: newSale.vendedor,
+            totBrutoUsd: newSale.subtotalUsd,
+            ivaUsd: isNeDoc ? 0 : newSale.ivaUsd,
+            totNetoUsd: netoUsd,
+            saldoUsd: saldoVal,
+            abonosUsd: Math.max(0, Number((netoUsd - saldoVal).toFixed(2))),
+            diasCredito: newSale.diasCredito || 0,
+            fechaEmision: newSale.fechaEmision || newSale.fecha,
+            fechaVencimiento: newSale.fechaVencimiento || newSale.fechaEmision || newSale.fecha,
+            tasa: newSale.tasaDolar,
+            status: saldoVal <= 0.01 ? 'COBRADA' : 'PENDIENTE',
+            items: newSale.items || []
+          };
+          setProfitInvoices(prev => {
+            const list = Array.isArray(prev) ? [...prev] : [];
+            const idx = list.findIndex(p =>
+              (newCanonKey && getEraScopedCanonicalDocKey(p) === newCanonKey) ||
+              String(p.id || '').trim() === String(previewInv.id || '').trim()
+            );
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...previewInv };
+              return list;
+            }
+            return [previewInv, ...list];
+          });
+        }
+
+        // Facturas y Notas de Entrega (incluso de contado) pasan a CxC; no ingresan directo a Caja/Banco al emitirse
+        const isCredSale = Number(newSale.diasCredito || saleData.diasCredito || 0) > 0
+          || String(newSale.condicionPago || saleData.condicionPago || '').toUpperCase().includes('CREDITO')
+          || String(newSale.estado || '').toUpperCase() === 'PENDIENTE';
+        if (
+          !isCredSale &&
+          tipoUpper !== 'FACTURA' &&
+          tipoUpper !== 'NOTA_ENTREGA' &&
+          tipoUpper !== 'NOTA_CREDITO' &&
+          tipoUpper !== 'COTIZACION'
+        ) {
+          try {
+            const targetAccount = saleData.selectedAccount
+              || saleData.cuentaDestino
+              || resolveTreasuryTargetForPaymentMethod(
+                newSale.metodoPago || saleData.metodoPago,
+                profitCashDesksRef.current,
+                profitBankAccountsRef.current
+              )?.accountRef;
+            if (targetAccount) {
+              const deltaUsd = Number((newSale.totalUsd ?? saleData.totalUsd ?? 0).toFixed(2));
+              const deltaBs = Number((newSale.totalBs ?? saleData.totalBs ?? 0).toFixed(2));
+              await applyTreasuryAccountDelta({
+                account: targetAccount,
+                deltaUsd,
+                deltaBs,
+                clampZero: false
+              });
+            }
+            const refreshedMovs = await getSupabaseCashMovements();
+            if (Array.isArray(refreshedMovs)) {
+              setCashMovementsState([...refreshedMovs]);
+            }
+          } catch (treasuryErr) {
+            console.warn('[handleProcessSale] No se pudo actualizar tesorería para venta contado:', treasuryErr);
+          }
+        }
+
+        if (newSale._offlineQueued) {
+          notify.warning(`Factura #${newSale.numeroDoc || newSale.id} guardada localmente en modo contingencia y encolada para subir al servidor.`);
+        }
       }
 
-      // Si la venta se originó de una Nota de Pedido de Preventa (y no se pidió conservar como FACTURADO), eliminar la orden
+      // Si la venta se originó de una Nota de Pedido de Preventa:
+      // Conservar el pedido y marcarlo como FACTURADO con los totales reales (evita borrar órdenes desde POS).
       const originOrderId = saleData.pedidoOrigenId || saleData.pedidoOrigenDoc;
-      if (originOrderId && !saleData.preserveOriginOrderOnSale) {
+      if (originOrderId && (!saleData.preserveOriginOrderOnSale || saleData.markOriginOrderBilled)) {
         try {
-          await deleteSupabaseOrder(originOrderId);
-          if (saleData.pedidoOrigenDoc && saleData.pedidoOrigenDoc !== originOrderId) {
-            await deleteSupabaseOrder(saleData.pedidoOrigenDoc);
-          }
-          deleteStorageOrder(originOrderId);
-          if (saleData.pedidoOrigenDoc) deleteStorageOrder(saleData.pedidoOrigenDoc);
-          setOrdersState(prev =>
-            prev.filter(o =>
-              o.id !== originOrderId &&
-              o.numeroDoc !== originOrderId &&
-              o.id !== saleData.pedidoOrigenId &&
-              o.numeroDoc !== saleData.pedidoOrigenDoc
-            )
+          const existingOrder = (orders || []).find(o =>
+            o &&
+            (o.id === originOrderId ||
+              o.numeroDoc === originOrderId ||
+              (saleData.pedidoOrigenId && o.id === saleData.pedidoOrigenId) ||
+              (saleData.pedidoOrigenDoc && (o.numeroDoc === saleData.pedidoOrigenDoc || o.id === saleData.pedidoOrigenDoc)))
           );
+          if (existingOrder) {
+            const billedOrder = {
+              ...existingOrder,
+              status: 'FACTURADO',
+              nroFactura: newSale?.numeroDoc || saleData.numeroDoc || existingOrder.nroFactura,
+              facturaId: newSale?.id || existingOrder.facturaId,
+              fechaFactura: newSale?.fechaEmision || newSale?.fecha || new Date().toISOString(),
+              metodoPagoFactura: newSale?.metodoPago || saleData.metodoPago,
+              totalBrutoUsd: newSale?.subtotalUsd ?? saleData.subtotalUsd ?? existingOrder.totalBrutoUsd,
+              ivaUsd: newSale?.ivaUsd ?? saleData.ivaUsd ?? existingOrder.ivaUsd,
+              igtfUsd: newSale?.igtfUsd ?? saleData.igtfUsd ?? existingOrder.igtfUsd,
+              totalNetoUsd: newSale?.totalUsd ?? saleData.totalUsd ?? existingOrder.totalNetoUsd,
+              totalUsd: newSale?.totalUsd ?? saleData.totalUsd ?? existingOrder.totalUsd,
+              saldoUsd: newSale?.saldoUsd ?? saleData.saldoUsd ?? existingOrder.saldoUsd
+            };
+            await saveSupabaseOrder(billedOrder, { skipStockValidation: true });
+            setOrdersState(prev =>
+              prev.map(o => (o.id === existingOrder.id ? billedOrder : o))
+            );
+          } else if (saleData.deleteOriginOrderOnSale) {
+            await deleteSupabaseOrder(originOrderId);
+          }
         } catch (statusErr) {
-          console.warn('[handleProcessSale] Error eliminando orden origen facturada:', statusErr);
+          console.warn('[handleProcessSale] Error actualizando orden origen a FACTURADO:', statusErr);
         }
       }
 
@@ -2222,8 +2368,14 @@ function MainApp() {
           setProfitAccountsPayable(prevList => {
             const list = Array.isArray(prevList) ? [...prevList] : [];
             const idx = list.findIndex(p =>
-              String(p.nroDoc || '').toUpperCase() === affNum ||
-              String(p.id || '').toUpperCase() === affNum
+              doesPayableMatchDocument(p, {
+                id: purchaseData.documentoAfectado,
+                nroDoc: affNum,
+                tipoDoc: 'FACT',
+                provRif,
+                coProv: provRif,
+                provNombre
+              })
             );
             if (idx >= 0) {
               const currentDoc = list[idx];
@@ -2282,6 +2434,26 @@ function MainApp() {
         fechaSincronizacion: new Date().toISOString()
       };
       setProfitPurchases(prev => [nextProfitPurchase, ...(Array.isArray(prev) ? prev : [])]);
+      saveSupabaseProfitPurchase({
+        ...nextProfitPurchase,
+        fact_num: nextProfitPurchase.factNum,
+        factura_prov: nextProfitPurchase.facturaProv,
+        fec_emis: nextProfitPurchase.fechaEmision,
+        fec_venc: nextProfitPurchase.fechaVencimiento,
+        co_prov: nextProfitPurchase.coProv,
+        prov_nombre: nextProfitPurchase.provNombre,
+        prov_rif: nextProfitPurchase.provRif,
+        tot_bruto_usd: nextProfitPurchase.totBrutoUsd,
+        tot_bruto_bs: nextProfitPurchase.totBrutoBs,
+        iva_usd: nextProfitPurchase.ivaUsd,
+        iva_bs: nextProfitPurchase.ivaBs,
+        tot_neto_usd: nextProfitPurchase.totNetoUsd,
+        tot_neto_bs: nextProfitPurchase.totNetoBs,
+        saldo_usd: nextProfitPurchase.saldoUsd,
+        saldo_bs: nextProfitPurchase.saldoBs,
+        forma_pag: nextProfitPurchase.formaPag,
+        fecha_sincronizacion: nextProfitPurchase.fechaSincronizacion
+      }).catch(() => {});
 
       // 3. Actualizar saldo pendiente del proveedor en cartera
       if (provRif && netoPagarUsd > 0) {
@@ -2431,7 +2603,32 @@ function MainApp() {
     } catch (err) {
       console.error(err);
       notify.error("Error al registrar el movimiento en la caja chica");
+      throw err;
     }
+  };
+
+  const handleUpdateCashDesk = async (desk) => {
+    await updateSupabaseProfitCashDesk(desk);
+    const fresh = await getSupabaseProfitCashDesks();
+    if (fresh) setProfitCashDesks(fresh);
+  };
+
+  const handleDeleteCashDesk = async (deskId) => {
+    await deleteSupabaseProfitCashDesk(deskId);
+    const fresh = await getSupabaseProfitCashDesks();
+    if (fresh) setProfitCashDesks(fresh);
+  };
+
+  const handleUpdateBankAccount = async (bankAcc) => {
+    await updateSupabaseProfitBankAccount(bankAcc);
+    const fresh = await getSupabaseProfitBankAccounts();
+    if (fresh) setProfitBankAccounts(fresh);
+  };
+
+  const handleDeleteBankAccount = async (bankId) => {
+    await deleteSupabaseProfitBankAccount(bankId);
+    const fresh = await getSupabaseProfitBankAccounts();
+    if (fresh) setProfitBankAccounts(fresh);
   };
 
   // Ejecutar Cierre Fiscal Diario (Reporte Z)
@@ -2484,7 +2681,9 @@ function MainApp() {
           return [enrichedSaved, ...prev];
         }
       });
-      if (enrichedSaved.status !== 'FACTURADO') {
+      if (enrichedSaved._offlineQueued) {
+        notify.warning(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.id} guardado localmente sin conexión y encolado para sincronizar.`);
+      } else if (enrichedSaved.status !== 'FACTURADO') {
         const isClientReq = String(enrichedSaved.tipoDoc || enrichedSaved.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
         if (isClientReq) {
           if (enrichedSaved.status === 'PENDIENTE_APROBACION') {
@@ -2535,30 +2734,42 @@ function MainApp() {
     }
   };
 
-  // Eliminar Factura / Venta / Documento CxC
+  // Eliminar Factura / Venta / Documento CxC (sin colisión cruzada FACTURA vs NOTA_ENTREGA)
   const handleDeleteSale = async (saleIdOrDoc) => {
     try {
-      const rawId = typeof saleIdOrDoc === 'object' ? (saleIdOrDoc?.id || '') : String(saleIdOrDoc || '');
-      const rawNum = typeof saleIdOrDoc === 'object'
-        ? (saleIdOrDoc?.factNum || saleIdOrDoc?.factura || saleIdOrDoc?.numeroDoc || saleIdOrDoc?.id || '')
-        : String(saleIdOrDoc || '');
-      const cleanNum = String(rawNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-      const cleanId = String(rawId).trim();
-      const candidateKeys = new Set([cleanId, cleanNum, rawId, rawNum, `FAC-${cleanNum}`, `NE-${cleanNum}`, `DOC-${cleanNum}`, `INV-${cleanNum}`].filter(Boolean));
+      const isObj = typeof saleIdOrDoc === 'object' && saleIdOrDoc !== null;
+      const rawId = isObj ? String(saleIdOrDoc?.id || '').trim() : String(saleIdOrDoc || '').trim();
+      const rawNum = isObj
+        ? String(saleIdOrDoc?.factNum || saleIdOrDoc?.factura || saleIdOrDoc?.numeroDoc || saleIdOrDoc?.id || '').trim()
+        : String(saleIdOrDoc || '').trim();
+      const targetTipo = inferCxcDocType(saleIdOrDoc);
+      const targetCanon = getCanonicalDocKey(saleIdOrDoc, targetTipo);
+      const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+      const cleanId = rawId;
 
       await deleteSupabaseSale(saleIdOrDoc);
-      deleteStorageSale(cleanId, { skipStockAdjustment: true });
-      deleteStorageSale(cleanNum, { skipStockAdjustment: true });
-      setSalesState(prev => (prev || []).filter(s => {
-        const sId = String(s.id || '').trim();
-        const sNum = String(s.numeroDoc || s.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-        return !candidateKeys.has(sId) && !candidateKeys.has(sNum);
-      }));
-      setProfitInvoices(prev => (prev || []).filter(p => {
-        const pKey = String(p.factNum || p.fact_num || p.numeroDoc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-        const pId = String(p.id || '').trim();
-        return !candidateKeys.has(pId) && !candidateKeys.has(pKey);
-      }));
+      if (cleanId) deleteStorageSale(cleanId, { skipStockAdjustment: true });
+      if (rawNum && rawNum !== cleanId) deleteStorageSale(rawNum, { skipStockAdjustment: true });
+
+      const doesEntryMatchDeletedTarget = (entry) => {
+        if (!entry) return false;
+        const entryId = String(entry.id || '').trim();
+        if (cleanId && entryId && entryId === cleanId && inferCxcDocType(entry) === targetTipo) {
+          return true;
+        }
+        const entryCanon = getCanonicalDocKey(entry);
+        if (targetCanon && entryCanon) {
+          return entryCanon === targetCanon;
+        }
+        if (cleanNum && inferCxcDocType(entry) === targetTipo) {
+          const eNum = String(entry.factNum || entry.fact_num || entry.numeroDoc || entry.numero_doc || '').replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+          return eNum === cleanNum;
+        }
+        return false;
+      };
+
+      setSalesState(prev => (prev || []).filter(s => !doesEntryMatchDeletedTarget(s)));
+      setProfitInvoices(prev => (prev || []).filter(p => !doesEntryMatchDeletedTarget(p)));
       notify.success('Documento eliminado y saldo actualizado con éxito');
       return true;
     } catch (err) {
@@ -2572,11 +2783,19 @@ function MainApp() {
   const handleSaveCxcDocument = async (docData) => {
     const saved = await saveSupabaseProfitInvoice(docData);
     if (!saved) return null;
+    if (saved.factNum) {
+      if (String(saved.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA') {
+        commitNotaEntregaCorrelativo(saved.factNum);
+      } else {
+        commitInvoiceCorrelativo(saved.factNum);
+      }
+    }
+    const savedCanonKey = getEraScopedCanonicalDocKey(saved);
     setProfitInvoices(prev => {
       const list = Array.isArray(prev) ? [...prev] : [];
       const idx = list.findIndex(p =>
-        String(p.id) === String(saved.id) ||
-        String(p.factNum ?? p.fact_num ?? '') === String(saved.factNum)
+        (savedCanonKey && getEraScopedCanonicalDocKey(p) === savedCanonKey) ||
+        String(p.id) === String(saved.id)
       );
       if (idx >= 0) {
         const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
@@ -2588,8 +2807,8 @@ function MainApp() {
     setSalesState(prev => {
       const list = Array.isArray(prev) ? [...prev] : [];
       const idx = list.findIndex(s =>
-        String(s.id) === String(saved.id) ||
-        String(s.numeroDoc ?? s.factNum ?? '') === String(saved.factNum)
+        (savedCanonKey && getEraScopedCanonicalDocKey(s) === savedCanonKey) ||
+        String(s.id) === String(saved.id)
       );
       if (idx >= 0) {
         const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
@@ -2652,14 +2871,192 @@ function MainApp() {
     return saved;
   };
 
-  // Registrar Cobro en Cuentas por Cobrar (Parte A) y actualizar Abonos y Restante (Parte B)
+  // Actualizar datos de una Factura o Nota de Entrega existente (correlativo, fecha/hora, cliente, montos)
+  const handleUpdateInvoiceDocument = async (originalDoc, updatedDocData) => {
+    const saved = await updateSupabaseInvoiceDocument(originalDoc, updatedDocData);
+    if (!saved) return null;
+
+    const oldId = String(originalDoc?.id || '').trim().toUpperCase();
+    const oldNum = String(originalDoc?.factNum ?? originalDoc?.fact_num ?? originalDoc?.numeroDoc ?? '').trim().toUpperCase();
+    const savedId = String(saved.id || '').trim().toUpperCase();
+    const savedNum = String(saved.factNum || saved.numeroDoc || '').trim().toUpperCase();
+    const renamed = (oldId && savedId && oldId !== savedId) || (oldNum && savedNum && oldNum !== savedNum);
+
+    setProfitInvoices(prev => {
+      const base = Array.isArray(prev) ? [...prev] : [];
+      const list = renamed
+        ? base.filter(p => {
+            const pId = String(p.id || '').trim().toUpperCase();
+            const pNum = String(p.factNum ?? p.fact_num ?? p.numeroDoc ?? '').trim().toUpperCase();
+            return pId !== oldId && pNum !== oldNum;
+          })
+        : base;
+      const idx = list.findIndex(p =>
+        String(p.id || '').trim().toUpperCase() === savedId ||
+        String(p.factNum ?? p.fact_num ?? '').trim().toUpperCase() === savedNum
+      );
+      if (idx >= 0) {
+        const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
+        list[idx] = { ...list[idx], ...saved, items: mergedItems };
+        return list;
+      }
+      return [saved, ...list];
+    });
+
+    setSalesState(prev => {
+      const base = Array.isArray(prev) ? [...prev] : [];
+      const list = renamed
+        ? base.filter(s => {
+            const sId = String(s.id || '').trim().toUpperCase();
+            const sNum = String(s.numeroDoc ?? s.factNum ?? '').trim().toUpperCase();
+            return sId !== oldId && sNum !== oldNum;
+          })
+        : base;
+      const idx = list.findIndex(s =>
+        String(s.id || '').trim().toUpperCase() === savedId ||
+        String(s.numeroDoc ?? s.factNum ?? '').trim().toUpperCase() === savedNum
+      );
+      const nextSalePatch = {
+        ...saved,
+        numeroDoc: saved.numeroDoc || saved.factNum,
+        numeroControl: saved.numeroControl || `00-${String(saved.factNum).replace(/\D/g, '').padStart(6, '0')}`,
+        fecha: saved.fechaEmision,
+        fechaEmision: saved.fechaEmision,
+        fechaVencimiento: saved.fechaVencimiento,
+        diasCredito: saved.diasCredito,
+        condicionPago: saved.condicionPago || (Number(saved.diasCredito || 0) > 0 ? 'CREDITO' : 'CONTADO'),
+        metodoPago: saved.metodoPago || (Number(saved.diasCredito || 0) > 0 ? 'CREDITO' : 'EFECTIVO_USD'),
+        vendedor: saved.vendedorNombre || saved.vendedor || '',
+        subtotalUsd: saved.totBrutoUsd,
+        ivaUsd: saved.ivaUsd,
+        totalUsd: saved.totNetoUsd,
+        subtotalBs: saved.totBrutoBs,
+        ivaBs: saved.ivaBs,
+        totalBs: saved.totNetoBs,
+        saldoUsd: saved.saldoUsd,
+        saldo_usd: saved.saldoUsd,
+        saldoBs: saved.saldoBs,
+        saldo_bs: saved.saldoBs,
+        abonosUsd: saved.abonosUsd,
+        abonos_usd: saved.abonosUsd,
+        abonosBs: saved.abonosBs,
+        estado: Number(saved.saldoUsd || 0) <= 0.01 ? 'PAGADO' : 'PENDIENTE'
+      };
+      if (idx >= 0) {
+        const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
+        list[idx] = { ...list[idx], ...nextSalePatch, items: mergedItems };
+        return list;
+      }
+      return [{ ...nextSalePatch, items: saved.items || [] }, ...list];
+    });
+
+    return saved;
+  };
+
+  // Helper unificado para acreditar/debitar Cajas Operativas y Cuentas Bancarias en USD y Bs
+  const applyTreasuryAccountDelta = async ({ account, deltaUsd = 0, deltaBs = 0, clampZero = false }) => {
+    if (!account) return null;
+    const accountKind = inferTreasuryAccountKind(account);
+    if (accountKind === 'CAJA') {
+      let currentDesks = Array.isArray(profitCashDesksRef.current) ? profitCashDesksRef.current : [];
+      let targetDesk = currentDesks.find((d) => matchesCashDesk(d, account));
+      if (!targetDesk) {
+        try {
+          const freshDesks = await getSupabaseProfitCashDesks();
+          if (Array.isArray(freshDesks) && freshDesks.length > 0) {
+            currentDesks = freshDesks;
+            targetDesk = freshDesks.find((d) => matchesCashDesk(d, account));
+          }
+        } catch (_) {}
+      }
+      if (!targetDesk) {
+        console.warn('[applyTreasuryAccountDelta] Caja destino no encontrada:', account);
+        return null;
+      }
+      const updatedDesk = applyTreasuryBalanceDelta(targetDesk, { deltaUsd, deltaBs, clampZero });
+      const nextDesks = currentDesks.map((d) => (matchesCashDesk(d, updatedDesk) ? updatedDesk : d));
+      profitCashDesksRef.current = nextDesks;
+      setProfitCashDesks(nextDesks);
+      await updateSupabaseProfitCashDesk(updatedDesk);
+      return updatedDesk;
+    }
+
+    if (accountKind === 'BANCO') {
+      let currentBanks = Array.isArray(profitBankAccountsRef.current) ? profitBankAccountsRef.current : [];
+      let targetBank = currentBanks.find((b) => matchesBankAccount(b, account));
+      if (!targetBank) {
+        try {
+          const freshBanks = await getSupabaseProfitBankAccounts();
+          if (Array.isArray(freshBanks) && freshBanks.length > 0) {
+            currentBanks = freshBanks;
+            targetBank = freshBanks.find((b) => matchesBankAccount(b, account));
+          }
+        } catch (_) {}
+      }
+      if (!targetBank) {
+        console.warn('[applyTreasuryAccountDelta] Cuenta bancaria destino no encontrada:', account);
+        return null;
+      }
+      const updatedBank = applyTreasuryBalanceDelta(targetBank, { deltaUsd, deltaBs, clampZero });
+      const nextBanks = currentBanks.map((b) => (matchesBankAccount(b, updatedBank) ? updatedBank : b));
+      profitBankAccountsRef.current = nextBanks;
+      setProfitBankAccounts(nextBanks);
+      await updateSupabaseProfitBankAccount(updatedBank);
+      return updatedBank;
+    }
+    return null;
+  };
+
+  // Registrar Cobro en Cuentas por Cobrar (Parte A) y actualizar Abonos, Tesorería y Flujo de Caja
   const handleRegisterCxcCollection = async (payloadOrParams) => {
     const raw = payloadOrParams || {};
     const docToSave = raw.updatedDoc || raw.updatedInvoice || null;
-    const savedDoc = docToSave ? await handleSaveCxcDocument(docToSave) : null;
+    const targetCanon = docToSave ? getEraScopedCanonicalDocKey(docToSave) : '';
+    const prevDocSnapshot = docToSave
+      ? (profitInvoices || []).find(p =>
+          (targetCanon && getEraScopedCanonicalDocKey(p) === targetCanon) ||
+          (docToSave.id && String(p.id) === String(docToSave.id))
+        ) || null
+      : null;
 
-    let colPayload = raw.collectionPayload;
-    if (!colPayload && (raw.montoUsd || raw.montoBs)) {
+    let savedDoc = null;
+    if (docToSave) {
+      savedDoc = await handleSaveCxcDocument(docToSave);
+      if (!savedDoc) {
+        throw new Error('No se pudo actualizar el documento CxC en el servidor.');
+      }
+    }
+
+    const effectiveDocType = raw.tipoDoc || savedDoc?.tipoDoc || docToSave?.tipoDoc || 'FACTURA';
+    const resolvedMonedaPago = raw.monedaPago || raw.collectionPayload?.monedaPago || (String(raw.tipoTasa || raw.collectionPayload?.tipoTasa || raw.moneda || '').toUpperCase().includes('USD') || String(raw.moneda || '').toUpperCase() === 'US$' ? 'USD' : 'BS');
+    const resolvedTipoTasa = normalizeRateType(raw.tipoTasa ?? raw.collectionPayload?.tipoTasa, {
+      tipoDoc: effectiveDocType,
+      monedaPago: resolvedMonedaPago,
+      fallback: 'BCV'
+    });
+    const baseRate = Number(raw.collectionPayload?.tasaPago || raw.tasaPago || raw.collectionPayload?.tasa || raw.tasa || config?.tasaDolar || 1) || 1;
+    const rawAmounts = normalizeCollectionWriteAmounts({
+      montoUsd: raw.collectionPayload?.montoUsd ?? raw.montoUsd ?? 0,
+      montoBs: resolvedTipoTasa === 'USD' ? (raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0) : (raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0),
+      tasa: baseRate
+    });
+    const finalMontoBs = resolvedTipoTasa === 'USD' && Number(raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0) === 0
+      ? 0
+      : rawAmounts.montoBs;
+
+    let colPayload = raw.collectionPayload
+      ? {
+          ...raw.collectionPayload,
+          montoUsd: rawAmounts.montoUsd,
+          montoBs: finalMontoBs,
+          tasa: rawAmounts.tasa,
+          tipoTasa: resolvedTipoTasa,
+          tasaPago: Number(raw.collectionPayload?.tasaPago ?? raw.tasaPago ?? rawAmounts.tasa ?? baseRate),
+          monedaPago: resolvedTipoTasa === 'USD' ? 'USD' : resolvedMonedaPago
+        }
+      : null;
+
+    if (!colPayload && (rawAmounts.montoUsd > 0 || finalMontoBs > 0)) {
       const cobNum = `COB-${Date.now().toString().slice(-6)}`;
       colPayload = {
         id: `cob-${cobNum}`,
@@ -2669,16 +3066,21 @@ function MainApp() {
         clienteNombre: raw.clienteNombre || 'Cliente General',
         clienteRif: raw.clienteRif || '',
         vendedorId: raw.vendedorId || 'OF',
-        montoUsd: Number(raw.montoUsd || 0),
-        montoBs: Number(raw.montoBs || 0),
-        tasa: Number(raw.tasa || 1),
+        montoUsd: rawAmounts.montoUsd,
+        montoBs: finalMontoBs,
+        tasa: rawAmounts.tasa,
+        tipoTasa: resolvedTipoTasa,
+        tasaPago: Number(raw.tasaPago ?? rawAmounts.tasa ?? baseRate),
+        monedaPago: resolvedTipoTasa === 'USD' ? 'USD' : resolvedMonedaPago,
         cuentaId: raw.accountId || raw.cuentaId || '',
         cuentaNombre: raw.cuentaDestino || raw.cuentaNombre || '',
-        descrip: raw.observaciones || `Cobro Factura #${raw.factNum || ''}`,
+        descrip: raw.observaciones || `Cobro ${raw.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${raw.factNum || ''}`,
         formasPago: [{
           formaPago: raw.formaPago === 'EFECTIVO' ? 'EFEC' : 'TRANS',
-          monto: Number(raw.montoBs || 0),
-          montoUsd: Number(raw.montoUsd || 0),
+          monto: finalMontoBs,
+          montoUsd: rawAmounts.montoUsd,
+          tipoTasa: resolvedTipoTasa,
+          tasaPago: Number(raw.tasaPago ?? rawAmounts.tasa ?? baseRate),
           referencia: raw.referencia || '',
           codCaja: raw.accountType === 'CAJA' ? (raw.accountId || '') : '',
           codCta: raw.accountType === 'BANCO' ? (raw.accountId || '') : ''
@@ -2686,16 +3088,24 @@ function MainApp() {
         documentosAfectados: [{
           numDoc: raw.factNum || '',
           tipoDoc: raw.tipoDoc === 'NOTA_ENTREGA' ? 'N/E' : 'FACT',
-          montoCobrado: Number(raw.montoBs || 0),
-          montoCobradoUsd: Number(raw.montoUsd || 0)
+          montoCobrado: finalMontoBs,
+          montoCobradoUsd: rawAmounts.montoUsd
         }]
       };
     }
 
+    let savedCob = null;
     if (colPayload) {
-      const savedCob = await saveSupabaseProfitCollection(colPayload);
-      if (savedCob) {
-        setProfitCollections(prev => [savedCob, ...(Array.isArray(prev) ? prev : [])]);
+      try {
+        savedCob = await saveSupabaseProfitCollection(colPayload);
+        if (savedCob) {
+          setProfitCollections(prev => [savedCob, ...(Array.isArray(prev) ? prev.filter(c => String(c.id) !== String(savedCob.id)) : [])]);
+        }
+      } catch (cobErr) {
+        if (prevDocSnapshot) {
+          await handleSaveCxcDocument(prevDocSnapshot).catch(() => {});
+        }
+        throw cobErr;
       }
     }
 
@@ -2704,53 +3114,59 @@ function MainApp() {
       rawId: raw.accountId,
       accountType: raw.accountType,
       id: raw.accountId,
+      codCta: raw.accountType === 'BANCO' ? raw.accountId : undefined,
+      coCaja: raw.accountType === 'CAJA' ? raw.accountId : undefined,
       nombre: raw.cuentaDestino || ''
     } : null);
 
     if (account) {
-      const montoUsd = Number(colPayload?.montoUsd || raw.montoUsd || 0);
-      const montoBs = Number(colPayload?.montoBs || raw.montoBs || 0);
-      const accountKind = account.kind || account.accountType;
-      const targetId = String(account.rawId || account.id || '');
+      const montoUsd = Number(savedCob?.montoUsd ?? colPayload?.montoUsd ?? rawAmounts.montoUsd ?? 0);
+      const montoBs = Number(savedCob?.montoBs ?? colPayload?.montoBs ?? rawAmounts.montoBs ?? 0);
+      try {
+        await applyTreasuryAccountDelta({ account, deltaUsd: montoUsd, deltaBs: montoBs, clampZero: false });
+      } catch (acctErr) {
+        console.error('[handleRegisterCxcCollection] Error actualizando saldo de caja/banco:', acctErr?.message || acctErr);
+        if (prevDocSnapshot) {
+          await handleSaveCxcDocument(prevDocSnapshot).catch(() => {});
+        }
+        throw new Error('No se pudo acreditar el cobro en la caja/banco seleccionada: ' + (acctErr?.message || acctErr));
+      }
+    }
 
-      if (accountKind === 'CAJA') {
-        setProfitCashDesks(prev => {
-          const list = Array.isArray(prev) ? [...prev] : [];
-          return list.map(d => {
-            if (String(d.id || d.coCaja) === targetId) {
-              const updatedDesk = {
-                ...d,
-                saldoUsd: Number(((Number(d.saldoUsd || 0)) + montoUsd).toFixed(2)),
-                saldoBs: Number(((Number(d.saldoBs || 0)) + montoBs).toFixed(2))
-              };
-              updateSupabaseProfitCashDesk(updatedDesk).catch(() => {});
-              return updatedDesk;
-            }
-            return d;
-          });
-        });
-      } else if (accountKind === 'BANCO') {
-        setProfitBankAccounts(prev => {
-          const list = Array.isArray(prev) ? [...prev] : [];
-          return list.map(b => {
-            if (String(b.id || b.codCta) === targetId) {
-              const updatedBank = {
-                ...b,
-                saldoUsd: Number(((Number(b.saldoUsd || 0)) + montoUsd).toFixed(2)),
-                saldoBs: Number(((Number(b.saldoBs || 0)) + montoBs).toFixed(2))
-              };
-              updateSupabaseProfitBankAccount(updatedBank).catch(() => {});
-              return updatedBank;
-            }
-            return b;
-          });
-        });
+    const montoCobradoUsd = Number(savedCob?.montoUsd ?? colPayload?.montoUsd ?? rawAmounts.montoUsd ?? 0);
+    const montoCobradoBs = Number(savedCob?.montoBs ?? colPayload?.montoBs ?? rawAmounts.montoBs ?? 0);
+
+    // Registrar movimiento INGRESO en Flujo de Caja / Caja Chica
+    if (montoCobradoUsd > 0) {
+      try {
+        const mov = {
+          tipo: 'INGRESO',
+          categoria: 'COBRO_CXC',
+          concepto: colPayload?.descrip || `Cobro CxC ${raw.clienteNombre || savedDoc?.clienteNombre || ''} (#${raw.factNum || savedDoc?.factNum || ''})`.trim(),
+          montoUsd: montoCobradoUsd,
+          montoBs: montoCobradoBs,
+          tasa: Number(colPayload?.tasaPago || colPayload?.tasa || rawAmounts.tasa || config?.tasaDolar || 1),
+          tipoTasa: colPayload?.tipoTasa || resolvedTipoTasa,
+          tasaPago: Number(colPayload?.tasaPago || colPayload?.tasa || rawAmounts.tasa || config?.tasaDolar || 1),
+          monedaPago: colPayload?.monedaPago || (resolvedTipoTasa === 'USD' ? 'USD' : 'BS'),
+          moneda: raw.moneda || (account?.moneda === 'USD' ? 'US$' : 'BS'),
+          cuentaId: account?.rawId || account?.id || colPayload?.cuentaId || '',
+          cuentaNombre: account?.nombre || colPayload?.cuentaNombre || '',
+          referencia: raw.referencia || savedCob?.cobNum || colPayload?.cobNum || '',
+          fecha: colPayload?.fecha || raw.fecha || new Date().toISOString().split('T')[0],
+          usuario: currentUser?.nombre || currentUser?.username || 'COBRANZAS'
+        };
+        const createdMov = await addSupabaseCashMovement(mov);
+        if (createdMov) {
+          setCashMovementsState(prev => [createdMov, ...(Array.isArray(prev) ? prev : [])]);
+        }
+      } catch (movErr) {
+        console.warn('[handleRegisterCxcCollection] No se pudo registrar ingreso en flujo de caja:', movErr?.message || movErr);
       }
     }
 
     const clienteId = colPayload?.clienteId || raw.clienteId || savedDoc?.clienteId;
     const clienteRif = colPayload?.clienteRif || raw.clienteRif || savedDoc?.clienteRif;
-    const montoCobradoUsd = Number(colPayload?.montoUsd || raw.montoUsd || 0);
 
     if (montoCobradoUsd > 0 && (clienteId || clienteRif)) {
       setClientsState(prev => {
@@ -2774,7 +3190,25 @@ function MainApp() {
       });
     }
 
-    return savedDoc;
+    return savedDoc || savedCob;
+  };
+
+  // Actualizar metadatos (ej. correlativo manual) de un cobro / movimiento CxC sin alterar saldos de caja ni deuda
+  const handleUpdateCxcCollection = async (collectionData) => {
+    if (!collectionData || !collectionData.id) return null;
+    const savedCob = await saveSupabaseProfitCollection(collectionData);
+    if (savedCob) {
+      setProfitCollections(prev => {
+        const list = Array.isArray(prev) ? [...prev] : [];
+        const idx = list.findIndex(c => String(c.id) === String(savedCob.id));
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...savedCob };
+          return list;
+        }
+        return [savedCob, ...list];
+      });
+    }
+    return savedCob;
   };
 
   // Guardar o Editar Documento CxP (Factura de Compra, Adelanto, etc.)
@@ -2783,10 +3217,7 @@ function MainApp() {
     if (!saved) return null;
     setProfitAccountsPayable(prev => {
       const list = Array.isArray(prev) ? [...prev] : [];
-      const idx = list.findIndex(p =>
-        String(p.id) === String(saved.id) ||
-        (String(p.nroDoc ?? p.nro_doc ?? '') === String(saved.nroDoc) && String(p.tipoDoc ?? p.tipo_doc ?? '') === String(saved.tipoDoc))
-      );
+      const idx = list.findIndex(p => doesPayableMatchDocument(p, saved));
       if (idx >= 0) {
         list[idx] = { ...list[idx], ...saved };
         return list;
@@ -2796,16 +3227,16 @@ function MainApp() {
     return saved;
   };
 
-  // Eliminar / Anular Documento CxP
+  // Eliminar / Anular Documento CxP (protegido contra colisión de nroDoc entre proveedores)
   const handleDeleteCxpDocument = async (payableOrId) => {
     try {
-      const rawId = typeof payableOrId === 'object' ? (payableOrId?.id || '') : String(payableOrId || '');
-      const rawNum = typeof payableOrId === 'object' ? (payableOrId?.nroDoc || payableOrId?.nro_doc || payableOrId?.id || '') : String(payableOrId || '');
+      const isObj = payableOrId && typeof payableOrId === 'object';
+      const rawId = isObj ? String(payableOrId?.id || '').trim() : String(payableOrId || '').trim();
       await deleteSupabaseProfitAccountsPayable(payableOrId);
       setProfitAccountsPayable(prev => (prev || []).filter(p => {
-        const pId = String(p.id || '').trim();
-        const pNum = String(p.nroDoc ?? p.nro_doc ?? '').trim();
-        return pId !== rawId && pNum !== rawNum;
+        if (!p) return false;
+        if (isObj) return !doesPayableMatchDocument(p, payableOrId);
+        return String(p.id || '').trim() !== rawId;
       }));
       notify.success('Documento de Cuenta por Pagar eliminado con éxito');
       return true;
@@ -2816,60 +3247,87 @@ function MainApp() {
     }
   };
 
-  // Registrar Pago a Proveedor en Cuentas por Pagar (Parte A) y actualizar Saldo y Abonos
+  // Registrar Pago a Proveedor en Cuentas por Pagar (Parte A) con atomicidad y egreso en flujo de caja
   const handleRegisterCxpPayment = async ({ updatedDoc, paymentPayload, selectedAccount }) => {
+    const prevDocSnapshot = (profitAccountsPayable || []).find(p => doesPayableMatchDocument(p, updatedDoc)) || null;
     const savedDoc = await handleSaveCxpDocument(updatedDoc);
+
+    let savedPay = null;
     if (paymentPayload) {
-      const savedPay = await saveSupabaseProfitSupplierPayment(paymentPayload);
-      if (savedPay) {
-        setProfitSupplierPayments(prev => [savedPay, ...(Array.isArray(prev) ? prev : [])]);
-      }
-    }
-    if (selectedAccount) {
-      const montoUsd = Number(paymentPayload?.montoUsd || 0);
-      const montoBs = Number(paymentPayload?.montoBs || 0);
-      if (selectedAccount.kind === 'CAJA') {
-        setProfitCashDesks(prev => {
-          const list = Array.isArray(prev) ? [...prev] : [];
-          return list.map(d => {
-            if (String(d.id || d.coCaja) === String(selectedAccount.rawId)) {
-              const updatedDesk = {
-                ...d,
-                saldoUsd: Number((Math.max(0, (Number(d.saldoUsd || 0)) - montoUsd)).toFixed(2)),
-                saldoBs: Number((Math.max(0, (Number(d.saldoBs || 0)) - montoBs)).toFixed(2))
-              };
-              updateSupabaseProfitCashDesk(updatedDesk).catch(() => {});
-              return updatedDesk;
-            }
-            return d;
-          });
-        });
-      } else if (selectedAccount.kind === 'BANCO') {
-        setProfitBankAccounts(prev => {
-          const list = Array.isArray(prev) ? [...prev] : [];
-          return list.map(b => {
-            if (String(b.id || b.codCta) === String(selectedAccount.rawId)) {
-              const updatedBank = {
-                ...b,
-                saldoUsd: Number((Math.max(0, (Number(b.saldoUsd || 0)) - montoUsd)).toFixed(2)),
-                saldoBs: Number((Math.max(0, (Number(b.saldoBs || 0)) - montoBs)).toFixed(2))
-              };
-              updateSupabaseProfitBankAccount(updatedBank).catch(() => {});
-              return updatedBank;
-            }
-            return b;
-          });
-        });
+      try {
+        savedPay = await saveSupabaseProfitSupplierPayment(paymentPayload);
+        if (savedPay) {
+          setProfitSupplierPayments(prev => [savedPay, ...(Array.isArray(prev) ? prev : [])]);
+        }
+      } catch (payErr) {
+        if (prevDocSnapshot) {
+          await handleSaveCxpDocument(prevDocSnapshot).catch(() => {});
+        }
+        throw payErr;
       }
     }
 
-    const provRif = String(paymentPayload?.provRif || paymentPayload?.coProv || savedDoc?.provRif || '').trim().toUpperCase();
+    if (selectedAccount) {
+      const montoUsd = Number(paymentPayload?.montoUsd || 0);
+      const montoBs = Number(paymentPayload?.montoBs || 0);
+      try {
+        await applyTreasuryAccountDelta({
+          account: selectedAccount,
+          deltaUsd: -montoUsd,
+          deltaBs: -montoBs,
+          clampZero: true
+        });
+      } catch (acctErr) {
+        console.error('[handleRegisterCxpPayment] Error debitando caja/banco:', acctErr?.message || acctErr);
+        if (prevDocSnapshot) {
+          await handleSaveCxpDocument(prevDocSnapshot).catch(() => {});
+        }
+        throw new Error('No se pudo debitar la cuenta bancaria/caja seleccionada: ' + (acctErr?.message || acctErr));
+      }
+    }
+
+    // Registrar movimiento EGRESO en Caja Chica / Flujo de Caja
     const montoPagadoUsd = Number(paymentPayload?.montoUsd || 0);
-    if (provRif && montoPagadoUsd > 0) {
+    if (montoPagadoUsd > 0) {
+      try {
+        const payRateType = normalizeRateType(paymentPayload?.tipoTasa, {
+          tipoDoc: updatedDoc?.tipoDoc || updatedDoc?.tipo_doc,
+          monedaPago: paymentPayload?.monedaPago || paymentPayload?.moneda,
+          fallback: 'BCV'
+        });
+        const payTasa = Number(paymentPayload?.tasaPago || paymentPayload?.tasa || config?.tasaDolar || 1);
+        const mov = {
+          tipo: 'EGRESO',
+          categoria: 'PAGO_PROVEEDOR',
+          concepto: paymentPayload?.descrip || `Pago a proveedor ${paymentPayload?.provNombre || savedDoc?.provNombre || ''} (${updatedDoc?.tipoDoc || 'DOC'} #${updatedDoc?.nroDoc || ''})`.trim(),
+          montoUsd: montoPagadoUsd,
+          montoBs: Number(paymentPayload?.montoBs || 0),
+          tasa: payTasa,
+          tipoTasa: payRateType,
+          tasaPago: payTasa,
+          monedaPago: paymentPayload?.monedaPago || (payRateType === 'USD' ? 'USD' : 'BS'),
+          moneda: paymentPayload?.moneda || (selectedAccount?.moneda === 'USD' ? 'US$' : 'BS'),
+          cuentaId: selectedAccount?.id || paymentPayload?.cuentaId || '',
+          cuentaNombre: selectedAccount?.nombre || paymentPayload?.cuentaNombre || '',
+          referencia: paymentPayload?.referencia || savedPay?.pagoNum || '',
+          fecha: paymentPayload?.fechaPago || new Date().toISOString().split('T')[0],
+          usuario: currentUser?.nombre || currentUser?.username || 'TESORERIA'
+        };
+        const createdMov = await addSupabaseCashMovement(mov);
+        if (createdMov) {
+          setCashMovementsState(prev => [createdMov, ...(Array.isArray(prev) ? prev : [])]);
+        }
+      } catch (movErr) {
+        console.warn('[handleRegisterCxpPayment] No se pudo registrar egreso en flujo de caja:', movErr?.message || movErr);
+      }
+    }
+
+    const providerContext = paymentPayload || savedDoc;
+    if (providerContext && montoPagadoUsd > 0) {
       setSuppliersState(prev => {
         const list = Array.isArray(prev) ? [...prev] : [];
         return list.map(s => {
-          if (String(s.rif || '').toUpperCase() === provRif || String(s.rif || '').replace(/[^A-Za-z0-9]/g, '') === provRif.replace(/[^A-Za-z0-9]/g, '')) {
+          if (doProvidersMatch(s, providerContext)) {
             const currentDebt = Number(s.saldoPendienteUsd ?? s.saldo_pendiente_usd ?? 0);
             const newDebt = Math.max(0, Number((currentDebt - montoPagadoUsd).toFixed(2)));
             return {
@@ -2968,6 +3426,8 @@ function MainApp() {
         onSwitchToDesktop={handleSwitchToDesktop}
         onSaveOrder={handleSaveOrder}
         onProceedToPOS={handleProceedToInvoiceFromOrder}
+        pendingOrderToBill={pendingOrderToBill}
+        onClearPendingOrder={() => setPendingOrderToBill(null)}
         onProcessSale={handleProcessSale}
         onSaveConfig={handleSaveConfig}
         onSaveProduct={handleSaveProduct}
@@ -2977,6 +3437,10 @@ function MainApp() {
         onRejectClient={handleRejectClient}
         onRegisterPurchase={handleRegisterPurchase}
         onAddCashMovement={handleAddCashMovement}
+        onUpdateCashDesk={handleUpdateCashDesk}
+        onDeleteCashDesk={handleDeleteCashDesk}
+        onUpdateBankAccount={handleUpdateBankAccount}
+        onDeleteBankAccount={handleDeleteBankAccount}
         onExecuteCierreZ={handleExecuteCierreZ}
         onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
         onUsersUpdated={handleUsersUpdated}
@@ -3117,6 +3581,7 @@ function MainApp() {
               initialOrder={ordersSalesModalOrder}
               onProceedToPOS={handleProceedToInvoiceFromOrder}
               onSaveCxcDocument={handleSaveCxcDocument}
+              onUpdateInvoiceDocument={handleUpdateInvoiceDocument}
               onSaveClient={handleSaveClient}
             />
           )}
@@ -3332,6 +3797,7 @@ function MainApp() {
               onSavePurchaseOrder={handleSavePurchaseOrder}
               onSaveGoodsReceipt={handleSaveGoodsReceiptNote}
               onSavePaymentOrder={handleSavePaymentOrder}
+              onOpenCxpModule={() => setActiveTab('cxp')}
               currentUser={currentUser}
               profitSuppliers={profitSuppliers}
               profitPurchases={profitPurchases}
@@ -3354,26 +3820,10 @@ function MainApp() {
               bankAccounts={profitBankAccounts}
               cashMovements={cashMovements}
               onAddMovement={handleAddCashMovement}
-              onUpdateCashDesk={async (desk) => {
-                await updateSupabaseProfitCashDesk(desk);
-                const fresh = await getSupabaseProfitCashDesks();
-                if (fresh) setProfitCashDesks(fresh);
-              }}
-              onDeleteCashDesk={async (deskId) => {
-                await deleteSupabaseProfitCashDesk(deskId);
-                const fresh = await getSupabaseProfitCashDesks();
-                if (fresh) setProfitCashDesks(fresh);
-              }}
-              onUpdateBankAccount={async (bankAcc) => {
-                await updateSupabaseProfitBankAccount(bankAcc);
-                const fresh = await getSupabaseProfitBankAccounts();
-                if (fresh) setProfitBankAccounts(fresh);
-              }}
-              onDeleteBankAccount={async (bankId) => {
-                await deleteSupabaseProfitBankAccount(bankId);
-                const fresh = await getSupabaseProfitBankAccounts();
-                if (fresh) setProfitBankAccounts(fresh);
-              }}
+              onUpdateCashDesk={handleUpdateCashDesk}
+              onDeleteCashDesk={handleDeleteCashDesk}
+              onUpdateBankAccount={handleUpdateBankAccount}
+              onDeleteBankAccount={handleDeleteBankAccount}
               config={config}
               currentUser={currentUser}
             />
@@ -3398,6 +3848,7 @@ function MainApp() {
               onDeleteSale={handleDeleteSale}
               onSaveDocument={handleSaveCxcDocument}
               onRegisterCollection={handleRegisterCxcCollection}
+              onUpdateCollection={handleUpdateCxcCollection}
               onSaveClient={handleSaveClient}
               onDeleteClient={handleDeleteClient}
               onApproveClient={handleApproveClient}

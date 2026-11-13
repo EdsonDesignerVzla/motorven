@@ -11,7 +11,7 @@ import {
   AlertTriangle,
   Printer
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateSalesPOSPDF, resolveDeliveryNoteLineItems } from '../services/pdfReportService';
 
 export default function ProfitInvoiceModal({ invoice, onClose, config = {}, currentUser = null, tasaBcv = 827.73 }) {
@@ -146,10 +146,10 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
                 Volumen Despachado
               </div>
               <div style={{ fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-tech)', fontSize: '1.15rem', marginTop: '2px' }}>
-                {invoice.totalLitros?.toLocaleString('es-VE', { minimumFractionDigits: 1 })} Litros
+                {formatUnitVe(invoice.totalLitros || 0)} Litros
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                ≈ {invoice.totalCajas?.toFixed(1)} Cajas Eq.
+                ≈ {formatUnitVe(invoice.totalCajas || 0)} Cajas Eq.
               </div>
             </div>
           </div>
@@ -185,7 +185,7 @@ export default function ProfitInvoiceModal({ invoice, onClose, config = {}, curr
                         </td>
                         <td><span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{item.presentacion}</span></td>
                         <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-tech)' }}>{item.cantidad}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{item.volumenTotal.toFixed(1)} L</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUnitVe(item.volumenTotal)} L</td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)' }}>{formatUsd(item.precioUsd)} ({formatBs(item.precioUsd * tasaBcv)})</td>
                         <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)', color: 'var(--text-main)' }}>{formatUsd(item.subtotalUsd)} ({formatBs(item.subtotalBs)})</td>
                       </tr>

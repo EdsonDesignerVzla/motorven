@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Printer, X, ShieldCheck, TrendingUp, BarChart3, PieChart as PieIcon, RefreshCw, Landmark } from 'lucide-react';
 import motorvenLogoImg from '../assets/logo_motorven_limpio.png';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, round2 } from '../services/formatService';
 import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails } from '../services/supabaseService';
 import { generateDashboardPDF } from '../services/pdfReportService';
 
@@ -149,16 +149,16 @@ export default function ExecutiveSummaryModal({
   };
 
   // Datos financieros calculados dinámicamente en Bs y USD desde datos en tiempo real de Supabase
-  const cxcDiaVal = Number(carteraClientesData?.find(c => c.name?.includes('DÍA'))?.value || 0);
-  const cxcVenVal = Number(carteraClientesData?.find(c => c.name?.includes('VENCIDAS'))?.value || 0);
-  const totalCarteraUsd = cxcDiaVal + cxcVenVal;
-  const totalCarteraBs = totalCarteraUsd * tasaBcvNum;
+  const cxcDiaVal = round2(carteraClientesData?.find(c => c.name?.includes('DÍA'))?.value || 0);
+  const cxcVenVal = round2(carteraClientesData?.find(c => c.name?.includes('VENCIDAS'))?.value || 0);
+  const totalCarteraUsd = round2(cxcDiaVal + cxcVenVal);
+  const totalCarteraBs = round2(totalCarteraUsd * tasaBcvNum);
 
   const carteraClientes = [
     {
       segmento: 'CxC Al Día (Vigentes dentro del plazo)',
       montoUsd: cxcDiaVal,
-      montoBs: cxcDiaVal * tasaBcvNum,
+      montoBs: round2(cxcDiaVal * tasaBcvNum),
       pct: totalCarteraUsd > 0 ? parseFloat(((cxcDiaVal / totalCarteraUsd) * 100).toFixed(2)) : 0,
       estado: 'VIGENTE / CRÉDITO SALUDABLE',
       estadoColor: '#10b981'
@@ -166,21 +166,21 @@ export default function ExecutiveSummaryModal({
     {
       segmento: 'CxC Vencidas (Morosidad activa)',
       montoUsd: cxcVenVal,
-      montoBs: cxcVenVal * tasaBcvNum,
+      montoBs: round2(cxcVenVal * tasaBcvNum),
       pct: totalCarteraUsd > 0 ? parseFloat(((cxcVenVal / totalCarteraUsd) * 100).toFixed(2)) : 0,
       estado: 'EN GESTIÓN DE COBRANZA EXTRAJUDICIAL',
       estadoColor: '#ef4444'
     }
   ];
 
-  const cobAcum = Number(cobranzasData?.acumulada || 0);
-  const cobBs = Number(cobranzasData?.enBs || 0);
-  const cobDivisasUsd = Number(cobranzasData?.efectivoZelle || 0);
-  const cobBsUsd = Number(cobranzasData?.enBsUsd ?? (tasaBcvNum > 0 ? cobBs / tasaBcvNum : 0));
+  const cobAcum = round2(cobranzasData?.acumulada || 0);
+  const cobBs = round2(cobranzasData?.enBs || 0);
+  const cobDivisasUsd = round2(cobranzasData?.efectivoZelle || 0);
+  const cobBsUsd = round2(cobranzasData?.enBsUsd ?? (tasaBcvNum > 0 ? cobBs / tasaBcvNum : 0));
   const totalCobranzasUsd = cobAcum;
-  const totalCobranzasBs = cobBs > 0 ? cobBs : (totalCobranzasUsd * tasaBcvNum);
-  const pctCobDivisas = totalCobranzasUsd > 0 ? parseFloat(((cobDivisasUsd / totalCobranzasUsd) * 100).toFixed(1)) : 0;
-  const pctCobBs = totalCobranzasUsd > 0 ? parseFloat(((cobBsUsd / totalCobranzasUsd) * 100).toFixed(1)) : 0;
+  const totalCobranzasBs = cobBs > 0 ? cobBs : round2(totalCobranzasUsd * tasaBcvNum);
+  const pctCobDivisas = totalCobranzasUsd > 0 ? parseFloat(((cobDivisasUsd / totalCobranzasUsd) * 100).toFixed(2)) : 0;
+  const pctCobBs = totalCobranzasUsd > 0 ? parseFloat(((cobBsUsd / totalCobranzasUsd) * 100).toFixed(2)) : 0;
   const pctProyectadoMeta = kpiData?.metaComercial > 0
     ? ((Number(kpiData.totalProyectado || 0) / Number(kpiData.metaComercial)) * 100).toFixed(2)
     : '0.00';
@@ -189,27 +189,27 @@ export default function ExecutiveSummaryModal({
     {
       concepto: 'Cobranza Acumulada del Período',
       montoUsd: cobAcum,
-      montoBs: cobAcum * tasaBcvNum,
+      montoBs: round2(cobAcum * tasaBcvNum),
       pct: 100,
       modalidad: 'Transferencias Bancarias Nacionales / Liquidación'
     },
     {
       concepto: 'Cobranza en Bolívares (Equivalente Facturación)',
-      montoUsd: tasaBcvNum > 0 ? (cobBs / tasaBcvNum) : 0,
+      montoUsd: tasaBcvNum > 0 ? round2(cobBs / tasaBcvNum) : 0,
       montoBs: cobBs,
       pct: totalCobranzasUsd > 0 ? parseFloat((((tasaBcvNum > 0 ? cobBs / tasaBcvNum : 0) / totalCobranzasUsd) * 100).toFixed(2)) : 0,
       modalidad: 'Liquidación en Bolívares Oficial BCV'
     }
   ];
 
-  const totalBancosUsd = (disponibilidadBancariaData || []).reduce((acc, b) => acc + (Number(b.monto) || 0), 0);
-  const totalBancosBs = totalBancosUsd * tasaBcvNum;
+  const totalBancosUsd = round2((disponibilidadBancariaData || []).reduce((acc, b) => acc + (Number(b.monto) || 0), 0));
+  const totalBancosBs = round2(totalBancosUsd * tasaBcvNum);
 
   const bancos = (disponibilidadBancariaData && disponibilidadBancariaData.length > 0)
     ? disponibilidadBancariaData.map(b => ({
         banco: b.banco || 'Banco',
         tipo: 'Cuenta Bancaria Operativa',
-        montoUsd: Number(b.monto || 0),
+        montoUsd: round2(b.monto || 0),
         pct: totalBancosUsd > 0 ? parseFloat(((Number(b.monto || 0) / totalBancosUsd) * 100).toFixed(2)) : 0
       }))
     : [{ banco: 'Disponibilidad Bancaria General', tipo: 'Tesorería', montoUsd: 0, pct: 0 }];
@@ -218,22 +218,22 @@ export default function ExecutiveSummaryModal({
   const hasRateDiff = Math.abs(liveBcvRate - baseConfigRate) > 0.05;
   const activePeriodText = periodoLabel || (selectedMonth === 'ALL' ? 'Cierre Anual Acumulado' : `Mes ${selectedMonth}`);
 
-  const abonosProv = Number(
+  const abonosProv = round2(
     selectedMonth === 'ALL'
       ? (objetivosData?.abonosProveedores || 0)
       : (objetivosData?.abonosPeriodo ?? objetivosData?.abonosProveedores ?? 0)
   );
-  const saldoPendProv = Number(cxpAnalytics?.totalSaldoUsd ?? objetivosData?.saldoPendiente ?? 0);
-  const cxpVencidoProv = Number(cxpAnalytics?.totalVencidoUsd || 0);
-  const cxpVigenteProv = Math.max(0, saldoPendProv - cxpVencidoProv);
-  const totalObligacionesUsd = abonosProv + saldoPendProv;
-  const totalObligacionesBs = totalObligacionesUsd * tasaBcvNum;
+  const saldoPendProv = round2(cxpAnalytics?.totalSaldoUsd ?? objetivosData?.saldoPendiente ?? 0);
+  const cxpVencidoProv = round2(cxpAnalytics?.totalVencidoUsd || 0);
+  const cxpVigenteProv = Math.max(0, round2(saldoPendProv - cxpVencidoProv));
+  const totalObligacionesUsd = round2(abonosProv + saldoPendProv);
+  const totalObligacionesBs = round2(totalObligacionesUsd * tasaBcvNum);
 
   const obligaciones = [
     {
       rubro: `Abonos a Proveedores Realizados (${selectedMonth === 'ALL' ? 'Acumulado Ejercicio' : activePeriodText})`,
       montoUsd: abonosProv,
-      montoBs: abonosProv * tasaBcvNum,
+      montoBs: round2(abonosProv * tasaBcvNum),
       estado: `${totalObligacionesUsd > 0 ? Math.round((abonosProv / totalObligacionesUsd) * 100) : 0}% - Liquidado y Conciliado`,
       color: '#10b981'
     },
@@ -242,14 +242,14 @@ export default function ExecutiveSummaryModal({
           {
             rubro: `Saldo CxP Vigente / Por Vencer (Próx. 15d: ${formatUsd(cxpAnalytics.porVencer15Usd || 0)})`,
             montoUsd: cxpVigenteProv,
-            montoBs: cxpVigenteProv * tasaBcvNum,
+            montoBs: round2(cxpVigenteProv * tasaBcvNum),
             estado: `${saldoPendProv > 0 ? Math.round((cxpVigenteProv / saldoPendProv) * 100) : 0}% - Vigente en Cronograma`,
             color: '#0284c7'
           },
           {
             rubro: `Saldo CxP Vencido en Mora (${cxpAnalytics.vencidosDocsCount || 0} docs)`,
             montoUsd: cxpVencidoProv,
-            montoBs: cxpVencidoProv * tasaBcvNum,
+            montoBs: round2(cxpVencidoProv * tasaBcvNum),
             estado: `${cxpAnalytics.morosidadPct || 0}% - Atención Prioritaria`,
             color: '#ef4444'
           }
@@ -258,7 +258,7 @@ export default function ExecutiveSummaryModal({
           {
             rubro: 'Saldo Pendiente por Pagar a Proveedores',
             montoUsd: saldoPendProv,
-            montoBs: saldoPendProv * tasaBcvNum,
+            montoBs: round2(saldoPendProv * tasaBcvNum),
             estado: `${totalObligacionesUsd > 0 ? Math.round((saldoPendProv / totalObligacionesUsd) * 100) : 0}% - Programado según Cronograma`,
             color: '#ef4444'
           }
@@ -700,9 +700,9 @@ export default function ExecutiveSummaryModal({
                     <td><strong>Ventas del Día{todayLabel ? ` (${todayLabel})` : ''}</strong></td>
                     <td style={{ textAlign: 'center' }}>{ventasDelDia?.documentos || 0} docs ({ventasDelDia?.clientes || 0} cli.)</td>
                     <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#0284c7' }}>
-                      {Number(ventasDelDia?.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                      {formatUnitVe(ventasDelDia?.litros || 0, 2)} L
                     </td>
-                    <td style={{ textAlign: 'right' }}>{Number(ventasDelDia?.cajas || 0).toLocaleString('es-VE')}</td>
+                    <td style={{ textAlign: 'right' }}>{formatUnitVe(ventasDelDia?.cajas || 0, 2)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#059669' }}>
                       {formatUsd(Number(ventasDelDia?.usd || 0))} <span style={{ fontWeight: 400, fontSize: '0.85em', color: '#64748b' }}>({formatBs(Number(ventasDelDia?.bs || (Number(ventasDelDia?.usd || 0) * tasaBcvNum)))})</span>
                     </td>
@@ -711,9 +711,9 @@ export default function ExecutiveSummaryModal({
                     <td><strong>Acumulado {ventasMesLabel || 'Mes Actual'}</strong></td>
                     <td style={{ textAlign: 'center' }}>{ventasAcumuladoMes?.documentos || 0} docs ({ventasAcumuladoMes?.pctMeta || 0}% meta)</td>
                     <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#002b7a' }}>
-                      {Number(ventasAcumuladoMes?.litros || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
+                      {formatUnitVe(ventasAcumuladoMes?.litros || 0, 2)} L
                     </td>
-                    <td style={{ textAlign: 'right' }}>{Number(ventasAcumuladoMes?.cajas || 0).toLocaleString('es-VE')}</td>
+                    <td style={{ textAlign: 'right' }}>{formatUnitVe(ventasAcumuladoMes?.cajas || 0, 2)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#002b7a' }}>
                       {formatUsd(Number(ventasAcumuladoMes?.usd || 0))} <span style={{ fontWeight: 400, fontSize: '0.85em', color: '#64748b' }}>({formatBs(Number(ventasAcumuladoMes?.bs || (Number(ventasAcumuladoMes?.usd || 0) * tasaBcvNum)))})</span>
                     </td>

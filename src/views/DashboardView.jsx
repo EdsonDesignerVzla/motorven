@@ -67,6 +67,7 @@ import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { generateDashboardPDF, generateNotificationsPDF } from '../services/pdfReportService';
 import { getSupabaseNotifications, seedInitialNotificationsIfEmpty } from '../services/supabaseService';
 import { getCanonicalDocKey, dedupeCanonicalDocs } from '../services/fiscalService';
+import { resolveExchangeRates, computeBankAccountValuation } from '../utils/treasuryAccountUtils';
 
 function formatAdvisorName(name) {
   if (!name) return 'Asesor';
@@ -229,7 +230,7 @@ export default function DashboardView({
     return (notificationsList || []).filter(n => !n.leida).length;
   }, [notificationsList]);
 
-  const tasaBcv = Number(config?.tasaDolar) || 827.73;
+  const { tasaBcv } = useMemo(() => resolveExchangeRates(config), [config]);
 
   // Filtro mensual y anual de Metas Cumplidas (Año en curso)
   const [selectedMonth, setSelectedMonth] = useState('ALL'); // 'ALL' = Cierre Anual Acumulado, '01'..'12' = Mes específico
@@ -562,20 +563,18 @@ export default function DashboardView({
   const disponibilidadBancariaData = useMemo(() => {
     if (!Array.isArray(profitBankAccounts) || profitBankAccounts.length === 0) return [];
     return profitBankAccounts
-      .filter(b => (Number(b.saldoUsd ?? b.saldo_usd ?? 0) > 0) || (Number(b.saldoBs ?? b.saldo_bs ?? 0) > 0))
       .map(b => {
-        const usdDirect = Number(b.saldoUsd ?? b.saldo_usd ?? 0);
-        const bsDirect = Number(b.saldoBs ?? b.saldo_bs ?? 0);
-        const montoCalculado = usdDirect > 0 ? usdDirect : (bsDirect > 0 && tasaBcv > 0 ? bsDirect / tasaBcv : 0);
+        const val = computeBankAccountValuation(b, config);
         return {
           banco: b.bancoNombre || b.banco_nombre || b.codCta || 'Banco',
           numCta: b.numCta || b.num_cta || '',
-          monto: parseFloat(montoCalculado.toFixed(2)),
-          montoBs: bsDirect
+          monto: val.usd,
+          montoBs: val.bs
         };
       })
+      .filter(b => b.monto > 0 || b.montoBs > 0)
       .sort((a, b) => b.monto - a.monto);
-  }, [profitBankAccounts, tasaBcv]);
+  }, [profitBankAccounts, config]);
 
   const totalDisponibilidad = useMemo(() => {
     return disponibilidadBancariaData.reduce((acc, b) => acc + (Number(b.monto) || 0), 0);
@@ -1458,7 +1457,7 @@ export default function DashboardView({
         const prev = salesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
         prev.litros += lts;
         prev.count += 1;
-        prev.usd += Number(it.totalNeto || 0) / (tasaBcv > 1 ? tasaBcv : 827.73);
+        prev.usd += Number(it.totalNeto || 0) / tasaBcv;
         salesMap.set(sku, prev);
       });
     });
@@ -1564,7 +1563,7 @@ export default function DashboardView({
         const prev = comparativaSalesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
         prev.litros += lts;
         prev.count += 1;
-        prev.usd += Number(it.totalNeto || 0) / (tasaBcv > 1 ? tasaBcv : 827.73);
+        prev.usd += Number(it.totalNeto || 0) / tasaBcv;
         comparativaSalesMap.set(sku, prev);
       });
     });
@@ -4228,7 +4227,7 @@ export default function DashboardView({
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={cxpAnalytics.agingChartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                     <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
+                    <YAxis width={58} tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => (v >= 1000 ? `$${(v / 1000).toFixed(2)}k` : `$${Number(v || 0).toFixed(2)}`)} />
                     <Tooltip
                       formatter={(value) => [formatUsd(value), 'Saldo']}
                       contentStyle={{ background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.3)', borderRadius: '8px', fontSize: '12px' }}
@@ -4310,7 +4309,7 @@ export default function DashboardView({
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={cxpAnalytics.comprasVsAbonosMensual} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                       <XAxis dataKey="mes" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
+                      <YAxis width={58} tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => (v >= 1000 ? `$${(v / 1000).toFixed(2)}k` : `$${Number(v || 0).toFixed(2)}`)} />
                       <Tooltip
                         formatter={(value, name) => [formatUsd(value), name === 'comprasUsd' ? 'Compras Netas' : 'Abonos / Pagos']}
                         contentStyle={{ background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.3)', borderRadius: '8px', fontSize: '12px' }}

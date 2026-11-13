@@ -17,7 +17,8 @@ import {
   Truck
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
-import { formatBs, formatUsd, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
+import { parseInvoiceDateInfo } from '../services/creditPolicyService';
+import { formatBs, formatUsd, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, generateCreditDebitNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
@@ -307,12 +308,16 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     });
   };
 
-  const fechaObj = new Date(sale.fechaEmision || sale.fecha || new Date());
+  const parsedFechaInfo = parseInvoiceDateInfo(sale);
+  const fechaObj = parsedFechaInfo.date || new Date();
   const fechaStr = fechaObj.toLocaleDateString('es-VE');
-  const horaStr = fechaObj.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const horaStr = parsedFechaInfo.hasTime
+    ? fechaObj.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '—';
   const diasCreditoDoc = sale.condicionPago === 'CONTADO' ? 0 : Number(sale.diasCredito ?? 0);
-  const fechaVencObj = sale.fechaVencimiento
-    ? new Date(sale.fechaVencimiento)
+  const parsedVencInfo = sale.fechaVencimiento ? parseInvoiceDateInfo(sale.fechaVencimiento) : null;
+  const fechaVencObj = (parsedVencInfo && parsedVencInfo.date)
+    ? parsedVencInfo.date
     : new Date(fechaObj.getTime() + (diasCreditoDoc * 24 * 60 * 60 * 1000));
   const fechaVencStr = fechaVencObj.toLocaleDateString('es-VE');
 
@@ -797,7 +802,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 <div>CONDICIÓN: {sale.condicionPago || 'CONTADO'} ({diasCreditoDoc} DÍAS) - {sale.metodoPago || 'EFECTIVO USD'}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span>TASA BCV:</span>
-                  <strong>Bs. {tasaBcv.toFixed(2)} / USD</strong>
+                  <strong>{formatBs(tasaBcv)} / USD</strong>
                 </div>
                 <div style={{ borderBottom: '1px dotted #9ca3af', margin: '4px 0' }} />
                 <div>CLIENTE: <strong>{sale.clienteNombre}</strong></div>
@@ -996,7 +1001,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                     Emisión: {fechaStr}, {horaStr}
                                   </div>
                                   <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 800, marginTop: '2px' }}>
-                                    Tasa BCV: Bs. {tasaBcv.toFixed(2)} / USD
+                                    Tasa BCV: {formatBs(tasaBcv)} / USD
                                   </div>
                                 </div>
                               </div>
@@ -1024,7 +1029,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 </div>
                                 <div style={{ border: '1px solid #cbd5e1', borderTop: '3px solid #f59e0b', borderRadius: '5px', background: '#f8fafc', padding: '6px 8px' }}>
                                   <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>CARGA TOTAL</div>
-                                  <div style={{ fontSize: '0.82rem', fontWeight: 900, color: '#0f172a', marginTop: '2px' }}>{totalBultosDoc} Unid. ({totalLitrosDoc.toFixed(1)} L)</div>
+                                  <div style={{ fontSize: '0.82rem', fontWeight: 900, color: '#0f172a', marginTop: '2px' }}>{formatUnitVe(totalBultosDoc, 0)} Unid. ({formatUnitVe(totalLitrosDoc)} L)</div>
                                 </div>
                                 <div style={{ border: '1px solid #cbd5e1', borderTop: '3px solid #10b981', borderRadius: '5px', background: '#f8fafc', padding: '6px 8px' }}>
                                   <div style={{ fontSize: '0.6rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>MONTO TOTAL USD</div>
@@ -1062,7 +1067,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Unidad / Transp.:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.transporte || 'Retiro Directo por Cliente en Rampa'}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Método • Tasa BCV:</span>
-                                    <strong style={{ color: '#0f172a' }}>{sale.metodoPago || 'EFECTIVO USD'} • Bs. {tasaBcv.toFixed(2)}/USD</strong>
+                                    <strong style={{ color: '#0f172a' }}>{sale.metodoPago || 'EFECTIVO USD'} • {formatBs(tasaBcv)}/USD</strong>
                                   </div>
                                 </div>
                               </div>
@@ -1107,7 +1112,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                     <td style={{ padding: '5px 6px', fontWeight: 600, color: '#0f172a' }}>{it.descripcion || it.nombre}</td>
                                     <td style={{ padding: '5px 6px', textAlign: 'center', color: '#475569', fontSize: '0.66rem' }}>{it.presentacion || 'CAJA / TAMBOR'}</td>
                                     <td style={{ padding: '5px 6px', textAlign: 'center', fontWeight: 800 }}>{qty}</td>
-                                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#475569' }}>{volRow.toFixed(1)} L</td>
+                                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#475569' }}>{formatUnitVe(volRow)} L</td>
                                     <td style={{ padding: '5px 6px', textAlign: 'right' }}>{formatUsd(unitUsd)}</td>
                                     <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#0f172a' }}>{formatUsd(subUsd)}</td>
                                     <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: '#475569' }}>{formatBs(subBs)}</td>
@@ -1203,7 +1208,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                               </div>
                               <div style={{ fontSize: '0.62rem', color: '#475569', maxWidth: '410px', lineHeight: '1.3' }}>
                                 <div><strong>SIGNUM ERP • MOTORVEN, C.A.</strong> — Nota de Entrega N° <strong>{correlativoDisplay}</strong></div>
-                                <div>Monto en <strong>{formatBs(invoiceTotalBs)}</strong> referencial a la fecha de emisión (Tasa BCV: Bs. {tasaBcv.toFixed(2)}/USD).</div>
+                                <div>Monto en <strong>{formatBs(invoiceTotalBs)}</strong> referencial a la fecha de emisión (Tasa BCV: {formatBs(tasaBcv)}/USD).</div>
                               </div>
                             </div>
 
@@ -1330,7 +1335,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
                                   <span style={{ color: '#64748b' }}>Tasa Oficial BCV:</span>
-                                  <strong style={{ color: '#d97706' }}>Bs. {tasaBcv.toFixed(2)} / USD</strong>
+                                  <strong style={{ color: '#d97706' }}>{formatBs(tasaBcv)} / USD</strong>
                                 </div>
                               </div>
                             </div>

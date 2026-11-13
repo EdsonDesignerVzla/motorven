@@ -135,7 +135,7 @@ export default function AccountingEntryModal({
             <div className="card" style={{ padding: '0.75rem', margin: 0, background: 'var(--bg-surface)' }}>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 600 }}>TASA DE CAMBIO BCV</div>
               <div style={{ fontWeight: 800, color: '#10b981', marginTop: '0.2rem', fontSize: '0.95rem' }}>
-                Bs. {Number(entry.tasa || tasa).toFixed(2)}
+                {formatBs(entry.tasa || tasa)}
               </div>
             </div>
           </div>

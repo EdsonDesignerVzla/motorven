@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { X, Printer, Plus } from 'lucide-react';
-import { formatBs, resolveProductUnit } from '../services/formatService';
+import { formatBs, formatNumberUs, formatUnitVe, resolveProductUnit } from '../services/formatService';
 import { generateInventoryPDF, generateWarehouseTransferOrAdjustmentPDF } from '../services/pdfReportService';
 
 export default function InventoryKardexModal({
@@ -401,10 +401,10 @@ export default function InventoryKardexModal({
               Ajustes de Entrada
             </div>
             <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
-              +{stats.totalEntradasUnits} <span className="text-sm font-medium text-slate-400">uds</span>
+              +{formatUnitVe(stats.totalEntradasUnits, 0)} <span className="text-sm font-medium text-slate-400">uds</span>
             </div>
             <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Valor: ${stats.totalValorEntradasUsd.toFixed(2)}
+              Valor: ${formatNumberUs(stats.totalValorEntradasUsd)}
             </div>
           </div>
 
@@ -413,10 +413,10 @@ export default function InventoryKardexModal({
               Salidas & Mermas
             </div>
             <div className="text-2xl font-black text-red-600 dark:text-red-400 mt-1">
-              -{stats.totalSalidasUnits} <span className="text-sm font-medium text-slate-400">uds</span>
+              -{formatUnitVe(stats.totalSalidasUnits, 0)} <span className="text-sm font-medium text-slate-400">uds</span>
             </div>
             <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Valor: ${stats.totalValorSalidasUsd.toFixed(2)}
+              Valor: ${formatNumberUs(stats.totalValorSalidasUsd)}
             </div>
           </div>
 
@@ -669,7 +669,7 @@ export default function InventoryKardexModal({
                                 {r.total_art} <span className="text-[10px] font-normal text-slate-400">{r.uni_venta}</span>
                               </td>
                               <td className="p-2.5 text-right text-slate-700 dark:text-slate-300">
-                                ${Number(r.cost_unit_om || 0).toFixed(2)}
+                                ${formatNumberUs(r.cost_unit_om || 0)}
                               </td>
                               <td className="p-2.5 text-right font-semibold text-slate-800 dark:text-slate-200">
                                 {formatBs(Number(r.cost_unit || 0))}
@@ -822,7 +822,7 @@ export default function InventoryKardexModal({
                               {r.total_art} <span className="text-[10px] font-normal text-slate-400">{r.uni_venta}</span>
                             </td>
                             <td className="p-2.5 text-right text-slate-700 dark:text-slate-300">
-                              ${Number(r.cost_unit_om || 0).toFixed(2)}
+                              ${formatNumberUs(r.cost_unit_om || 0)}
                             </td>
                             <td className="p-2.5 text-right font-semibold text-slate-800 dark:text-slate-200">
                               {formatBs(Number(r.cost_unit || 0))}

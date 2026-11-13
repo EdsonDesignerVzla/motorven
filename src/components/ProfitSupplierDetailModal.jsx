@@ -16,6 +16,7 @@ import {
   Printer
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
+import { doProvidersMatch } from '../utils/cxpUtils';
 import { generatePurchasesPDF } from '../services/pdfReportService';
 
 export default function ProfitSupplierDetailModal({
@@ -27,8 +28,8 @@ export default function ProfitSupplierDetailModal({
 }) {
   if (!supplier) return null;
 
-  const supplierPurchases = purchases.filter(p => p.coProv === supplier.coProv || p.provNombre === supplier.provDes);
-  const supplierCxP = accountsPayable.filter(d => d.coProv === supplier.coProv || d.provNombre === supplier.provDes);
+  const supplierPurchases = purchases.filter(p => doProvidersMatch(p, supplier));
+  const supplierCxP = accountsPayable.filter(d => !d?.anulado && doProvidersMatch(d, supplier));
 
   const totalCxP = supplierCxP.reduce((acc, d) => acc + (d.saldoUsd || 0), 0);
 

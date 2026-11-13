@@ -32,6 +32,22 @@ process.on('unhandledRejection', (reason) => {
 // Mantener activo el event loop indefinidamente
 setInterval(() => {}, 60000);
 
+const INVOICE_SERIES_RESET_DATE = '2026-11-01';
+
+const isLegacyPreNovServerRow = (row) => {
+  if (!row || typeof row !== 'object') return false;
+  const rawId = String(row.id || '').trim();
+  const rawDate = String(row.fechaEmision || row.fec_emis || row.fecha_emision || row.fecha || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    return rawDate.slice(0, 10) < INVOICE_SERIES_RESET_DATE;
+  }
+  const fallbackTs = String(row.updated_at || row.created_at || row.fecha_sincronizacion || row.fechaSincronizacion || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(fallbackTs)) {
+    return fallbackTs.slice(0, 10) < INVOICE_SERIES_RESET_DATE;
+  }
+  return !row._customCreated && /^fac-[1-9]\d{0,3}$/.test(rawId);
+};
+
 const canonicalServerDocKey = (row, isProfitInvoice = false) => {
   if (!row || typeof row !== 'object') return '';
   const tipo = String(row.tipoDoc || row.tipo_doc || '').trim().toUpperCase();
@@ -53,7 +69,9 @@ const canonicalServerDocKey = (row, isProfitInvoice = false) => {
     .replace(/^(FAC-|FACT-|FAC\s+|INV-|NE-|NE\s+|NC-|ND-|doc-)/i, '')
     .trim()
     .replace(/^0+(?=\d)/, '');
-  return cleaned ? `${prefix}:${cleaned}` : '';
+  if (!cleaned) return '';
+  const eraSuffix = prefix === 'FAC' && isLegacyPreNovServerRow(row) ? ':LEGACY' : '';
+  return `${prefix}:${cleaned}${eraSuffix}`;
 };
 
 const pickBestServerDoc = (a, b) => {
@@ -600,6 +618,135 @@ setInterval(() => {
     }
   }
 }, 15000);
+
+// ----------------------------------------------------------------------------
+// RESERVA ATÓMICA DE CORRELATIVOS EN SERVIDOR (MULTI-CAJA / MULTI-NAVEGADOR)
+// Evita que dos cajeras reciban o inserten el mismo correlativo al mismo tiempo
+// ----------------------------------------------------------------------------
+const CORRELATIVE_LOCK_TTL_MS = 90 * 1000;
+const correlativeReservations = new Map(); // seriesType -> Map(num -> { clientId, expiresAt })
+
+function resolveServerSeriesType(tipoDoc = '', numOrId = '') {
+  const t = String(tipoDoc || '').toUpperCase().trim();
+  const s = String(numOrId || '').toUpperCase().trim();
+  if (t === 'NOTA_ENTREGA' || t === 'N/E' || t === 'NE' || /^(NE-|NDE-)/.test(s)) return 'NOTA_ENTREGA';
+  if (t === 'NOTA_CREDITO' || /^(NC-)/.test(s)) return 'NOTA_CREDITO';
+  if (t === 'NOTA_DEBITO' || /^(ND-)/.test(s)) return 'NOTA_DEBITO';
+  return 'FACTURA';
+}
+
+function formatServerCorrelativo(seriesType, numVal) {
+  const padded = String(Math.max(0, Number(numVal) || 0)).padStart(6, '0');
+  if (seriesType === 'NOTA_ENTREGA') return `NE-${padded}`;
+  if (seriesType === 'NOTA_CREDITO') return `NC-${padded}`;
+  if (seriesType === 'NOTA_DEBITO') return `ND-${padded}`;
+  return padded;
+}
+
+function getSeriesUsedNumbersAndFloor(seriesType) {
+  const usedNums = new Set();
+  let maxLowSeries = 0;
+  let maxOverall = 0;
+
+  const inspectRow = (row) => {
+    if (!row || typeof row !== 'object') return;
+    const rawNum = String(row.numero_doc ?? row.numeroDoc ?? row.factNum ?? row.fact_num ?? row.id ?? '').trim();
+    const rowSeries = resolveServerSeriesType(row.tipo_doc || row.tipoDoc || '', rawNum || row.id);
+    if (rowSeries !== seriesType) return;
+    if (seriesType === 'FACTURA' && isLegacyPreNovServerRow(row)) return;
+
+    const digits = rawNum.replace(/^(FAC-|FACT-|FAC\s+|INV-|NE-|NDE-|NC-|ND-|doc-)/i, '').replace(/[^0-9]/g, '');
+    if (!digits) return;
+    const val = parseInt(digits, 10);
+    if (Number.isNaN(val) || val <= 0 || val >= 900000) return;
+    usedNums.add(val);
+    if (val > maxOverall) maxOverall = val;
+    if (val < 400 && val > maxLowSeries) maxLowSeries = val;
+  };
+
+  if (Array.isArray(database.sales)) database.sales.forEach(inspectRow);
+  if (Array.isArray(database.profit_invoices)) database.profit_invoices.forEach(inspectRow);
+
+  const floorVal = seriesType === 'FACTURA' ? (maxLowSeries > 0 ? maxLowSeries : 0) : maxOverall;
+  return { usedNums, floorVal };
+}
+
+function purgeExpiredCorrelativeLocks(seriesType) {
+  const locks = correlativeReservations.get(seriesType);
+  if (!locks) return;
+  const now = Date.now();
+  for (const [num, meta] of locks.entries()) {
+    if (!meta || meta.expiresAt <= now) {
+      locks.delete(num);
+    }
+  }
+}
+
+function reserveNextServerCorrelativo({ tipoDoc = 'FACTURA', preferredNum = null, clientId = 'default' } = {}) {
+  const seriesType = resolveServerSeriesType(tipoDoc, preferredNum || '');
+  purgeExpiredCorrelativeLocks(seriesType);
+  if (!correlativeReservations.has(seriesType)) {
+    correlativeReservations.set(seriesType, new Map());
+  }
+  const locks = correlativeReservations.get(seriesType);
+  const { usedNums, floorVal } = getSeriesUsedNumbersAndFloor(seriesType);
+  const now = Date.now();
+  const safeClientId = String(clientId || 'default').trim() || 'default';
+
+  const isAvailableForClient = (num) => {
+    if (usedNums.has(num)) return false;
+    const existingLock = locks.get(num);
+    if (existingLock && existingLock.expiresAt > now && existingLock.clientId !== safeClientId) {
+      return false;
+    }
+    return true;
+  };
+
+  let requestedVal = null;
+  if (preferredNum !== null && preferredNum !== undefined && String(preferredNum).trim() !== '') {
+    const cleanDigits = String(preferredNum).replace(/^(FAC-|FACT-|INV-|NE-|NDE-|NC-|ND-)/i, '').replace(/[^0-9]/g, '');
+    if (cleanDigits) {
+      const parsed = parseInt(cleanDigits, 10);
+      if (!Number.isNaN(parsed) && parsed > 0 && parsed < 999999) {
+        requestedVal = parsed;
+      }
+    }
+  }
+
+  let assignedVal = null;
+  let reassigned = false;
+  if (requestedVal !== null && isAvailableForClient(requestedVal)) {
+    assignedVal = requestedVal;
+  } else {
+    reassigned = requestedVal !== null;
+    let candidate = Math.max(1, floorVal + 1);
+    while (!isAvailableForClient(candidate) && candidate < 999999) {
+      candidate++;
+    }
+    assignedVal = candidate;
+  }
+
+  locks.set(assignedVal, { clientId: safeClientId, expiresAt: now + CORRELATIVE_LOCK_TTL_MS });
+  return {
+    correlativo: formatServerCorrelativo(seriesType, assignedVal),
+    series: seriesType,
+    reserved: true,
+    reassigned
+  };
+}
+
+function releaseServerCorrelativeReservation(row) {
+  if (!row || typeof row !== 'object') return;
+  const rawNum = String(row.numero_doc ?? row.numeroDoc ?? row.factNum ?? row.fact_num ?? row.id ?? '').trim();
+  const seriesType = resolveServerSeriesType(row.tipo_doc || row.tipoDoc || '', rawNum);
+  const digits = rawNum.replace(/^(FAC-|FACT-|INV-|NE-|NDE-|NC-|ND-)/i, '').replace(/[^0-9]/g, '');
+  if (!digits) return;
+  const val = parseInt(digits, 10);
+  const locks = correlativeReservations.get(seriesType);
+  if (locks && !Number.isNaN(val)) {
+    locks.delete(val);
+  }
+}
 
 
 // Helpers para evaluar filtros de PostgREST
@@ -1365,6 +1512,25 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 2.6. Reserva atómica de correlativos en servidor (multi-caja)
+  if (
+    req.method === 'POST' &&
+    (pathname === '/correlativos/reserve' || pathname === '/rest/v1/rpc/reserve_correlativo')
+  ) {
+    try {
+      const body = await parseBody(req);
+      const reservation = reserveNextServerCorrelativo({
+        tipoDoc: body?.tipoDoc || body?.tipo_doc || 'FACTURA',
+        preferredNum: body?.preferredNum ?? body?.preferred_num ?? null,
+        clientId: body?.clientId || body?.client_id || req.headers['x-client-id'] || 'default'
+      });
+      sendJson(req, res, 200, reservation);
+    } catch (err) {
+      sendJson(req, res, 400, { error: err.message });
+    }
+    return;
+  }
+
   // 3. Supabase Storage API v1: /storage/v1/object/...
   if (pathname.startsWith('/storage/v1/')) {
     const STORAGE_ROOT = fs.existsSync(path.join(__dirname, 'storage'))
@@ -1713,7 +1879,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const body = await parseBody(req);
         const rowsToInsert = Array.isArray(body) ? body : [body];
-        
+        const preferHeader = String(req.headers['prefer'] || '').toLowerCase();
+        const isUpsertMode =
+          preferHeader.includes('resolution=merge-duplicates') ||
+          preferHeader.includes('resolution=ignore-duplicates');
+
         const inserted = [];
         let shouldPersist = false;
 
@@ -1776,8 +1946,36 @@ const server = http.createServer(async (req, res) => {
             newRow.litrosPorUnidad = realL;
             newRow.litros_por_unidad = realL;
           }
-          
+
+          if (tableName === 'sales' && !isUpsertMode) {
+            const originOrderId = String(newRow.pedido_origen_id || newRow.pedidoOrigenId || '').trim();
+            if (originOrderId) {
+              const dupOrderSale = tableData.find(
+                r =>
+                  r &&
+                  String(r.pedido_origen_id || r.pedidoOrigenId || '').trim() === originOrderId &&
+                  !['ANULADA', 'ANULADO'].includes(String(r.estado || '').toUpperCase().trim())
+              );
+              if (dupOrderSale) {
+                sendJson(req, res, 409, {
+                  code: '23505',
+                  errorCode: 'ORDER_ALREADY_INVOICED',
+                  message: `El pedido ${originOrderId} ya fue facturado previamente (#${dupOrderSale.numero_doc || dupOrderSale.numeroDoc || dupOrderSale.id}).`,
+                  existingId: dupOrderSale.id,
+                  existingNumeroDoc: dupOrderSale.numero_doc || dupOrderSale.numeroDoc
+                });
+                return;
+              }
+            }
+          }
+
           const existingIdx = tableData.findIndex(r => {
+            if (tableName === 'profit_invoices' || tableName === 'sales') {
+              const isProf = tableName === 'profit_invoices';
+              const kNew = canonicalServerDocKey(newRow, isProf);
+              const kOld = canonicalServerDocKey(r, isProf);
+              if (kNew && kOld) return kNew === kOld;
+            }
             if (newRow.id && r.id && String(r.id).trim().toUpperCase() === String(newRow.id).trim().toUpperCase()) return true;
             if (tableName === 'users' && newRow.username && r.username) {
               return String(r.username).trim().toLowerCase() === String(newRow.username).trim().toLowerCase();
@@ -1795,22 +1993,22 @@ const server = http.createServer(async (req, res) => {
               const codeOld = String(r.codigo || '').trim().toUpperCase();
               return codeNew && codeOld && codeNew === codeOld;
             }
-            if (tableName === 'profit_invoices') {
-              const kNew = canonicalServerDocKey(newRow, true);
-              const kOld = canonicalServerDocKey(r, true);
-              return Boolean(kNew && kOld && kNew === kOld);
-            }
-            if (tableName === 'sales') {
-              const kNew = canonicalServerDocKey(newRow, false);
-              const kOld = canonicalServerDocKey(r, false);
-              return Boolean(kNew && kOld && kNew === kOld);
-            }
             if (tableName === 'profit_accounts_payable') {
               const cpNew = String(newRow.nroDoc || newRow.nro_doc || '').trim().toUpperCase();
               const cpOld = String(r.nroDoc || r.nro_doc || '').trim().toUpperCase();
               const tipoNew = String(newRow.tipoDoc || newRow.tipo_doc || '').trim().toUpperCase();
               const tipoOld = String(r.tipoDoc || r.tipo_doc || '').trim().toUpperCase();
-              return cpNew && cpOld && cpNew === cpOld && (!tipoNew || !tipoOld || tipoNew === tipoOld);
+              if (!cpNew || !cpOld || cpNew !== cpOld || (tipoNew && tipoOld && tipoNew !== tipoOld)) {
+                return false;
+              }
+              const normProv = (v) => String(v || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+              const normName = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, ' ');
+              const provCodeNew = normProv(newRow.coProv || newRow.co_prov || newRow.provRif || newRow.prov_rif);
+              const provCodeOld = normProv(r.coProv || r.co_prov || r.provRif || r.prov_rif);
+              if (provCodeNew && provCodeOld) return provCodeNew === provCodeOld;
+              const nameNew = normName(newRow.provNombre || newRow.prov_nombre || newRow.provDes);
+              const nameOld = normName(r.provNombre || r.prov_nombre || r.provDes);
+              return Boolean(nameNew && nameOld && nameNew === nameOld);
             }
             if (tableName === 'profit_warehouses') {
               const getWKey = x => String(x.coAlm || x.co_alm || x.coAlma || x.co_alma || x.id || '').trim().toUpperCase().replace(/^ALM-/, '');
@@ -1882,6 +2080,17 @@ const server = http.createServer(async (req, res) => {
             return false;
           });
 
+          if (existingIdx >= 0 && !isUpsertMode && (tableName === 'sales' || tableName === 'profit_invoices')) {
+            sendJson(req, res, 409, {
+              code: '23505',
+              errorCode: 'DUPLICATE_CORRELATIVE',
+              message: `El correlativo o ID ya existe en ${tableName}.`,
+              existingId: tableData[existingIdx].id,
+              existingNumeroDoc: tableData[existingIdx].numero_doc || tableData[existingIdx].numeroDoc || tableData[existingIdx].factNum
+            });
+            return;
+          }
+
           shouldPersist = true;
           let savedRow;
           if (existingIdx >= 0) {
@@ -1890,6 +2099,9 @@ const server = http.createServer(async (req, res) => {
           } else {
             tableData.push(newRow);
             savedRow = newRow;
+          }
+          if (tableName === 'sales' || tableName === 'profit_invoices') {
+            releaseServerCorrelativeReservation(savedRow);
           }
           inserted.push(savedRow);
 

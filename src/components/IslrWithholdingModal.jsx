@@ -20,6 +20,7 @@ import {
   Percent,
   Check
 } from 'lucide-react';
+import { formatBs, formatUsd } from '../services/formatService';
 import { saveSupabaseProfitIslrWithholding } from '../services/supabaseService';
 import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generatePaymentOrderPDF } from '../services/pdfReportService';
 
@@ -482,10 +483,10 @@ export default function IslrWithholdingModal({
                     {selectedVoucher.tasaCambio > 1 && (
                       <div className="mb-6 p-2.5 bg-slate-50 border border-slate-200 rounded text-xs flex justify-between items-center">
                         <span className="text-slate-600">
-                          Monto equivalente en Divisas (Tasa Ref: {selectedVoucher.tasaCambio} Bs/$):
+                          Monto equivalente en Divisas (Tasa Ref: {formatBs(selectedVoucher.tasaCambio)}/$):
                         </span>
                         <span className="font-mono font-bold text-slate-800">
-                          Retención: $ {(selectedVoucher.montoRetenido / selectedVoucher.tasaCambio).toFixed(2)} USD | Base: $ {(selectedVoucher.baseImponible / selectedVoucher.tasaCambio).toFixed(2)} USD
+                          Retención: {formatUsd(selectedVoucher.montoRetenido / selectedVoucher.tasaCambio)} USD | Base: {formatUsd(selectedVoucher.baseImponible / selectedVoucher.tasaCambio)} USD
                         </span>
                       </div>
                     )}
@@ -650,7 +651,7 @@ export default function IslrWithholdingModal({
                       <option value="">-- Seleccione una Factura / CxP de Proveedor --</option>
                       {accountsPayable.slice(0, 50).map(d => (
                         <option key={d.id} value={d.id}>
-                          Doc #{d.nroDoc} | Prov: {d.provDes || d.coProv} | Saldo: Bs. {Number(d.saldo || 0).toFixed(2)}
+                          Doc #{d.nroDoc} | Prov: {d.provDes || d.coProv} | Saldo: {formatBs(d.saldo || 0)}
                         </option>
                       ))}
                     </select>
@@ -857,16 +858,16 @@ export default function IslrWithholdingModal({
                   <div>
                     <span className="text-xs text-amber-300 font-bold block">MONTO TOTAL RETENCIÓN APLICADA:</span>
                     <span className="text-[11px] text-slate-400">
-                      Cálculo: (Base Bs. {parseFloat(formData.baseImponible || 0).toFixed(2)} × {formData.porcentajeRetencion}%) - Sustraendo
+                      Cálculo: (Base {formatBs(parseFloat(formData.baseImponible || 0))} × {formData.porcentajeRetencion}%) - Sustraendo
                     </span>
                   </div>
                   <div className="text-right">
                     <span className="text-2xl font-mono font-black text-amber-400 block">
-                      Bs. {calculatedWithholding.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                      {formatBs(calculatedWithholding)}
                     </span>
                     {parseFloat(formData.tasaCambio) > 0 && (
                       <span className="text-xs text-slate-400 font-mono">
-                        ≈ $ {(calculatedWithholding / parseFloat(formData.tasaCambio)).toFixed(2)} USD
+                        ≈ {formatUsd(calculatedWithholding / parseFloat(formData.tasaCambio))} USD
                       </span>
                     )}
                   </div>

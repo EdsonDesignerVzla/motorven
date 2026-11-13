@@ -21,7 +21,7 @@ import {
   Receipt,
   Info
 } from 'lucide-react';
-import { formatBs } from '../services/formatService';
+import { formatBs, formatNumberUs, round2 } from '../services/formatService';
 import { generateSalesPOSPDF, generateCreditDebitNotePDF } from '../services/pdfReportService';
 import { Plus } from 'lucide-react';
 
@@ -136,8 +136,8 @@ export default function CustomerReturnsModal({
 
     return {
       totalCount: profitReturns.length,
-      totalMontoUsd,
-      totalMontoBs: totalMontoUsd * tasaDolar,
+      totalMontoUsd: round2(totalMontoUsd),
+      totalMontoBs: round2(totalMontoUsd * tasaDolar),
       totalItemsDevueltos,
       notasCreditoCount
     };
@@ -392,7 +392,7 @@ export default function CustomerReturnsModal({
               <DollarSign size={18} color="var(--motorven-red)" />
             </div>
             <div style={{ fontSize: '1.6rem', fontWeight: 900, fontFamily: 'var(--font-tech)', color: 'var(--motorven-red)', marginTop: '4px' }}>
-              ${stats.totalMontoUsd.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${formatNumberUs(stats.totalMontoUsd)}
             </div>
             <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '4px' }}>
               Valor neto en divisas ($)
@@ -410,7 +410,7 @@ export default function CustomerReturnsModal({
               {formatBs(stats.totalMontoBs)}
             </div>
             <div style={{ fontSize: '0.725rem', color: 'var(--motorven-gold)', fontWeight: 700, marginTop: '4px' }}>
-              Tasa BCV: Bs. {tasaDolar.toFixed(2)}
+              Tasa BCV: {formatBs(tasaDolar)}
             </div>
           </div>
 
@@ -586,7 +586,7 @@ export default function CustomerReturnsModal({
                           </td>
                           <td style={{ textAlign: 'right' }}>
                             <div style={{ fontWeight: 800, color: 'var(--text-heading)', fontFamily: 'var(--font-tech)' }}>
-                              ${montoUsd.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              ${formatNumberUs(montoUsd)}
                             </div>
                             <div style={{ fontSize: '0.7rem', color: 'var(--motorven-gold)', fontWeight: 600 }}>
                               {formatBs(montoUsd * tasaDolar)}
@@ -721,10 +721,10 @@ export default function CustomerReturnsModal({
                             {item.total_art} <span style={{ fontSize: '0.675rem', fontWeight: 400, color: 'var(--text-muted)' }}>{item.uni_venta}</span>
                           </td>
                           <td style={{ textAlign: 'right', color: 'var(--text-secondary)' }}>
-                            ${Number(item.prec_vta || 0).toFixed(2)}
+                            ${formatNumberUs(item.prec_vta || 0)}
                           </td>
                           <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--text-heading)', fontFamily: 'var(--font-tech)' }}>
-                            ${Number(item.reng_neto || 0).toFixed(2)}
+                            ${formatNumberUs(item.reng_neto || 0)}
                           </td>
                         </tr>
                       ))}
@@ -737,11 +737,11 @@ export default function CustomerReturnsModal({
               <div style={{ background: 'var(--bg-btn-secondary)', padding: '0.85rem 1rem', borderRadius: '12px', border: '1px solid var(--border-glass)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Tasa de Cambio Aplicada: </span>
-                  <strong style={{ color: 'var(--motorven-gold)', fontFamily: 'var(--font-code)' }}>Bs. {Number(selectedReturn.tasa || 1).toFixed(2)}</strong>
+                  <strong style={{ color: 'var(--motorven-gold)', fontFamily: 'var(--font-code)' }}>{formatBs(selectedReturn.tasa || 1)}</strong>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: '1.15rem', fontWeight: 900, color: 'var(--neon-cyan)', fontFamily: 'var(--font-tech)' }}>
-                    Total Neto: ${Number(selectedReturn.totNeto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                    Total Neto: ${formatNumberUs(selectedReturn.totNeto || 0)}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--motorven-gold)', fontWeight: 700 }}>
                     {formatBs(Number(selectedReturn.totNeto || 0) * (selectedReturn.tasa || tasaDolar))}

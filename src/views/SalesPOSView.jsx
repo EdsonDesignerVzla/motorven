@@ -31,8 +31,8 @@ import {
   Users,
   Warehouse
 } from 'lucide-react';
-import { formatUsd, formatBs, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
-import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
+import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
+import { calculateFiscalTaxes, resolveConfigIgtfOptions, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
 import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -43,6 +43,13 @@ import {
   evaluateClientCreditPolicy,
   getAuthorizedApproverGroups
 } from '../services/creditPolicyService';
+import {
+  normalizeRateType,
+  getAllowedRateTypesForDoc,
+  resolveDefaultRateValue,
+  isFiscalDocumentForRatePolicy,
+  RATE_TYPE_META
+} from '../utils/rateClassificationUtils';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import SalesInvoiceModal from '../components/SalesInvoiceModal';
 import CustomerReturnsModal from '../components/CustomerReturnsModal';
@@ -105,6 +112,8 @@ export default function SalesPOSView({
   const [condicionPago, setCondicionPago] = useState('CONTADO');
   const [creditTerm, setCreditTerm] = useState('15_DIAS');
   const [metodoPago, setMetodoPago] = useState('EFECTIVO_USD');
+  const [tipoTasa, setTipoTasa] = useState('BCV');
+  const [customTasaPago, setCustomTasaPago] = useState('');
   const [modalidadVenta, setModalidadVenta] = useState('MOSTRADOR'); // 'MOSTRADOR' | 'OFICINA'
   const [officeSeller, setOfficeSeller] = useState(
     currentUser?.nombre || 'Oficina Principal Motorven'
@@ -303,8 +312,8 @@ export default function SalesPOSView({
           subtotalUsd: lineSubtotal(cantidad, precio),
           // Precio pactado en la Nota de Pedido: no se recalcula al cambiar cliente/catálogo
           precioPactado: true,
-          tipoAlicuota: matchedProd?.tipoAlicuota || 'GENERAL_16',
-          aplicaIva: matchedProd?.aplicaIva !== false
+          tipoAlicuota: it.tipoAlicuota || matchedProd?.tipoAlicuota || 'GENERAL_16',
+          aplicaIva: it.aplicaIva !== undefined ? it.aplicaIva !== false : (matchedProd?.aplicaIva !== false)
         };
       });
       setCartItems(loadedCart);
@@ -550,15 +559,36 @@ export default function SalesPOSView({
   const totalLitrosCarrito = cartItems.reduce((acc, item) => acc + (item.litros || 0), 0);
 
   const tasaBcv = Number(safeConfig.tasaDolar) || 827.73;
+  const rawKeystone = Number(safeConfig.tasaKeystone ?? safeConfig.tasa_keystone ?? 0);
+  const tasaKeystone = rawKeystone > 10 ? rawKeystone : Math.round((tasaBcv * 1.03 + Number.EPSILON) * 100) / 100;
+  const isFiscalRateLocked = isFiscalDocumentForRatePolicy(tipoDoc);
+  const allowedPosRateTypes = useMemo(() => getAllowedRateTypesForDoc(tipoDoc), [tipoDoc]);
+  const effectivePosRateType = useMemo(() => normalizeRateType(tipoTasa, { tipoDoc, fallback: 'BCV' }), [tipoTasa, tipoDoc]);
+  const effectivePosTasaPago = useMemo(() => {
+    if (effectivePosRateType === 'EDITABLE') {
+      const parsed = Number(customTasaPago);
+      return parsed > 0 ? parsed : tasaKeystone;
+    }
+    return resolveDefaultRateValue(effectivePosRateType, { tasaBcv, tasaKeystone, customRate: customTasaPago });
+  }, [effectivePosRateType, customTasaPago, tasaBcv, tasaKeystone]);
+
+  useEffect(() => {
+    if (isFiscalRateLocked && tipoTasa !== 'BCV' && tipoTasa !== 'USD') {
+      setTipoTasa('BCV');
+    }
+  }, [isFiscalRateLocked, tipoTasa]);
 
   // Motor Fiscal SENIAT (En Notas de Entrega NO aplica IVA: 0%)
+  const resolvedPorcentajeRetIva =
+    selectedClient?.porcentajeRetencionIva ?? (selectedClient?.agenteRetencionIva ? 75 : 0);
   const fiscalTaxes = calculateFiscalTaxes({
     items: cartItems,
     tipoDoc,
     metodoPago,
     condicionPago,
     tasaBcv,
-    porcentajeRetencionIva: selectedClient?.porcentajeRetencionIva || (selectedClient?.agenteRetencionIva ? 75 : 0)
+    porcentajeRetencionIva: resolvedPorcentajeRetIva,
+    ...resolveConfigIgtfOptions(safeConfig)
   });
 
   const subtotalUsd = fiscalTaxes.subtotalNetoUsd;
@@ -688,22 +718,21 @@ export default function SalesPOSView({
     const resolvedNextCorrelativo = (tipoDoc === 'FACTURA' || !tipoDoc)
       ? getNextInvoiceCorrelativo(sales, profitInvoices)
       : (tipoDoc === 'NOTA_ENTREGA' ? getNextNotaEntregaCorrelativo(sales, profitInvoices) : undefined);
-    if (resolvedNextCorrelativo) {
-      if (tipoDoc === 'NOTA_ENTREGA') {
-        commitNotaEntregaCorrelativo(resolvedNextCorrelativo);
-      } else {
-        commitInvoiceCorrelativo(resolvedNextCorrelativo);
-      }
-    }
     const controlDigits = resolvedNextCorrelativo ? parseInt(String(resolvedNextCorrelativo).replace(/[^0-9]/g, ''), 10) : NaN;
+
+    const emitNow = new Date();
+    const emitVencimiento = calculateExpirationDate(emitNow, diasCreditoActual);
 
     const salePayload = {
       tipoDoc,
       numeroDoc: resolvedNextCorrelativo,
-      numeroControl: !isNaN(controlDigits) ? generateFiscalControlNumber(controlDigits + 1) : undefined,
+      numeroControl: !isNaN(controlDigits) ? generateFiscalControlNumber(controlDigits) : undefined,
+      porcentajeRetencionIva: resolvedPorcentajeRetIva,
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim() : '',
       pedidoOrigenId: activeOrderInPOS?.id || null,
       pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
+      preserveOriginOrderOnSale: Boolean(activeOrderInPOS),
+      markOriginOrderBilled: Boolean(activeOrderInPOS),
       modalidadVenta: activeOrderInPOS?.modalidadVenta || modalidadVenta,
       clienteId: selectedClient?.id || 'CLI-003',
       clienteNombre: selectedClient?.nombre || selectedClient?.razonSocial || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
@@ -712,9 +741,12 @@ export default function SalesPOSView({
       direccionEntrega: selectedClient?.direccion || selectedClient?.domicilioFiscal || selectedClient?.direccion2 || '',
       condicionPago: condicionPago === 'CREDITO' ? creditTerm : 'CONTADO',
       diasCredito: diasCreditoActual,
-      fechaEmision: fechaEmisionActual.toISOString(),
-      fechaVencimiento: fechaVencimientoActual.toISOString(),
+      fechaEmision: emitNow.toISOString(),
+      fechaVencimiento: emitVencimiento.toISOString(),
       metodoPago: condicionPago === 'CREDITO' ? 'CREDITO' : metodoPago,
+      tipoTasa: effectivePosRateType,
+      tasaPago: effectivePosTasaPago,
+      monedaPago: effectivePosRateType === 'USD' ? 'USD' : 'BS',
       creditOverrideApproved,
       creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : (activeOrderInPOS?.creditOverrideAuthorizer || null),
       creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : (activeOrderInPOS?.creditOverrideJustification || null),
@@ -748,10 +780,22 @@ export default function SalesPOSView({
     try {
       const createdSale = await onProcessSale(salePayload);
       if (createdSale) {
-        notify.success("FACTURA REALIZADA CON EXITO");
+        const finalDocNum = createdSale.numeroDoc || resolvedNextCorrelativo;
+        if (finalDocNum) {
+          if (tipoDoc === 'NOTA_ENTREGA') {
+            commitNotaEntregaCorrelativo(finalDocNum);
+          } else if (tipoDoc === 'FACTURA' || !tipoDoc) {
+            commitInvoiceCorrelativo(finalDocNum);
+          }
+        }
+        notify.success(
+          tipoDoc === 'NOTA_CREDITO'
+            ? "NOTA DE CRÉDITO REALIZADA CON EXITO"
+            : "FACTURA / DOCUMENTO EMITIDO Y ENVIADO A CUENTAS POR COBRAR"
+        );
         setLastSaleDoc({
           ...createdSale,
-          numeroDoc: createdSale.numeroDoc || resolvedNextCorrelativo,
+          numeroDoc: finalDocNum,
           clienteDireccion: createdSale.clienteDireccion || salePayload.clienteDireccion || '',
           direccionEntrega: createdSale.direccionEntrega || salePayload.direccionEntrega || '',
           pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
@@ -1311,7 +1355,7 @@ export default function SalesPOSView({
                             </strong>
                             {p.litrosPorUnidad > 0 && disponibleReal > 0 && (
                               <span style={{ fontSize: '0.65rem', color: 'var(--neon-cyan, #38bdf8)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
-                                ({(disponibleReal * p.litrosPorUnidad).toLocaleString('es-VE', { maximumFractionDigits: 0 })} L)
+                                ({formatUnitVe(disponibleReal * p.litrosPorUnidad, 2)} L)
                               </span>
                             )}
                           </div>
@@ -1594,7 +1638,7 @@ export default function SalesPOSView({
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Volumen: </span>
                   <strong style={{ color: 'var(--neon-cyan)' }}>
-                    {Number(activeOrderInPOS.totalLitros || totalLitrosCarrito || 0).toFixed(2)} Lts ({cartItems.length} ítem{cartItems.length === 1 ? '' : 's'})
+                    {formatUnitVe(activeOrderInPOS.totalLitros || totalLitrosCarrito || 0, 2)} Lts ({cartItems.length} ítem{cartItems.length === 1 ? '' : 's'})
                   </strong>
                 </div>
                 {(activeOrderInPOS.direccionEntrega || selectedClient?.domicilioFiscal) && (
@@ -1872,7 +1916,7 @@ export default function SalesPOSView({
                     <div style={{ flex: 1, minWidth: 0, paddingRight: '2px' }}>
                       <div style={{ fontWeight: 700, fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.descripcion}</div>
                       <div style={{ fontSize: '0.68rem', color: 'var(--motorven-emerald)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {formatUsd(item.precioUsd)} x {item.cantidad} = <strong>{formatUsd(item.subtotalUsd)}</strong> ({item.litros.toFixed(1)} L)
+                        {formatUsd(item.precioUsd)} x {item.cantidad} = <strong>{formatUsd(item.subtotalUsd)}</strong> ({formatUnitVe(item.litros, 2)} L)
                       </div>
                       {isItemBlockedZero && (
                         <div style={{ fontSize: '0.64rem', color: '#f87171', fontWeight: 800, marginTop: '2px' }}>
@@ -1967,7 +2011,15 @@ export default function SalesPOSView({
                 className="form-control"
                 style={{ width: '100%', maxWidth: '100%', minWidth: 0, fontSize: '0.78rem', padding: '0.42rem 2rem 0.42rem 0.7rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}
                 value={metodoPago}
-                onChange={(e) => setMetodoPago(e.target.value)}
+                onChange={(e) => {
+                  const nextMethod = e.target.value;
+                  setMetodoPago(nextMethod);
+                  if (nextMethod === 'EFECTIVO_USD' || nextMethod === 'ZELLE') {
+                    setTipoTasa('USD');
+                  } else if (tipoTasa === 'USD') {
+                    setTipoTasa('BCV');
+                  }
+                }}
               >
                 <option value="EFECTIVO_USD">💵 Efectivo Divisas (USD) [+3% IGTF]</option>
                 <option value="PAGO_MOVIL">📲 Pago Móvil (Bs. Oficial)</option>
@@ -1976,6 +2028,44 @@ export default function SalesPOSView({
                 <option value="ZELLE">💲 Zelle / Transferencia USD [+3% IGTF]</option>
               </select>
             )}
+
+            {/* Selector Explícito de Clasificación de Tasa (Fiscal vs Nota de Entrega) */}
+            <div style={{ marginTop: '0.45rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                <span style={{ fontWeight: 700, textTransform: 'uppercase' }}>Clasificación de Tasa:</span>
+                <span style={{ fontFamily: 'var(--font-code)', color: RATE_TYPE_META[effectivePosRateType]?.color || '#10b981', fontWeight: 700 }}>
+                  {isFiscalRateLocked ? 'Fiscal: Solo BCV / USD' : `Ref: Bs. ${effectivePosTasaPago.toFixed(2)}`}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <select
+                  className="form-control"
+                  style={{ flex: 1, fontSize: '0.74rem', padding: '0.35rem 0.55rem' }}
+                  value={effectivePosRateType}
+                  onChange={(e) => setTipoTasa(e.target.value)}
+                  disabled={isOrderLocked && isFiscalRateLocked}
+                >
+                  {allowedPosRateTypes.map((rt) => (
+                    <option key={rt} value={rt}>
+                      {RATE_TYPE_META[rt]?.label || rt}
+                      {rt === 'BCV' ? ` (Bs. ${tasaBcv.toFixed(2)})` : rt === 'KEYSTONE' ? ` (Bs. ${tasaKeystone.toFixed(2)})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {!isFiscalRateLocked && effectivePosRateType === 'EDITABLE' && (
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={customTasaPago}
+                    onChange={(e) => setCustomTasaPago(e.target.value)}
+                    placeholder={tasaKeystone.toFixed(2)}
+                    className="form-control"
+                    style={{ width: '96px', fontSize: '0.74rem', padding: '0.35rem 0.45rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                  />
+                )}
+              </div>
+            </div>
 
             {/* Plazos y Evaluación de Normas de Crédito en POS Mostrador / Oficina */}
             {condicionPago === 'CREDITO' && (
@@ -2092,7 +2182,7 @@ export default function SalesPOSView({
           <div style={{ background: 'var(--bg-card-glass)', border: '1px solid var(--border-glass)', padding: '0.7rem 0.85rem', borderRadius: '12px', marginBottom: '0.65rem', minWidth: 0, flexShrink: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
               <span>Litros Totales:</span>
-              <strong style={{ color: 'var(--neon-cyan)' }}>{totalLitrosCarrito.toFixed(2)} L</strong>
+              <strong style={{ color: 'var(--neon-cyan)' }}>{formatUnitVe(totalLitrosCarrito, 2)} L</strong>
             </div>
 
             {fiscalTaxes.baseExentaUsd > 0 && (
@@ -2299,7 +2389,7 @@ export default function SalesPOSView({
                         </div>
                         {(selectedSpecProduct.litrosPorUnidad || 0) > 0 && specDisp > 0 && (
                           <span style={{ fontSize: '0.7rem', color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
-                            {(specDisp * (selectedSpecProduct.litrosPorUnidad || 1)).toFixed(0)} Lts. Libres
+                            {formatUnitVe(specDisp * (selectedSpecProduct.litrosPorUnidad || 1), 2)} Lts. Libres
                           </span>
                         )}
                       </div>
@@ -2554,7 +2644,7 @@ export default function SalesPOSView({
                             {formatUsd(ord.totalNetoUsd || ord.totalUsd)}
                           </div>
                           <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)', fontWeight: 700 }}>
-                            {Number(ord.totalLitros || 0).toFixed(1)} Lts ({Number(ord.totalCajas || 0).toFixed(0)} cj)
+                            {formatUnitVe(ord.totalLitros || 0, 2)} Lts ({formatUnitVe(ord.totalCajas || 0, 0)} cj)
                           </div>
                         </div>
                       </div>

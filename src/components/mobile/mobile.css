@@ -72,6 +72,24 @@ body.mobile-screen-locked {
   box-sizing: border-box !important;
 }
 
+.mobile-app-root input,
+.mobile-app-root textarea,
+.mobile-app-root select,
+.mobile-app-root [contenteditable="true"],
+.mobile-app-root .mobile-card,
+.mobile-app-root .bento-card,
+.mobile-app-root .clients-modal-container,
+.mobile-app-root table,
+.mobile-app-root code {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.mobile-app-root button {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 [data-theme="light"] .mobile-app-root {
   background: radial-gradient(circle at 50% 0%, #f1f5f9 0%, #e2e8f0 70%, #cbd5e1 100%);
   color: #0f172a;

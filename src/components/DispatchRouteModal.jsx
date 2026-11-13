@@ -16,7 +16,7 @@ import {
   Navigation,
   Weight
 } from 'lucide-react';
-import { formatUsd, formatBs } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateOrdersPDF } from '../services/pdfReportService';
 import MotorvenLogo from './MotorvenLogo';
 
@@ -246,10 +246,10 @@ export default function DispatchRouteModal({
                 <Droplet size={14} color="#3b82f6" />
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#3b82f6', marginTop: '0.2rem' }}>
-                {totalLitros.toFixed(1)} <span style={{ fontSize: '0.8rem' }}>Litros</span>
+                {formatUnitVe(totalLitros)} <span style={{ fontSize: '0.8rem' }}>Litros</span>
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {totalCajas} Cajas / Bultos
+                {formatUnitVe(totalCajas, 0)} Cajas / Bultos
               </div>
             </div>
 
@@ -259,7 +259,7 @@ export default function DispatchRouteModal({
                 <Weight size={14} color="#f59e0b" />
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f59e0b', marginTop: '0.2rem' }}>
-                {pesoEstimadoKg.toLocaleString('es-VE')} <span style={{ fontSize: '0.8rem' }}>Kg</span>
+                {formatUnitVe(pesoEstimadoKg)} <span style={{ fontSize: '0.8rem' }}>Kg</span>
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 Carga útil calculada
@@ -300,7 +300,7 @@ export default function DispatchRouteModal({
                 Secuencia de Paradas & Detalle de Despacho
               </span>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Tasa BCV: Bs. {tasa.toFixed(2)}
+                Tasa BCV: {formatBs(tasa)}
               </span>
             </div>
 
@@ -339,7 +339,7 @@ export default function DispatchRouteModal({
                           {stop.cajas} cajas
                         </div>
                         <div style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 600 }}>
-                          {stop.litros.toFixed(1)} L
+                          {formatUnitVe(stop.litros)} L
                         </div>
                       </td>
                       <td style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>

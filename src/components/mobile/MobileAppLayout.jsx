@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import './mobile.css';
 import {
   Home,
@@ -24,6 +24,7 @@ import TaxReportsView from '../../views/TaxReportsView';
 import UsersManagementView from '../../views/UsersManagementView';
 import SellersView from '../../views/SellersView';
 import ProfitabilityView from '../../views/ProfitabilityView';
+import CashBankModal from '../CashBankModal';
 import AppConfigModal from '../AppConfigModal';
 import { formatBs } from '../../services/formatService';
 
@@ -51,6 +52,13 @@ export default function MobileAppLayout({
   profitReturns = [],
   profitSellers = [],
   profitZones = [],
+  purchaseRequisitions = [],
+  purchaseOrders = [],
+  goodsReceiptNotes = [],
+  onSaveRequisition,
+  onSavePurchaseOrder,
+  onSaveGoodsReceipt,
+  onSavePaymentOrder,
   usersList = [],
   config = {},
   currentUser,
@@ -59,6 +67,8 @@ export default function MobileAppLayout({
   onSwitchToDesktop,
   onSaveOrder,
   onProceedToPOS,
+  pendingOrderToBill = null,
+  onClearPendingOrder,
   onProcessSale,
   onSaveConfig,
   onSaveProduct,
@@ -68,6 +78,10 @@ export default function MobileAppLayout({
   onRejectClient,
   onRegisterPurchase,
   onAddCashMovement,
+  onUpdateCashDesk,
+  onDeleteCashDesk,
+  onUpdateBankAccount,
+  onDeleteBankAccount,
   onExecuteCierreZ,
   onOpenOrdersSalesModal,
   onUsersUpdated,
@@ -77,6 +91,33 @@ export default function MobileAppLayout({
 }) {
   const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'cxc' | 'inventario' | 'menu' | <module_id>
   const [showConfigModal, setShowConfigModal] = useState(false);
+
+  // Si se solicita abrir un pedido en el POS desde móvil, navegar a 'ventas' automáticamente
+  useEffect(() => {
+    if (pendingOrderToBill) {
+      setMobileTab('ventas');
+    }
+  }, [pendingOrderToBill]);
+
+  // Contar solo pedidos activos pendientes o aprobados por facturar (excluyendo solicitudes de clientes, facturados, anulados y caducados)
+  const activePendingOrdersCount = useMemo(() => {
+    if (!Array.isArray(orders)) return 0;
+    const now = Date.now();
+    const HOURS_72_MS = 72 * 60 * 60 * 1000;
+    return orders.filter((o) => {
+      if (!o) return false;
+      const tDoc = String(o.tipoDoc || o.tipo_doc || '').toUpperCase();
+      if (tDoc === 'SOLICITUD_CLIENTE') return false;
+      const st = String(o.status || o.estado || '').toUpperCase();
+      if (!['PENDIENTE', 'APROBADO', 'EN_PROCESO', 'EMITIDO', 'RETENIDO_CREDITO'].includes(st)) return false;
+      const rawDate = o.fechaEmision || o.fecha || o.created_at;
+      if (rawDate) {
+        const orderTime = new Date(rawDate).getTime();
+        if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) return false;
+      }
+      return true;
+    }).length;
+  }, [orders]);
 
   // Bloqueo total de desplazamiento en viewport del celular para Cero-Scroll garantizado
   useEffect(() => {
@@ -129,7 +170,7 @@ export default function MobileAppLayout({
 
         <div className="mobile-rate-pill" title="Tasa Oficial BCV en vivo">
           <span>BCV:</span>
-          <span>Bs. {tasaBcv.toFixed(2)}</span>
+          <span>{formatBs(tasaBcv)}</span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -266,7 +307,8 @@ export default function MobileAppLayout({
               onSyncProfit={onSyncProfit}
               onProcessSale={onProcessSale}
               onOpenOrdersSalesModal={onOpenOrdersSalesModal}
-              currentUser={currentUser}
+              pendingOrderToBill={pendingOrderToBill}
+              onClearPendingOrder={onClearPendingOrder}
             />
           )}
 
@@ -287,12 +329,30 @@ export default function MobileAppLayout({
               onSyncProfit={onSyncProfit}
               config={config}
               onAddCashMovement={onAddCashMovement}
+              onUpdateCashDesk={onUpdateCashDesk}
+              onUpdateBankAccount={onUpdateBankAccount}
+              onOpenCashBankModal={() => setMobileTab('caja_bancos')}
               onSaveClient={onSaveClient}
               onDeleteClient={onDeleteClient}
               onApproveClient={onApproveClient}
               onRejectClient={onRejectClient}
               currentUser={currentUser}
               initialTab={mobileTab === 'cxp' ? 'CXP' : 'SPLIT'}
+            />
+          )}
+
+          {mobileTab === 'caja_bancos' && (
+            <CashBankModal
+              cashDesks={profitCashDesks}
+              bankAccounts={profitBankAccounts}
+              cashMovements={cashMovements}
+              onAddMovement={onAddCashMovement}
+              onUpdateCashDesk={onUpdateCashDesk}
+              onDeleteCashDesk={onDeleteCashDesk}
+              onUpdateBankAccount={onUpdateBankAccount}
+              onDeleteBankAccount={onDeleteBankAccount}
+              config={config}
+              currentUser={currentUser}
             />
           )}
 
@@ -304,6 +364,14 @@ export default function MobileAppLayout({
               config={config}
               onSaveProduct={onSaveProduct}
               onRegisterPurchase={onRegisterPurchase}
+              purchaseRequisitions={purchaseRequisitions}
+              purchaseOrders={purchaseOrders}
+              goodsReceiptNotes={goodsReceiptNotes}
+              onSaveRequisition={onSaveRequisition}
+              onSavePurchaseOrder={onSavePurchaseOrder}
+              onSaveGoodsReceipt={onSaveGoodsReceipt}
+              onSavePaymentOrder={onSavePaymentOrder}
+              onOpenCxpModule={() => setMobileTab('cxp')}
               currentUser={currentUser}
               profitSuppliers={profitSuppliers}
               profitPurchases={profitPurchases}
@@ -398,8 +466,8 @@ export default function MobileAppLayout({
         >
           <ShoppingCart size={19} />
           <span>Pedidos</span>
-          {orders.length > 0 && (
-            <span className="mobile-dock-badge">{orders.length}</span>
+          {activePendingOrdersCount > 0 && (
+            <span className="mobile-dock-badge">{activePendingOrdersCount}</span>
           )}
         </button>
 

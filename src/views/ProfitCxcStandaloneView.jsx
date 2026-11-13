@@ -39,7 +39,10 @@ import {
 } from '../services/supabaseService';
 import { subscribeToRealtimeChanges } from '../services/profitService';
 import { formatUsd, formatBs } from '../services/formatService';
+import { getNextInvoiceCorrelativo, getNextNotaEntregaCorrelativo } from '../services/fiscalService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { isCxcInvoiceCancelled, inferCxcDocType } from '../utils/cxcUtils';
+import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber } from '../utils/rateClassificationUtils';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
@@ -473,10 +476,16 @@ export default function ProfitCxcStandaloneView() {
     Object.entries(localOverrides).forEach(([key, override]) => {
       if (override?._deleted) {
         rawMap.delete(key);
-        const cleanKey = String(key).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-        for (const mapK of Array.from(rawMap.keys())) {
-          const cleanMapK = String(mapK).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
-          if (cleanMapK === cleanKey || mapK === key) {
+        const delTipo = override._tipoDoc ? inferCxcDocType({ tipoDoc: override._tipoDoc }) : inferCxcDocType(key);
+        const delNum = String(key).replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').replace(/^0+(?=\d)/, '').trim();
+        for (const [mapK, mapVal] of Array.from(rawMap.entries())) {
+          if (mapK === key) {
+            rawMap.delete(mapK);
+            continue;
+          }
+          if (inferCxcDocType(mapVal) !== delTipo) continue;
+          const mapNum = String(mapVal?.factNum || mapK).replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').replace(/^0+(?=\d)/, '').trim();
+          if (delNum && mapNum === delNum) {
             rawMap.delete(mapK);
           }
         }
@@ -488,10 +497,10 @@ export default function ProfitCxcStandaloneView() {
 
     const processed = [];
     rawMap.forEach((inv, mapKey) => {
-      if (inv.anulada) return;
+      if (isCxcInvoiceCancelled(inv)) return;
 
       const factNum = String(inv.factNum || inv.factura || mapKey).trim();
-      const tipoDoc = inferDocType(inv);
+      const tipoDoc = inferCxcDocType(inv);
       const isNotaEntrega = tipoDoc === 'NOTA_ENTREGA';
       const isPosDoc =
         Boolean(inv._isPosSale) ||
@@ -625,6 +634,9 @@ export default function ProfitCxcStandaloneView() {
         abonosUsd,
         restanteUsd,
         tasa: tasaDoc,
+        tipoTasa: resolveRecordRateType(inv, 'BCV'),
+        tasaPago: resolveEffectiveRateNumber(inv, tasaDoc),
+        monedaPago: inv.monedaPago || inv.moneda_pago || (String(inv.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
         estado,
         isCarteraActiva,
         observaciones: inv.observaciones || '',
@@ -1026,6 +1038,9 @@ export default function ProfitCxcStandaloneView() {
   const buildSavePayload = (effectiveRow, originalFactNum) => {
     const factKey = String(effectiveRow.factura || effectiveRow.factNum || originalFactNum).trim();
     const isNotaEntrega = effectiveRow.tipoDoc === 'NOTA_ENTREGA';
+    const canonicalFactId = isNotaEntrega
+      ? (factKey.toUpperCase().startsWith('NE-') ? factKey : `NE-${factKey}`)
+      : factKey.replace(/^(FAC-|INV-)/i, '');
     const montoFacturaUsd = round2(Number(effectiveRow.montoFacturaUsd || 0));
     const subtotalUsd = isNotaEntrega
       ? montoFacturaUsd
@@ -1034,8 +1049,11 @@ export default function ProfitCxcStandaloneView() {
     const abonosUsd = round2(Math.min(montoFacturaUsd, Math.max(0, Number(effectiveRow.abonosUsd || 0))));
     const restanteUsd = round2(Math.max(0, montoFacturaUsd - abonosUsd));
 
+    const correlativeChanged = Boolean(originalFactNum) && factKey !== String(originalFactNum).trim();
+    const resolvedId = correlativeChanged ? canonicalFactId : (effectiveRow.id || canonicalFactId);
+
     return {
-      id: effectiveRow.id || `INV-${factKey}`,
+      id: resolvedId,
       factNum: factKey,
       originalFactNum: originalFactNum || factKey,
       tipoDoc: effectiveRow.tipoDoc || 'FACTURA',
@@ -1112,15 +1130,19 @@ export default function ProfitCxcStandaloneView() {
 
   const handleAddNewRow = () => {
     const isNE = docTypeFilter === 'NOTA_ENTREGA';
-    const randomNum = Math.floor(10000 + Math.random() * 90000);
-    const newFactNum = isNE ? `NE-${randomNum}` : `${randomNum}`;
+    const nextCorrelativo = isNE
+      ? getNextNotaEntregaCorrelativo(sales, profitInvoices)
+      : getNextInvoiceCorrelativo(sales, profitInvoices);
+    const newFactNum = isNE
+      ? (String(nextCorrelativo).toUpperCase().startsWith('NE-') ? String(nextCorrelativo) : `NE-${nextCorrelativo}`)
+      : String(nextCorrelativo).replace(/^(FAC-|INV-)/i, '');
     const todayIso = getTodayIso();
     const venc = new Date();
     venc.setDate(venc.getDate() + 15);
     const vencIso = toIsoDateInput(venc);
 
     const newDoc = {
-      id: `INV-${newFactNum}`,
+      id: newFactNum,
       factNum: newFactNum,
       factura: newFactNum,
       tipoDoc: isNE ? 'NOTA_ENTREGA' : 'FACTURA',
@@ -1606,6 +1628,36 @@ export default function ProfitCxcStandaloneView() {
         </div>
       </header>
 
+      <div
+        className="no-print"
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '10px',
+          flexWrap: 'wrap',
+          padding: '8px 14px',
+          borderRadius: '8px',
+          marginBottom: '12px',
+          fontSize: '12px',
+          background: '#fffbeb',
+          border: '1px solid #fde68a',
+          color: '#92400e',
+          fontWeight: 600
+        }}
+      >
+        <span>
+          Vista auxiliar de hoja de trabajo e impresión. Para registrar cobros con impacto en Caja/Banco y recibos en{' '}
+          <code>profit_collections</code>, utilice el módulo principal de Cuentas por Cobrar.
+        </span>
+        <a
+          href="?tab=cxc"
+          style={{ color: '#1d4ed8', fontWeight: 700, textDecoration: 'underline', whiteSpace: 'nowrap' }}
+        >
+          Ir al Módulo CxC Principal →
+        </a>
+      </div>
+
       {/* AVISO / NOTIFICACIÓN DE LECTURA Y GUARDADO */}
       {statusBanner && (
         <div
@@ -1921,6 +1973,12 @@ export default function ProfitCxcStandaloneView() {
               <th onClick={() => handleSort('diasCredito')} style={{ width: '82px', textAlign: 'center' }}>
                 Días Créd. {renderSortIcon('diasCredito')}
               </th>
+              <th style={{ width: '98px', textAlign: 'center' }}>
+                Clasif. Tasa
+              </th>
+              <th style={{ width: '105px', textAlign: 'right' }}>
+                Tasa Pago
+              </th>
               <th onClick={() => handleSort('montoFacturaUsd')} style={{ width: '115px', textAlign: 'right' }}>
                 Monto (USD) {renderSortIcon('montoFacturaUsd')}
               </th>
@@ -1939,7 +1997,7 @@ export default function ProfitCxcStandaloneView() {
           <tbody>
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan="14" style={{ padding: '32px', textAlign: 'center', color: '#475569', fontSize: '14px' }}>
+                <td colSpan="16" style={{ padding: '32px', textAlign: 'center', color: '#475569', fontSize: '14px' }}>
                   No se encontraron registros de Cuentas por Cobrar con las palabras claves o filtros seleccionados.
                 </td>
               </tr>
@@ -2053,6 +2111,34 @@ export default function ProfitCxcStandaloneView() {
                       />
                     </td>
 
+                    {/* 9b. Clasificación Tasa */}
+                    <td style={{ textAlign: 'center' }}>
+                      {(() => {
+                        const rType = resolveRecordRateType(eff, 'BCV');
+                        const rMeta = resolveRateMeta(rType, 'BCV');
+                        return (
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontSize: '10.5px',
+                            fontWeight: 800,
+                            fontFamily: 'monospace',
+                            background: rMeta.bg,
+                            color: rMeta.color,
+                            border: `1px solid ${rMeta.border}`
+                          }}>
+                            {rMeta.badgeText}
+                          </span>
+                        );
+                      })()}
+                    </td>
+
+                    {/* 9c. Tasa Aplicada */}
+                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: '11.5px', fontWeight: 700, color: '#334155', whiteSpace: 'nowrap' }}>
+                      {eff.tipoTasa === 'USD' ? 'Divisa USD' : formatBs(resolveEffectiveRateNumber(eff, tasaBcv))}
+                    </td>
+
                     {/* 10. Monto Factura USD */}
                     <td style={{ textAlign: 'right' }}>
                       <input
@@ -2158,7 +2244,7 @@ export default function ProfitCxcStandaloneView() {
           {filteredRows.length > 0 && (
             <tfoot>
               <tr style={{ background: '#f1f5f9', fontWeight: 800, borderTop: '2px solid #0f172a' }}>
-                <td colSpan="9" style={{ padding: '10px 8px', textAlign: 'right', textTransform: 'uppercase', color: '#0f172a' }}>
+                <td colSpan="11" style={{ padding: '10px 8px', textAlign: 'right', textTransform: 'uppercase', color: '#0f172a' }}>
                   Totales ({filteredRows.length} documentos):
                 </td>
                 <td style={{ padding: '10px 8px', textAlign: 'right', color: '#0f172a' }}>

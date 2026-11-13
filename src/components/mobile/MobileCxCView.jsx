@@ -2,16 +2,12 @@ import React, { useState, useMemo } from 'react';
 import {
   Search,
   MessageCircle,
-  AlertTriangle,
-  CheckCircle2,
-  Phone,
-  Clock,
   ChevronDown,
   ChevronUp,
-  FileText,
-  DollarSign
+  FileText
 } from 'lucide-react';
 import { formatUsd, formatBs } from '../../services/formatService';
+import { consolidateClientReceivables } from '../../utils/cxcUtils';
 
 export default function MobileCxCView({
   clients = [],
@@ -26,26 +22,16 @@ export default function MobileCxCView({
   const tasaBcv = Number(config?.tasaDolar || 827.73);
   const nombreEmpresa = config?.nombreEmpresa || 'GRUPO MOTORVEN, C.A.';
 
-  // Extraer clientes con saldo
+  // Consolidar cartera real desde profitInvoices + sales a crédito + clients
   const clientsWithDebt = useMemo(() => {
-    return clients
-      .map(cli => {
-        const saldoUsd = Number(cli.saldoUsd || cli.saldo_usd || 0);
-        const saldoBs = saldoUsd * tasaBcv;
-        const diasCredito = Number(cli.diasCredito || cli.dias_credito || cli.plazo || 0);
-        const diasMora = Number(cli.diasMora || cli.dias_mora || 0);
-        const isMora = diasMora > 0 || diasCredito < diasMora;
-        return {
-          ...cli,
-          saldoUsd,
-          saldoBs,
-          diasCredito,
-          diasMora,
-          isMora
-        };
-      })
-      .filter(cli => cli.saldoUsd > 0.01);
-  }, [clients, tasaBcv]);
+    return consolidateClientReceivables({
+      clients,
+      profitInvoices,
+      sales,
+      tasaBcv,
+      includePendingDocs: true
+    });
+  }, [clients, profitInvoices, sales, tasaBcv]);
 
   // Filtrado
   const filteredClients = useMemo(() => {
@@ -72,7 +58,7 @@ export default function MobileCxCView({
     const phoneToUse = cleanPhone.startsWith('0') ? '58' + cleanPhone.slice(1) : (cleanPhone.startsWith('58') ? cleanPhone : '58' + cleanPhone);
     const fechaHoy = new Date().toLocaleDateString('es-VE');
 
-    const msg = `Estimado(a) *${cli.nombre || cli.razonSocial}* (RIF: ${cli.rif || 'V-00000000'}), le saludamos cordialmente de *${nombreEmpresa}*.\n\nLe recordamos su saldo pendiente a la fecha *${fechaHoy}*:\n💵 *Monto en Divisas:* $ ${cli.saldoUsd.toFixed(2)} USD\n🇻🇪 *Equivalente Oficial:* ${formatBs(cli.saldoBs)} (Tasa Oficial BCV: Bs. ${tasaBcv.toFixed(2)}/USD).\n\nAgradecemos remitir su comprobante de pago por este canal para conciliar su estado de cuenta.\n\n¡Muchas gracias por su preferencia!`;
+    const msg = `Estimado(a) *${cli.nombre || cli.razonSocial}* (RIF: ${cli.rif || 'V-00000000'}), le saludamos cordialmente de *${nombreEmpresa}*.\n\nLe recordamos su saldo pendiente a la fecha *${fechaHoy}*:\n💵 *Monto en Divisas:* ${formatUsd(cli.saldoUsd)} USD\n🇻🇪 *Equivalente Oficial:* ${formatBs(cli.saldoBs)} (Tasa Oficial BCV: ${formatBs(tasaBcv)}/USD).\n\nAgradecemos remitir su comprobante de pago por este canal para conciliar su estado de cuenta.\n\n¡Muchas gracias por su preferencia!`;
 
     const url = `https://wa.me/${phoneToUse}?text=${encodeURIComponent(msg)}`;
     window.open(url, '_blank');
@@ -195,7 +181,29 @@ export default function MobileCxCView({
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255, 255, 255, 0.08)', gap: '6px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedClientId(isExpanded ? null : cli.id)}
+                    style={{
+                      background: 'rgba(148, 163, 184, 0.14)',
+                      border: '1px solid rgba(148, 163, 184, 0.25)',
+                      borderRadius: '8px',
+                      color: '#cbd5e1',
+                      padding: '4px 9px',
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <FileText size={12} />
+                    <span>{cli.facturasCount || 0} doc(s)</span>
+                    {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  </button>
+
                   <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
                     {cli.isMora ? (
                       <span style={{ color: '#ef4444', fontWeight: 800 }}>⚠️ Mora: {cli.diasMora} días</span>
@@ -224,6 +232,37 @@ export default function MobileCxCView({
                     <MessageCircle size={13} /> Cobrar WhatsApp
                   </button>
                 </div>
+
+                {isExpanded && Array.isArray(cli.pendingDocs) && cli.pendingDocs.length > 0 && (
+                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed rgba(255, 255, 255, 0.1)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {cli.pendingDocs.map((doc) => (
+                      <div
+                        key={`${doc.tipoDoc}-${doc.factNum}-${doc.id}`}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '0.7rem',
+                          padding: '5px 8px',
+                          borderRadius: '6px',
+                          background: 'rgba(15, 23, 42, 0.5)'
+                        }}
+                      >
+                        <div>
+                          <strong style={{ color: '#e2e8f0' }}>
+                            {doc.tipoDoc === 'NOTA_ENTREGA' ? 'N/E' : 'FAC'} #{doc.factNum}
+                          </strong>
+                          <span style={{ color: doc.diasVencido > 0 ? '#fca5a5' : '#86efac', marginLeft: '6px' }}>
+                            {doc.diasVencido > 0 ? `${doc.diasVencido}d mora` : 'Vigente'}
+                          </span>
+                        </div>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#f8fafc' }}>
+                          {formatUsd(doc.saldoUsd)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })
