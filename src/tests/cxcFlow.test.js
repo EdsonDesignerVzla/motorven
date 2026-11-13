@@ -7,7 +7,8 @@ import {
   consolidateClientReceivables,
   doesCollectionMatchInvoice,
   classifyCollectionRateType,
-  groupMovementsByRateType
+  groupMovementsByRateType,
+  summarizeDailyMovementsByCaja
 } from '../utils/cxcUtils.js';
 import {
   getScopedCxcDeleteKeys,
@@ -257,19 +258,41 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   }
 }
 
-// 6. Clasificación por renglones de tasa (BCV, Euro, Keystone, Personalizada) y regla obligatoria Fiscal -> BCV
+// 6. Clasificación por renglones de tasa (BCV, Euro, Keystone, Personalizada)
 {
   const rates = { tasaBcv: 911.62, tasaEuro: 980.50, tasaKeystone: 935.00 };
 
-  // Fiscal con tasa manual/Euro o explícita igual clasifica obligatorio a BCV
+  // Fiscal con Euro clasifica a BCV, pero respeta KEYSTONE y PERSONALIZADA explícitas
   assert.equal(
     classifyCollectionRateType({ tipoDoc: 'FACTURA', factNum: '000500', tasa: 980.50, tipoTasa: 'EURO' }, rates),
     'BCV',
-    'Todo documento fiscal debe ir obligatorio al renglón BCV'
+    'Documento fiscal no admite Euro y cae a BCV'
+  );
+  assert.equal(
+    classifyCollectionRateType({ tipoDoc: 'FACTURA', factNum: '000502', tasa: 935.00, tipoTasa: 'KEYSTONE' }, rates),
+    'KEYSTONE',
+    'Documento fiscal debe respetar Tasa Keystone explícita'
+  );
+  assert.equal(
+    classifyCollectionRateType({ tipoDoc: 'FACTURA', factNum: '000503', tasa: 990.00, tipoTasa: 'PERSONALIZADA' }, rates),
+    'PERSONALIZADA',
+    'Documento fiscal debe respetar Tasa Personalizada explícita'
   );
   assert.equal(
     classifyCollectionRateType({ tipoDoc: 'FACT', factNum: '000501', tasa: 1050.00 }, rates),
     'BCV'
+  );
+  // Registro histórico en Caja USDT (Binance) con Bs > 0 a tasa Keystone conserva KEYSTONE
+  assert.equal(
+    classifyCollectionRateType({
+      tipoDoc: 'NOTA_ENTREGA',
+      factNum: '002812',
+      tasa: 935.00,
+      montoUsd: 30,
+      montoBs: 28050,
+      cuentaNombre: 'Caja USDT (Binance)'
+    }, rates),
+    'KEYSTONE'
   );
 
   // Nota de Entrega respeta tipo explícito o infiere contra tasas de referencia / personalizada
@@ -309,6 +332,66 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.equal(grouped.totals.totalUsd, 215);
   assert.equal(grouped.totals.totalBs, 202837);
   console.log('  ✓ 6. Clasificación por renglones BCV/Euro/Keystone/Personalizada, regla Fiscal->BCV y sumatorias totales verificadas.');
+}
+
+// 7. Monedas Directas (Efectivo USD, Zelle, Binance USDT, Kontigo USDC) con tasa/Bs en 0 y resumen por Caja / Banco
+{
+  const rates = { tasaBcv: 911.62, tasaEuro: 1009.34, tasaKeystone: 1003.49 };
+  const dailyMovs = [
+    { id: 'd1', tipoDoc: 'FACTURA', factNum: '002600', tipoTasa: 'BCV', tasa: 911.62, montoUsd: 100, montoBs: 91162, cuentaNombre: 'BANCO PLAZA' },
+    { id: 'd2', tipoDoc: 'NOTA_ENTREGA', factNum: 'NE-20', tipoTasa: 'USD', tasa: 1, montoUsd: 50, montoBs: 50, cuentaNombre: 'Caja Efectivo $ (Valencia)' },
+    { id: 'd3', tipoDoc: 'FACTURA', factNum: '002601', tipoTasa: 'ZELLE', tasa: 1, montoUsd: 120, montoBs: 0, cuentaNombre: 'ZELLE MOTORVEN' },
+    { id: 'd4', tipoDoc: 'NOTA_ENTREGA', factNum: 'NE-21', tipoTasa: 'USDT', tasa: 1, montoUsd: 80, montoBs: 0, cuentaNombre: 'Caja USDT (Binance)' },
+    { id: 'd5', tipoDoc: 'NOTA_ENTREGA', factNum: 'NE-22', tipoTasa: 'USDC', tasa: 1, montoUsd: 40, montoBs: 0, cuentaNombre: 'Caja Kontigo (USDC)' },
+    { id: 'd6', tipoDoc: 'NOTA_ENTREGA', factNum: 'NE-23', tipoTasa: 'KEYSTONE', tasa: 1003.49, montoUsd: 60, montoBs: 60209.40, cuentaNombre: 'BANCO PLAZA' },
+    // Registros históricos sin tipoTasa explícito pero depositados en cajas en moneda directa:
+    { id: 'd7', tipoDoc: 'FACTURA', factNum: '002651', tasa: 911.62, montoUsd: 50, montoBs: 45581, cuentaNombre: 'Caja Efectivo $ (Valencia)' },
+    { id: 'd8', tipoDoc: 'NOTA_ENTREGA', factNum: '002074', tasa: 1009.34, montoUsd: 50, montoBs: 50467, cuentaNombre: 'Caja Efectivo Caracas $' },
+    { id: 'd9', tipoDoc: 'NOTA_ENTREGA', factNum: '002075', tasa: 1003.49, montoUsd: 35, montoBs: 35122.15, cuentaNombre: 'Caja Zelle' },
+    { id: 'd10', tipoDoc: 'NOTA_ENTREGA', factNum: '002076', tasa: 1003.49, montoUsd: 25, montoBs: 25087.25, cuentaNombre: 'Caja USDC (Kontigo App)' },
+    // Caja Efectivo Bs (Valencia) SÍ conserva sus bolívares
+    { id: 'd11', tipoDoc: 'NOTA_ENTREGA', factNum: '002077', tasa: 1003.49, montoUsd: 10, montoBs: 10034.90, cuentaNombre: 'Caja Efectivo Bs (Valencia)' }
+  ];
+
+  const grouped = groupMovementsByRateType(dailyMovs, rates);
+  assert.equal(grouped.byType.USD.items.length, 3);
+  assert.equal(grouped.byType.USD.totalUsd, 150);
+  assert.equal(grouped.byType.USD.totalBs, 0);
+  assert.equal(grouped.byType.USD.items[1].tasa, 0);
+  assert.equal(grouped.byType.USD.items[1].montoBs, 0);
+  assert.equal(grouped.byType.ZELLE.totalUsd, 155);
+  assert.equal(grouped.byType.ZELLE.totalBs, 0);
+  assert.equal(grouped.byType.USDT.totalBs, 0);
+  assert.equal(grouped.byType.USDC.totalUsd, 65);
+  assert.equal(grouped.byType.USDC.totalBs, 0);
+  assert.equal(grouped.byType.KEYSTONE.totalUsd, 70);
+  assert.equal(grouped.byType.KEYSTONE.totalBs, 70244.30);
+  assert.equal(grouped.totals.count, 11);
+  assert.equal(grouped.totals.totalUsd, 620);
+  assert.equal(grouped.totals.totalBs, 161406.30);
+
+  const byCaja = summarizeDailyMovementsByCaja(dailyMovs);
+  const plaza = byCaja.rows.find(r => r.cuentaNombre === 'BANCO PLAZA');
+  const valenciaUsd = byCaja.rows.find(r => r.cuentaNombre === 'Caja Efectivo $ (Valencia)');
+  const caracasUsd = byCaja.rows.find(r => r.cuentaNombre === 'Caja Efectivo Caracas $');
+  const kontigo = byCaja.rows.find(r => r.cuentaNombre === 'Caja USDC (Kontigo App)');
+  const valenciaBs = byCaja.rows.find(r => r.cuentaNombre === 'Caja Efectivo Bs (Valencia)');
+  assert.ok(plaza);
+  assert.equal(plaza.count, 2);
+  assert.equal(plaza.totalUsd, 160);
+  assert.equal(plaza.totalBs, 151371.40);
+  assert.equal(valenciaUsd.totalUsd, 100);
+  assert.equal(valenciaUsd.totalBs, 0);
+  assert.equal(caracasUsd.totalUsd, 50);
+  assert.equal(caracasUsd.totalBs, 0);
+  assert.equal(kontigo.totalUsd, 25);
+  assert.equal(kontigo.totalBs, 0);
+  assert.equal(valenciaBs.totalUsd, 10);
+  assert.equal(valenciaBs.totalBs, 10034.90);
+  assert.equal(byCaja.totals.count, 11);
+  assert.equal(byCaja.totals.totalUsd, 620);
+  assert.equal(byCaja.totals.totalBs, 161406.30);
+  console.log('  ✓ 7. Monedas directas en 0 (Tasa/Bs) y resumen por Caja / Banco verificados.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');

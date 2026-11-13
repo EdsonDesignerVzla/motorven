@@ -20,12 +20,20 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateProfitabilityPDF } from '../services/pdfReportService';
+import {
+  resolveProductListPrice,
+  computeInvoiceItemProratedUsd,
+  deduplicatePosSalesAgainstProfitInvoices,
+  PRICE_LIST_TIERS
+} from '../utils/profitabilityUtils';
 
 export default function SkuProfitabilityModal({
   product,
   profitInvoices = [],
+  sales = [],
   profitPurchases = [],
   clients = [],
+  priceTier = PRICE_LIST_TIERS.MAYOR,
   config,
   onClose
 }) {
@@ -33,8 +41,8 @@ export default function SkuProfitabilityModal({
 
   // Costo y Precios base
   const costoUsd = Number(product?.costoUsd || product?.costo_usd || 0);
-  const precioA = Number(product?.precioA || product?.precio_a || 0);
-  const precioB = Number(product?.precioB || product?.precio_b || 0);
+  const precioA = resolveProductListPrice(product, priceTier);
+  const precioB = Number(product?.precioB || product?.precio_b || product?.precioUsdDetal || product?.precio_usd_detal || 0);
   const precioC = Number(product?.precioC || product?.precio_c || 0);
   const stock = Number(product?.stock || 0);
   const litrosPorUnidad = Number(product?.litrosPorUnidad || product?.litros_por_unidad || 12);
@@ -42,33 +50,41 @@ export default function SkuProfitabilityModal({
   // Simulador de sensibilidad de precios
   const [simulatedPrice, setSimulatedPrice] = useState(precioA || (costoUsd * 1.3));
 
-  // Ventas reales en facturas de Profit para este producto
+  // Ventas reales en facturas de Profit + POS único para este producto
   const productSales = useMemo(() => {
     if (!product) return [];
     const list = [];
-    profitInvoices.forEach((fac) => {
-      if (fac.anulado) return;
+    const prodCode = (product.codigo || product.id || '').trim();
+    const matchDesc = (product.descripcion || '').toLowerCase().slice(0, 15);
+    const allDocs = [
+      ...profitInvoices.filter((fac) => fac && !(fac.anulado || fac.anulada)),
+      ...deduplicatePosSalesAgainstProfitInvoices(profitInvoices, sales)
+    ];
+
+    allDocs.forEach((fac) => {
       const items = Array.isArray(fac.items) ? fac.items : [];
       items.forEach((item) => {
-        const itemCode = (item.articuloId || item.codigo || '').trim();
-        const prodCode = (product.codigo || product.id || '').trim();
-        if (itemCode === prodCode || (item.descripcion && item.descripcion.toLowerCase().includes((product.descripcion || '').toLowerCase().slice(0, 15)))) {
+        const itemCode = (item.articuloId || item.coArt || item.co_art || item.productId || item.codigo || '').trim();
+        const itemDesc = (item.descripcion || item.artDes || '').toLowerCase();
+        if ((prodCode && itemCode === prodCode) || (matchDesc && itemDesc.includes(matchDesc))) {
+          const qty = Number(item.cantidad ?? item.totalArt ?? item.total_art ?? 0);
+          const proratedUsd = computeInvoiceItemProratedUsd(item, items, fac);
           list.push({
-            factNum: fac.factNum || fac.id,
-            fecha: fac.fechaEmision || fac.fec_emis,
-            clienteNombre: fac.clienteNombre || fac.cli_des,
+            factNum: fac.factNum || fac.docNum || fac.numeroFactura || fac.id,
+            fecha: fac.fechaEmision || fac.fec_emis || fac.fecha,
+            clienteNombre: fac.clienteNombre || fac.cli_des || fac.cliente,
             clienteRif: fac.clienteRif || fac.rif,
-            cantidad: Number(item.cantidad || 0),
-            precioUnitario: Number(item.precioUnitario || 0),
+            cantidad: qty,
+            precioUnitario: Number(item.precioUnitario ?? item.precVta ?? (qty > 0 ? proratedUsd / qty : 0)),
             totalNetoBs: Number(item.totalNeto || 0),
-            totalNetoUsd: fac.tasa && fac.tasa > 0 ? Number(item.totalNeto || 0) / fac.tasa : (fac.totNetoUsd || 0),
-            litrosTotales: Number(item.litrosTotales || (Number(item.cantidad || 0) * litrosPorUnidad))
+            totalNetoUsd: proratedUsd,
+            litrosTotales: Number(item.litrosTotales || (qty * litrosPorUnidad))
           });
         }
       });
     });
     return list;
-  }, [profitInvoices, product, litrosPorUnidad]);
+  }, [profitInvoices, sales, product, litrosPorUnidad]);
 
   // Compras reales en facturas de compra Profit para este producto
   const productPurchases = useMemo(() => {

@@ -64,7 +64,8 @@ import {
 } from '../utils/cxcUtils.js';
 import {
   normalizeRateType,
-  isFiscalDocumentForRatePolicy
+  isFiscalDocumentForRatePolicy,
+  isDirectCurrencyRateType
 } from '../utils/rateClassificationUtils.js';
 import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from './formatService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate, preserveDateWithTime, parseInvoiceDateInfo } from './creditPolicyService.js';
@@ -107,7 +108,16 @@ import {
   deleteStorageSale,
   getCommissionSettlements as getStorageCommissionSettlements,
   saveCommissionSettlement as saveStorageCommissionSettlement,
-  deleteCommissionSettlement as deleteStorageCommissionSettlement
+  deleteCommissionSettlement as deleteStorageCommissionSettlement,
+  getStorageEmployees,
+  saveStorageEmployee,
+  deleteStorageEmployee,
+  getStoragePayroll,
+  saveStoragePayroll,
+  deleteStoragePayroll,
+  getStorageExpenses,
+  saveStorageExpense,
+  deleteStorageExpense
 } from './storageService.js';
 import {
   normalizeProfitCollectionUsd,
@@ -1031,7 +1041,7 @@ const mapSaleToDb = (s) => ({
   items: s.items,
   subtotal_usd: s.subtotalUsd || s.subtotal_usd,
   base_exenta_usd: s.baseExentaUsd || s.base_exenta_usd || 0,
-  base_general_usd: s.baseGeneralUsd || s.base_general_usd || 0,
+  base_general_usd: String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim() === 'NOTA_ENTREGA' ? 0 : (s.baseGeneralUsd || s.base_general_usd || 0),
   iva_general_usd: s.ivaGeneralUsd || s.iva_general_usd || 0,
   base_reducida_usd: s.baseReducidaUsd || s.base_reducida_usd || 0,
   iva_reducida_usd: s.ivaReducidaUsd || s.iva_reducida_usd || 0,
@@ -1042,7 +1052,7 @@ const mapSaleToDb = (s) => ({
   total_usd: s.totalUsd || s.total_usd,
   subtotal_bs: s.subtotalBs || s.subtotal_bs,
   base_exenta_bs: s.baseExentaBs || s.base_exenta_bs || 0,
-  base_general_bs: s.baseGeneralBs || s.base_general_bs || 0,
+  base_general_bs: String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim() === 'NOTA_ENTREGA' ? 0 : (s.baseGeneralBs || s.base_general_bs || 0),
   iva_general_bs: s.ivaGeneralBs || s.iva_general_bs || 0,
   base_reducida_bs: s.baseReducidaBs || s.base_reducida_bs || 0,
   iva_reducida_bs: s.ivaReducidaBs || s.iva_reducida_bs || 0,
@@ -1119,7 +1129,7 @@ const mapSaleFromDb = (s) => {
     items: typeof s.items === 'string' ? (() => { try { return JSON.parse(s.items); } catch { return []; } })() : (Array.isArray(s.items) ? s.items : []),
     subtotalUsd: effectiveSubUsd,
     baseExentaUsd: Number(s.base_exenta_usd ?? s.baseExentaUsd ?? 0),
-    baseGeneralUsd: isNe ? effectiveSubUsd : Number(s.base_general_usd ?? s.subtotal_usd ?? s.subtotalUsd ?? 0),
+    baseGeneralUsd: isNe ? 0 : Number(s.base_general_usd ?? s.subtotal_usd ?? s.subtotalUsd ?? 0),
     ivaGeneralUsd: isNe ? 0 : Number(s.iva_general_usd ?? s.iva_usd ?? s.ivaUsd ?? 0),
     baseReducidaUsd: Number(s.base_reducida_usd ?? s.baseReducidaUsd ?? 0),
     ivaReducidaUsd: isNe ? 0 : Number(s.iva_reducida_usd ?? s.ivaReducidaUsd ?? 0),
@@ -1130,7 +1140,7 @@ const mapSaleFromDb = (s) => {
     totalUsd: effectiveTotUsd,
     subtotalBs: effectiveSubBs,
     baseExentaBs: Number(s.base_exenta_bs ?? s.baseExentaBs ?? 0),
-    baseGeneralBs: isNe ? effectiveSubBs : Number(s.base_general_bs ?? s.subtotal_bs ?? s.subtotalBs ?? 0),
+    baseGeneralBs: isNe ? 0 : Number(s.base_general_bs ?? s.subtotal_bs ?? s.subtotalBs ?? 0),
     ivaGeneralBs: isNe ? 0 : Number(s.iva_general_bs ?? s.iva_bs ?? s.ivaBs ?? 0),
     baseReducidaBs: Number(s.base_reducida_bs ?? s.baseReducidaBs ?? 0),
     ivaReducidaBs: isNe ? 0 : Number(s.iva_reducida_bs ?? s.ivaReducidaBs ?? 0),
@@ -1301,7 +1311,7 @@ const mapCashMovementToDb = (m) => {
     monedaPago,
     fallback: monedaPago === 'USD' ? 'USD' : 'BCV'
   });
-  const effectiveTasaPago = tasa > 0 ? tasa : (tipoTasa === 'USD' ? 1 : 0);
+  const effectiveTasaPago = tasa > 0 ? tasa : (isDirectCurrencyRateType(tipoTasa) ? 1 : 0);
   return {
     id: m.id,
     fecha: m.fecha || new Date().toISOString(),
@@ -1333,6 +1343,14 @@ const mapCashMovementToDb = (m) => {
     moneda_pago: monedaPago,
     monedaPago,
     referencia: m.referencia || m.id,
+    cuenta_gasto: m.cuentaGasto || m.cuenta_gasto || null,
+    cuentaGasto: m.cuentaGasto || m.cuenta_gasto || null,
+    cuenta_gasto_desc: m.cuentaGastoDesc || m.cuenta_gasto_desc || null,
+    cuentaGastoDesc: m.cuentaGastoDesc || m.cuenta_gasto_desc || null,
+    referencia_tipo: m.referenciaTipo || m.referencia_tipo || null,
+    referenciaTipo: m.referenciaTipo || m.referencia_tipo || null,
+    referencia_id: m.referenciaId || m.referencia_id || null,
+    referenciaId: m.referenciaId || m.referencia_id || null,
     moneda,
     usuario: m.usuario || m.usuarioId || m.usuario_id || 'Sistema'
   };
@@ -1354,11 +1372,17 @@ const mapCashMovementFromDb = (m) => {
     monedaPago,
     fallback: montoBs <= 0 && monedaPago === 'USD' ? 'USD' : 'BCV'
   });
+  const rawTipoUpper = String(m.tipo || '').toUpperCase().trim();
+  const normalizedTipo = rawTipoUpper === 'EGRESO' ? 'EGRESO' : 'INGRESO';
+  const cuentaGasto = m.cuentaGasto ?? m.cuenta_gasto ?? '';
+  const cuentaGastoDesc = m.cuentaGastoDesc ?? m.cuenta_gasto_desc ?? '';
+  const referenciaTipo = m.referenciaTipo ?? m.referencia_tipo ?? '';
+  const referenciaId = m.referenciaId ?? m.referencia_id ?? '';
   return {
     id: m.id,
     fecha: m.fecha,
-    tipo: m.tipo || 'INGRESO',
-    categoria: m.categoria || 'VENTAS',
+    tipo: normalizedTipo,
+    categoria: m.categoria || (normalizedTipo === 'EGRESO' ? 'GASTO_OPERATIVO' : 'VENTAS'),
     concepto,
     descripcion: concepto,
     montoUsd,
@@ -1384,6 +1408,14 @@ const mapCashMovementFromDb = (m) => {
     monedaPago,
     moneda_pago: monedaPago,
     referencia: m.referencia || m.id,
+    cuentaGasto,
+    cuenta_gasto: cuentaGasto,
+    cuentaGastoDesc,
+    cuenta_gasto_desc: cuentaGastoDesc,
+    referenciaTipo,
+    referencia_tipo: referenciaTipo,
+    referenciaId,
+    referencia_id: referenciaId,
     moneda,
     usuario: m.usuario || m.usuario_id || m.usuarioId || 'Sistema'
   };
@@ -8118,6 +8150,31 @@ export const getSupabaseProfitPaymentOrders = async () => {
   }
 };
 
+const mapIslrWithholdingFromDb = (w) => ({
+  id: w.id,
+  nroComprobante: w.nro_comprobante,
+  periodoFiscal: w.periodo_fiscal,
+  fechaEmision: w.fecha_emision || w.created_at,
+  proveedorCod: w.proveedor_cod,
+  proveedorNombre: w.proveedor_nombre,
+  proveedorRif: w.proveedor_rif,
+  proveedorDireccion: w.proveedor_direccion,
+  nroFacturaAfectada: w.nro_factura_afectada,
+  nroControl: w.nro_control,
+  baseImponible: Number(w.base_imponible) || 0,
+  porcentajeRetencion: Number(w.porcentaje_retencion) || 0,
+  montoRetenido: Number(w.monto_retenido) || 0,
+  montoTotalFactura: Number(w.monto_total_factura) || 0,
+  codigoConceptoIslr: w.codigo_concepto_islr,
+  conceptoDescripcion: w.concepto_descripcion,
+  sustraendo: Number(w.sustraendo) || 0,
+  moneda: w.moneda || 'BS',
+  tasaCambio: Number(w.tasa_cambio) || 1,
+  coSucu: w.co_sucu || '01',
+  createdAt: w.created_at,
+  updatedAt: w.updated_at
+});
+
 export const getSupabaseProfitIslrWithholdings = async () => {
   try {
     const { data, error } = await withTimeout(
@@ -8126,30 +8183,7 @@ export const getSupabaseProfitIslrWithholdings = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    return (data || []).map(w => ({
-      id: w.id,
-      nroComprobante: w.nro_comprobante,
-      periodoFiscal: w.periodo_fiscal,
-      fechaEmision: w.fecha_emision || w.created_at,
-      proveedorCod: w.proveedor_cod,
-      proveedorNombre: w.proveedor_nombre,
-      proveedorRif: w.proveedor_rif,
-      proveedorDireccion: w.proveedor_direccion,
-      nroFacturaAfectada: w.nro_factura_afectada,
-      nroControl: w.nro_control,
-      baseImponible: Number(w.base_imponible) || 0,
-      porcentajeRetencion: Number(w.porcentaje_retencion) || 0,
-      montoRetenido: Number(w.monto_retenido) || 0,
-      montoTotalFactura: Number(w.monto_total_factura) || 0,
-      codigoConceptoIslr: w.codigo_concepto_islr,
-      conceptoDescripcion: w.concepto_descripcion,
-      sustraendo: Number(w.sustraendo) || 0,
-      moneda: w.moneda || 'BS',
-      tasaCambio: Number(w.tasa_cambio) || 1,
-      coSucu: w.co_sucu || '01',
-      createdAt: w.created_at,
-      updatedAt: w.updated_at
-    })).sort((a, b) => new Date(b.createdAt || b.fechaEmision || 0) - new Date(a.createdAt || a.fechaEmision || 0));
+    return (data || []).map(mapIslrWithholdingFromDb).sort((a, b) => new Date(b.createdAt || b.fechaEmision || 0) - new Date(a.createdAt || a.fechaEmision || 0));
   } catch (err) {
     return [];
   }
@@ -8356,7 +8390,7 @@ export const saveSupabaseProfitIslrWithholding = async (withholding) => {
       .single();
 
     if (error) throw error;
-    return { success: true, data };
+    return { success: true, data: data ? mapIslrWithholdingFromDb(data) : withholding };
   } catch (err) {
     console.error('[Supabase] Error guardando comprobante ISLR:', err);
     return { success: false, error: err.message };
@@ -9436,108 +9470,428 @@ export const getSupabaseProfitWarehouseTransfersMerged = async () => {
 };
 
 // =========================================================================
-// LIQUIDACIONES DE COMISIONES (SINCRONIZADAS CON SUPABASE + FALLBACK LOCAL)
+// LIQUIDACIONES DE COMISIONES, GASTOS, EMPLEADOS Y NÓMINA (SUPABASE + LOCAL)
 // =========================================================================
-export const getSupabaseCommissionSettlements = async () => {
-  const localList = getStorageCommissionSettlements();
+export const mapCommissionSettlementToDb = (s) => ({
+  id: s.id,
+  co_ven: s.coVen || s.co_ven || '',
+  ven_des: s.venDes || s.ven_des || '',
+  cedula: s.cedula || '',
+  periodo: s.periodo || '',
+  periodo_id: s.periodoId || s.periodo_id || '',
+  total_litros: round2(s.totalLitros ?? s.total_litros ?? 0),
+  meta_litros: round2(s.metaLitros ?? s.meta_litros ?? 0),
+  total_facturado_usd: round2(s.totalFacturadoUsd ?? s.total_facturado_usd ?? 0),
+  base_pagada_sin_iva_usd: round2(s.basePagadaSinIvaUsd ?? s.base_pagada_sin_iva_usd ?? 0),
+  documentos_pagados_count: Number(s.documentosPagadosCount ?? s.documentos_pagados_count ?? 0),
+  documentos_pendientes_excluidos_count: Number(s.documentosPendientesExcluidosCount ?? s.documentos_pendientes_excluidos_count ?? 0),
+  motorven_tiers: s.motorvenTiers ?? s.motorven_tiers ?? [],
+  bono_adicional_usd: round2(s.bonoAdicionalUsd ?? s.bono_adicional_usd ?? 0),
+  total_cobrado_usd: round2(s.totalCobradoUsd ?? s.total_cobrado_usd ?? 0),
+  total_comision_usd: round2(s.totalComisionUsd ?? s.total_comision_usd ?? 0),
+  total_comision_bs: round2(s.totalComisionBs ?? s.total_comision_bs ?? 0),
+  tasa_bcv: Number(s.tasaBcv ?? s.tasa_bcv ?? 0),
+  metodo_pago: s.metodoPago || s.metodo_pago || 'Efectivo',
+  referencia_pago: s.referenciaPago || s.referencia_pago || 'S/R',
+  fecha_pago: s.fechaPago || s.fecha_pago || '',
+  notas: s.notas || '',
+  seller: s.seller || {},
+  estado: s.estado || 'PAGADA',
+  cash_movement_id: s.cashMovementId || s.cash_movement_id || null
+});
+
+export const mapCommissionSettlementFromDb = (s) => {
+  if (!s) return null;
+  return {
+    id: s.id,
+    coVen: s.coVen ?? s.co_ven ?? '',
+    venDes: s.venDes ?? s.ven_des ?? '',
+    cedula: s.cedula || '',
+    periodo: s.periodo || '',
+    periodoId: s.periodoId ?? s.periodo_id ?? '',
+    totalLitros: Number(s.totalLitros ?? s.total_litros ?? 0),
+    metaLitros: Number(s.metaLitros ?? s.meta_litros ?? 0),
+    totalFacturadoUsd: Number(s.totalFacturadoUsd ?? s.total_facturado_usd ?? 0),
+    basePagadaSinIvaUsd: Number(s.basePagadaSinIvaUsd ?? s.base_pagada_sin_iva_usd ?? 0),
+    documentosPagadosCount: Number(s.documentosPagadosCount ?? s.documentos_pagados_count ?? 0),
+    documentosPendientesExcluidosCount: Number(s.documentosPendientesExcluidosCount ?? s.documentos_pendientes_excluidos_count ?? 0),
+    motorvenTiers: s.motorvenTiers ?? s.motorven_tiers ?? [],
+    bonoAdicionalUsd: Number(s.bonoAdicionalUsd ?? s.bono_adicional_usd ?? 0),
+    totalCobradoUsd: Number(s.totalCobradoUsd ?? s.total_cobrado_usd ?? 0),
+    totalComisionUsd: Number(s.totalComisionUsd ?? s.total_comision_usd ?? 0),
+    totalComisionBs: Number(s.totalComisionBs ?? s.total_comision_bs ?? 0),
+    tasaBcv: Number(s.tasaBcv ?? s.tasa_bcv ?? 0),
+    metodoPago: s.metodoPago ?? s.metodo_pago ?? 'Efectivo',
+    referenciaPago: s.referenciaPago ?? s.referencia_pago ?? 'S/R',
+    fechaPago: s.fechaPago ?? s.fecha_pago ?? '',
+    fechaRegistro: s.fechaRegistro ?? s.created_at ?? s.fecha_pago ?? '',
+    notas: s.notas || '',
+    seller: s.seller || {},
+    estado: s.estado || 'PAGADA',
+    cashMovementId: s.cashMovementId ?? s.cash_movement_id ?? null
+  };
+};
+
+export const mapEmployeeToDb = (e) => ({
+  id: e.id,
+  cedula: String(e.cedula || '').trim(),
+  nombre: String(e.nombre || '').trim(),
+  cargo: String(e.cargo || '').trim(),
+  departamento: e.departamento || 'OPERACIONES',
+  fecha_ingreso: e.fechaIngreso || e.fecha_ingreso || null,
+  salario_base_usd: round2(e.salarioBaseUsd ?? e.salario_base_usd ?? 0),
+  bono_fijo_usd: round2(e.bonoFijoUsd ?? e.bono_fijo_usd ?? 0),
+  frecuencia_pago: e.frecuenciaPago || e.frecuencia_pago || 'QUINCENAL',
+  metodo_pago: e.metodoPago || e.metodo_pago || 'TRANSFERENCIA',
+  cuenta_bancaria: e.cuentaBancaria || e.cuenta_bancaria || '',
+  telefono: e.telefono || '',
+  activo: e.activo !== false
+});
+
+export const mapEmployeeFromDb = (e) => {
+  if (!e) return null;
+  return {
+    id: e.id,
+    cedula: e.cedula || '',
+    nombre: e.nombre || '',
+    cargo: e.cargo || '',
+    departamento: e.departamento || 'OPERACIONES',
+    fechaIngreso: e.fechaIngreso ?? e.fecha_ingreso ?? '',
+    salarioBaseUsd: round2(e.salarioBaseUsd ?? e.salario_base_usd ?? 0),
+    bonoFijoUsd: round2(e.bonoFijoUsd ?? e.bono_fijo_usd ?? 0),
+    frecuenciaPago: e.frecuenciaPago ?? e.frecuencia_pago ?? 'QUINCENAL',
+    metodoPago: e.metodoPago ?? e.metodo_pago ?? 'TRANSFERENCIA',
+    cuentaBancaria: e.cuentaBancaria ?? e.cuenta_bancaria ?? '',
+    telefono: e.telefono || '',
+    activo: e.activo !== false,
+    createdAt: e.createdAt ?? e.created_at ?? '',
+    updatedAt: e.updatedAt ?? e.updated_at ?? ''
+  };
+};
+
+export const mapExpenseToDb = (x) => ({
+  id: x.id,
+  fecha: x.fecha || new Date().toISOString().split('T')[0],
+  concepto: String(x.concepto || '').trim(),
+  categoria: x.categoria || 'GASTO_OPERATIVO',
+  cuenta_gasto: x.cuentaGasto || x.cuenta_gasto || null,
+  cuenta_gasto_desc: x.cuentaGastoDesc || x.cuenta_gasto_desc || null,
+  proveedor: x.proveedor || '',
+  rif_proveedor: x.rifProveedor || x.rif_proveedor || '',
+  documento_ref: x.documentoRef || x.documento_ref || '',
+  monto_usd: round2(x.montoUsd ?? x.monto_usd ?? 0),
+  monto_bs: round2(x.montoBs ?? x.monto_bs ?? 0),
+  tasa_pago: Number(x.tasaPago ?? x.tasa_pago ?? 0),
+  tipo_tasa: x.tipoTasa || x.tipo_tasa || 'BCV',
+  metodo_pago: x.metodoPago || x.metodo_pago || 'TRANSFERENCIA',
+  caja_banco_id: x.cajaBancoId || x.caja_banco_id || null,
+  caja_banco_nombre: x.cajaBancoNombre || x.caja_banco_nombre || '',
+  referencia: x.referencia || '',
+  estado: x.estado || 'PAGADA',
+  notas: x.notas || '',
+  cash_movement_id: x.cashMovementId || x.cash_movement_id || null,
+  created_by: x.createdBy || x.created_by || 'Sistema'
+});
+
+export const mapExpenseFromDb = (x) => {
+  if (!x) return null;
+  return {
+    id: x.id,
+    fecha: x.fecha || '',
+    concepto: x.concepto || '',
+    categoria: x.categoria || 'GASTO_OPERATIVO',
+    cuentaGasto: x.cuentaGasto ?? x.cuenta_gasto ?? '',
+    cuentaGastoDesc: x.cuentaGastoDesc ?? x.cuenta_gasto_desc ?? '',
+    proveedor: x.proveedor || '',
+    rifProveedor: x.rifProveedor ?? x.rif_proveedor ?? '',
+    documentoRef: x.documentoRef ?? x.documento_ref ?? '',
+    montoUsd: round2(x.montoUsd ?? x.monto_usd ?? 0),
+    montoBs: round2(x.montoBs ?? x.monto_bs ?? 0),
+    tasaPago: Number(x.tasaPago ?? x.tasa_pago ?? 0),
+    tipoTasa: x.tipoTasa ?? x.tipo_tasa ?? 'BCV',
+    metodoPago: x.metodoPago ?? x.metodo_pago ?? 'TRANSFERENCIA',
+    cajaBancoId: x.cajaBancoId ?? x.caja_banco_id ?? '',
+    cajaBancoNombre: x.cajaBancoNombre ?? x.caja_banco_nombre ?? '',
+    referencia: x.referencia || '',
+    estado: x.estado || 'PAGADA',
+    notas: x.notas || '',
+    cashMovementId: x.cashMovementId ?? x.cash_movement_id ?? null,
+    createdBy: x.createdBy ?? x.created_by ?? 'Sistema',
+    createdAt: x.createdAt ?? x.created_at ?? '',
+    updatedAt: x.updatedAt ?? x.updated_at ?? ''
+  };
+};
+
+export const mapPayrollToDb = (p) => ({
+  id: p.id,
+  periodo: p.periodo || '',
+  periodo_inicio: p.periodoInicio || p.periodo_inicio || null,
+  periodo_fin: p.periodoFin || p.periodo_fin || null,
+  fecha_pago: p.fechaPago || p.fecha_pago || new Date().toISOString().split('T')[0],
+  frecuencia: p.frecuencia || 'QUINCENAL',
+  total_salarios_usd: round2(p.totalSalariosUsd ?? p.total_salarios_usd ?? 0),
+  total_bonos_usd: round2(p.totalBonosUsd ?? p.total_bonos_usd ?? 0),
+  total_deducciones_usd: round2(p.totalDeduccionesUsd ?? p.total_deducciones_usd ?? 0),
+  total_neto_usd: round2(p.totalNetoUsd ?? p.total_neto_usd ?? 0),
+  total_neto_bs: round2(p.totalNetoBs ?? p.total_neto_bs ?? 0),
+  tasa_bcv: Number(p.tasaBcv ?? p.tasa_bcv ?? 0),
+  tipo_tasa: p.tipoTasa || p.tipo_tasa || 'BCV',
+  metodo_pago: p.metodoPago || p.metodo_pago || 'TRANSFERENCIA',
+  cuenta_destino: p.cuentaDestino || p.cuenta_destino || '',
+  caja_banco_id: p.cajaBancoId || p.caja_banco_id || null,
+  referencia: p.referencia || '',
+  estado: p.estado || 'PAGADA',
+  notas: p.notas || '',
+  detalles: Array.isArray(p.detalles) ? p.detalles : [],
+  cash_movement_id: p.cashMovementId || p.cash_movement_id || null,
+  created_by: p.createdBy || p.created_by || 'Sistema'
+});
+
+export const mapPayrollFromDb = (p) => {
+  if (!p) return null;
+  return {
+    id: p.id,
+    periodo: p.periodo || '',
+    periodoInicio: p.periodoInicio ?? p.periodo_inicio ?? '',
+    periodoFin: p.periodoFin ?? p.periodo_fin ?? '',
+    fechaPago: p.fechaPago ?? p.fecha_pago ?? '',
+    frecuencia: p.frecuencia || 'QUINCENAL',
+    totalSalariosUsd: round2(p.totalSalariosUsd ?? p.total_salarios_usd ?? 0),
+    totalBonosUsd: round2(p.totalBonosUsd ?? p.total_bonos_usd ?? 0),
+    totalDeduccionesUsd: round2(p.totalDeduccionesUsd ?? p.total_deducciones_usd ?? 0),
+    totalNetoUsd: round2(p.totalNetoUsd ?? p.total_neto_usd ?? 0),
+    totalNetoBs: round2(p.totalNetoBs ?? p.total_neto_bs ?? 0),
+    tasaBcv: Number(p.tasaBcv ?? p.tasa_bcv ?? 0),
+    tipoTasa: p.tipoTasa ?? p.tipo_tasa ?? 'BCV',
+    metodoPago: p.metodoPago ?? p.metodo_pago ?? 'TRANSFERENCIA',
+    cuentaDestino: p.cuentaDestino ?? p.cuenta_destino ?? '',
+    cajaBancoId: p.cajaBancoId ?? p.caja_banco_id ?? '',
+    referencia: p.referencia || '',
+    estado: p.estado || 'PAGADA',
+    notas: p.notas || '',
+    detalles: Array.isArray(p.detalles) ? p.detalles : [],
+    cashMovementId: p.cashMovementId ?? p.cash_movement_id ?? null,
+    createdBy: p.createdBy ?? p.created_by ?? 'Sistema',
+    createdAt: p.createdAt ?? p.created_at ?? '',
+    updatedAt: p.updatedAt ?? p.updated_at ?? ''
+  };
+};
+
+/**
+ * Helper genérico de lectura/escritura/eliminación sincronizada (Supabase + caché local + cola offline + realtime).
+ */
+const fetchSyncedCollection = async ({
+  tableName,
+  getLocalFn,
+  localStorageKey,
+  mapFromDbFn,
+  sortValueFn
+}) => {
+  const localList = getLocalFn();
   if (!isNetworkOnline()) return localList;
   try {
     const { data, error } = await withTimeout(
-      supabase.from('commission_settlements').select('*').order('fechaRegistro', { ascending: false }).limit(1000),
+      supabase.from(tableName).select('*').limit(2000),
       8000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    const remoteList = Array.isArray(data) ? data : [];
     const mergedMap = new Map();
-    remoteList.forEach((r) => {
-      if (r && r.id) mergedMap.set(String(r.id), r);
+    (Array.isArray(data) ? data : []).forEach((raw) => {
+      const mapped = mapFromDbFn(raw);
+      if (mapped?.id) mergedMap.set(String(mapped.id), mapped);
     });
     localList.forEach((l) => {
-      if (l && l.id && !mergedMap.has(String(l.id))) {
+      if (l?.id && !mergedMap.has(String(l.id))) {
         mergedMap.set(String(l.id), l);
       }
     });
     const merged = Array.from(mergedMap.values()).sort((a, b) =>
-      String(b?.fechaRegistro || b?.fechaPago || '').localeCompare(String(a?.fechaRegistro || a?.fechaPago || ''))
+      String(sortValueFn(b) || '').localeCompare(String(sortValueFn(a) || ''))
     );
     try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('sm_commission_settlements_v4', JSON.stringify(merged));
+      if (typeof localStorage !== 'undefined' && localStorageKey) {
+        localStorage.setItem(localStorageKey, JSON.stringify(merged));
       }
     } catch (_) {}
     return merged;
   } catch (err) {
-    console.warn('[Supabase] Error cargando liquidaciones de comisiones (usando caché local):', err?.message || err);
+    console.warn(`[Supabase] Error cargando ${tableName} (usando caché local):`, err?.message || err);
     return localList;
   }
 };
 
-export const saveSupabaseCommissionSettlement = async (settlement) => {
-  const savedLocal = saveStorageCommissionSettlement(settlement);
+const upsertSyncedCollectionItem = async ({
+  tableName,
+  tableId,
+  syncEntity,
+  saveLocalFn,
+  mapToDbFn,
+  record
+}) => {
+  const savedLocal = saveLocalFn(record);
+  const dbPayload = mapToDbFn ? mapToDbFn(savedLocal) : savedLocal;
+  const emit = () => broadcastReconcileChange({
+    tableId,
+    action: 'UPDATE',
+    key: savedLocal.id,
+    item: savedLocal
+  });
   if (!isNetworkOnline()) {
-    enqueueSyncAction('commission_settlement', 'UPDATE', savedLocal);
-    broadcastReconcileChange({
-      tableId: 'commission_settlements',
-      action: 'UPDATE',
-      key: savedLocal.id,
-      item: savedLocal
-    });
+    enqueueSyncAction(syncEntity, 'UPDATE', dbPayload);
+    emit();
     return savedLocal;
   }
   try {
     const { error } = await withTimeout(
-      supabase.from('commission_settlements').upsert(savedLocal, { onConflict: 'id' }),
+      supabase.from(tableName).upsert(dbPayload, { onConflict: 'id' }),
       8000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    broadcastReconcileChange({
-      tableId: 'commission_settlements',
-      action: 'UPDATE',
-      key: savedLocal.id,
-      item: savedLocal
-    });
+    emit();
     return savedLocal;
   } catch (err) {
-    console.warn('[Supabase] Encolando liquidación de comisión:', err?.message || err);
-    enqueueSyncAction('commission_settlement', 'UPDATE', savedLocal);
+    console.warn(`[Supabase] Encolando ${syncEntity}:`, err?.message || err);
+    enqueueSyncAction(syncEntity, 'UPDATE', dbPayload);
     return savedLocal;
   }
 };
 
-export const deleteSupabaseCommissionSettlement = async (id) => {
-  const updatedLocal = deleteStorageCommissionSettlement(id);
+const deleteSyncedCollectionItem = async ({
+  tableName,
+  tableId,
+  syncEntity,
+  deleteLocalFn,
+  id
+}) => {
+  const updatedLocal = deleteLocalFn(id);
+  const emit = () => broadcastReconcileChange({
+    tableId,
+    action: 'DELETE',
+    key: id,
+    item: { id }
+  });
   if (!isNetworkOnline()) {
-    enqueueSyncAction('commission_settlement', 'DELETE', { id });
-    broadcastReconcileChange({
-      tableId: 'commission_settlements',
-      action: 'DELETE',
-      key: id,
-      item: { id }
-    });
+    enqueueSyncAction(syncEntity, 'DELETE', { id });
+    emit();
     return updatedLocal;
   }
   try {
     const { error } = await withTimeout(
-      supabase.from('commission_settlements').delete().eq('id', id),
+      supabase.from(tableName).delete().eq('id', id),
       8000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    broadcastReconcileChange({
-      tableId: 'commission_settlements',
-      action: 'DELETE',
-      key: id,
-      item: { id }
-    });
+    emit();
     return updatedLocal;
   } catch (err) {
-    console.warn('[Supabase] Encolando anulación de liquidación:', err?.message || err);
-    enqueueSyncAction('commission_settlement', 'DELETE', { id });
+    console.warn(`[Supabase] Encolando eliminación ${syncEntity}:`, err?.message || err);
+    enqueueSyncAction(syncEntity, 'DELETE', { id });
     return updatedLocal;
   }
 };
+
+export const getSupabaseCommissionSettlements = () => fetchSyncedCollection({
+  tableName: 'commission_settlements',
+  getLocalFn: getStorageCommissionSettlements,
+  localStorageKey: 'sm_commission_settlements_v4',
+  mapFromDbFn: mapCommissionSettlementFromDb,
+  sortValueFn: (s) => s?.fechaRegistro || s?.fechaPago
+});
+
+export const saveSupabaseCommissionSettlement = (settlement) => upsertSyncedCollectionItem({
+  tableName: 'commission_settlements',
+  tableId: 'commission_settlements',
+  syncEntity: 'commission_settlement',
+  saveLocalFn: saveStorageCommissionSettlement,
+  mapToDbFn: mapCommissionSettlementToDb,
+  record: settlement
+});
+
+export const deleteSupabaseCommissionSettlement = (id) => deleteSyncedCollectionItem({
+  tableName: 'commission_settlements',
+  tableId: 'commission_settlements',
+  syncEntity: 'commission_settlement',
+  deleteLocalFn: deleteStorageCommissionSettlement,
+  id
+});
+
+export const getSupabaseEmployees = () => fetchSyncedCollection({
+  tableName: 'employees',
+  getLocalFn: getStorageEmployees,
+  localStorageKey: 'sm_employees_v4',
+  mapFromDbFn: mapEmployeeFromDb,
+  sortValueFn: (e) => e?.nombre || e?.createdAt
+});
+
+export const saveSupabaseEmployee = (employee) => upsertSyncedCollectionItem({
+  tableName: 'employees',
+  tableId: 'employees',
+  syncEntity: 'employee',
+  saveLocalFn: saveStorageEmployee,
+  mapToDbFn: mapEmployeeToDb,
+  record: employee
+});
+
+export const deleteSupabaseEmployee = (id) => deleteSyncedCollectionItem({
+  tableName: 'employees',
+  tableId: 'employees',
+  syncEntity: 'employee',
+  deleteLocalFn: deleteStorageEmployee,
+  id
+});
+
+export const getSupabaseExpenses = () => fetchSyncedCollection({
+  tableName: 'expenses',
+  getLocalFn: getStorageExpenses,
+  localStorageKey: 'sm_expenses_v4',
+  mapFromDbFn: mapExpenseFromDb,
+  sortValueFn: (x) => x?.fecha || x?.createdAt
+});
+
+export const saveSupabaseExpense = (expense) => upsertSyncedCollectionItem({
+  tableName: 'expenses',
+  tableId: 'expenses',
+  syncEntity: 'expense',
+  saveLocalFn: saveStorageExpense,
+  mapToDbFn: mapExpenseToDb,
+  record: expense
+});
+
+export const deleteSupabaseExpense = (id) => deleteSyncedCollectionItem({
+  tableName: 'expenses',
+  tableId: 'expenses',
+  syncEntity: 'expense',
+  deleteLocalFn: deleteStorageExpense,
+  id
+});
+
+export const getSupabasePayroll = () => fetchSyncedCollection({
+  tableName: 'payroll',
+  getLocalFn: getStoragePayroll,
+  localStorageKey: 'sm_payroll_v4',
+  mapFromDbFn: mapPayrollFromDb,
+  sortValueFn: (p) => p?.fechaPago || p?.createdAt
+});
+
+export const saveSupabasePayroll = (payrollRec) => upsertSyncedCollectionItem({
+  tableName: 'payroll',
+  tableId: 'payroll',
+  syncEntity: 'payroll',
+  saveLocalFn: saveStoragePayroll,
+  mapToDbFn: mapPayrollToDb,
+  record: payrollRec
+});
+
+export const deleteSupabasePayroll = (id) => deleteSyncedCollectionItem({
+  tableName: 'payroll',
+  tableId: 'payroll',
+  syncEntity: 'payroll',
+  deleteLocalFn: deleteStoragePayroll,
+  id
+});
 
 
 

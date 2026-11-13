@@ -1045,34 +1045,113 @@ export const generateVatRetentionVoucherNumber = (date = new Date(), sequenceNum
  * @param {Object} config - Configuración de la empresa emisora
  * @returns {string} - Contenido en texto plano del archivo TXT
  */
-export const generateSeniatVatRetentionTxt = (retencionesList = [], config = {}) => {
-  const cleanAgentRif = (config.rif || 'J-31115365-9').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+const VALID_FISCAL_DOC_TYPES = new Set(['FACTURA', 'NOTA_CREDITO', 'NOTA_DEBITO']);
 
-  const lines = retencionesList.map(ret => {
-    const periodo = ret.periodoFiscal || `${new Date(ret.fechaEmision).getFullYear()}${String(new Date(ret.fechaEmision).getMonth() + 1).padStart(2, '0')}`;
-    
-    // Formato de fecha AAAA-MM-DD
+/**
+ * Determina si un documento pertenece al universo fiscal SENIAT (excluye NOTA_ENTREGA, COTIZACION, etc.).
+ */
+export const isFiscalDocEligible = (doc) => {
+  if (!doc) return false;
+  const rawTipo = String(doc.tipoDoc || doc.tipo_doc || 'FACTURA').toUpperCase().trim();
+  const rawNum = String(doc.numeroDoc ?? doc.numero_doc ?? doc.factNum ?? doc.fact_num ?? '').toUpperCase().trim();
+  const rawId = String(doc.id || '').toUpperCase().trim();
+  if (/^(NE-|NDE-|COT-|PED-|PRE-)/.test(rawNum) || /^(NE-|NDE-|COT-|PED-|PRE-)/.test(rawId)) {
+    return false;
+  }
+  return VALID_FISCAL_DOC_TYPES.has(rawTipo);
+};
+
+/**
+ * Escapa caracteres reservados XML para preservar la validez del esquema SENIAT.
+ */
+const escapeXml = (val = '') => String(val ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&apos;');
+
+/**
+ * Codifica una cadena a bytes reales ISO-8859-1 (Latin-1) para exportaciones XML SENIAT.
+ */
+export const encodeIso88591Bytes = (str = '') => {
+  const s = String(str || '');
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    bytes[i] = code <= 0xFF ? code : 0x3F; // '?' para caracteres fuera de Latin-1
+  }
+  return bytes;
+};
+
+/**
+ * Genera el próximo correlativo secuencial oficial de 14 dígitos para comprobante de retención ISLR (AAAAMM + 8 dígitos).
+ */
+export const generateNextIslrVoucherNumber = (existingWithholdings = [], periodoFiscal = '') => {
+  const now = new Date();
+  const cleanPeriod = String(periodoFiscal || '').replace(/[^0-9]/g, '');
+  const periodPrefix = cleanPeriod.length === 6
+    ? cleanPeriod
+    : `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  let maxSeq = 0;
+  (existingWithholdings || []).forEach((w) => {
+    const nro = String(w?.nroComprobante || w?.nro_comprobante || '').replace(/[^0-9]/g, '');
+    if (nro.length >= 14 && nro.startsWith(periodPrefix)) {
+      const seqPart = parseInt(nro.slice(6), 10);
+      if (!isNaN(seqPart) && seqPart > maxSeq) maxSeq = seqPart;
+    } else if (nro.length > 0 && nro.startsWith(periodPrefix)) {
+      const seqPart = parseInt(nro.slice(periodPrefix.length), 10);
+      if (!isNaN(seqPart) && seqPart > maxSeq) maxSeq = seqPart;
+    }
+  });
+  return `${periodPrefix}${String(maxSeq + 1).padStart(8, '0')}`;
+};
+
+const normalizeSeniatCleanRif = (rawRif = '') => {
+  const validation = validateRif(String(rawRif || ''));
+  if (validation.isValid && validation.formatted) {
+    return validation.formatted.replace(/-/g, '').toUpperCase();
+  }
+  return String(rawRif || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+};
+
+export const generateSeniatVatRetentionTxt = (retencionesList = [], config = {}) => {
+  const cleanAgentRif = normalizeSeniatCleanRif(config.rif || 'J-31115365-9');
+
+  const lines = (retencionesList || []).reduce((acc, ret) => {
+    const montoRetNum = Number(ret?.montoRetenidoBs ?? 0);
+    const comprobanteNro = String(ret?.comprobanteNro || ret?.comprobanteRetencion || ret?.comprobanteRetencionIva || '').trim();
+    const provRifCheck = validateRif(String(ret?.proveedorRif || ''));
+    const cleanProvRif = provRifCheck.isValid
+      ? provRifCheck.formatted.replace(/-/g, '').toUpperCase()
+      : '';
+
+    // Excluir registros sin retención real, sin comprobante de 14 dígitos o con RIF inválido/placeholder
+    if (montoRetNum <= 0 || !/^\d{14}$/.test(comprobanteNro) || !cleanProvRif || cleanProvRif.length !== 10 || /^[VEJPG]0{9}$/.test(cleanProvRif)) {
+      return acc;
+    }
+
     const d = new Date(ret.fechaEmision || new Date());
-    const fechaDoc = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    
+    const validDate = isNaN(d.getTime()) ? new Date() : d;
+    const periodo = ret.periodoFiscal || `${validDate.getFullYear()}${String(validDate.getMonth() + 1).padStart(2, '0')}`;
+    const fechaDoc = `${validDate.getFullYear()}-${String(validDate.getMonth() + 1).padStart(2, '0')}-${String(validDate.getDate()).padStart(2, '0')}`;
+
     const tipoOperacion = ret.tipoOperacion || 'C';
     const tipoDoc = ret.tipoDocumento || '01'; // 01 Factura, 02 ND, 03 NC
-    const cleanProvRif = (ret.proveedorRif || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    
-    const numDoc = (ret.numeroDocumento || ret.numeroFactura || '').trim();
-    const numCtrl = (ret.numeroControl || '').trim();
-    
-    const totalDoc = Number(ret.totalDocumentoBs || 0).toFixed(2);
-    const baseImp = Number(ret.baseImponibleBs || 0).toFixed(2);
-    const montoRet = Number(ret.montoRetenidoBs || 0).toFixed(2);
-    
-    const docAfectado = (ret.documentoAfectado && ret.documentoAfectado !== '') ? ret.documentoAfectado.trim() : '0';
-    const comprobanteNro = (ret.comprobanteNro || ret.comprobanteRetencion || ret.comprobanteRetencionIva || '').trim();
-    const montoExento = Number(ret.montoExentoBs || 0).toFixed(2);
-    const alicuota = Number(ret.alicuota || 16.00).toFixed(2);
-    const numExpediente = (ret.numeroExpediente && ret.numeroExpediente !== '') ? ret.numeroExpediente.trim() : '0';
+    const numDoc = String(ret.numeroDocumento || ret.numeroFactura || '').trim().slice(0, 20);
+    const numCtrl = String(ret.numeroControl || '').trim().slice(0, 20);
 
-    return [
+    const totalDoc = Number(ret.totalDocumentoBs ?? 0).toFixed(2);
+    const baseImp = Number(ret.baseImponibleBs ?? 0).toFixed(2);
+    const montoRet = montoRetNum.toFixed(2);
+
+    const docAfectado = (ret.documentoAfectado && String(ret.documentoAfectado).trim() !== '') ? String(ret.documentoAfectado).trim() : '0';
+    const montoExento = Number(ret.montoExentoBs ?? 0).toFixed(2);
+    const rawAlicuota = Number(ret.alicuota ?? 16.00);
+    const alicuota = (Number.isFinite(rawAlicuota) ? rawAlicuota : 16.00).toFixed(2);
+    const numExpediente = (ret.numeroExpediente && String(ret.numeroExpediente).trim() !== '') ? String(ret.numeroExpediente).trim() : '0';
+
+    acc.push([
       cleanAgentRif,
       periodo,
       fechaDoc,
@@ -1089,8 +1168,9 @@ export const generateSeniatVatRetentionTxt = (retencionesList = [], config = {})
       montoExento,
       alicuota,
       numExpediente
-    ].join('\t');
-  });
+    ].join('\t'));
+    return acc;
+  }, []);
 
   return lines.join('\r\n');
 };
@@ -1104,25 +1184,36 @@ export const generateSeniatVatRetentionTxt = (retencionesList = [], config = {})
  * @returns {string} - Cadena XML con codificación ISO-8859-1
  */
 export const generateSeniatIslrXml = (retencionesIslrList = [], config = {}) => {
-  const cleanAgentRif = (config.rif || 'J-31115365-9').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-  const currentPeriod = retencionesIslrList[0]?.periodoFiscal || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  const cleanAgentRif = escapeXml(normalizeSeniatCleanRif(config.rif || 'J-31115365-9'));
+  const firstPeriod = retencionesIslrList[0]?.periodoFiscal
+    ? String(retencionesIslrList[0].periodoFiscal).replace(/[^0-9]/g, '')
+    : '';
+  const currentPeriod = escapeXml(firstPeriod || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`);
 
   let xml = `<?xml version="1.0" encoding="ISO-8859-1"?>\n`;
   xml += `<RelacionRetencionesISLR RifAgente="${cleanAgentRif}" Periodo="${currentPeriod}">\n`;
 
-  retencionesIslrList.forEach(item => {
-    const cleanProvRif = (item.proveedorRif || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    const d = new Date(item.fechaEmision || new Date());
-    const fechaOperacion = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-    const montoOp = Number(item.montoOperacionBs || 0).toFixed(2);
-    const pctRet = Number(item.porcentajeRetencion || 2.00).toFixed(2);
+  (retencionesIslrList || []).forEach(item => {
+    if (!item) return;
+    const cleanProvRif = escapeXml(normalizeSeniatCleanRif(item.proveedorRif || ''));
+    const d = new Date(item.fechaEmision || item.fecha || new Date());
+    const validDate = isNaN(d.getTime()) ? new Date() : d;
+    const fechaOperacion = `${String(validDate.getDate()).padStart(2, '0')}/${String(validDate.getMonth() + 1).padStart(2, '0')}/${validDate.getFullYear()}`;
+    const isUsd = String(item.moneda || 'BS').toUpperCase() === 'USD';
+    const fx = Number(item.tasaCambio || item.tasaDolar || config?.tasaDolar || 1);
+    const rawBaseOp = item.montoOperacionBs ?? (isUsd ? Number(item.baseImponible || 0) * fx : Number(item.baseImponible || 0));
+    const montoOp = Number(rawBaseOp || 0).toFixed(2);
+    const pctRet = Number(item.porcentajeRetencion ?? 0).toFixed(2);
+    const nroFac = escapeXml(String(item.numeroFactura || item.nroFacturaAfectada || '').trim());
+    const nroCtrl = escapeXml(String(item.numeroControl || item.nroControl || '').trim());
+    const codConcepto = escapeXml(String(item.codigoConcepto || item.codigoConceptoIslr || '055').trim());
 
     xml += `  <DetalleRetencion>\n`;
     xml += `    <RifRetenido>${cleanProvRif}</RifRetenido>\n`;
-    xml += `    <NumeroFactura>${item.numeroFactura || ''}</NumeroFactura>\n`;
-    xml += `    <NumeroControl>${item.numeroControl || ''}</NumeroControl>\n`;
+    xml += `    <NumeroFactura>${nroFac}</NumeroFactura>\n`;
+    xml += `    <NumeroControl>${nroCtrl}</NumeroControl>\n`;
     xml += `    <FechaOperacion>${fechaOperacion}</FechaOperacion>\n`;
-    xml += `    <CodigoConcepto>${item.codigoConcepto || '055'}</CodigoConcepto>\n`;
+    xml += `    <CodigoConcepto>${codConcepto}</CodigoConcepto>\n`;
     xml += `    <MontoOperacion>${montoOp}</MontoOperacion>\n`;
     xml += `    <PorcentajeRetencion>${pctRet}</PorcentajeRetencion>\n`;
     xml += `  </DetalleRetencion>\n`;
@@ -1138,42 +1229,69 @@ export const generateSeniatIslrXml = (retencionesIslrList = [], config = {}) => 
 
 /**
  * Prepara las filas oficiales del Libro de Ventas conforme al Art. 76 del Reglamento de la Ley del IVA.
+ * Excluye Notas de Entrega y Cotizaciones; registra anuladas con montos en cero (XX-ANU).
  */
 export const buildLibroVentasRows = (sales = [], config = {}) => {
   const safeConfig = config || {};
-  return sales.map((sale, index) => {
+  const fiscalSales = (sales || []).filter(isFiscalDocEligible);
+
+  return fiscalSales.map((sale, index) => {
     const fecha = new Date(sale.fecha || new Date()).toLocaleDateString('es-VE');
     const tasa = Number(sale.tasaDolar || safeConfig.tasaDolar || 827.73);
+    const upperTipo = String(sale.tipoDoc || sale.tipo_doc || 'FACTURA').toUpperCase().trim();
+    const anulada = String(sale.estado || '').toUpperCase().trim() === 'ANULADA' || Boolean(sale.anulada);
 
-    // Tipos: FACTURA -> 01, NOTA_DEBITO -> 02, NOTA_CREDITO -> 03
-    let tipoTransaccion = '01-REG';
-    if (sale.tipoDoc === 'NOTA_CREDITO') tipoTransaccion = '03-REG';
-    if (sale.tipoDoc === 'NOTA_DEBITO') tipoTransaccion = '02-REG';
+    // Tipos: FACTURA -> 01, NOTA_DEBITO -> 02, NOTA_CREDITO -> 03 (sufijo -ANU si anulada)
+    const baseTipo = upperTipo === 'NOTA_CREDITO' ? '03' : (upperTipo === 'NOTA_DEBITO' ? '02' : '01');
+    const tipoTransaccion = `${baseTipo}-${anulada ? 'ANU' : 'REG'}`;
+    const signo = upperTipo === 'NOTA_CREDITO' ? -1 : 1;
 
-    const esCredito = sale.tipoDoc === 'NOTA_CREDITO';
-    const signo = esCredito ? -1 : 1;
+    const rawTotalBs = sale.totalBs ?? (sale.totalUsd != null ? Number(sale.totalUsd) * tasa : 0);
+    const rawExentaBs = sale.baseExentaBs ?? (sale.baseExentaUsd != null ? Number(sale.baseExentaUsd) * tasa : 0);
+    const rawBase16Bs = sale.baseGeneralBs ?? (
+      sale.baseGeneralUsd != null
+        ? Number(sale.baseGeneralUsd) * tasa
+        : (rawExentaBs > 0 ? 0 : (sale.subtotalBs ?? (Number(sale.subtotalUsd || 0) * tasa)))
+    );
+    const rawIva16Bs = sale.ivaGeneralBs ?? sale.ivaBs ?? (
+      sale.ivaGeneralUsd != null
+        ? Number(sale.ivaGeneralUsd) * tasa
+        : (Number(sale.ivaUsd || 0) * tasa)
+    );
+    const rawBase8Bs = sale.baseReducidaBs ?? (sale.baseReducidaUsd != null ? Number(sale.baseReducidaUsd) * tasa : 0);
+    const rawIva8Bs = sale.ivaReducidaBs ?? (sale.ivaReducidaUsd != null ? Number(sale.ivaReducidaUsd) * tasa : 0);
+    const rawBase31Bs = sale.baseAdicionalBs ?? (sale.baseAdicionalUsd != null ? Number(sale.baseAdicionalUsd) * tasa : 0);
+    const rawIva31Bs = sale.ivaAdicionalBs ?? (sale.ivaAdicionalUsd != null ? Number(sale.ivaAdicionalUsd) * tasa : 0);
+    const rawIgtfBs = sale.igtfBs ?? (Number(sale.igtfUsd || 0) * tasa);
+    const rawRetIvaBs = sale.retencionIvaBs ?? 0;
 
-    const totalVentasBs = roundTo2Decimals((sale.totalBs || (sale.totalUsd * tasa)) * signo);
-    const ventasExentasBs = roundTo2Decimals((sale.baseExentaBs || 0) * signo);
-    const baseImponible16Bs = roundTo2Decimals((sale.baseGeneralBs || (sale.subtotalBs || (sale.subtotalUsd * tasa))) * signo);
-    const iva16Bs = roundTo2Decimals((sale.ivaGeneralBs || (sale.ivaBs || (sale.ivaUsd * tasa))) * signo);
-    
-    const baseImponible8Bs = roundTo2Decimals((sale.baseReducidaBs || 0) * signo);
-    const iva8Bs = roundTo2Decimals((sale.ivaReducidaBs || 0) * signo);
+    const totalVentasBs = anulada ? 0 : roundTo2Decimals(Number(rawTotalBs || 0) * signo);
+    const ventasExentasBs = anulada ? 0 : roundTo2Decimals(Number(rawExentaBs || 0) * signo);
+    const baseImponible16Bs = anulada ? 0 : roundTo2Decimals(Number(rawBase16Bs || 0) * signo);
+    const iva16Bs = anulada ? 0 : roundTo2Decimals(Number(rawIva16Bs || 0) * signo);
+    const baseImponible8Bs = anulada ? 0 : roundTo2Decimals(Number(rawBase8Bs || 0) * signo);
+    const iva8Bs = anulada ? 0 : roundTo2Decimals(Number(rawIva8Bs || 0) * signo);
+    const baseImponible31Bs = anulada ? 0 : roundTo2Decimals(Number(rawBase31Bs || 0) * signo);
+    const iva31Bs = anulada ? 0 : roundTo2Decimals(Number(rawIva31Bs || 0) * signo);
+    const igtfBs = anulada ? 0 : roundTo2Decimals(Number(rawIgtfBs || 0) * signo);
+    const retencionIvaBs = anulada ? 0 : roundTo2Decimals(Number(rawRetIvaBs || 0) * signo);
 
-    const igtfBs = roundTo2Decimals((sale.igtfBs || (sale.igtfUsd * tasa || 0)) * signo);
-    const retencionIvaBs = roundTo2Decimals((sale.retencionIvaBs || 0) * signo);
+    const rifCliente = sale.clienteRif || 'V-00000000-0';
+    const rifVal = validateRif(rifCliente);
 
     return {
       numOperacion: index + 1,
       fecha,
-      rifCliente: sale.clienteRif || 'V-00000000-0',
-      nombreCliente: sale.clienteNombre || 'CLIENTE CONTADO',
+      rifCliente,
+      rifValido: rifVal.isValid,
+      nombreCliente: anulada ? `${sale.clienteNombre || 'CLIENTE CONTADO'} (ANULADA)` : (sale.clienteNombre || 'CLIENTE CONTADO'),
+      anulada,
+      sinDesgloseIva: !anulada && baseImponible16Bs > 0 && iva16Bs === 0,
       tipoTransaccion,
       numeroFactura: sale.numeroDoc || `FACT-${String(index + 1).padStart(6, '0')}`,
       numeroControl: sale.numeroControl || generateFiscalControlNumber(index + 1),
       facturaAfectada: sale.documentoAfectado || '',
-      comprobanteRetencion: sale.comprobanteRetencionNro || '',
+      comprobanteRetencion: anulada ? '' : (sale.comprobanteRetencionIva || sale.comprobanteRetencionNro || sale.comprobanteRetencion || ''),
       totalVentasBs,
       ventasExentasBs,
       baseImponible16Bs,
@@ -1182,6 +1300,9 @@ export const buildLibroVentasRows = (sales = [], config = {}) => {
       baseImponible8Bs,
       alicuota8: 8.00,
       iva8Bs,
+      baseImponible31Bs,
+      alicuota31: 31.00,
+      iva31Bs,
       igtfBs,
       retencionIvaBs,
       tasaBcv: tasa
@@ -1191,36 +1312,78 @@ export const buildLibroVentasRows = (sales = [], config = {}) => {
 
 /**
  * Prepara las filas oficiales del Libro de Compras conforme al Art. 75 del Reglamento de la Ley del IVA.
+ * Respeta montos exentos y retenciones en cero (no inventa 16%, 75% ni 2%); soporta NC/ND y anulaciones.
  */
 export const buildLibroComprasRows = (purchases = [], config = {}) => {
   const safeConfig = config || {};
-  return purchases.map((pur, index) => {
-    const fecha = new Date(pur.fecha || new Date()).toLocaleDateString('es-VE');
-    const tasa = Number(pur.tasaDolar || safeConfig.tasaDolar || 827.73);
+  return (purchases || []).map((pur, index) => {
+    const rawFecha = pur.fecha || pur.fechaEmision || pur.fechaCompra || new Date().toISOString();
+    const fecha = new Date(rawFecha).toLocaleDateString('es-VE');
+    const rawTotBs = pur.totalBs ?? pur.totNetoBs;
+    const rawTotUsd = pur.totalUsd ?? pur.totNetoUsd;
+    const inferredRate = (Number(rawTotBs || 0) > 0 && Number(rawTotUsd || 0) > 0)
+      ? roundTo2Decimals(Number(rawTotBs) / Number(rawTotUsd))
+      : 0;
+    const tasa = Number(pur.tasaDolar || pur.tasaBcv || inferredRate || safeConfig.tasaDolar || 827.73);
 
-    const totalComprasBs = roundTo2Decimals(pur.totalBs || (pur.totalUsd * tasa));
-    const comprasExentasBs = roundTo2Decimals(pur.montoExentoBs || 0);
-    const baseImponible16Bs = roundTo2Decimals(pur.baseGeneralBs || (pur.subtotalBs || (pur.subtotalUsd * tasa)));
-    const creditoFiscal16Bs = roundTo2Decimals(pur.ivaGeneralBs || (baseImponible16Bs * 0.16));
-    const retencionIvaBs = roundTo2Decimals(pur.retencionIvaBs || (creditoFiscal16Bs * 0.75));
+    const upperTipo = String(pur.tipoDoc || pur.tipo_doc || 'FACTURA').toUpperCase().trim();
+    const anulada = String(pur.estado || pur.status || '').toUpperCase().trim() === 'ANULADA' || Boolean(pur.anulada || pur.anulado);
+    const baseTipo = upperTipo === 'NOTA_CREDITO' ? '03' : (upperTipo === 'NOTA_DEBITO' ? '02' : '01');
+    const tipoTransaccion = `${baseTipo}-${anulada ? 'ANU' : 'REG'}`;
+    const signo = upperTipo === 'NOTA_CREDITO' ? -1 : 1;
+
+    const totalBsVal = Number(rawTotBs ?? (Number(rawTotUsd || 0) * tasa));
+    const ivaGeneralBsVal = Number(
+      pur.ivaGeneralBs ?? pur.ivaBs ?? (
+        pur.ivaGeneralUsd != null
+          ? Number(pur.ivaGeneralUsd) * tasa
+          : (pur.ivaUsd != null ? Number(pur.ivaUsd) * tasa : 0)
+      )
+    );
+    const baseReducidaBsVal = Number(pur.baseReducidaBs ?? (pur.baseReducidaUsd != null ? Number(pur.baseReducidaUsd) * tasa : 0));
+    const explicitBase16 = pur.baseGeneralBs ?? (pur.baseGeneralUsd != null ? Number(pur.baseGeneralUsd) * tasa : undefined);
+    const base16Val = explicitBase16 !== undefined
+      ? Number(explicitBase16)
+      : (ivaGeneralBsVal > 0 ? Number(pur.subtotalBs ?? pur.totBrutoBs ?? (Number(pur.subtotalUsd ?? pur.totBrutoUsd ?? 0) * tasa)) : 0);
+
+    const explicitExenta = pur.montoExentoBs ?? pur.baseExentaBs ?? pur.comprasExentasBs ?? (
+      pur.baseExentaUsd != null ? Number(pur.baseExentaUsd) * tasa : undefined
+    );
+    const exentaVal = explicitExenta !== undefined
+      ? Number(explicitExenta)
+      : (ivaGeneralBsVal === 0 && base16Val === 0 && baseReducidaBsVal === 0 ? totalBsVal : 0);
+
+    const retIvaVal = Number(pur.retencionIvaBs ?? (pur.retencionIvaUsd != null ? Number(pur.retencionIvaUsd) * tasa : 0));
+    const retIslrVal = Number(pur.retencionIslrBs ?? (pur.retencionIslrUsd != null ? Number(pur.retencionIslrUsd) * tasa : 0));
+
+    const totalComprasBs = anulada ? 0 : roundTo2Decimals(totalBsVal * signo);
+    const comprasExentasBs = anulada ? 0 : roundTo2Decimals(exentaVal * signo);
+    const baseImponible16Bs = anulada ? 0 : roundTo2Decimals(base16Val * signo);
+    const creditoFiscal16Bs = anulada ? 0 : roundTo2Decimals(ivaGeneralBsVal * signo);
+    const retencionIvaBs = anulada ? 0 : roundTo2Decimals(retIvaVal * signo);
+    const retencionIslrBs = anulada ? 0 : roundTo2Decimals(retIslrVal * signo);
+
+    const alicuotaEfectiva = baseImponible16Bs > 0 ? 16.00 : (baseReducidaBsVal > 0 ? 8.00 : 0.00);
+    const compRet = pur.comprobanteRetencionIva || pur.numeroComprobanteRetencionIva || '';
 
     return {
       numOperacion: index + 1,
       fecha,
-      rifProveedor: pur.proveedorRif || 'J-00000000-0',
-      nombreProveedor: pur.proveedorNombre || pur.proveedor || 'PROVEEDOR KEISTONE',
-      tipoTransaccion: '01-REG',
-      numeroFactura: pur.numeroFactura || pur.facturaProv || `FAC-PROV-${String(index + 100).padStart(4, '0')}`,
-      numeroControl: pur.numeroControl || generateFiscalControlNumber(index + 500),
+      rifProveedor: pur.proveedorRif || pur.provRif || 'J-00000000-0',
+      nombreProveedor: anulada ? `${pur.proveedorNombre || pur.provNombre || pur.proveedor || 'PROVEEDOR'} (ANULADA)` : (pur.proveedorNombre || pur.provNombre || pur.proveedor || 'PROVEEDOR'),
+      anulada,
+      tipoTransaccion,
+      numeroFactura: pur.numeroFactura || pur.numeroFacturaProv || pur.nroFactura || pur.facturaProv || `FAC-PROV-${String(index + 100).padStart(4, '0')}`,
+      numeroControl: pur.numeroControl || pur.nroControl || '00-000000',
       documentoAfectado: pur.documentoAfectado || '',
-      comprobanteRetencion: pur.comprobanteRetencionIva || generateVatRetentionVoucherNumber(pur.fecha, index + 1),
+      comprobanteRetencion: anulada ? '' : compRet,
       totalComprasBs,
       comprasExentasBs,
       baseImponible16Bs,
-      alicuota16: 16.00,
+      alicuota16: alicuotaEfectiva,
       creditoFiscal16Bs,
       retencionIvaBs,
-      retencionIslrBs: roundTo2Decimals(pur.retencionIslrBs || (baseImponible16Bs * 0.02)),
+      retencionIslrBs,
       tasaBcv: tasa
     };
   });
@@ -1281,8 +1444,15 @@ export const generarReporteX = ({ sales = [], config = {}, currentUser = null })
   const tasaBcv = Number(safeConfig.tasaDolar) || 827.73;
   const fechaLectura = new Date().toISOString();
 
-  // Filtrar ventas abiertas / no consolidadas en un cierre Z previo
-  const ventasPendientes = sales.filter(s => !s.cierreZId && s.estado !== 'ANULADA');
+  // Filtrar documentos fiscales abiertos / no consolidados en un cierre Z previo (excluye N.E. y anuladas)
+  const ventasPendientes = (sales || []).filter(s =>
+    isFiscalDocEligible(s) &&
+    !s.cierreZId &&
+    !s.cierre_z_id &&
+    !s.cerrada &&
+    String(s.estado || '').toUpperCase() !== 'ANULADA' &&
+    !s.anulada
+  );
 
   let primeraFactura = null;
   let ultimaFactura = null;
@@ -1327,6 +1497,7 @@ export const generarReporteX = ({ sales = [], config = {}, currentUser = null })
     const isNc = sale.tipoDoc === 'NOTA_CREDITO';
     const isNd = sale.tipoDoc === 'NOTA_DEBITO';
     const signo = isNc ? -1 : 1;
+    const saleRate = Number(sale.tasaDolar || tasaBcv);
 
     if (sale.tipoDoc === 'FACTURA' || !sale.tipoDoc) {
       cantFacturas++;
@@ -1342,13 +1513,20 @@ export const generarReporteX = ({ sales = [], config = {}, currentUser = null })
       ultimaNd = sale.numeroDoc;
     }
 
-    const exenta = Number(sale.baseExentaBs || 0) * signo;
-    const base16 = Number(sale.baseGeneralBs || (sale.subtotalBs || (sale.subtotalUsd * tasaBcv))) * signo;
-    const iva16 = Number(sale.ivaGeneralBs || (sale.ivaBs || (sale.ivaUsd * tasaBcv))) * signo;
-    const base8 = Number(sale.baseReducidaBs || 0) * signo;
-    const iva8 = Number(sale.ivaReducidaBs || 0) * signo;
-    const base31 = Number(sale.baseAdicionalBs || 0) * signo;
-    const iva31 = Number(sale.ivaAdicionalBs || 0) * signo;
+    const exentaRaw = Number(sale.baseExentaBs ?? (Number(sale.baseExentaUsd || 0) * saleRate));
+    const base16Raw = Number(sale.baseGeneralBs ?? (
+      sale.baseGeneralUsd != null
+        ? Number(sale.baseGeneralUsd) * saleRate
+        : (exentaRaw > 0 ? 0 : (sale.subtotalBs ?? (Number(sale.subtotalUsd || 0) * saleRate)))
+    ));
+    const iva16Raw = Number(sale.ivaGeneralBs ?? sale.ivaBs ?? (Number(sale.ivaUsd || 0) * saleRate));
+    const exenta = exentaRaw * signo;
+    const base16 = base16Raw * signo;
+    const iva16 = iva16Raw * signo;
+    const base8 = Number(sale.baseReducidaBs ?? 0) * signo;
+    const iva8 = Number(sale.ivaReducidaBs ?? 0) * signo;
+    const base31 = Number(sale.baseAdicionalBs ?? 0) * signo;
+    const iva31 = Number(sale.ivaAdicionalBs ?? 0) * signo;
 
     ventasExentasBs += exenta;
     baseGeneralBs += base16;
@@ -1363,7 +1541,7 @@ export const generarReporteX = ({ sales = [], config = {}, currentUser = null })
     baseIgtfBs += bIgtf;
     totalIgtfBs += mIgtf;
 
-    const tBs = Number(sale.totalBs || (sale.totalUsd * tasaBcv)) * signo;
+    const tBs = Number(sale.totalBs ?? (Number(sale.totalUsd || 0) * saleRate)) * signo;
     const tUsd = Number(sale.totalUsd || 0) * signo;
     totalVentasBs += tBs;
     totalVentasUsd += tUsd;
@@ -1425,15 +1603,22 @@ export const ejecutarCierreZ = async ({ sales = [], previousClosures = [], confi
   const tasaBcv = Number(safeConfig.tasaDolar) || 827.73;
   const fechaCierre = new Date().toISOString();
 
-  // Calcular siguiente número correlativo Z sin saltos
-  const zClosures = previousClosures.filter(c => c.tipo === 'Z');
-  const ultimoNumeroZ = zClosures.reduce((max, c) => Math.max(max, Number(c.numeroZ || 0)), 0);
+  // Calcular siguiente número correlativo Z sin saltos ni colisiones con cierres históricos (ej. Z-00000001 con numero_z="0000")
+  const parseClosureSeq = (c) => {
+    const numZ = Number(c?.numeroZ ?? c?.numero_z ?? 0) || 0;
+    const numCierre = Number(c?.numeroCierre ?? c?.numero_cierre ?? 0) || 0;
+    const idMatch = String(c?.id || '').match(/^Z-0*(\d+)$/i);
+    const idNum = idMatch ? (parseInt(idMatch[1], 10) || 0) : 0;
+    return Math.max(numZ, numCierre, idNum);
+  };
+  const zClosures = (previousClosures || []).filter(c => String(c?.tipo || '').toUpperCase() === 'Z');
+  const ultimoNumeroZ = zClosures.reduce((max, c) => Math.max(max, parseClosureSeq(c)), 0);
   const nuevoNumeroZ = ultimoNumeroZ + 1;
   const cierreId = `Z-${String(nuevoNumeroZ).padStart(8, '0')}`;
 
   // Obtener último Gran Total Histórico
-  const ultimoCierre = [...zClosures].sort((a, b) => (Number(b.numeroZ || 0) - Number(a.numeroZ || 0)))[0];
-  const ultimoGranTotal = Number(ultimoCierre?.granTotalHistoricoBs || 0);
+  const ultimoCierre = [...zClosures].sort((a, b) => parseClosureSeq(b) - parseClosureSeq(a))[0];
+  const ultimoGranTotal = Number(ultimoCierre?.granTotalHistoricoBs ?? ultimoCierre?.gran_total_historico_bs ?? 0);
 
   // Generar consolidación con la lógica de base
   const reporteBase = generarReporteX({ sales, config: safeConfig, currentUser });
@@ -1445,6 +1630,7 @@ export const ejecutarCierreZ = async ({ sales = [], previousClosures = [], confi
     id: cierreId,
     tipo: 'Z',
     numeroZ: nuevoNumeroZ,
+    numeroCierre: nuevoNumeroZ,
     fechaCierre,
     granTotalHistoricoBs: nuevoGranTotal,
     rifEmisor: safeConfig.rif || 'J-31115365-9'

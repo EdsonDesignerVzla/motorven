@@ -48,7 +48,8 @@ export default function SellerCommissionModal({
   currentUser = null,
   tasaBcv = 827.73,
   initialMonth = 'ALL',
-  onSettlementSaved
+  onSettlementSaved,
+  onAddCashMovement
 }) {
   const [selectedMes, setSelectedMes] = useState(initialMonth || 'ALL');
   const [bonoAdicionalUsd, setBonoAdicionalUsd] = useState(0);
@@ -56,6 +57,7 @@ export default function SellerCommissionModal({
   const [referenciaPago, setReferenciaPago] = useState('');
   const [fechaPago, setFechaPago] = useState(new Date().toISOString().substring(0, 10));
   const [notas, setNotas] = useState('');
+  const [registrarEgresoCaja, setRegistrarEgresoCaja] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [savedSettlementId, setSavedSettlementId] = useState(null);
@@ -167,6 +169,24 @@ export default function SellerCommissionModal({
       };
 
       const saved = await saveSupabaseCommissionSettlement(settlementData);
+      if (registrarEgresoCaja && onAddCashMovement && totalComisionUsd > 0 && saved?.id) {
+        await onAddCashMovement({
+          fecha: new Date(`${fechaPago}T12:00:00`).toISOString(),
+          tipo: 'EGRESO',
+          categoria: 'COMISIONES',
+          concepto: `[Comisión Cobrador] ${sellerVenDes} (${getMesLabel(selectedMes)})`,
+          montoUsd: totalComisionUsd,
+          montoBs: totalComisionBs,
+          tasa: tasaBcv,
+          tasaPago: tasaBcv,
+          tipoTasa: 'BCV',
+          metodo: metodoPago,
+          referencia: saved.id,
+          referenciaTipo: 'COMMISSION_SETTLEMENT',
+          referenciaId: saved.id,
+          usuario: currentUser?.username || currentUser?.nombre || 'Sistema'
+        });
+      }
       setIsSaved(true);
       setSavedSettlementId(saved?.id || settlementData.id);
       if (onSettlementSaved) onSettlementSaved(saved);
@@ -483,6 +503,16 @@ export default function SellerCommissionModal({
                 onChange={(e) => setNotas(e.target.value)}
                 style={{ fontSize: '0.85rem' }}
               />
+              {onAddCashMovement && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.55rem', fontSize: '0.78rem', color: 'var(--text-main)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={registrarEgresoCaja}
+                    onChange={(e) => setRegistrarEgresoCaja(e.target.checked)}
+                  />
+                  Registrar desembolso automático en Caja / Flujo de Efectivo (Egreso P&amp;L Comisiones)
+                </label>
+              )}
             </div>
           </div>
 

@@ -30,6 +30,7 @@ import fs from 'fs';
 import {
   generateSellersPDF,
   generateProfitabilityPDF,
+  generateOperationalPandLPDF,
   generateAccountsReceivablePDF,
   generateConsolidatedCxcPDF,
   generateAccountsPayablePDF,
@@ -157,6 +158,39 @@ async function runPdfTests() {
 
   testGen('Rentabilidad & BI (vacío)', () => {
     generateProfitabilityPDF({ products: [], sales: [], config: mockConfig, currentUser: mockUser });
+  });
+
+  testGen('Estado de Resultados P&L Operativo Real', () => {
+    generateOperationalPandLPDF({
+      financialData: {
+        isSimulation: false,
+        activeDocsCount: 5,
+        facturadoBrutoUsd: 1200,
+        devolucionesUsd: 50,
+        facturadoAjustadoUsd: 1150,
+        cmvAjustadoUsd: 700,
+        utilidadBrutaUsd: 450,
+        margenBrutoPct: 39.13,
+        costoFletesUsd: 40,
+        comisionesVendedoresUsd: 35,
+        costoMermasUsd: 10,
+        retencionesIslrUsd: 15,
+        margenContribucionUsd: 350,
+        margenContribucionPct: 30.43,
+        costoNominaUsd: 120,
+        opexFijoUsd: 80,
+        ebitdaOperativoUsd: 150,
+        ebitdaPct: 13.04,
+        litersSold: 250,
+        puntoEquilibrioUsd: 657.14,
+        linesBreakdown: [
+          { name: 'Diésel', rev: 800, cmv: 480, marginUsd: 320, marginPct: 40, liters: 170 },
+          { name: 'Gasolina', rev: 350, cmv: 220, marginUsd: 130, marginPct: 37.1, liters: 80 }
+        ]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
   });
 
   // 3. Cuentas por Cobrar (CxC)

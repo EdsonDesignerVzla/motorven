@@ -27,6 +27,9 @@ import {
   buildLibroComprasRows,
   generateSeniatVatRetentionTxt,
   generateSeniatIslrXml,
+  encodeIso88591Bytes,
+  isFiscalDocEligible,
+  validateRif,
   generarReporteX,
   ejecutarCierreZ,
   dedupeCanonicalDocs
@@ -39,6 +42,7 @@ export default function TaxReportsView({
   sales = [],
   purchases = [],
   suppliers = [],
+  profitSuppliers = [],
   fiscalClosures = [],
   onExecuteCierreZ,
   config: rawConfig = {},
@@ -55,6 +59,7 @@ export default function TaxReportsView({
   const safeConfig = config;
   const [reportType, setReportType] = useState('LIBRO_VENTAS'); // LIBRO_VENTAS, LIBRO_COMPRAS, IGTF, CIERRES_FISCALES, EXPORT_SENIAT
   const [showIslrModal, setShowIslrModal] = useState(false);
+  const [seniatExportFeedback, setSeniatExportFeedback] = useState(null);
   const [mesFiltro, setMesFiltro] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -67,20 +72,93 @@ export default function TaxReportsView({
   const [isClosingZ, setIsClosingZ] = useState(false);
   const [zConfirmCheck, setZConfirmCheck] = useState(false);
 
-  // Filtrado por mes seleccionado (deduplicado por clave canónica)
+  // Filtrado estricto por mes seleccionado y documentos fiscales válidos (excluye NE/Cotizaciones y fechas nulas)
   const filteredSales = useMemo(() => {
     return dedupeCanonicalDocs(sales || []).filter(s => {
-      if (!s.fecha) return true;
-      return s.fecha.startsWith(mesFiltro);
+      if (!s || !s.fecha || !isFiscalDocEligible(s)) return false;
+      return String(s.fecha).slice(0, 7) === mesFiltro;
     });
   }, [sales, mesFiltro]);
 
-  const filteredPurchases = useMemo(() => {
-    return purchases.filter(p => {
-      if (!p.fecha) return true;
-      return p.fecha.startsWith(mesFiltro);
+  // Fusión normalizada y sin duplicados de compras locales Signum + profit_purchases
+  const unifiedPurchases = useMemo(() => {
+    const byKey = new Map();
+    const buildKey = (num, rif, fallbackId) => {
+      const f = String(num || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+      const r = String(rif || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return f ? `${f}::${r}` : String(fallbackId || '');
+    };
+
+    // Priorizar compras locales Signum cuando tengan desglose/retenciones completas, luego completar con profit_purchases
+    (purchases || []).forEach(p => {
+      if (!p) return;
+      const num = p.numeroFacturaProv || p.numeroFactura || p.nroFactura || p.id;
+      const key = buildKey(num, p.proveedorRif || p.proveedorId, p.id);
+      if (key) byKey.set(key, p);
     });
-  }, [purchases, mesFiltro]);
+
+    (profitPurchases || []).forEach(p => {
+      if (!p) return;
+      const num = p.facturaProv || p.factNum || p.id;
+      const key = buildKey(num, p.provRif || p.coProv, p.id);
+      if (!key || byKey.has(key)) return;
+      const totUsd = Number(p.totNetoUsd ?? 0);
+      const totBs = Number(p.totNetoBs ?? 0);
+      const ivaUsd = Number(p.ivaUsd ?? 0);
+      const ivaBs = Number(p.ivaBs ?? 0);
+      const brutoBs = Number(p.totBrutoBs ?? 0);
+      const brutoUsd = Number(p.totBrutoUsd ?? 0);
+      const rate = (totBs > 0 && totUsd > 0) ? Number((totBs / totUsd).toFixed(4)) : (Number(safeConfig.tasaDolar) || 0);
+      byKey.set(key, {
+        id: p.id,
+        tipoDoc: p.tipoDoc || 'FACTURA',
+        numeroFactura: String(num || ''),
+        numeroFacturaProv: String(num || ''),
+        numeroControl: p.numeroControl || p.nroControl || '00-000000',
+        fecha: p.fechaEmision || p.fecEmis || '',
+        proveedorId: p.coProv || '',
+        proveedorNombre: p.provNombre || 'PROVEEDOR',
+        proveedorRif: p.provRif || '',
+        tasaDolar: rate,
+        subtotalUsd: brutoUsd,
+        subtotalBs: brutoBs,
+        baseGeneralUsd: ivaUsd > 0 ? brutoUsd : 0,
+        baseGeneralBs: ivaBs > 0 ? brutoBs : 0,
+        ivaGeneralUsd: ivaUsd,
+        ivaGeneralBs: ivaBs,
+        ivaUsd,
+        ivaBs,
+        montoExentoBs: ivaBs === 0 ? (totBs || brutoBs) : 0,
+        totalUsd: totUsd,
+        totalBs: totBs,
+        retencionIvaBs: Number(p.retencionIvaBs ?? 0),
+        retencionIslrBs: Number(p.retencionIslrBs ?? 0),
+        comprobanteRetencionIva: p.comprobanteRetencionIva || '',
+        anulada: Boolean(p.anulada || p.anulado)
+      });
+    });
+
+    return Array.from(byKey.values());
+  }, [purchases, profitPurchases, safeConfig.tasaDolar]);
+
+  const filteredPurchases = useMemo(() => {
+    return unifiedPurchases.filter(p => {
+      const f = p?.fecha || p?.fechaEmision || p?.fechaCompra || '';
+      if (!f) return false;
+      return String(f).slice(0, 7) === mesFiltro;
+    });
+  }, [unifiedPurchases, mesFiltro]);
+
+  const filteredIslrWithholdings = useMemo(() => {
+    return (profitIslrWithholdings || []).filter(w => {
+      if (!w) return false;
+      if (w.periodoFiscal) {
+        return String(w.periodoFiscal).replace(/[^0-9]/g, '') === mesFiltro.replace('-', '');
+      }
+      const f = w.fechaEmision || w.createdAt || '';
+      return f ? String(f).slice(0, 7) === mesFiltro : false;
+    });
+  }, [profitIslrWithholdings, mesFiltro]);
 
   // Construcción de filas oficiales conforme al Reglamento de la Ley del IVA
   const libroVentasRows = useMemo(() => {
@@ -91,6 +169,12 @@ export default function TaxReportsView({
     return buildLibroComprasRows(filteredPurchases, safeConfig);
   }, [filteredPurchases, safeConfig]);
 
+  const ventasAuditSummary = useMemo(() => {
+    const invalidRifRows = libroVentasRows.filter(r => !r.anulada && !r.rifValido);
+    const missingIvaRows = libroVentasRows.filter(r => r.sinDesgloseIva);
+    return { invalidRifRows, missingIvaRows };
+  }, [libroVentasRows]);
+
   // Totales Libro de Ventas
   const totalesVentas = useMemo(() => {
     return libroVentasRows.reduce((acc, row) => ({
@@ -100,6 +184,8 @@ export default function TaxReportsView({
       iva16Bs: acc.iva16Bs + (row.iva16Bs || 0),
       baseImponible8Bs: acc.baseImponible8Bs + (row.baseImponible8Bs || 0),
       iva8Bs: acc.iva8Bs + (row.iva8Bs || 0),
+      baseImponible31Bs: acc.baseImponible31Bs + (row.baseImponible31Bs || 0),
+      iva31Bs: acc.iva31Bs + (row.iva31Bs || 0),
       igtfBs: acc.igtfBs + (row.igtfBs || 0),
       retencionIvaBs: acc.retencionIvaBs + (row.retencionIvaBs || 0),
     }), {
@@ -109,6 +195,8 @@ export default function TaxReportsView({
       iva16Bs: 0,
       baseImponible8Bs: 0,
       iva8Bs: 0,
+      baseImponible31Bs: 0,
+      iva31Bs: 0,
       igtfBs: 0,
       retencionIvaBs: 0,
     });
@@ -135,13 +223,25 @@ export default function TaxReportsView({
 
   // Ventas con percepción de IGTF
   const igtfSales = useMemo(() => {
-    return filteredSales.filter(s => (s.igtfUsd > 0 || s.igtfBs > 0));
+    return filteredSales.filter(s => String(s.estado || '').toUpperCase() !== 'ANULADA' && !s.anulada && (s.igtfUsd > 0 || s.igtfBs > 0));
   }, [filteredSales]);
 
-  // Documentos abiertos en la jornada activa pendientes de Cierre Z
+  // Documentos fiscales abiertos en la jornada activa pendientes de Cierre Z
   const openSales = useMemo(() => {
-    return sales.filter(s => !s.cierreZId && s.estado !== 'ANULADA');
+    return (sales || []).filter(s =>
+      isFiscalDocEligible(s) &&
+      !s.cierreZId &&
+      !s.cierre_z_id &&
+      !s.cerrada &&
+      String(s.estado || '').toUpperCase() !== 'ANULADA' &&
+      !s.anulada
+    );
   }, [sales]);
+
+  const openDatesCount = useMemo(() => {
+    const dates = new Set(openSales.map(s => String(s.fecha || '').slice(0, 10)).filter(Boolean));
+    return dates.size;
+  }, [openSales]);
 
   const corteXActual = useMemo(() => {
     return generarReporteX({ sales, config: safeConfig, currentUser });
@@ -177,7 +277,7 @@ export default function TaxReportsView({
     }
   };
 
-  // Helper para descargar archivos de texto/xml
+  // Helper para descargar archivos de texto/xml (soporta bytes binarios para ISO-8859-1)
   const downloadFile = (filename, content, mimeType = 'text/plain;charset=utf-8') => {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
@@ -190,11 +290,11 @@ export default function TaxReportsView({
     URL.revokeObjectURL(url);
   };
 
-  // 1. Exportar Libro de Ventas a CSV Oficial
+  // 1. Exportar Libro de Ventas a CSV Oficial (incluyendo alícuota adicional 31%)
   const exportLibroVentasCsv = () => {
-    let csv = "N° Operacion;Fecha;RIF Cliente;Nombre o Razon Social;Tipo Transaccion;N° Factura;N° Control;Factura Afectada;Total Ventas con IVA (Bs);Ventas Exentas (Bs);Base Imponible 16% (Bs);IVA 16% (Bs);Base Imponible 8% (Bs);IVA 8% (Bs);IGTF 3% (Bs);IVA Retenido (Bs);N° Comprobante Retencion\n";
+    let csv = "N° Operacion;Fecha;RIF Cliente;Nombre o Razon Social;Tipo Transaccion;N° Factura;N° Control;Factura Afectada;Total Ventas con IVA (Bs);Ventas Exentas (Bs);Base Imponible 16% (Bs);IVA 16% (Bs);Base Imponible 8% (Bs);IVA 8% (Bs);Base Imponible 31% (Bs);IVA 31% (Bs);IGTF 3% (Bs);IVA Retenido (Bs);N° Comprobante Retencion\n";
     libroVentasRows.forEach(r => {
-      csv += `${r.numOperacion};${r.fecha};${r.rifCliente};"${r.nombreCliente.replace(/"/g, '""')}";${r.tipoTransaccion};${r.numeroFactura};${r.numeroControl};${r.facturaAfectada};${r.totalVentasBs.toFixed(2)};${r.ventasExentasBs.toFixed(2)};${r.baseImponible16Bs.toFixed(2)};${r.iva16Bs.toFixed(2)};${r.baseImponible8Bs.toFixed(2)};${r.iva8Bs.toFixed(2)};${r.igtfBs.toFixed(2)};${r.retencionIvaBs.toFixed(2)};${r.comprobanteRetencion}\n`;
+      csv += `${r.numOperacion};${r.fecha};${r.rifCliente};"${r.nombreCliente.replace(/"/g, '""')}";${r.tipoTransaccion};${r.numeroFactura};${r.numeroControl};${r.facturaAfectada};${r.totalVentasBs.toFixed(2)};${r.ventasExentasBs.toFixed(2)};${r.baseImponible16Bs.toFixed(2)};${r.iva16Bs.toFixed(2)};${r.baseImponible8Bs.toFixed(2)};${r.iva8Bs.toFixed(2)};${(r.baseImponible31Bs || 0).toFixed(2)};${(r.iva31Bs || 0).toFixed(2)};${r.igtfBs.toFixed(2)};${r.retencionIvaBs.toFixed(2)};${r.comprobanteRetencion}\n`;
     });
     downloadFile(`LIBRO_VENTAS_${config.rif || 'J-31115365-9'}_${mesFiltro}.csv`, csv, 'text/csv;charset=utf-8');
   };
@@ -208,48 +308,114 @@ export default function TaxReportsView({
     downloadFile(`LIBRO_COMPRAS_${config.rif || 'J-31115365-9'}_${mesFiltro}.csv`, csv, 'text/csv;charset=utf-8');
   };
 
+  // Retenciones reales elegibles para TXT de Retenciones IVA SENIAT
+  const eligibleVatRetentions = useMemo(() => {
+    return filteredPurchases.filter(p => {
+      if (!p || p.anulada || p.anulado || String(p.estado || p.status || '').toUpperCase() === 'ANULADA') return false;
+      const retBs = Number(p.retencionIvaBs ?? 0);
+      const comp = String(p.comprobanteRetencionIva || p.numeroComprobanteRetencionIva || '').trim();
+      return retBs > 0 && /^\d{14}$/.test(comp);
+    });
+  }, [filteredPurchases]);
+
   // 3. Generar y Descargar Archivo TXT de Retenciones de IVA para el Portal SENIAT (16 Columnas Tabuladas)
   const handleDownloadSeniatTxt = () => {
-    const retencionesData = filteredPurchases.map((p, idx) => ({
-      periodoFiscal: mesFiltro.replace('-', ''),
-      fechaEmision: p.fecha || new Date().toISOString(),
-      tipoOperacion: 'C',
-      tipoDocumento: p.tipoDoc === 'NOTA_CREDITO' ? '03' : (p.tipoDoc === 'NOTA_DEBITO' ? '02' : '01'),
-      proveedorRif: p.proveedorRif,
-      numeroFactura: p.numeroFactura || p.facturaProv || `FAC-${idx + 100}`,
-      numeroControl: p.numeroControl || `00-${String(idx + 100).padStart(6, '0')}`,
-      totalDocumentoBs: p.totalBs,
-      baseImponibleBs: p.baseGeneralBs || p.subtotalBs,
-      montoIvaBs: p.ivaGeneralBs || (p.subtotalBs * 0.16),
-      montoRetenidoBs: p.retencionIvaBs || ((p.ivaGeneralBs || (p.subtotalBs * 0.16)) * 0.75),
-      documentoAfectado: p.documentoAfectado || '0',
-      comprobanteRetencion: p.comprobanteRetencionIva,
-      montoExentoBs: p.montoExentoBs || 0,
-      alicuota: 16.00,
-      numeroExpediente: '0'
-    }));
+    setSeniatExportFeedback(null);
+    if (eligibleVatRetentions.length === 0) {
+      setSeniatExportFeedback({
+        type: 'warning',
+        text: `No existen compras en ${mesFiltro} con retención de IVA aplicada (> Bs. 0,00) y N° de comprobante de 14 dígitos.`
+      });
+      return;
+    }
+
+    const invalidRifs = eligibleVatRetentions.filter(p => !validateRif(p.proveedorRif || '').isValid);
+    if (invalidRifs.length > 0) {
+      setSeniatExportFeedback({
+        type: 'error',
+        text: `Existen ${invalidRifs.length} registro(s) con RIF de proveedor inválido según Módulo 11 SENIAT. Corrígelos antes de exportar.`
+      });
+      return;
+    }
+
+    const retencionesData = eligibleVatRetentions.map((p, idx) => {
+      const tasa = Number(p.tasaDolar || safeConfig.tasaDolar || 1);
+      const ivaBs = Number(p.ivaGeneralBs ?? p.ivaBs ?? (p.ivaUsd != null ? Number(p.ivaUsd) * tasa : 0));
+      const baseGenBs = Number(p.baseGeneralBs ?? (p.baseGeneralUsd != null ? Number(p.baseGeneralUsd) * tasa : (ivaBs > 0 ? Number(p.subtotalBs ?? 0) : 0)));
+      const baseRedBs = Number(p.baseReducidaBs ?? 0);
+      const alicuota = p.alicuota ?? (baseGenBs > 0 ? 16.00 : (baseRedBs > 0 ? 8.00 : 0.00));
+
+      return {
+        periodoFiscal: mesFiltro.replace('-', ''),
+        fechaEmision: p.fecha || p.fechaEmision,
+        tipoOperacion: 'C',
+        tipoDocumento: p.tipoDoc === 'NOTA_CREDITO' ? '03' : (p.tipoDoc === 'NOTA_DEBITO' ? '02' : '01'),
+        proveedorRif: p.proveedorRif,
+        numeroFactura: p.numeroFactura || p.numeroFacturaProv || p.facturaProv || `FAC-${idx + 1}`,
+        numeroControl: p.numeroControl || p.nroControl || '00-000000',
+        totalDocumentoBs: Number(p.totalBs ?? 0),
+        baseImponibleBs: baseGenBs || baseRedBs,
+        montoIvaBs: ivaBs,
+        montoRetenidoBs: Number(p.retencionIvaBs ?? 0),
+        documentoAfectado: p.documentoAfectado || '0',
+        comprobanteRetencion: String(p.comprobanteRetencionIva || p.numeroComprobanteRetencionIva || '').trim(),
+        montoExentoBs: Number(p.montoExentoBs ?? p.baseExentaBs ?? 0),
+        alicuota,
+        numeroExpediente: '0'
+      };
+    });
 
     const txtContent = generateSeniatVatRetentionTxt(retencionesData, config);
-    const cleanRif = (config.rif || 'J-31115365-9').replace(/[^A-Z0-9]/gi, '');
+    if (!txtContent) {
+      setSeniatExportFeedback({
+        type: 'error',
+        text: 'Ningún comprobante superó la validación de 14 dígitos y RIF de 10 caracteres requerida por el SENIAT.'
+      });
+      return;
+    }
+    const cleanRif = (config.rif || 'J-31115365-9').replace(/[^A-Z0-9]/gi, '').toUpperCase();
     downloadFile(`${cleanRif}_${mesFiltro.replace('-', '')}_RET_IVA.txt`, txtContent, 'text/plain;charset=utf-8');
+    setSeniatExportFeedback({
+      type: 'success',
+      text: `Archivo TXT generado con ${retencionesData.length} retención(es) de IVA reales.`
+    });
   };
 
-  // 4. Generar y Descargar Archivo XML de Retenciones de ISLR para el Portal SENIAT
+  // 4. Generar y Descargar Archivo XML de Retenciones de ISLR para el Portal SENIAT (ISO-8859-1 real desde profit_islr_withholdings)
   const handleDownloadSeniatXml = () => {
-    const islrData = filteredPurchases.map((p, idx) => ({
-      periodoFiscal: mesFiltro.replace('-', ''),
-      fechaEmision: p.fecha || new Date().toISOString(),
-      proveedorRif: p.proveedorRif,
-      numeroFactura: p.numeroFactura || p.facturaProv || `FAC-${idx + 100}`,
-      numeroControl: p.numeroControl || `00-${String(idx + 100).padStart(6, '0')}`,
-      codigoConcepto: '055', // Compra o adquisición de bienes muebles
-      montoOperacionBs: p.baseGeneralBs || p.subtotalBs,
-      porcentajeRetencion: p.porcentajeRetencionIslr || 2.00
-    }));
+    setSeniatExportFeedback(null);
+    if (filteredIslrWithholdings.length === 0) {
+      setSeniatExportFeedback({
+        type: 'warning',
+        text: `No existen comprobantes de retención ISLR registrados en ${mesFiltro}. Emítelos primero desde "Retenciones ISLR SENIAT & Pagos".`
+      });
+      return;
+    }
+
+    const islrData = filteredIslrWithholdings.map((w) => {
+      const isUsd = String(w.moneda || 'BS').toUpperCase() === 'USD';
+      const tasa = Number(w.tasaCambio || safeConfig.tasaDolar || 1);
+      const montoOpBs = isUsd ? Number(w.baseImponible || 0) * tasa : Number(w.baseImponible || 0);
+      return {
+        periodoFiscal: String(w.periodoFiscal || mesFiltro).replace('-', ''),
+        fechaEmision: w.fechaEmision || w.createdAt,
+        proveedorRif: w.proveedorRif,
+        numeroFactura: w.nroFacturaAfectada || '',
+        numeroControl: w.nroControl || '00-000000',
+        codigoConcepto: w.codigoConceptoIslr || '055',
+        montoOperacionBs: montoOpBs,
+        porcentajeRetencion: Number(w.porcentajeRetencion ?? 0)
+      };
+    });
 
     const xmlContent = generateSeniatIslrXml(islrData, config);
-    const cleanRif = (config.rif || 'J-31115365-9').replace(/[^A-Z0-9]/gi, '');
-    downloadFile(`${cleanRif}_${mesFiltro.replace('-', '')}_ISLR.xml`, xmlContent, 'application/xml;charset=iso-8859-1');
+    const isoBytes = encodeIso88591Bytes(xmlContent);
+    const cleanRif = (config.rif || 'J-31115365-9').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    downloadFile(`${cleanRif}_${mesFiltro.replace('-', '')}_ISLR.xml`, isoBytes, 'application/xml;charset=iso-8859-1');
+    setSeniatExportFeedback({
+      type: 'success',
+      text: `Archivo XML ISO-8859-1 generado con ${islrData.length} comprobante(s) ISLR oficiales.`
+    });
   };
 
   return (
@@ -450,6 +616,18 @@ export default function TaxReportsView({
               </div>
             </div>
 
+            {(ventasAuditSummary.invalidRifRows.length > 0 || ventasAuditSummary.missingIvaRows.length > 0) && (
+              <div style={{ marginBottom: '1rem', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.4)', fontSize: '0.8rem', color: '#fcd34d', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <strong>Auditoría Fiscal SENIAT ({mesFiltro}):</strong>
+                {ventasAuditSummary.invalidRifRows.length > 0 && (
+                  <span>• {ventasAuditSummary.invalidRifRows.length} factura(s) con RIF inválido según Módulo 11 (marcadas en rojo en la columna RIF).</span>
+                )}
+                {ventasAuditSummary.missingIvaRows.length > 0 && (
+                  <span>• {ventasAuditSummary.missingIvaRows.length} factura(s) con Base 16% positiva e IVA = Bs. 0,00 (verificar si corresponden a ventas exentas antes de declarar).</span>
+                )}
+              </div>
+            )}
+
             <div className="table-container" style={{ overflowX: 'auto' }}>
               <table className="custom-table" style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
                 <thead>
@@ -469,6 +647,8 @@ export default function TaxReportsView({
                     <th>Débito Fiscal IVA 16% (Bs.)</th>
                     <th>Base Imponible 8% (Bs.)</th>
                     <th>IVA 8% (Bs.)</th>
+                    <th>Base Imponible 31% (Bs.)</th>
+                    <th>IVA 31% (Bs.)</th>
                     <th>IGTF 3% (Bs.)</th>
                     <th>IVA Retenido (Bs.)</th>
                     <th>N° Comprobante Ret.</th>
@@ -477,19 +657,23 @@ export default function TaxReportsView({
                 <tbody>
                   {libroVentasRows.length === 0 ? (
                     <tr>
-                      <td colSpan="18" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                        No existen operaciones de venta registradas para el período {mesFiltro}.
+                      <td colSpan="20" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                        No existen operaciones fiscales de venta registradas para el período {mesFiltro}.
                       </td>
                     </tr>
                   ) : (
                     libroVentasRows.map((row) => (
-                      <tr key={row.numOperacion} style={{ backgroundColor: row.tipoTransaccion === '03-REG' ? 'rgba(239, 68, 68, 0.05)' : 'inherit' }}>
+                      <tr key={row.numOperacion} style={{ backgroundColor: row.anulada ? 'rgba(148, 163, 184, 0.08)' : (row.tipoTransaccion.startsWith('03-') ? 'rgba(239, 68, 68, 0.05)' : 'inherit'), opacity: row.anulada ? 0.72 : 1 }}>
                         <td>{String(row.numOperacion).padStart(4, '0')}</td>
                         <td>{row.fecha}</td>
-                        <td><code>{row.rifCliente}</code></td>
+                        <td>
+                          <code style={{ color: !row.anulada && !row.rifValido ? '#f87171' : 'inherit', fontWeight: !row.anulada && !row.rifValido ? 700 : 400 }} title={!row.anulada && !row.rifValido ? 'RIF inválido según Módulo 11 SENIAT' : ''}>
+                            {row.rifCliente}
+                          </code>
+                        </td>
                         <td style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.nombreCliente}</td>
                         <td>
-                          <span className={`badge ${row.tipoTransaccion === '03-REG' ? 'badge-danger' : (row.tipoTransaccion === '02-REG' ? 'badge-warning' : 'badge-primary')}`} style={{ fontSize: '0.7rem' }}>
+                          <span className={`badge ${row.anulada ? 'badge-secondary' : (row.tipoTransaccion === '03-REG' ? 'badge-danger' : (row.tipoTransaccion === '02-REG' ? 'badge-warning' : 'badge-primary'))}`} style={{ fontSize: '0.7rem' }}>
                             {row.tipoTransaccion}
                           </span>
                         </td>
@@ -499,10 +683,12 @@ export default function TaxReportsView({
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatBs(row.totalVentasBs)}</td>
                         <td style={{ textAlign: 'right' }}>{formatBs(row.ventasExentasBs)}</td>
                         <td style={{ textAlign: 'right' }}>{formatBs(row.baseImponible16Bs)}</td>
-                        <td style={{ textAlign: 'center' }}>16%</td>
-                        <td style={{ textAlign: 'right', color: 'var(--accent-primary)', fontWeight: 600 }}>{formatBs(row.iva16Bs)}</td>
+                        <td style={{ textAlign: 'center' }}>{row.baseImponible16Bs !== 0 ? '16%' : (row.baseImponible8Bs !== 0 ? '8%' : (row.baseImponible31Bs !== 0 ? '31%' : '0%'))}</td>
+                        <td style={{ textAlign: 'right', color: row.sinDesgloseIva ? '#f59e0b' : 'var(--accent-primary)', fontWeight: 600 }}>{formatBs(row.iva16Bs)}</td>
                         <td style={{ textAlign: 'right' }}>{formatBs(row.baseImponible8Bs)}</td>
                         <td style={{ textAlign: 'right' }}>{formatBs(row.iva8Bs)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatBs(row.baseImponible31Bs || 0)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatBs(row.iva31Bs || 0)}</td>
                         <td style={{ textAlign: 'right', color: 'var(--accent-amber)' }}>{formatBs(row.igtfBs)}</td>
                         <td style={{ textAlign: 'right', color: 'var(--accent-emerald)' }}>{formatBs(row.retencionIvaBs)}</td>
                         <td><code>{row.comprobanteRetencion || '-'}</code></td>
@@ -521,6 +707,8 @@ export default function TaxReportsView({
                       <td style={{ textAlign: 'right', color: 'var(--accent-primary)' }}>{formatBs(totalesVentas.iva16Bs)}</td>
                       <td style={{ textAlign: 'right' }}>{formatBs(totalesVentas.baseImponible8Bs)}</td>
                       <td style={{ textAlign: 'right' }}>{formatBs(totalesVentas.iva8Bs)}</td>
+                      <td style={{ textAlign: 'right' }}>{formatBs(totalesVentas.baseImponible31Bs)}</td>
+                      <td style={{ textAlign: 'right' }}>{formatBs(totalesVentas.iva31Bs)}</td>
                       <td style={{ textAlign: 'right', color: 'var(--accent-amber)' }}>{formatBs(totalesVentas.igtfBs)}</td>
                       <td style={{ textAlign: 'right', color: 'var(--accent-emerald)' }}>{formatBs(totalesVentas.retencionIvaBs)}</td>
                       <td></td>
@@ -622,37 +810,45 @@ export default function TaxReportsView({
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatBs(row.totalComprasBs)}</td>
                         <td style={{ textAlign: 'right' }}>{formatBs(row.comprasExentasBs)}</td>
                         <td style={{ textAlign: 'right' }}>{formatBs(row.baseImponible16Bs)}</td>
-                        <td style={{ textAlign: 'center' }}>16%</td>
+                        <td style={{ textAlign: 'center' }}>{row.alicuota16 ?? 0}%</td>
                         <td style={{ textAlign: 'right', color: 'var(--accent-primary)', fontWeight: 600 }}>{formatBs(row.creditoFiscal16Bs)}</td>
                         <td style={{ textAlign: 'right', color: 'var(--motorven-red)', fontWeight: 700 }}>{formatBs(row.retencionIvaBs)}</td>
                         <td>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                            <code style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>{row.comprobanteRetencion}</code>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              style={{ padding: '2px 6px', fontSize: '0.68rem' }}
-                              onClick={() => generateSeniatRetentionVoucherPDF({
-                                type: 'IVA',
-                                record: {
-                                  numeroFacturaProv: row.numeroFactura,
-                                  numeroControl: row.numeroControl,
-                                  proveedorNombre: row.nombreProveedor,
-                                  proveedorRif: row.rifProveedor,
-                                  fecha: row.fecha,
-                                  baseGeneralUsd: Number(row.baseImponible16Bs || 0) / (Number(safeConfig.tasaDolar) || 1),
-                                  ivaGeneralUsd: Number(row.creditoFiscal16Bs || 0) / (Number(safeConfig.tasaDolar) || 1),
-                                  retencionIvaBs: row.retencionIvaBs,
-                                  numeroComprobanteRetencionIva: row.comprobanteRetencion
-                                },
-                                config: safeConfig,
-                                currentUser
-                              })}
-                              title="Descargar Comprobante Retención IVA SENIAT en PDF"
-                            >
-                              <Printer size={11} /> PDF
-                            </button>
-                          </div>
+                          {row.comprobanteRetencion && Number(row.retencionIvaBs || 0) > 0 ? (
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                              <code style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>{row.comprobanteRetencion}</code>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '2px 6px', fontSize: '0.68rem' }}
+                                onClick={() => generateSeniatRetentionVoucherPDF({
+                                  type: 'IVA',
+                                  record: {
+                                    numeroFactura: row.numeroFactura,
+                                    numeroFacturaProv: row.numeroFactura,
+                                    numeroControl: row.numeroControl,
+                                    proveedorNombre: row.nombreProveedor,
+                                    proveedorRif: row.rifProveedor,
+                                    fecha: row.fecha,
+                                    tasaCambio: row.tasaBcv || safeConfig.tasaDolar,
+                                    montoTotalBs: row.totalComprasBs,
+                                    baseImponibleBs: row.baseImponible16Bs,
+                                    ivaBs: row.creditoFiscal16Bs,
+                                    baseExentaBs: row.comprasExentasBs,
+                                    retencionIvaBs: row.retencionIvaBs,
+                                    numeroComprobanteRetencionIva: row.comprobanteRetencion
+                                  },
+                                  config: safeConfig,
+                                  currentUser
+                                })}
+                                title="Descargar Comprobante Retención IVA SENIAT en PDF"
+                              >
+                                <Printer size={11} /> PDF
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Sin comprobante</span>
+                          )}
                         </td>
                         <td style={{ textAlign: 'right', color: 'var(--accent-amber)' }}>{formatBs(row.retencionIslrBs)}</td>
                       </tr>
@@ -784,6 +980,24 @@ export default function TaxReportsView({
             </p>
           </div>
 
+          {seniatExportFeedback && (
+            <div
+              style={{
+                marginBottom: '1.25rem',
+                padding: '0.85rem 1rem',
+                borderRadius: 'var(--radius-sm)',
+                background: seniatExportFeedback.type === 'error'
+                  ? 'rgba(239, 68, 68, 0.12)'
+                  : (seniatExportFeedback.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)'),
+                border: `1px solid ${seniatExportFeedback.type === 'error' ? '#ef4444' : (seniatExportFeedback.type === 'success' ? '#10b981' : '#f59e0b')}`,
+                fontSize: '0.84rem',
+                fontWeight: 600
+              }}
+            >
+              {seniatExportFeedback.text}
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
             {/* Card TXT IVA */}
             <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', borderTop: '4px solid var(--motorven-red)' }}>
@@ -803,7 +1017,7 @@ export default function TaxReportsView({
                 </p>
 
                 <div style={{ background: 'var(--bg-tertiary)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', marginBottom: '1rem' }}>
-                  <div>• <strong>Registros en el período:</strong> {filteredPurchases.length} compras / comprobantes</div>
+                  <div>• <strong>Comprobantes válidos en el período:</strong> {eligibleVatRetentions.length} de {filteredPurchases.length} compras</div>
                   <div>• <strong>Monto total retenido:</strong> <span style={{ color: 'var(--motorven-red)', fontWeight: 700 }}>{formatBs(totalesCompras.retencionIvaBs)}</span></div>
                   <div>• <strong>Formato de archivo:</strong> <code>RIF_AAAAMM_RET_IVA.txt</code></div>
                 </div>
@@ -812,7 +1026,6 @@ export default function TaxReportsView({
               <button
                 className="btn btn-primary"
                 onClick={handleDownloadSeniatTxt}
-                disabled={filteredPurchases.length === 0}
                 style={{ width: '100%', justifyContent: 'center', gap: '8px' }}
               >
                 <Download size={18} /> Descargar Archivo TXT para SENIAT
@@ -833,12 +1046,12 @@ export default function TaxReportsView({
                 </div>
 
                 <p style={{ fontSize: '0.85rem', color: '#cbd5e1', lineHeight: '1.4', marginBottom: '1rem' }}>
-                  Genera el archivo <strong>XML bajo codificación ISO-8859-1</strong> con el nodo raíz <code>&lt;RelacionRetencionesISLR&gt;</code> para carga de retenciones a proveedores (Concepto 055 - 2%).
+                  Genera el archivo <strong>XML bajo codificación ISO-8859-1</strong> con el nodo raíz <code>&lt;RelacionRetencionesISLR&gt;</code> conectado a los comprobantes reales registrados.
                 </p>
 
                 <div style={{ background: 'var(--bg-tertiary)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', marginBottom: '1rem' }}>
-                  <div>• <strong>Registros en el período:</strong> {filteredPurchases.length} retenciones ISLR</div>
-                  <div>• <strong>Monto total retenido:</strong> <span style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>{formatBs(totalesCompras.retencionIslrBs)}</span></div>
+                  <div>• <strong>Comprobantes ISLR en el período:</strong> {filteredIslrWithholdings.length} comprobante(s)</div>
+                  <div>• <strong>Monto total retenido:</strong> <span style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>{formatBs(filteredIslrWithholdings.reduce((acc, w) => acc + Number(w.montoRetenido || 0) * (String(w.moneda || 'BS').toUpperCase() === 'USD' ? Number(w.tasaCambio || safeConfig.tasaDolar || 1) : 1), 0))}</span></div>
                   <div>• <strong>Formato de archivo:</strong> <code>RIF_AAAAMM_ISLR.xml</code></div>
                 </div>
               </div>
@@ -846,7 +1059,6 @@ export default function TaxReportsView({
               <button
                 className="btn btn-secondary"
                 onClick={handleDownloadSeniatXml}
-                disabled={filteredPurchases.length === 0}
                 style={{ width: '100%', justifyContent: 'center', gap: '8px', borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)' }}
               >
                 <Download size={18} /> Descargar Archivo XML para SENIAT
@@ -899,7 +1111,12 @@ export default function TaxReportsView({
       {/* ========================================================================= */}
       {reportType === 'CIERRES_FISCALES' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          
+          {openDatesCount > 1 && (
+            <div style={{ padding: '0.9rem 1rem', borderRadius: 'var(--radius-sm)', background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.45)', fontSize: '0.82rem', color: '#fcd34d' }}>
+              <strong>Aviso de Saneamiento Histórico:</strong> Hay {openSales.length} documento(s) fiscal(es) abierto(s) distribuidos en <strong>{openDatesCount} fecha(s) distintas</strong> sin Cierre Z asignado. Se recomienda conciliar/cerrar por fecha el histórico antes de emitir el próximo Cierre Z operativo.
+            </div>
+          )}
+
           {/* PANEL DE CONTROL DEL TURNO / JORNADA ACTIVA */}
           <div className="bento-card" style={{ borderLeft: '4px solid var(--motorven-red)' }}>
             <div className="bento-card-header" style={{ marginBottom: '1.25rem' }}>
@@ -1193,8 +1410,9 @@ export default function TaxReportsView({
           paymentOrders={profitPaymentOrders}
           withholdings={profitIslrWithholdings}
           accountsPayable={profitAccountsPayable}
-          purchases={profitPurchases}
+          purchases={unifiedPurchases}
           suppliers={suppliers}
+          profitSuppliers={profitSuppliers}
           config={config}
           currentUser={currentUser}
           onRefresh={onSyncProfit}

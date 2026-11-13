@@ -841,14 +841,23 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                     <span>{formatBs(sale.baseExentaBs)}</span>
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>BASE IMPONIBLE (G 16%):</span>
-                  <span>{formatBs(sale.baseGeneralBs)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>DÉBITO FISCAL (16%):</span>
-                  <span>{formatBs(sale.ivaGeneralBs || sale.ivaBs)}</span>
-                </div>
+                {isNe ? (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>SUBTOTAL (NO FISCAL):</span>
+                    <span>{formatBs(sale.subtotalBs ?? (Number(sale.totalBs || 0) - Number(sale.igtfBs || 0)))}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>BASE IMPONIBLE (G 16%):</span>
+                      <span>{formatBs(sale.baseGeneralBs)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>DÉBITO FISCAL (16%):</span>
+                      <span>{formatBs(sale.ivaGeneralBs || sale.ivaBs)}</span>
+                    </div>
+                  </>
+                )}
                 {Number(sale.baseReducidaBs || 0) > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>IVA REDUCIDO (8%):</span>

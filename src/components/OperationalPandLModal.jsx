@@ -25,13 +25,15 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { formatUsd, formatBs, formatNumberUs, formatUnitVe } from '../services/formatService';
-import { generateProfitabilityPDF } from '../services/pdfReportService';
+import { generateOperationalPandLPDF } from '../services/pdfReportService';
+import { computeOperationalPandL, safePct } from '../utils/profitabilityUtils';
 
 export default function OperationalPandLModal({
   isOpen,
   onClose,
   products = [],
   profitInvoices = [],
+  sales = [],
   profitPurchases = [],
   profitSellers = [],
   profitTransports = [],
@@ -40,225 +42,153 @@ export default function OperationalPandLModal({
   profitInventoryAdjustments = [],
   profitIslrWithholdings = [],
   cashMovements = [],
+  commissionSettlements = [],
+  expenses = [],
+  payroll = [],
   config = {},
   currentUser = null,
   tasaBcv: propTasaBcv
 }) {
   const tasaBcv = Number(propTasaBcv || config?.tasaDolar || 827.73);
   
-  // Parámetros del Simulador What-If
+  // Parámetros del Simulador What-If (aplicados ÚNICAMENTE en pestaña 'simulator')
   const [priceAdjustmentPct, setPriceAdjustmentPct] = useState(0); // -15% a +15%
   const [cogsAdjustmentPct, setCogsAdjustmentPct] = useState(0); // -15% a +15%
   const [freightPerLiterUsd, setFreightPerLiterUsd] = useState(0.08); // $0.08 USD por litro base
   const [avgCommissionPct, setAvgCommissionPct] = useState(3.0); // 3% comisión promedio vendedores
   const [activeTab, setActiveTab] = useState('waterfall'); // 'waterfall' | 'lines_pnl' | 'simulator' | 'print'
 
+  const isSimulation = activeTab === 'simulator';
+
   // =========================================================================
-  // 1. MOTOR FINANCIERO DE P&L Y CASCADA DE RESULTADOS
+  // 1. MOTOR FINANCIERO DE P&L Y CASCADA DE RESULTADOS (MODO REAL vs SIMULACIÓN)
   // =========================================================================
   const financialData = useMemo(() => {
-    // A. Ventas e Ingresos Brutos
-    let baseFacturadoUsd = 0;
-    let baseFacturadoBs = 0;
-    let baseLitrosVendidos = 0;
-    let baseCajasVendidas = 0;
-    let baseCmvUsd = 0;
-
-    // Mapeo por Líneas de Aceite
-    const linesBreakdown = {
-      'Gasolina': { nombre: 'Gasolina Mineral / Sintético', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 },
-      'Semisintético R500': { nombre: 'Semisintético R500', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 },
-      'Diesel 4T': { nombre: 'Diésel Pesado (CI-4 / CH-4)', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 },
-      'Motos 2T/4T': { nombre: 'Motos 2T / 4T Racing', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 },
-      'Transmisiones & ATF': { nombre: 'Transmisión & ATF', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 },
-      'Hidráulicos AW68': { nombre: 'Hidráulicos Industriales AW', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 },
-      'Fuera de Borda': { nombre: 'Fuera de Borda TC-W3', litros: 0, cajas: 0, ventaUsd: 0, cmvUsd: 0, skus: 0 }
-    };
-
-    // Indexar costos de productos
-    const productCostMap = {};
-    const productCategoryMap = {};
-    products.forEach(p => {
-      const code = (p.codigo || p.id || '').trim().toUpperCase();
-      productCostMap[code] = Number(p.costoUsd || 28.0);
-      productCategoryMap[code] = p.categoria || 'Gasolina';
-    });
-
-    // Procesar facturas de Supabase
-    const activeInvoices = profitInvoices.filter(f => !f.anulado);
-
-    activeInvoices.forEach(inv => {
-      const vUsd = Number(inv.totNetoUsd || 0);
-      const vBs = Number(inv.totNetoBs || (vUsd * tasaBcv));
-      const lts = Number(inv.totalLitros || 0);
-      const caj = Number(inv.totalCajas || 0);
-
-      baseFacturadoUsd += vUsd;
-      baseFacturadoBs += vBs;
-      baseLitrosVendidos += lts;
-      baseCajasVendidas += caj;
-
-      // Estimación CMV por factura
-      const items = Array.isArray(inv.items) ? inv.items : [];
-      if (items.length > 0) {
-        items.forEach(it => {
-          const itCode = (it.articuloId || it.codigo || '').trim().toUpperCase();
-          const cost = productCostMap[itCode] || 28.0;
-          const qty = Number(it.cantidad || 0);
-          const itLitros = Number(it.litrosTotales || (qty * 11.35));
-          const itNetoUsd = Number(it.totalNetoUsd || (it.totalNeto ? it.totalNeto / tasaBcv : qty * cost * 1.35));
-          const cat = productCategoryMap[itCode] || 'Gasolina';
-
-          baseCmvUsd += qty * cost;
-
-          const targetLine = linesBreakdown[cat] || linesBreakdown['Gasolina'];
-          targetLine.litros += itLitros;
-          targetLine.cajas += qty;
-          targetLine.ventaUsd += itNetoUsd;
-          targetLine.cmvUsd += (qty * cost);
-          targetLine.skus += 1;
-        });
-      } else {
-        baseCmvUsd += (vUsd * 0.68);
+    const core = computeOperationalPandL({
+      products,
+      profitInvoices,
+      sales,
+      profitReturns,
+      profitInventoryAdjustments,
+      profitIslrWithholdings,
+      cashMovements,
+      commissionSettlements,
+      expenses,
+      payroll,
+      config: { ...config, tasaDolar: tasaBcv },
+      isSimulation,
+      simulationParams: {
+        simVolPct: 100,
+        simPricePct: 100 + priceAdjustmentPct,
+        freightPerLiterUsd,
+        avgCommissionPct
       }
     });
 
-    // Si la base no tiene facturas vivas suficientes, alimentar con el catálogo
-    if (baseFacturadoUsd === 0) {
-      products.forEach(p => {
-        const cat = p.categoria || 'Gasolina';
-        const targetLine = linesBreakdown[cat] || linesBreakdown['Gasolina'];
-        const estLitros = (p.stock || 20) * (p.litrosPorUnidad || 11.35) * 1.5;
-        const estCajas = (p.stock || 20) * 1.5;
-        const estVenta = estCajas * (p.precioUsdMayor || 40.0);
-        const estCmv = estCajas * (p.costoUsd || 28.0);
+    // En simulación también permitir sensibilizar CMV (% sobre costo)
+    const factorCmvSim = isSimulation ? 1 + (cogsAdjustmentPct / 100) : 1;
+    const cmvAjustadoUsd = core.cmvAjustadoUsd * factorCmvSim;
+    const utilidadBrutaUsd = core.facturadoAjustadoUsd - cmvAjustadoUsd;
+    const margenBrutoPct = safePct(utilidadBrutaUsd, core.facturadoAjustadoUsd);
+    const margenContribucionUsd = utilidadBrutaUsd - core.totalGastosVariablesUsd;
+    const margenContribucionPct = safePct(margenContribucionUsd, core.facturadoAjustadoUsd);
+    const utilidadOperativaUsd = margenContribucionUsd - core.totalGastosFijosUsd;
+    const margenOperativoPct = safePct(utilidadOperativaUsd, core.facturadoAjustadoUsd);
+    const utilidadPorLitroUsd = core.litersSold > 0 ? (utilidadOperativaUsd / core.litersSold) : 0;
 
-        baseFacturadoUsd += estVenta;
-        baseFacturadoBs += (estVenta * tasaBcv);
-        baseLitrosVendidos += estLitros;
-        baseCajasVendidas += estCajas;
-        baseCmvUsd += estCmv;
+    // Enriquecer líneas reales dinámicas prorrateando costos reales/simulados para vista por línea
+    const linesResult = (core.linesBreakdown || []).map((ln) => {
+      const cUsd = ln.cmv * factorCmvSim;
+      const uBruta = ln.rev - cUsd;
+      const shareLitros = core.litersSold > 0 ? ln.liters / core.litersSold : 0;
+      const shareVentas = core.facturadoAjustadoUsd > 0 ? ln.rev / core.facturadoAjustadoUsd : 0;
 
-        targetLine.litros += estLitros;
-        targetLine.cajas += estCajas;
-        targetLine.ventaUsd += estVenta;
-        targetLine.cmvUsd += estCmv;
-        targetLine.skus += 1;
-      });
-    }
-
-    // B. Aplicar Ajustes de Sensibilidad (What-If Simulator)
-    const factorPrecio = 1 + (priceAdjustmentPct / 100);
-    const factorCmv = 1 + (cogsAdjustmentPct / 100);
-
-    const facturadoAjustadoUsd = baseFacturadoUsd * factorPrecio;
-    const facturadoAjustadoBs = facturadoAjustadoUsd * tasaBcv;
-    const cmvAjustadoUsd = baseCmvUsd * factorCmv;
-
-    // C. Utilidad Bruta
-    const utilidadBrutaUsd = facturadoAjustadoUsd - cmvAjustadoUsd;
-    const margenBrutoPct = facturadoAjustadoUsd > 0 ? (utilidadBrutaUsd / facturadoAjustadoUsd) * 100 : 0;
-
-    // D. Gastos Variables Directos
-    const costoFletesUsd = baseLitrosVendidos * freightPerLiterUsd;
-    const costoComisionesUsd = facturadoAjustadoUsd * (avgCommissionPct / 100);
-    const costoMermasUsd = profitInventoryAdjustments.reduce((acc, a) => acc + Math.abs(Number(a.costoTotalUsd || 0)), 0) || (baseCmvUsd * 0.008);
-    const retencionesIslrUsd = profitIslrWithholdings.reduce((acc, r) => acc + Number(r.montoRetenidoUsd || 0), 0) || (facturadoAjustadoUsd * 0.015);
-
-    const totalGastosVariablesUsd = costoFletesUsd + costoComisionesUsd + costoMermasUsd + retencionesIslrUsd;
-
-    // E. Margen de Contribución Real
-    const margenContribucionUsd = utilidadBrutaUsd - totalGastosVariablesUsd;
-    const margenContribucionPct = facturadoAjustadoUsd > 0 ? (margenContribucionUsd / facturadoAjustadoUsd) * 100 : 0;
-
-    // F. Gastos Operativos Fijos de Distribución (OPEX)
-    const totalEgresosCajaUsd = cashMovements.filter(m => m.tipo === 'EGRESO').reduce((acc, m) => acc + Number(m.montoUsd || 0), 0);
-    const opexFijoUsd = totalEgresosCajaUsd > 0 ? totalEgresosCajaUsd : (facturadoAjustadoUsd * 0.08);
-
-    // G. Utilidad Operativa Neta (EBITDA Operativo)
-    const utilidadOperativaUsd = margenContribucionUsd - opexFijoUsd;
-    const margenOperativoPct = facturadoAjustadoUsd > 0 ? (utilidadOperativaUsd / facturadoAjustadoUsd) * 100 : 0;
-    const utilidadPorLitroUsd = baseLitrosVendidos > 0 ? (utilidadOperativaUsd / baseLitrosVendidos) : 0;
-
-    // H. Análisis de Líneas con Gastos Prorrateados
-    const linesResult = Object.entries(linesBreakdown).map(([key, data]) => {
-      const vUsd = data.ventaUsd * factorPrecio;
-      const cUsd = data.cmvUsd * factorCmv;
-      const uBruta = vUsd - cUsd;
-      const mBrutoPct = vUsd > 0 ? (uBruta / vUsd) * 100 : 0;
-
-      const shareLitros = baseLitrosVendidos > 0 ? data.litros / baseLitrosVendidos : 0;
-      const shareVentas = facturadoAjustadoUsd > 0 ? vUsd / facturadoAjustadoUsd : 0;
-
-      const fleteLinea = costoFletesUsd * shareLitros;
-      const comisionLinea = costoComisionesUsd * shareVentas;
-      const mermasLinea = costoMermasUsd * shareLitros;
-      const islrLinea = retencionesIslrUsd * shareVentas;
-      const opexLinea = opexFijoUsd * shareVentas;
-
-      const totalDeduccionesLinea = fleteLinea + comisionLinea + mermasLinea + islrLinea + opexLinea;
+      const fleteLinea = core.costoFletesUsd * shareLitros;
+      const comisionLinea = core.comisionesVendedoresUsd * shareVentas;
+      const mermasLinea = core.costoMermasUsd * shareLitros;
+      const islrLinea = core.retencionesIslrUsd * shareVentas;
+      const nominaLinea = core.costoNominaUsd * shareVentas;
+      const opexLinea = core.opexFijoUsd * shareVentas;
+      const totalDeduccionesLinea = fleteLinea + comisionLinea + mermasLinea + islrLinea + nominaLinea + opexLinea;
       const utilidadNetaLinea = uBruta - totalDeduccionesLinea;
-      const margenNetoPct = vUsd > 0 ? (utilidadNetaLinea / vUsd) * 100 : 0;
-      const rendimientoLitro = data.litros > 0 ? (utilidadNetaLinea / data.litros) : 0;
 
       return {
-        key,
-        nombre: data.nombre,
-        litros: data.litros,
-        cajas: data.cajas,
-        ventaUsd: vUsd,
+        key: ln.name,
+        nombre: ln.name,
+        litros: ln.liters,
+        cajas: ln.units,
+        ventaUsd: ln.rev,
         cmvUsd: cUsd,
         utilidadBrutaUsd: uBruta,
-        margenBrutoPct,
+        margenBrutoPct: safePct(uBruta, ln.rev),
         fleteLinea,
         comisionLinea,
         mermasLinea,
         islrLinea,
+        nominaLinea,
         opexLinea,
         totalDeduccionesLinea,
         utilidadNetaLinea,
-        margenNetoPct,
-        rendimientoLitro
+        margenNetoPct: safePct(utilidadNetaLinea, ln.rev),
+        rendimientoLitro: ln.liters > 0 ? (utilidadNetaLinea / ln.liters) : 0
       };
     }).sort((a, b) => b.utilidadNetaLinea - a.utilidadNetaLinea);
 
     return {
-      baseFacturadoUsd,
-      baseLitrosVendidos,
-      baseCajasVendidas,
-      facturadoAjustadoUsd,
-      facturadoAjustadoBs,
+      ...core,
+      baseFacturadoUsd: core.facturadoBrutoUsd,
+      baseLitrosVendidos: core.litersSold,
+      facturadoAjustadoBs: core.facturadoAjustadoUsd * tasaBcv,
       cmvAjustadoUsd,
       utilidadBrutaUsd,
       margenBrutoPct,
-      costoFletesUsd,
-      costoComisionesUsd,
-      costoMermasUsd,
-      retencionesIslrUsd,
-      totalGastosVariablesUsd,
+      costoComisionesUsd: core.comisionesVendedoresUsd,
       margenContribucionUsd,
       margenContribucionPct,
-      opexFijoUsd,
       utilidadOperativaUsd,
       margenOperativoPct,
+      ebitdaOperativoUsd: utilidadOperativaUsd,
+      ebitdaPct: margenOperativoPct,
       utilidadPorLitroUsd,
       linesResult
     };
-  }, [products, profitInvoices, profitInventoryAdjustments, profitIslrWithholdings, cashMovements, tasaBcv, priceAdjustmentPct, cogsAdjustmentPct, freightPerLiterUsd, avgCommissionPct]);
+  }, [
+    products,
+    profitInvoices,
+    sales,
+    profitReturns,
+    profitInventoryAdjustments,
+    profitIslrWithholdings,
+    cashMovements,
+    commissionSettlements,
+    expenses,
+    payroll,
+    config,
+    tasaBcv,
+    isSimulation,
+    priceAdjustmentPct,
+    cogsAdjustmentPct,
+    freightPerLiterUsd,
+    avgCommissionPct
+  ]);
 
   const handleExportCsv = () => {
+    const pctStr = (num) => safePct(num, financialData.facturadoAjustadoUsd).toFixed(2) + '%';
     let csv = '\uFEFF';
     csv += 'CONCEPTO_ESTADO_DE_RESULTADOS;MONTO_USD;MONTO_BS;PORCENTAJE_VENTAS\n';
 
-    csv += 'Ingresos Brutos por Ventas;' + financialData.facturadoAjustadoUsd.toFixed(2) + ';' + financialData.facturadoAjustadoBs.toFixed(2) + ';100.00%\n';
-    csv += '(-) Costo de Mercancía Vendida (CMV);-' + financialData.cmvAjustadoUsd.toFixed(2) + ';-' + (financialData.cmvAjustadoUsd * tasaBcv).toFixed(2) + ';-' + ((financialData.cmvAjustadoUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2) + '%\n';
+    csv += '(+) Facturación Bruta Sin IVA;' + financialData.facturadoBrutoUsd.toFixed(2) + ';' + (financialData.facturadoBrutoUsd * tasaBcv).toFixed(2) + ';100.00%\n';
+    csv += '(-) Devoluciones en Ventas;-' + financialData.devolucionesUsd.toFixed(2) + ';-' + (financialData.devolucionesUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.devolucionesUsd) + '\n';
+    csv += '(=) Ingresos Netos de Operación;' + financialData.facturadoAjustadoUsd.toFixed(2) + ';' + financialData.facturadoAjustadoBs.toFixed(2) + ';100.00%\n';
+    csv += '(-) Costo de Mercancía Vendida (CMV);-' + financialData.cmvAjustadoUsd.toFixed(2) + ';-' + (financialData.cmvAjustadoUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.cmvAjustadoUsd) + '\n';
     csv += '(=) UTILIDAD BRUTA OPERATIVA;' + financialData.utilidadBrutaUsd.toFixed(2) + ';' + (financialData.utilidadBrutaUsd * tasaBcv).toFixed(2) + ';' + financialData.margenBrutoPct.toFixed(2) + '%\n';
-    csv += '(-) Fletes y Logística de Distribución;-' + financialData.costoFletesUsd.toFixed(2) + ';-' + (financialData.costoFletesUsd * tasaBcv).toFixed(2) + ';-' + ((financialData.costoFletesUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2) + '%\n';
-    csv += '(-) Comisiones Fuerza de Ventas;-' + financialData.costoComisionesUsd.toFixed(2) + ';-' + (financialData.costoComisionesUsd * tasaBcv).toFixed(2) + ';-' + ((financialData.costoComisionesUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2) + '%\n';
-    csv += '(-) Mermas y Ajustes de Inventario;-' + financialData.costoMermasUsd.toFixed(2) + ';-' + (financialData.costoMermasUsd * tasaBcv).toFixed(2) + ';-' + ((financialData.costoMermasUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2) + '%\n';
-    csv += '(-) Retenciones e Impacto Fiscal ISLR;-' + financialData.retencionesIslrUsd.toFixed(2) + ';-' + (financialData.retencionesIslrUsd * tasaBcv).toFixed(2) + ';-' + ((financialData.retencionesIslrUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2) + '%\n';
+    csv += '(-) Fletes y Logística de Distribución;-' + financialData.costoFletesUsd.toFixed(2) + ';-' + (financialData.costoFletesUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.costoFletesUsd) + '\n';
+    csv += '(-) Comisiones Fuerza de Ventas;-' + financialData.costoComisionesUsd.toFixed(2) + ';-' + (financialData.costoComisionesUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.costoComisionesUsd) + '\n';
+    csv += '(-) Mermas y Ajustes de Inventario;-' + financialData.costoMermasUsd.toFixed(2) + ';-' + (financialData.costoMermasUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.costoMermasUsd) + '\n';
+    csv += '(-) Retenciones e Impacto Fiscal ISLR;-' + financialData.retencionesIslrUsd.toFixed(2) + ';-' + (financialData.retencionesIslrUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.retencionesIslrUsd) + '\n';
     csv += '(=) MARGEN DE CONTRIBUCIÓN REAL;' + financialData.margenContribucionUsd.toFixed(2) + ';' + (financialData.margenContribucionUsd * tasaBcv).toFixed(2) + ';' + financialData.margenContribucionPct.toFixed(2) + '%\n';
-    csv += '(-) Gastos Fijos de Distribución (OPEX);-' + financialData.opexFijoUsd.toFixed(2) + ';-' + (financialData.opexFijoUsd * tasaBcv).toFixed(2) + ';-' + ((financialData.opexFijoUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2) + '%\n';
+    csv += '(-) Nómina y Salarios Operativos;-' + financialData.costoNominaUsd.toFixed(2) + ';-' + (financialData.costoNominaUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.costoNominaUsd) + '\n';
+    csv += '(-) Gastos Fijos de Distribución (OPEX);-' + financialData.opexFijoUsd.toFixed(2) + ';-' + (financialData.opexFijoUsd * tasaBcv).toFixed(2) + ';-' + pctStr(financialData.opexFijoUsd) + '\n';
     csv += '(=) UTILIDAD OPERATIVA NETA (EBITDA);' + financialData.utilidadOperativaUsd.toFixed(2) + ';' + (financialData.utilidadOperativaUsd * tasaBcv).toFixed(2) + ';' + financialData.margenOperativoPct.toFixed(2) + '%\n';
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -273,10 +203,8 @@ export default function OperationalPandLModal({
   };
 
   const handlePrint = () => {
-    generateProfitabilityPDF({
-      products,
-      sales: profitInvoices,
-      purchases: profitPurchases,
+    generateOperationalPandLPDF({
+      financialData,
       config,
       currentUser
     });
@@ -511,25 +439,62 @@ export default function OperationalPandLModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {/* 1. Ingresos */}
+                  {/* 1. Ingresos Brutos, Devoluciones e Ingreso Neto */}
                   <tr style={{ background: 'rgba(37, 99, 235, 0.06)' }}>
                     <td>
                       <div style={{ fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <ArrowUpRight size={16} color="var(--motorven-navy-light)" />
-                        (+) Ingresos Brutos por Ventas de Lubricantes
+                        (+) Facturación Bruta Sin IVA (Profit + POS)
                       </div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', paddingLeft: '22px' }}>
-                        Facturación total consolidada de aceites de motor, transmisiones e industriales
+                        {financialData.activeDocsCount} documentos activos contabilizados {isSimulation ? '(Simulación What-If)' : '(Cifra Real)'}
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-primary">Ingreso Base</span></td>
+                    <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-tech)' }}>
+                      {formatUsd(financialData.facturadoBrutoUsd)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
+                      {formatBs(financialData.facturadoBrutoUsd * tasaBcv)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-code)' }}>100.00%</td>
+                  </tr>
+
+                  <tr>
+                    <td>
+                      <div style={{ paddingLeft: '1.25rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <ArrowDownRight size={14} color="var(--motorven-red)" />
+                        (-) Devoluciones sobre Ventas ({financialData.dataSources?.returnsCount || 0})
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'center' }}><span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>Deducción</span></td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)', color: 'var(--text-muted)' }}>
+                      - {formatUsd(financialData.devolucionesUsd)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                      - {formatBs(financialData.devolucionesUsd * tasaBcv)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                      - {safePct(financialData.devolucionesUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
+                    </td>
+                  </tr>
+
+                  <tr style={{ background: 'rgba(37, 99, 235, 0.1)' }}>
+                    <td>
+                      <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>
+                        (=) Ingresos Netos de Operación (Sin IVA)
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'center' }}><span className="badge badge-primary">Neto Ventas</span></td>
                     <td style={{ textAlign: 'right', fontWeight: 900, fontFamily: 'var(--font-tech)', fontSize: '0.95rem' }}>
                       {formatUsd(financialData.facturadoAjustadoUsd)}
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--motorven-gold)' }}>
                       {formatBs(financialData.facturadoAjustadoBs)}
                     </td>
-                    <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-code)' }}>100.00%</td>
+                    <td style={{ textAlign: 'right', fontWeight: 800, fontFamily: 'var(--font-code)' }}>
+                      {financialData.facturadoAjustadoUsd > 0 ? '100.00%' : '0.00%'}
+                    </td>
                   </tr>
 
                   {/* 2. CMV */}
@@ -540,7 +505,7 @@ export default function OperationalPandLModal({
                         (-) Costo de Mercancía Vendida (CMV / COGS)
                       </div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', paddingLeft: '22px' }}>
-                        Costo de adquisición de lubricantes en refinería / planta envasadora
+                        Costo histórico neto de unidades despachadas menos devoluciones
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-danger">Costo Directo</span></td>
@@ -551,7 +516,7 @@ export default function OperationalPandLModal({
                       - {formatBs(financialData.cmvAjustadoUsd * tasaBcv)}
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--motorven-red)' }}>
-                      - {((financialData.cmvAjustadoUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%
+                      - {safePct(financialData.cmvAjustadoUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
                     </td>
                   </tr>
 
@@ -579,7 +544,9 @@ export default function OperationalPandLModal({
                     <td>
                       <div style={{ paddingLeft: '1.25rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Truck size={14} color="#0284c7" />
-                        (-) Fletes y Logística de Distribución ($ {freightPerLiterUsd.toFixed(2)}/L)
+                        {isSimulation
+                          ? `(-) Fletes y Logística Simulados ($ ${freightPerLiterUsd.toFixed(2)}/L)`
+                          : `(-) Fletes y Logística Reales ${financialData.costoFletesUsd === 0 ? '(Sin registros)' : ''}`}
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>Variable</span></td>
@@ -590,7 +557,7 @@ export default function OperationalPandLModal({
                       - {formatBs(financialData.costoFletesUsd * tasaBcv)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
-                      - {((financialData.costoFletesUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%
+                      - {safePct(financialData.costoFletesUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
                     </td>
                   </tr>
 
@@ -598,7 +565,9 @@ export default function OperationalPandLModal({
                     <td>
                       <div style={{ paddingLeft: '1.25rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Users size={14} color="#8b5cf6" />
-                        (-) Comisiones Fuerza de Ventas ({avgCommissionPct}%)
+                        {isSimulation
+                          ? `(-) Comisiones Simuladas (${avgCommissionPct}%)`
+                          : `(-) Comisiones Fuerza de Ventas Liquidadas (${financialData.dataSources?.settlementsCount || 0}) ${financialData.costoComisionesUsd === 0 ? '— Sin registros' : ''}`}
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>Variable</span></td>
@@ -609,7 +578,7 @@ export default function OperationalPandLModal({
                       - {formatBs(financialData.costoComisionesUsd * tasaBcv)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
-                      - {((financialData.costoComisionesUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%
+                      - {safePct(financialData.costoComisionesUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
                     </td>
                   </tr>
 
@@ -617,7 +586,7 @@ export default function OperationalPandLModal({
                     <td>
                       <div style={{ paddingLeft: '1.25rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <ShieldCheck size={14} color="#d97706" />
-                        (-) Retenciones e Impacto Fiscal ISLR SENIAT
+                        (-) Retenciones e Impacto Fiscal ISLR {financialData.retencionesIslrUsd === 0 ? '(Sin registros)' : ''}
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>Fiscal</span></td>
@@ -628,7 +597,7 @@ export default function OperationalPandLModal({
                       - {formatBs(financialData.retencionesIslrUsd * tasaBcv)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
-                      - {((financialData.retencionesIslrUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%
+                      - {safePct(financialData.retencionesIslrUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
                     </td>
                   </tr>
 
@@ -636,7 +605,7 @@ export default function OperationalPandLModal({
                     <td>
                       <div style={{ paddingLeft: '1.25rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <AlertTriangle size={14} color="var(--motorven-red)" />
-                        (-) Pérdidas por Mermas y Ajustes de Almacén
+                        (-) Pérdidas por Mermas y Ajustes de Almacén ({financialData.dataSources?.adjustmentsCount || 0} docs)
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>Merma</span></td>
@@ -647,7 +616,7 @@ export default function OperationalPandLModal({
                       - {formatBs(financialData.costoMermasUsd * tasaBcv)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
-                      - {((financialData.costoMermasUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%
+                      - {safePct(financialData.costoMermasUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
                     </td>
                   </tr>
 
@@ -670,12 +639,31 @@ export default function OperationalPandLModal({
                     </td>
                   </tr>
 
-                  {/* 4. OPEX */}
+                  {/* 4. Nómina & OPEX */}
+                  <tr>
+                    <td>
+                      <div style={{ fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Users size={14} color="#0ea5e9" />
+                        (-) Nómina, Salarios & Beneficios ({financialData.dataSources?.payrollCount || 0} corridas) {financialData.costoNominaUsd === 0 ? '— Sin registros' : ''}
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'center' }}><span className="badge badge-secondary">Nómina</span></td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)', color: 'var(--text-muted)' }}>
+                      - {formatUsd(financialData.costoNominaUsd)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                      - {formatBs(financialData.costoNominaUsd * tasaBcv)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                      - {safePct(financialData.costoNominaUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
+                    </td>
+                  </tr>
+
                   <tr>
                     <td>
                       <div style={{ fontWeight: 700, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Building size={14} />
-                        (-) Gastos Fijos de Operación, Nómina & Almacén (OPEX)
+                        (-) Gastos Operativos Fijos OPEX ({financialData.dataSources?.expensesCount || 0} gastos) {financialData.opexFijoUsd === 0 ? '— Sin registros' : ''}
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}><span className="badge badge-secondary">Fijo</span></td>
@@ -686,7 +674,7 @@ export default function OperationalPandLModal({
                       - {formatBs(financialData.opexFijoUsd * tasaBcv)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
-                      - {((financialData.opexFijoUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%
+                      - {safePct(financialData.opexFijoUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%
                     </td>
                   </tr>
 
@@ -800,7 +788,7 @@ export default function OperationalPandLModal({
                       {formatUsd(financialData.utilidadBrutaUsd)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)' }}>
-                      - {formatUsd(financialData.totalGastosVariablesUsd + financialData.opexFijoUsd)}
+                      - {formatUsd(financialData.totalGastosVariablesUsd + financialData.totalGastosFijosUsd)}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-tech)', fontSize: '1rem', color: 'var(--semaforo-verde)' }}>
                       {formatUsd(financialData.utilidadOperativaUsd)}
@@ -1059,7 +1047,7 @@ export default function OperationalPandLModal({
                     <td style={{ padding: '8px 10px', color: '#b91c1c' }}>(-) Costo de Mercancía Vendida (CMV)</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', color: '#b91c1c' }}>-${financialData.cmvAjustadoUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', color: '#64748b' }}>-Bs. {(financialData.cmvAjustadoUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: '#b91c1c' }}>-{((financialData.cmvAjustadoUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: '#b91c1c' }}>-{safePct(financialData.cmvAjustadoUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%</td>
                   </tr>
 
                   <tr style={{ borderBottom: '2px solid #002b7a', background: '#eef4ff' }}>
@@ -1073,21 +1061,21 @@ export default function OperationalPandLModal({
                     <td style={{ padding: '8px 10px', paddingLeft: '20px' }}>(-) Fletes y Logística de Distribución</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-${financialData.costoFletesUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-Bs. {(financialData.costoFletesUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{((financialData.costoFletesUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{safePct(financialData.costoFletesUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%</td>
                   </tr>
 
                   <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                     <td style={{ padding: '8px 10px', paddingLeft: '20px' }}>(-) Comisiones de Vendedores</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-${financialData.costoComisionesUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-Bs. {(financialData.costoComisionesUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{((financialData.costoComisionesUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{safePct(financialData.costoComisionesUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%</td>
                   </tr>
 
                   <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                     <td style={{ padding: '8px 10px', paddingLeft: '20px' }}>(-) Retenciones e Impacto Fiscal ISLR</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-${financialData.retencionesIslrUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-Bs. {(financialData.retencionesIslrUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{((financialData.retencionesIslrUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{safePct(financialData.retencionesIslrUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%</td>
                   </tr>
 
                   <tr style={{ borderBottom: '2px solid #0284c7', background: '#f0f9ff' }}>
@@ -1098,10 +1086,17 @@ export default function OperationalPandLModal({
                   </tr>
 
                   <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                    <td style={{ padding: '8px 10px' }}>(-) Nómina y Salarios Operativos</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-${financialData.costoNominaUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-Bs. {(financialData.costoNominaUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{safePct(financialData.costoNominaUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%</td>
+                  </tr>
+
+                  <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                     <td style={{ padding: '8px 10px' }}>(-) Gastos Fijos de Operación (OPEX)</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-${financialData.opexFijoUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>-Bs. {(financialData.opexFijoUsd * tasaBcv).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{((financialData.opexFijoUsd / financialData.facturadoAjustadoUsd) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>-{safePct(financialData.opexFijoUsd, financialData.facturadoAjustadoUsd).toFixed(2)}%</td>
                   </tr>
 
                   <tr style={{ background: '#dcfce7', borderTop: '2px solid #16a34a' }}>

@@ -41,6 +41,7 @@ import {
   resolveRateMeta,
   resolveRecordRateType,
   resolveEffectiveRateNumber,
+  isDirectCurrencyRateType,
   RATE_TYPE_META
 } from '../utils/rateClassificationUtils';
 
@@ -389,7 +390,7 @@ export default function AccountsPayableModal({
       setPagoTasa(round2(tasaBcv).toFixed(2));
     } else if (pagoTipoTasa === 'KEYSTONE') {
       setPagoTasa(round2(tasaKeystone).toFixed(2));
-    } else if (pagoTipoTasa === 'USD') {
+    } else if (isDirectCurrencyRateType(pagoTipoTasa)) {
       setPagoTasa('1.00');
     }
   }, [pagoTipoTasa, tasaBcv, tasaKeystone]);
@@ -629,9 +630,10 @@ export default function AccountsPayableModal({
 
   useEffect(() => {
     if (!selectedPagoDoc) return;
-    const defaultType = isFiscalInvoiceType(selectedPagoDoc.tipoDoc)
-      ? 'BCV'
-      : normalizeRateType(selectedPagoDoc.tipoTasa, { tipoDoc: selectedPagoDoc.tipoDoc, fallback: 'KEYSTONE' });
+    const defaultType = normalizeRateType(selectedPagoDoc.tipoTasa, {
+      tipoDoc: selectedPagoDoc.tipoDoc,
+      fallback: isFiscalInvoiceType(selectedPagoDoc.tipoDoc) ? 'BCV' : 'KEYSTONE'
+    });
     setPagoTipoTasa(defaultType);
     const defaultRate = resolveDefaultRateValue(defaultType, { tasaBcv, tasaKeystone, customRate: selectedPagoDoc.tasaPago || selectedPagoDoc.tasa });
     setPagoTasa(round2(defaultRate).toFixed(2));
@@ -773,15 +775,16 @@ export default function AccountsPayableModal({
     const doc = processedPayables.find(d => String(d.id) === keyStr || buildCxpCompositeKey(d) === keyStr);
     if (doc) {
       setPagoDocKey(doc.id);
-      const nextRateType = isFiscalInvoiceType(doc.tipoDoc)
-        ? 'BCV'
-        : normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: 'KEYSTONE' });
+      const nextRateType = normalizeRateType(doc.tipoTasa, {
+        tipoDoc: doc.tipoDoc,
+        fallback: isFiscalInvoiceType(doc.tipoDoc) ? 'BCV' : 'KEYSTONE'
+      });
       const rate = resolveDefaultRateValue(nextRateType, { tasaBcv, tasaKeystone, customRate: doc.tasaPago || doc.tasa });
       setPagoTipoTasa(nextRateType);
       setPagoTasa(round2(rate).toFixed(2));
       const rest = round2(doc.saldoUsd);
       setPagoMontoUsd(String(rest.toFixed(2)));
-      setPagoMontoBs(nextRateType === 'USD' ? '0.00' : String(round2(rest * rate).toFixed(2)));
+      setPagoMontoBs(isDirectCurrencyRateType(nextRateType) ? '0.00' : String(round2(rest * rate).toFixed(2)));
       setPagoObservaciones(`Abono a ${doc.tipoDoc} #${doc.nroDoc} - ${doc.provNombre}`);
 
       // Desplazamiento suave al formulario de Parte A
@@ -804,7 +807,7 @@ export default function AccountsPayableModal({
     });
     setPagoTasa(round2(nextRate).toFixed(2));
     const usd = Number(pagoMontoUsd);
-    if (nextType === 'USD') {
+    if (isDirectCurrencyRateType(nextType)) {
       setPagoMontoBs('0.00');
     } else if (!isNaN(usd) && pagoMontoUsd !== '' && nextRate > 0) {
       setPagoMontoBs(String(round2(usd * nextRate).toFixed(2)));
@@ -893,10 +896,10 @@ export default function AccountsPayableModal({
 
     const normalizedPagoRateType = normalizeRateType(pagoTipoTasa, {
       tipoDoc: selectedPagoDoc.tipoDoc,
-      monedaPago: pagoTipoTasa === 'USD' ? 'USD' : 'BS',
+      monedaPago: isDirectCurrencyRateType(pagoTipoTasa) ? 'USD' : 'BS',
       fallback: isSelectedPagoFiscal ? 'BCV' : 'KEYSTONE'
     });
-    const isDirectUsdPago = normalizedPagoRateType === 'USD';
+    const isDirectUsdPago = isDirectCurrencyRateType(normalizedPagoRateType);
     const effectiveAbonoUsd = Math.min(abonoUsd, selectedPagoDoc.saldoUsd);
     const effectiveAbonoBs = isDirectUsdPago ? 0 : round2(effectiveAbonoUsd * tasaNum);
     const nuevoSaldoUsd = round2(Math.max(0, selectedPagoDoc.saldoUsd - effectiveAbonoUsd));
@@ -1719,7 +1722,7 @@ export default function AccountsPayableModal({
             {/* Campo: CLASIFICACIÓN DE TASA + TASA DE PAGO */}
             <div style={{ minWidth: '210px' }}>
               <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                Clasificación de Tasa * {isSelectedPagoFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(Fiscal: Solo BCV/USD)</span>}
+                Clasificación de Tasa * {isSelectedPagoFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(BCV / Keystone / Pers. / Divisas)</span>}
               </label>
               <select
                 value={pagoTipoTasa}
@@ -1738,11 +1741,11 @@ export default function AccountsPayableModal({
 
             <div>
               <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                {pagoTipoTasa === 'USD' ? 'Moneda Directa' : 'Tasa del Pago (Bs/USD) *'}
+                {isDirectCurrencyRateType(pagoTipoTasa) ? 'Moneda Directa' : 'Tasa del Pago (Bs/USD) *'}
               </label>
-              {pagoTipoTasa === 'USD' ? (
-                <div className="input-modern" style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: '#22c55e', fontFamily: 'var(--font-code)' }}>
-                  Divisa Directa USD ($1 = $1)
+              {isDirectCurrencyRateType(pagoTipoTasa) ? (
+                <div className="input-modern" style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: RATE_TYPE_META[pagoTipoTasa]?.color || '#22c55e', fontFamily: 'var(--font-code)' }}>
+                  {RATE_TYPE_META[pagoTipoTasa]?.label || 'Divisa Efectivo USD'} ($1 = $1)
                 </div>
               ) : (
                 <input
@@ -2371,7 +2374,7 @@ export default function AccountsPayableModal({
 
                         {/* 5c. Tasa Aplicada */}
                         <td style={{ padding: '0.85rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                          {p.tipoTasa === 'USD' ? 'USD Directo' : formatBs(resolveEffectiveRateNumber(p, tasaKeystone))}
+                          {isDirectCurrencyRateType(p.tipoTasa) ? (RATE_TYPE_META[p.tipoTasa]?.shortLabel || 'USD Directo') : formatBs(resolveEffectiveRateNumber(p, tasaKeystone))}
                         </td>
 
                         {/* 6. Monto Original */}

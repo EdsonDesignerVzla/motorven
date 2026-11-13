@@ -49,6 +49,7 @@ import DebtCollectionIntelligenceModal from '../components/DebtCollectionIntelli
 import CreditScoreEngineModal from '../components/CreditScoreEngineModal';
 import { generateCashflowPDF, generateConsolidatedCxcPDF, generateBankAccountsPDF } from '../services/pdfReportService';
 import { consolidateClientReceivables } from '../utils/cxcUtils';
+import { buildExpenseAccountOptions } from '../utils/profitabilityUtils';
 import {
   resolveExchangeRates,
   computeBankBalancesSummary,
@@ -72,6 +73,7 @@ export default function CashflowView({
   profitCollections = [],
   profitInvoices = [],
   profitSellers = [],
+  profitIncomeExpenseAccounts = [],
   onSyncProfit,
   config = {},
   onAddCashMovement,
@@ -127,12 +129,19 @@ export default function CashflowView({
   // Formulario de Movimiento
   const [movTipo, setMovTipo] = useState('INGRESO');
   const [movConcepto, setMovConcepto] = useState('');
+  const [movCategoria, setMovCategoria] = useState('VENTAS');
+  const [movCuentaGasto, setMovCuentaGasto] = useState('');
   const [movMontoUsd, setMovMontoUsd] = useState('');
   const [movMontoBs, setMovMontoBs] = useState('');
   const [movAccountKind, setMovAccountKind] = useState('CAJA');
   const [movTargetId, setMovTargetId] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
   const [movError, setMovError] = useState('');
+
+  const expenseAccountOptions = useMemo(
+    () => buildExpenseAccountOptions(profitIncomeExpenseAccounts),
+    [profitIncomeExpenseAccounts]
+  );
 
   // Formulario de Cobro CxC
   const [cobroMontoUsd, setCobroMontoUsd] = useState('');
@@ -524,8 +533,12 @@ export default function CashflowView({
       }
     }
 
+    const selectedProfitAcc = expenseAccountOptions.profitAccounts.find((a) => a.code === movCuentaGasto);
     await onAddCashMovement({
       tipo: movTipo,
+      categoria: movTipo === 'INGRESO' ? (movCategoria || 'VENTAS') : (movCategoria || 'GASTO_OPERATIVO'),
+      cuentaGasto: selectedProfitAcc?.code || null,
+      cuentaGastoDesc: selectedProfitAcc?.descrip || '',
       concepto: movConcepto.trim(),
       montoUsd: effectiveUsd,
       monto_usd: effectiveUsd,
@@ -543,6 +556,7 @@ export default function CashflowView({
 
     setShowMovModal(false);
     setMovConcepto('');
+    setMovCuentaGasto('');
     setMovMontoUsd('');
     setMovMontoBs('');
     setMovTargetId('');
@@ -2413,6 +2427,49 @@ export default function CashflowView({
                         : `${acc.codCta || acc.cod_cta} - ${acc.bancoNombre || acc.banco_nombre}`;
                       return <option key={accId} value={accId}>{accLabel}</option>;
                     })}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '1rem' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Categoría P&L</label>
+                  <select
+                    className="form-control"
+                    value={movCategoria}
+                    onChange={(e) => setMovCategoria(e.target.value)}
+                  >
+                    {movTipo === 'INGRESO' ? (
+                      <>
+                        <option value="VENTAS">Ventas / Ingreso Operativo</option>
+                        <option value="COBRO_CXC">Cobro CxC</option>
+                        <option value="DEPOSITO_MANUAL">Reposición / Aporte</option>
+                      </>
+                    ) : (
+                      expenseAccountOptions.standardCategories.map((c) => (
+                        <option key={c.id} value={c.id}>{c.label}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Cuenta Profit Plus</label>
+                  <select
+                    className="form-control"
+                    value={movCuentaGasto}
+                    onChange={(e) => {
+                      const code = e.target.value;
+                      setMovCuentaGasto(code);
+                      const acc = expenseAccountOptions.profitAccounts.find((a) => a.code === code);
+                      if (acc && movTipo === 'EGRESO' && ['NOMINA', 'COMISIONES', 'FLETES', 'IMPUESTOS'].includes(acc.pnlBucket)) {
+                        setMovCategoria(acc.pnlBucket);
+                      }
+                    }}
+                  >
+                    <option value="">-- Sin cuenta contable Profit --</option>
+                    {expenseAccountOptions.profitAccounts.map((acc) => (
+                      <option key={acc.id} value={acc.code}>{acc.label}</option>
+                    ))}
                   </select>
                 </div>
               </div>

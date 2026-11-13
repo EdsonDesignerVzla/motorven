@@ -38,6 +38,8 @@ import {
     resolveRecordRateType,
     resolveEffectiveRateNumber,
     isFiscalDocumentForRatePolicy,
+    isDirectCurrencyRateType,
+    inferDirectCurrencyFromAccountOrMethod,
     RATE_TYPE_META
 } from '../utils/rateClassificationUtils';
 import { generateAccountsReceivablePDF, generateDeliveryNotePDF, generateCollectionReceiptPDF, generateThirdPartyStatementPDF, generateCreditDebitNotePDF, resolveDeliveryNoteLineItems, pickPreferredLineItems } from '../services/pdfReportService';
@@ -295,7 +297,7 @@ export function AccountsReceivableModal({
             setCobroTasa(round2(tasaKeystone).toFixed(2));
         } else if (cobroTipoTasa === 'EURO' && tasaEuro > 0) {
             setCobroTasa(round2(tasaEuro).toFixed(2));
-        } else if (cobroTipoTasa === 'USD') {
+        } else if (isDirectCurrencyRateType(cobroTipoTasa)) {
             setCobroTasa('1.00');
         }
     }, [cobroTipoTasa, tasaBcv, tasaKeystone, tasaEuro]);
@@ -1078,7 +1080,7 @@ export function AccountsReceivableModal({
     );
 
     useEffect(() => {
-        if (isSelectedCobroFiscal && cobroTipoTasa !== 'BCV' && cobroTipoTasa !== 'USD') {
+        if (isSelectedCobroFiscal && cobroTipoTasa === 'EURO') {
             setCobroTipoTasa('BCV');
             setCobroTasa(round2(tasaBcv).toFixed(2));
         }
@@ -1098,7 +1100,7 @@ export function AccountsReceivableModal({
         });
         setCobroTasa(round2(nextRate).toFixed(2));
         const usd = Number(cobroMontoUsd);
-        if (nextType === 'USD') {
+        if (isDirectCurrencyRateType(nextType)) {
             setCobroMontoBs('0.00');
         } else if (!isNaN(usd) && cobroMontoUsd !== '' && nextRate > 0) {
             setCobroMontoBs(String(round2(usd * nextRate).toFixed(2)));
@@ -1109,16 +1111,13 @@ export function AccountsReceivableModal({
         setCobroDocKey(factNum);
         const doc = docsForActiveType.find(d => String(d.factNum) === String(factNum));
         if (doc) {
-            const docIsFiscal = isFiscalDocumentForRatePolicy(doc.tipoDoc);
-            const nextType = docIsFiscal
-                ? (cobroTipoTasa === 'USD' ? 'USD' : 'BCV')
-                : normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: cobroTipoTasa || 'BCV' });
+            const nextType = normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: cobroTipoTasa || 'BCV' });
             setCobroTipoTasa(nextType);
             const rate = resolveDefaultRateValue(nextType, { tasaBcv, tasaKeystone, tasaEuro, customRate: doc.tasaPago || doc.tasa });
             setCobroTasa(round2(rate).toFixed(2));
             const rest = round2(doc.restanteUsd);
             setCobroMontoUsd(String(rest.toFixed(2)));
-            setCobroMontoBs(nextType === 'USD' ? '0.00' : String(round2(rest * rate).toFixed(2)));
+            setCobroMontoBs(isDirectCurrencyRateType(nextType) ? '0.00' : String(round2(rest * rate).toFixed(2)));
         }
     };
 
@@ -1204,10 +1203,10 @@ export function AccountsReceivableModal({
 
         const resolvedTipoTasa = normalizeRateType(cobroTipoTasa, {
             tipoDoc: selectedCobroDoc.tipoDoc,
-            monedaPago: cobroTipoTasa === 'USD' ? 'USD' : 'BS',
+            monedaPago: isDirectCurrencyRateType(cobroTipoTasa) ? 'USD' : 'BS',
             fallback: 'BCV'
         });
-        const isDirectUsdCobro = resolvedTipoTasa === 'USD';
+        const isDirectUsdCobro = isDirectCurrencyRateType(resolvedTipoTasa);
         const effectiveAbonoUsd = Math.min(abonoUsd, selectedCobroDoc.restanteUsd);
         const typedBs = round2(Number(cobroMontoBs));
         const computedBs = isDirectUsdCobro ? 0 : round2(effectiveAbonoUsd * tasaNum);
@@ -1230,7 +1229,7 @@ export function AccountsReceivableModal({
             const effectiveTasaPago = isDirectUsdCobro ? 1 : tasaNum;
             const monedaPagoVal = isDirectUsdCobro ? 'USD' : 'BS';
             const observacionCobro = isDirectUsdCobro
-                ? `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} [Divisa Directa USD]`
+                ? `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} [${RATE_TYPE_META[resolvedTipoTasa]?.label || resolvedTipoTasa}]`
                 : `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} @ Tasa ${tasaNum} [${resolvedTipoTasa}]`;
             const cobroRecord = {
                 id: `mov-${cobNum}-${Date.now().toString().slice(-4)}`,
@@ -2594,7 +2593,7 @@ export function AccountsReceivableModal({
                         {/* Campo 1 Requerido: CLASIFICACIÓN DE TASA + TASA */}
                         <div style={{ minWidth: '210px' }}>
                             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                                Clasificación de Tasa * {isSelectedCobroFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(Fiscal: Solo BCV/USD)</span>}
+                                Clasificación de Tasa * {isSelectedCobroFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(BCV / Keystone / Pers. / Divisas)</span>}
                             </label>
                             <select
                                 value={cobroTipoTasa}
@@ -2613,11 +2612,11 @@ export function AccountsReceivableModal({
 
                         <div>
                             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                                {cobroTipoTasa === 'USD' ? 'Moneda Directa' : 'Tasa del Cobro (Bs/USD) *'}
+                                {isDirectCurrencyRateType(cobroTipoTasa) ? 'Moneda Directa' : 'Tasa del Cobro (Bs/USD) *'}
                             </label>
-                            {cobroTipoTasa === 'USD' ? (
-                                <div className="input-modern" style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: '#22c55e', fontFamily: 'var(--font-code)' }}>
-                                    Divisa Directa USD ($1 = $1)
+                            {isDirectCurrencyRateType(cobroTipoTasa) ? (
+                                <div className="input-modern" style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: RATE_TYPE_META[cobroTipoTasa]?.color || '#22c55e', fontFamily: 'var(--font-code)' }}>
+                                    {RATE_TYPE_META[cobroTipoTasa]?.label || 'Divisa Efectivo USD'} ($1 = $1)
                                 </div>
                             ) : (
                                 <input
@@ -2667,7 +2666,17 @@ export function AccountsReceivableModal({
                             <select
                                 required
                                 value={cobroCuentaKey}
-                                onChange={(e) => setCobroCuentaKey(e.target.value)}
+                                onChange={(e) => {
+                                    const nextKey = e.target.value;
+                                    setCobroCuentaKey(nextKey);
+                                    const acc = catalogCuentas.find(c => c.key === nextKey);
+                                    const directFromAcc = inferDirectCurrencyFromAccountOrMethod(acc, { includeBinanceFromAccount: true });
+                                    if (directFromAcc) {
+                                        handleCobroTipoTasaChange(directFromAcc);
+                                    } else if (acc && isDirectCurrencyRateType(cobroTipoTasa)) {
+                                        handleCobroTipoTasaChange('BCV');
+                                    }
+                                }}
                                 className="select-modern"
                                 style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.85rem' }}
                             >
@@ -3398,7 +3407,7 @@ export function AccountsReceivableModal({
 
                                                 {/* 8c. Tasa Aplicada */}
                                                 <td style={{ padding: '0.85rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                                                    {inv.tipoTasa === 'USD' ? 'USD Directo' : formatBs(resolveEffectiveRateNumber(inv, tasaBcv))}
+                                                    {isDirectCurrencyRateType(inv.tipoTasa) ? (RATE_TYPE_META[inv.tipoTasa]?.shortLabel || 'USD Directo') : formatBs(resolveEffectiveRateNumber(inv, tasaBcv))}
                                                 </td>
 
                                                 {/* 9. Monto Factura */}
@@ -4335,11 +4344,11 @@ export function AccountsReceivableModal({
                                                                 </span>
                                                             </td>
                                                             <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
-                                                                {cRateType === 'USD' ? 'USD' : (cRateNum > 0 ? formatBs(cRateNum) : '—')}
+                                                                {isDirectCurrencyRateType(cRateType) ? cRateMeta.shortLabel : (cRateNum > 0 ? formatBs(cRateNum) : '—')}
                                                             </td>
                                                             <td style={{ padding: '0.45rem 0.65rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>{c.referencia || '—'}</td>
                                                             <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#10b981' }}>{formatUsd(c.montoUsd)}</td>
-                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b' }}>{cRateType === 'USD' && !(Number(c.montoBs) > 0) ? 'Divisa USD' : formatBs(c.montoBs)}</td>
+                                                            <td style={{ padding: '0.45rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b' }}>{isDirectCurrencyRateType(cRateType) && !(Number(c.montoBs) > 0) ? cRateMeta.shortLabel : formatBs(c.montoBs)}</td>
                                                         </tr>
                                                         );
                                                     })}

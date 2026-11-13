@@ -3,14 +3,15 @@
  * para POS, CxC, CxP, Caja Chica/Bancos y Reportes PDF.
  *
  * Reglas de Negocio:
- * - Factura Fiscal (FACTURA / FACT): solo permite operar/cobrar/pagar en Tasa BCV ('BCV') o Divisa Directa ('USD').
- * - Nota de Entrega / Documentos sin IVA: habilita selector explícito ('BCV', 'KEYSTONE', 'EDITABLE', 'USD'; y 'EURO' cuando aplica en cobranza).
+ * - Factura Fiscal (FACTURA / FACT): solo permite operar/cobrar/pagar en Tasa BCV ('BCV') o monedas directas ('USD', 'ZELLE', 'USDT', 'USDC').
+ * - Nota de Entrega / Documentos sin IVA: habilita selector explícito ('BCV', 'KEYSTONE', 'EDITABLE', 'USD', 'ZELLE', 'USDT', 'USDC'; y 'EURO' cuando aplica en cobranza).
  */
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
-export const STANDARD_RATE_TYPES = ['BCV', 'KEYSTONE', 'EDITABLE', 'USD'];
-export const EXTENDED_RATE_TYPES = ['BCV', 'EURO', 'KEYSTONE', 'EDITABLE', 'USD'];
+export const DIRECT_CURRENCY_RATE_TYPES = ['USD', 'ZELLE', 'USDT', 'USDC'];
+export const STANDARD_RATE_TYPES = ['BCV', 'KEYSTONE', 'EDITABLE', ...DIRECT_CURRENCY_RATE_TYPES];
+export const EXTENDED_RATE_TYPES = ['BCV', 'EURO', 'KEYSTONE', 'EDITABLE', ...DIRECT_CURRENCY_RATE_TYPES];
 
 export const RATE_TYPE_META = {
   BCV: {
@@ -51,12 +52,39 @@ export const RATE_TYPE_META = {
   },
   USD: {
     id: 'USD',
-    label: 'Divisa Directa USD',
-    shortLabel: 'USD',
-    badgeText: 'USD',
+    label: 'Divisa Efectivo USD',
+    shortLabel: 'EFEC. USD',
+    badgeText: 'EFEC. USD',
     color: '#22c55e',
     bg: 'rgba(34, 197, 94, 0.14)',
     border: 'rgba(34, 197, 94, 0.38)'
+  },
+  ZELLE: {
+    id: 'ZELLE',
+    label: 'Divisa Zelle (USD)',
+    shortLabel: 'ZELLE',
+    badgeText: 'ZELLE',
+    color: '#a855f7',
+    bg: 'rgba(168, 85, 247, 0.14)',
+    border: 'rgba(168, 85, 247, 0.38)'
+  },
+  USDT: {
+    id: 'USDT',
+    label: 'Divisa Binance (USDT)',
+    shortLabel: 'USDT',
+    badgeText: 'USDT',
+    color: '#14b8a6',
+    bg: 'rgba(20, 184, 166, 0.14)',
+    border: 'rgba(20, 184, 166, 0.38)'
+  },
+  USDC: {
+    id: 'USDC',
+    label: 'Divisas Kontigo (USDC)',
+    shortLabel: 'USDC',
+    badgeText: 'USDC',
+    color: '#06b6d4',
+    bg: 'rgba(6, 182, 212, 0.14)',
+    border: 'rgba(6, 182, 212, 0.38)'
   }
 };
 
@@ -85,9 +113,27 @@ export function isFiscalDocumentForRatePolicy(docOrType) {
 
 export function getAllowedRateTypesForDoc(docOrType, { includeEuro = false } = {}) {
   if (isFiscalDocumentForRatePolicy(docOrType)) {
-    return ['BCV', 'USD'];
+    return [...STANDARD_RATE_TYPES];
   }
-  return includeEuro ? ['BCV', 'EURO', 'KEYSTONE', 'EDITABLE', 'USD'] : ['BCV', 'KEYSTONE', 'EDITABLE', 'USD'];
+  return includeEuro ? [...EXTENDED_RATE_TYPES] : [...STANDARD_RATE_TYPES];
+}
+
+function matchDirectCurrencyAlias(up) {
+  if (!up) return null;
+  if (up === 'ZELLE' || up.includes('ZELLE')) return 'ZELLE';
+  if (up === 'USDT' || up.includes('BINANCE') || up.includes('USDT')) return 'USDT';
+  if (up === 'USDC' || up.includes('KONTIGO') || up.includes('USDC')) return 'USDC';
+  if (
+    up === 'USD' ||
+    up === 'US$' ||
+    up === 'DIVISA' ||
+    up === 'EFECTIVO_USD' ||
+    up.includes('EFECTIVO USD') ||
+    up.includes('DIRECTA USD')
+  ) {
+    return 'USD';
+  }
+  return null;
 }
 
 export function normalizeRateType(rawType, { isFiscal = false, tipoDoc = '', monedaPago = '', fallback = 'BCV' } = {}) {
@@ -101,25 +147,93 @@ export function normalizeRateType(rawType, { isFiscal = false, tipoDoc = '', mon
     resolved = 'KEYSTONE';
   } else if (up === 'EDITABLE' || up === 'PERSONALIZADA' || up === 'PERSONALIZADO' || up === 'MANUAL' || up === 'CUSTOM' || up === 'TASA_PERSONALIZADA') {
     resolved = 'EDITABLE';
-  } else if (up === 'USD' || up === 'US$' || up === 'DIVISA' || up === 'EFECTIVO_USD' || up === 'ZELLE') {
-    resolved = 'USD';
   } else if (up === 'EURO' || up === 'EUR' || up === 'TASA_EURO' || up === 'TASA EURO') {
     resolved = 'EURO';
+  } else {
+    resolved = matchDirectCurrencyAlias(up);
   }
 
   if (!resolved) {
-    const monUp = String(monedaPago || '').toUpperCase().trim();
-    if (monUp === 'USD' || monUp === 'US$' || monUp === 'USDT' || monUp === 'USDC') {
-      resolved = 'USD';
-    } else {
-      resolved = fallback || 'BCV';
-    }
+    const directFromMoneda = matchDirectCurrencyAlias(String(monedaPago || '').toUpperCase().trim());
+    resolved = directFromMoneda || fallback || 'BCV';
   }
 
-  if (effectiveFiscal && resolved !== 'USD') {
+  if (effectiveFiscal && resolved === 'EURO') {
     return 'BCV';
   }
   return resolved;
+}
+
+/** Devuelve true cuando la clasificación corresponde a una moneda directa (sin tasa fija en Bs). */
+export function isDirectCurrencyRateType(rawType, { monedaPago = '' } = {}) {
+  const resolved = normalizeRateType(rawType, { monedaPago, fallback: '' });
+  return DIRECT_CURRENCY_RATE_TYPES.includes(resolved);
+}
+
+/**
+ * Detecta si la caja/cuenta receptora o método de pago corresponde a una moneda directa
+ * (Caja Zelle, Caja USDC Kontigo, Caja Efectivo $ Valencia / Caracas, y opcionalmente Caja USDT Binance)
+ * sin tasa de cambio fijada en Bolívares. Excluye cuentas/cajas en Bolívares (ej. Caja Efectivo Bs).
+ */
+export function inferDirectCurrencyFromAccountOrMethod(record, { includeBinanceFromAccount = false } = {}) {
+  if (!record || typeof record !== 'object') return null;
+  const fp0 = Array.isArray(record.formasPago) ? (record.formasPago[0] || {}) : {};
+  const accountText = [
+    record.cuentaNombre,
+    record.cuenta_nombre,
+    record.cajaOBanco,
+    record.caja_o_banco,
+    record.cuentaDestino,
+    record.descripcion,
+    record.nombre,
+    record.label,
+    record.cuentaId,
+    record.cuenta_id,
+    record.cajaId,
+    record.caja_id,
+    record.coCaja,
+    record.co_caja,
+    record.rawId,
+    fp0.codCaja,
+    fp0.codCta,
+    fp0.banco
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toUpperCase();
+
+  const methodText = String(record.formaPago || record.metodoPago || record.metodo || fp0.formaPago || fp0.tipo || '')
+    .toUpperCase()
+    .trim();
+
+  const rawBs = Number(record.montoBs ?? record.monto_bs ?? 0);
+  const monPago = String(record.monedaPago || record.moneda_pago || '').toUpperCase().trim();
+  const isExplicitBsAccount =
+    /\bBS\b|BOLIVAR|CAJA-?03|CTA-?\d|BANCO\s+(MERCANTIL|PLAZA|DE\s+VENEZUELA|BANCARIBE|ACTIVO|BANCAMIGA)/.test(accountText) ||
+    String(record.moneda || '').toUpperCase().trim() === 'BS';
+
+  if (/CAJA-?04|\bZELLE\b/.test(accountText)) return 'ZELLE';
+  if (/CAJA-?06|\bUSDC\b|\bKONTIGO\b/.test(accountText)) return 'USDC';
+  if (/CAJA-?05|\bUSDT\b|\bBINANCE\b/.test(accountText)) {
+    if (includeBinanceFromAccount || monPago === 'USDT' || rawBs <= 0) {
+      return 'USDT';
+    }
+    return null;
+  }
+
+  if (!isExplicitBsAccount) {
+    if (
+      /CAJA-?01|CAJA-?02/.test(accountText) ||
+      (/\bEFECTIVO\b/.test(accountText) && /\$|\bUSD\b|\bDIVISA\b|\bVALENCIA\b|\bCARACAS\b/.test(accountText)) ||
+      (/\bDEPOSITO\b/.test(accountText) && /\bEFECTIVO\b/.test(accountText) && /VALENCIA|CARACAS|\$|USD/.test(accountText))
+    ) {
+      return 'USD';
+    }
+    if (/ZELLE/.test(methodText)) return 'ZELLE';
+    if (/USDT|BINANCE/.test(methodText) && (includeBinanceFromAccount || monPago === 'USDT' || rawBs <= 0)) return 'USDT';
+    if (/USDC|KONTIGO/.test(methodText)) return 'USDC';
+  }
+  return null;
 }
 
 export function resolveRecordRateType(record, fallback = 'BCV') {
@@ -129,8 +243,9 @@ export function resolveRecordRateType(record, fallback = 'BCV') {
     : false;
   const rawType = record.tipoTasa ?? record.tipo_tasa ?? '';
   const rawMoneda = record.monedaPago ?? record.moneda_pago ?? record.moneda ?? '';
-  if (!rawType && (String(rawMoneda).toUpperCase().includes('USD') || String(rawMoneda).toUpperCase() === 'US$') && Number(record.montoBs ?? record.monto_bs ?? 0) === 0) {
-    return 'USD';
+  const directMoneda = matchDirectCurrencyAlias(String(rawMoneda).toUpperCase().trim());
+  if (!rawType && directMoneda && Number(record.montoBs ?? record.monto_bs ?? 0) === 0) {
+    return directMoneda;
   }
   return normalizeRateType(rawType, {
     isFiscal,
@@ -153,13 +268,13 @@ export function resolveDefaultRateValue(tipoTasa, { tasaBcv = 1, tasaKeystone = 
   if (normalized === 'KEYSTONE') return safeKeystone;
   if (normalized === 'EURO') return safeEuro;
   if (normalized === 'EDITABLE') return Number(customRate) > 0 ? round2(customRate) : safeKeystone;
-  if (normalized === 'USD') return 1;
+  if (DIRECT_CURRENCY_RATE_TYPES.includes(normalized)) return 1;
   return safeBcv;
 }
 
 export function resolveMonedaPago(tipoTasa, accountOrMoneda = '') {
   const normalized = normalizeRateType(tipoTasa, { fallback: 'BCV' });
-  if (normalized === 'USD') return 'USD';
+  if (DIRECT_CURRENCY_RATE_TYPES.includes(normalized)) return 'USD';
   const monUp = String(accountOrMoneda?.moneda ?? accountOrMoneda ?? '').toUpperCase().trim();
   if (monUp === 'BS' || monUp === 'VES' || monUp === 'BOLIVARES') return 'BS';
   return 'BS';
@@ -203,7 +318,7 @@ export function summarizeByRateClassification(records = [], fallbackTasa = 1) {
     const usd = round2(Number(rec.montoUsd ?? rec.monto_usd ?? rec.saldoUsd ?? rec.saldo_usd ?? rec.totNetoUsd ?? rec.totalUsd ?? 0));
     const rate = resolveEffectiveRateNumber(rec, fallbackTasa);
     const rawBs = Number(rec.montoBs ?? rec.monto_bs ?? rec.saldoBs ?? rec.saldo_bs ?? 0);
-    const bs = key === 'USD'
+    const bs = DIRECT_CURRENCY_RATE_TYPES.includes(key)
       ? (rawBs > 0 ? round2(rawBs) : 0)
       : (rawBs > 0 ? round2(rawBs) : round2(usd * (rate > 0 ? rate : 1)));
 

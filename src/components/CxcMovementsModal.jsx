@@ -33,8 +33,13 @@ import {
   CXC_RATE_BUCKETS,
   normalizeCxcRateType,
   classifyCollectionRateType,
-  groupMovementsByRateType
+  groupMovementsByRateType,
+  summarizeDailyMovementsByCaja
 } from '../utils/cxcUtils';
+import {
+  isDirectCurrencyRateType,
+  inferDirectCurrencyFromAccountOrMethod
+} from '../utils/rateClassificationUtils';
 import { generateCollectionReceiptPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
@@ -241,6 +246,7 @@ const buildInvoiceMovementsList = ({
         observaciones: String(h.observaciones || h.descrip || '').trim(),
         tasa: tasaVal,
         tipoTasa: normalizeCxcRateType(h.tipoTasa || h.tipo_tasa),
+        monedaPago: h.monedaPago || h.moneda_pago || h.moneda || '',
         montoUsd,
         montoBs,
         montoFacturaUsd: Number(doc.montoFacturaUsd || 0),
@@ -342,6 +348,7 @@ const buildInvoiceMovementsList = ({
           observaciones: String(c.descrip || '').trim(),
           tasa: tasaVal,
           tipoTasa: normalizeCxcRateType(c.tipoTasa || c.tipo_tasa || fp0.tipoTasa),
+          monedaPago: c.monedaPago || c.moneda_pago || fp0.moneda || '',
           montoUsd: round2(itemUsd),
           montoBs: round2(itemBs),
           montoFacturaUsd: Number(matchedDoc?.montoFacturaUsd || 0),
@@ -379,6 +386,7 @@ const buildInvoiceMovementsList = ({
         observaciones: String(c.descrip || '').trim(),
         tasa: tasaVal,
         tipoTasa: normalizeCxcRateType(c.tipoTasa || c.tipo_tasa || fp0.tipoTasa),
+        monedaPago: c.monedaPago || c.moneda_pago || fp0.moneda || '',
         montoUsd: totalColUsd,
         montoBs: totalColBs,
         montoFacturaUsd: 0,
@@ -570,29 +578,49 @@ export function CxcMovementsModal({
     }
   }, [catalogCuentas, insertCuentaKey]);
 
-  // Sincronizar forma de pago por defecto con cuenta seleccionada
+  // Sincronizar forma de pago y moneda directa por defecto con la Caja / Banco seleccionada
   useEffect(() => {
     const acc = (catalogCuentas || []).find(c => c.key === insertCuentaKey);
     if (!acc) return;
     if (acc.accountType === 'CAJA') {
       const mUpper = String(acc.nombre || '').toUpperCase();
-      if (mUpper.includes('USDT')) setInsertFormaPago('USDT');
+      if (mUpper.includes('USDT') || mUpper.includes('BINANCE')) setInsertFormaPago('USDT');
       else if (mUpper.includes('ZELLE')) setInsertFormaPago('ZELLE');
       else setInsertFormaPago('EFECTIVO');
     } else if (insertFormaPago === 'EFECTIVO') {
       setInsertFormaPago('TRANSFERENCIA');
     }
+
+    const directFromAcc = inferDirectCurrencyFromAccountOrMethod(acc, { includeBinanceFromAccount: true });
+    if (directFromAcc) {
+      setInsertTipoTasa(directFromAcc);
+      setInsertTasa('0');
+      setInsertMontoBs('0');
+    } else if (isDirectCurrencyRateType(insertTipoTasa)) {
+      const bcvStr = round2(effectiveTasaBcv).toFixed(2);
+      setInsertTipoTasa('BCV');
+      setInsertTasa(bcvStr);
+      const u = Number(insertMontoUsd);
+      if (!isNaN(u) && insertMontoUsd !== '') {
+        setInsertMontoBs(round2(u * Number(bcvStr)).toFixed(2));
+      }
+    }
   }, [insertCuentaKey]);
 
-  // Consolidar y clasificar todos los movimientos por renglón de tasa (Fiscal siempre BCV)
+  // Consolidar y clasificar todos los movimientos por renglón de tasa (Fiscal: BCV o moneda directa; moneda directa muestra 0 en Bs/Tasa)
   const allMovements = useMemo(
     () =>
       buildInvoiceMovementsList({ documents, collections, fallbackTasa: effectiveTasaBcv }).map((m) => {
         const tipoTasa = classifyCollectionRateType(m, rateRefMap);
+        const isDirect = isDirectCurrencyRateType(tipoTasa);
         return {
           ...m,
           tipoTasa,
-          tipoTasaLabel: CXC_RATE_BUCKETS[tipoTasa]?.label || 'Tasa BCV'
+          tipoTasaLabel: CXC_RATE_BUCKETS[tipoTasa]?.label || 'Tasa BCV',
+          isDirectCurrency: isDirect,
+          monedaPago: isDirect ? 'USD' : (m.monedaPago || 'BS'),
+          tasa: isDirect ? 0 : m.tasa,
+          montoBs: isDirect ? 0 : m.montoBs
         };
       }),
     [documents, collections, effectiveTasaBcv, rateRefMap]
@@ -641,10 +669,14 @@ export function CxcMovementsModal({
     });
   }, [allMovements, selectedDay, focusedFactNum, docTypeFilter, rateTypeFilter, searchQuery, initialDocument]);
 
-  // Desglose global por los 4 renglones de tasa (BCV, Euro, Keystone, Personalizada)
+  // Desglose global por renglones de tasa y sumatoria consolidada por Caja / Banco
   const overallRateBreakdown = useMemo(
     () => groupMovementsByRateType(filteredMovements, rateRefMap),
     [filteredMovements, rateRefMap]
+  );
+  const overallCajaBreakdown = useMemo(
+    () => summarizeDailyMovementsByCaja(filteredMovements),
+    [filteredMovements]
   );
 
   // Agrupar movimientos por día y clasificar internamente por renglón de tasa
@@ -723,6 +755,7 @@ export function CxcMovementsModal({
   );
 
   const resolvePresetRateValue = (tipoKey) => {
+    if (isDirectCurrencyRateType(tipoKey)) return '0';
     if (tipoKey === 'EURO') return round2(liveEuroRate).toFixed(2);
     if (tipoKey === 'KEYSTONE') return round2(effectiveTasaKeystone).toFixed(2);
     return round2(effectiveTasaBcv).toFixed(2);
@@ -733,8 +766,9 @@ export function CxcMovementsModal({
     const doc = (documents || []).find(d => String(d.factNum) === String(factNum));
     if (doc) {
       const isFiscal = String(doc.tipoDoc || '').toUpperCase() !== 'NOTA_ENTREGA';
+      const currentIsDirect = isDirectCurrencyRateType(insertTipoTasa);
       let nextRateNum = Number(insertTasa) > 0 ? Number(insertTasa) : effectiveTasaBcv;
-      if (isFiscal) {
+      if (isFiscal && insertTipoTasa === 'EURO') {
         setInsertTipoTasa('BCV');
         const bcvStr = round2(effectiveTasaBcv).toFixed(2);
         setInsertTasa(bcvStr);
@@ -742,12 +776,13 @@ export function CxcMovementsModal({
       }
       const rest = round2(Math.max(0, Number(doc.restanteUsd || 0)));
       setInsertMontoUsd(rest > 0 ? rest.toFixed(2) : '');
-      setInsertMontoBs(rest > 0 ? round2(rest * nextRateNum).toFixed(2) : '');
+      setInsertMontoBs(currentIsDirect ? '0' : (rest > 0 ? round2(rest * nextRateNum).toFixed(2) : ''));
     }
   };
 
   const handleInsertTipoTasaChange = (nextTipo) => {
-    if (isInsertDocFiscal && nextTipo !== 'BCV') {
+    const nextIsDirect = isDirectCurrencyRateType(nextTipo);
+    if (isInsertDocFiscal && nextTipo === 'EURO') {
       setInsertTipoTasa('BCV');
       const bcvStr = round2(effectiveTasaBcv).toFixed(2);
       setInsertTasa(bcvStr);
@@ -755,11 +790,16 @@ export function CxcMovementsModal({
       if (!isNaN(u) && insertMontoUsd !== '') {
         setInsertMontoBs(round2(u * Number(bcvStr)).toFixed(2));
       }
-      notify.info('Los documentos fiscales clasifican obligatoriamente a Tasa BCV.');
+      notify.info('Los documentos fiscales no permiten Tasa Euro; use BCV, Keystone, Personalizada o moneda directa.');
       return;
     }
     setInsertTipoTasa(nextTipo);
     if (nextTipo === 'PERSONALIZADA') {
+      return;
+    }
+    if (nextIsDirect) {
+      setInsertTasa('0');
+      setInsertMontoBs('0');
       return;
     }
     const presetStr = resolvePresetRateValue(nextTipo);
@@ -782,6 +822,10 @@ export function CxcMovementsModal({
 
   const handleInsertUsdChange = (val) => {
     setInsertMontoUsd(val);
+    if (isDirectCurrencyRateType(insertTipoTasa)) {
+      setInsertMontoBs('0');
+      return;
+    }
     const r = Number(insertTasa);
     const u = Number(val);
     if (r > 0 && !isNaN(u) && val !== '') {
@@ -809,8 +853,9 @@ export function CxcMovementsModal({
       notify.warning('Seleccione una Factura o Nota de Entrega para asociar el movimiento.');
       return;
     }
-    const rate = Number(insertTasa);
-    if (!rate || isNaN(rate) || rate <= 0) {
+    const isDirectCurrency = isDirectCurrencyRateType(insertTipoTasa);
+    const rate = isDirectCurrency ? 0 : Number(insertTasa);
+    if (!isDirectCurrency && (!rate || isNaN(rate) || rate <= 0)) {
       notify.warning('Ingrese una Tasa válida mayor a 0.');
       return;
     }
@@ -845,10 +890,12 @@ export function CxcMovementsModal({
 
     const effectiveUsd = maxAllowed > 0.01 ? Math.min(abonoUsd, maxAllowed) : abonoUsd;
     const typedBs = round2(Number(insertMontoBs));
-    const computedBs = round2(effectiveUsd * rate);
-    const effectiveBs = (typedBs > 0 && Math.abs(computedBs - typedBs) < Math.max(2, rate * 0.015))
-      ? typedBs
-      : computedBs;
+    const computedBs = isDirectCurrency ? 0 : round2(effectiveUsd * rate);
+    const effectiveBs = isDirectCurrency
+      ? 0
+      : ((typedBs > 0 && Math.abs(computedBs - typedBs) < Math.max(2, rate * 0.015))
+          ? typedBs
+          : computedBs);
     const factKey = String(selectedInsertDoc.factNum);
     const newAbonosUsd = round2(Math.min(
       Number(selectedInsertDoc.montoFacturaUsd || (Number(selectedInsertDoc.abonosUsd || 0) + effectiveUsd)),
@@ -858,11 +905,17 @@ export function CxcMovementsModal({
 
     const movNowIso = new Date().toISOString();
     const fechaCompleta = insertFecha === getTodayIso() ? movNowIso : `${insertFecha}T12:00:00.000Z`;
+    const normalizedInsertTipo = normalizeCxcRateType(insertTipoTasa);
     const effectiveTipoTasa = selectedInsertDoc.tipoDoc !== 'NOTA_ENTREGA'
-      ? 'BCV'
-      : (normalizeCxcRateType(insertTipoTasa) || 'PERSONALIZADA');
-    const obsFinal = insertObservaciones.trim() ||
-      `Mov. #${correlativoFinal} • Abono ${selectedInsertDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${factKey} @ Tasa ${rate} [${effectiveTipoTasa}]`;
+      ? (normalizedInsertTipo === 'EURO' ? 'BCV' : (normalizedInsertTipo || 'BCV'))
+      : (normalizedInsertTipo || 'PERSONALIZADA');
+    const persistedRate = isDirectCurrency ? 1 : rate;
+    const monedaPagoVal = isDirectCurrency ? 'USD' : 'BS';
+    const obsFinal = insertObservaciones.trim() || (
+      isDirectCurrency
+        ? `Mov. #${correlativoFinal} • Abono ${selectedInsertDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${factKey} [${CXC_RATE_BUCKETS[effectiveTipoTasa]?.label || effectiveTipoTasa}]`
+        : `Mov. #${correlativoFinal} • Abono ${selectedInsertDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${factKey} @ Tasa ${rate} [${effectiveTipoTasa}]`
+    );
 
     setIsSavingMovement(true);
     try {
@@ -875,8 +928,10 @@ export function CxcMovementsModal({
         factNum: factKey,
         tipoDoc: selectedInsertDoc.tipoDoc,
         fecha: fechaCompleta,
-        tasa: rate,
+        tasa: persistedRate,
+        tasaPago: persistedRate,
         tipoTasa: effectiveTipoTasa,
+        monedaPago: monedaPagoVal,
         montoUsd: effectiveUsd,
         montoBs: effectiveBs,
         formaPago: insertFormaPago,
@@ -900,9 +955,12 @@ export function CxcMovementsModal({
         vendedorId: selectedInsertDoc.vendedorId || 'OF',
         montoUsd: effectiveUsd,
         montoBs: effectiveBs,
-        tasa: rate,
+        tasa: persistedRate,
+        tasaPago: persistedRate,
         tipoTasa: effectiveTipoTasa,
         tipo_tasa: effectiveTipoTasa,
+        monedaPago: monedaPagoVal,
+        moneda_pago: monedaPagoVal,
         cuentaId: cuentaObj.rawId || cuentaObj.id,
         cuentaNombre: cuentaObj.nombre,
         descrip: obsFinal,
@@ -911,6 +969,8 @@ export function CxcMovementsModal({
           monto: effectiveBs,
           montoUsd: effectiveUsd,
           tipoTasa: effectiveTipoTasa,
+          tasaPago: persistedRate,
+          moneda: monedaPagoVal,
           referencia: insertReferencia.trim(),
           codCaja: cuentaObj.accountType === 'CAJA' ? (cuentaObj.rawId || cuentaObj.id) : '',
           codCta: cuentaObj.accountType === 'BANCO' ? (cuentaObj.rawId || cuentaObj.id) : '',
@@ -981,7 +1041,7 @@ export function CxcMovementsModal({
       setInsertObservaciones('');
       if (newRestanteUsd > 0.01) {
         setInsertMontoUsd(newRestanteUsd.toFixed(2));
-        setInsertMontoBs(round2(newRestanteUsd * rate).toFixed(2));
+        setInsertMontoBs(isDirectCurrency ? '0' : round2(newRestanteUsd * rate).toFixed(2));
       } else {
         setInsertMontoUsd('');
         setInsertMontoBs('');
@@ -1188,7 +1248,7 @@ export function CxcMovementsModal({
     docTypeFilter === 'FACTURA' ? 'Solo Facturas Fiscales' : (docTypeFilter === 'NOTA_ENTREGA' ? 'Solo Notas de Entrega' : ''),
     rateTypeFilter !== 'ALL'
       ? `Renglón: ${CXC_RATE_BUCKETS[rateTypeFilter]?.label || rateTypeFilter}`
-      : 'Clasificado por Tasas (BCV, Euro, Keystone, Personalizada)'
+      : 'Clasificado por Tasas y Monedas Directas (BCV, Euro, Keystone, Pers., Efectivo USD, Zelle, Binance USDT, Kontigo USDC)'
   ].filter(Boolean).join(' • ');
 
   const modalNode = (
@@ -1754,20 +1814,20 @@ export function CxcMovementsModal({
                     </select>
                   </div>
 
-                  {/* Selector y Valor de Tasa (BCV / Euro / Keystone / Personalizada) */}
+                  {/* Selector y Valor de Tasa / Moneda Directa */}
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '4px' }}>
                       <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#10b981', textTransform: 'uppercase' }}>
-                        Tasa (Bs/USD) *
+                        {isDirectCurrencyRateType(insertTipoTasa) ? 'Moneda Directa' : 'Tasa (Bs/USD) *'}
                       </label>
                       {isInsertDocFiscal && (
                         <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#34d399', background: 'rgba(16, 185, 129, 0.16)', border: '1px solid rgba(16, 185, 129, 0.35)', padding: '1px 5px', borderRadius: '4px' }}>
-                          Fiscal → BCV
+                          BCV / Keystone / Pers.
                         </span>
                       )}
                     </div>
                     <select
-                      value={isInsertDocFiscal ? 'BCV' : insertTipoTasa}
+                      value={isInsertDocFiscal && insertTipoTasa === 'EURO' ? 'BCV' : insertTipoTasa}
                       onChange={(e) => handleInsertTipoTasaChange(e.target.value)}
                       className="input-modern"
                       style={{
@@ -1775,50 +1835,71 @@ export function CxcMovementsModal({
                         padding: '0.46rem 0.55rem',
                         fontSize: '0.79rem',
                         fontWeight: 700,
-                        color: CXC_RATE_BUCKETS[isInsertDocFiscal ? 'BCV' : insertTipoTasa]?.color || '#10b981'
+                        color: CXC_RATE_BUCKETS[isInsertDocFiscal && insertTipoTasa === 'EURO' ? 'BCV' : insertTipoTasa]?.color || '#10b981'
                       }}
                     >
-                      <option value="BCV">BCV — {formatBs(effectiveTasaBcv)}</option>
+                      <option value="BCV">Tasa BCV — {formatBs(effectiveTasaBcv)}</option>
                       <option value="EURO" disabled={isInsertDocFiscal}>
-                        Euro — {formatBs(liveEuroRate)}{isInsertDocFiscal ? ' (Solo N.E.)' : ''}
+                        Tasa Euro — {formatBs(liveEuroRate)}{isInsertDocFiscal ? ' (Solo N.E.)' : ''}
                       </option>
-                      <option value="KEYSTONE" disabled={isInsertDocFiscal}>
-                        Keystone — {formatBs(effectiveTasaKeystone)}{isInsertDocFiscal ? ' (Solo N.E.)' : ''}
+                      <option value="KEYSTONE">
+                        Tasa Keystone — {formatBs(effectiveTasaKeystone)}
                       </option>
-                      <option value="PERSONALIZADA" disabled={isInsertDocFiscal}>
-                        Personalizada (Manual){isInsertDocFiscal ? ' (Solo N.E.)' : ''}
+                      <option value="PERSONALIZADA">
+                        Personalizada (Manual)
                       </option>
+                      <option value="USD">Divisa Efectivo USD (Directa)</option>
+                      <option value="ZELLE">Divisa Zelle (USD) (Directa)</option>
+                      <option value="USDT">Divisa Binance (USDT) (Directa)</option>
+                      <option value="USDC">Divisas Kontigo (USDC) (Directa)</option>
                     </select>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      value={insertTasa}
-                      readOnly={isInsertDocFiscal || insertTipoTasa !== 'PERSONALIZADA'}
-                      onChange={(e) => {
-                        if (isInsertDocFiscal || insertTipoTasa !== 'PERSONALIZADA') return;
-                        handleInsertTasaChange(e.target.value);
-                      }}
-                      placeholder="Ingrese tasa manual..."
-                      required
-                      className="input-modern"
-                      style={{
-                        width: '100%',
-                        marginTop: '5px',
-                        padding: '0.38rem 0.6rem',
-                        fontSize: '0.8rem',
-                        fontFamily: 'var(--font-code)',
-                        color: (!isInsertDocFiscal && insertTipoTasa === 'PERSONALIZADA') ? '#c084fc' : '#10b981',
-                        fontWeight: 700,
-                        opacity: (!isInsertDocFiscal && insertTipoTasa === 'PERSONALIZADA') ? 1 : 0.85,
-                        borderColor: (!isInsertDocFiscal && insertTipoTasa === 'PERSONALIZADA') ? 'rgba(192, 132, 252, 0.55)' : undefined
-                      }}
-                      title={
-                        !isInsertDocFiscal && insertTipoTasa === 'PERSONALIZADA'
-                          ? 'Ingrese manualmente la tasa en Bs/USD'
-                          : 'Tasa calculada según el tipo seleccionado'
-                      }
-                    />
+                    {isDirectCurrencyRateType(insertTipoTasa) ? (
+                      <div
+                        className="input-modern"
+                        style={{
+                          width: '100%',
+                          marginTop: '5px',
+                          padding: '0.38rem 0.6rem',
+                          fontSize: '0.78rem',
+                          fontFamily: 'var(--font-code)',
+                          color: CXC_RATE_BUCKETS[insertTipoTasa]?.color || '#22c55e',
+                          fontWeight: 700
+                        }}
+                      >
+                        {CXC_RATE_BUCKETS[insertTipoTasa]?.label} (Tasa Bs: 0)
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={insertTasa}
+                        readOnly={insertTipoTasa !== 'PERSONALIZADA'}
+                        onChange={(e) => {
+                          if (insertTipoTasa !== 'PERSONALIZADA') return;
+                          handleInsertTasaChange(e.target.value);
+                        }}
+                        placeholder="Ingrese tasa manual..."
+                        required
+                        className="input-modern"
+                        style={{
+                          width: '100%',
+                          marginTop: '5px',
+                          padding: '0.38rem 0.6rem',
+                          fontSize: '0.8rem',
+                          fontFamily: 'var(--font-code)',
+                          color: insertTipoTasa === 'PERSONALIZADA' ? '#c084fc' : '#10b981',
+                          fontWeight: 700,
+                          opacity: insertTipoTasa === 'PERSONALIZADA' ? 1 : 0.85,
+                          borderColor: insertTipoTasa === 'PERSONALIZADA' ? 'rgba(192, 132, 252, 0.55)' : undefined
+                        }}
+                        title={
+                          insertTipoTasa === 'PERSONALIZADA'
+                            ? 'Ingrese manualmente la tasa en Bs/USD'
+                            : 'Tasa calculada según el tipo seleccionado'
+                        }
+                      />
+                    )}
                   </div>
 
                   {/* Monto USD */}
@@ -1868,8 +1949,12 @@ export function CxcMovementsModal({
                       type="number"
                       step="0.01"
                       min="0"
-                      value={insertMontoBs}
-                      onChange={(e) => handleInsertBsChange(e.target.value)}
+                      readOnly={isDirectCurrencyRateType(insertTipoTasa)}
+                      value={isDirectCurrencyRateType(insertTipoTasa) ? '0' : insertMontoBs}
+                      onChange={(e) => {
+                        if (isDirectCurrencyRateType(insertTipoTasa)) return;
+                        handleInsertBsChange(e.target.value);
+                      }}
                       placeholder="0.00"
                       className="input-modern"
                       style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem', fontFamily: 'var(--font-code)', color: '#38bdf8', fontWeight: 700 }}
@@ -2019,7 +2104,7 @@ export function CxcMovementsModal({
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'inline-flex', background: 'rgba(255,255,255,0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)', gap: '3px' }}>
+                  <div style={{ display: 'inline-flex', flexWrap: 'wrap', background: 'rgba(255,255,255,0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)', gap: '3px' }}>
                     {[
                       { id: 'ALL', label: 'Todas Tasas' },
                       ...CXC_RATE_ORDER.map((rk) => ({
@@ -2192,7 +2277,7 @@ export function CxcMovementsModal({
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontFamily: 'var(--font-code)', fontSize: '0.82rem' }}>
                         <span style={{ color: '#10b981', fontWeight: 800 }}>Subtotal Día: {formatUsd(dayGroup.totalUsd)}</span>
-                        <span style={{ color: '#38bdf8', fontWeight: 700 }}>{formatBs(dayGroup.totalBs)}</span>
+                        <span style={{ color: '#38bdf8', fontWeight: 700 }}>{dayGroup.totalBs > 0 ? formatBs(dayGroup.totalBs) : '0'}</span>
                       </div>
                     </div>
 
@@ -2232,7 +2317,7 @@ export function CxcMovementsModal({
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', fontFamily: 'var(--font-code)', fontSize: '0.78rem' }}>
                             <span style={{ color: '#e2e8f0', fontWeight: 700 }}>Subtotal {rateGroup.shortLabel}: <strong style={{ color: '#10b981' }}>{formatUsd(rateGroup.totalUsd)}</strong></span>
-                            <span style={{ color: '#38bdf8', fontWeight: 700 }}>{formatBs(rateGroup.totalBs)}</span>
+                            <span style={{ color: '#38bdf8', fontWeight: 700 }}>{rateGroup.isDirectCurrency ? '0' : formatBs(rateGroup.totalBs)}</span>
                           </div>
                         </div>
 
@@ -2327,14 +2412,14 @@ export function CxcMovementsModal({
                                     {!mov.referencia && !mov.observaciones && '—'}
                                   </td>
                                   <td style={{ padding: '0.6rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                                    <div>{formatBs(mov.tasa)}</div>
+                                    <div>{mov.isDirectCurrency ? '0' : formatBs(mov.tasa)}</div>
                                     <div style={{ fontSize: '0.65rem', fontWeight: 700, color: rateGroup.color }}>{rateGroup.shortLabel}</div>
                                   </td>
                                   <td style={{ padding: '0.6rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 800, color: '#10b981', whiteSpace: 'nowrap' }}>
                                     {formatUsd(mov.montoUsd)}
                                   </td>
                                   <td style={{ padding: '0.6rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#38bdf8', whiteSpace: 'nowrap' }}>
-                                    {formatBs(mov.montoBs)}
+                                    {mov.isDirectCurrency ? '0' : formatBs(mov.montoBs)}
                                   </td>
                                   <td style={{ padding: '0.6rem 0.75rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
                                     <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
@@ -2414,6 +2499,75 @@ export function CxcMovementsModal({
                     ))}
                   </div>
                 ))
+              )}
+
+              {/* Resúmenes en Pantalla: Por Renglón de Tasa y Por Caja / Banco */}
+              {filteredMovements.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '0.85rem', marginTop: '0.25rem' }}>
+                  <div style={{ border: '1px solid var(--border-glass)', borderRadius: '12px', overflow: 'hidden', background: 'rgba(15, 23, 42, 0.55)' }}>
+                    <div style={{ padding: '0.6rem 0.9rem', background: 'rgba(16, 185, 129, 0.12)', borderBottom: '1px solid var(--border-glass)', fontSize: '0.78rem', fontWeight: 800, color: '#34d399', textTransform: 'uppercase' }}>
+                      Resumen Total por Renglón de Tasa
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(2, 6, 23, 0.45)', color: 'var(--text-muted)' }}>
+                          <th style={{ padding: '0.45rem 0.75rem', textAlign: 'left' }}>Clasificación</th>
+                          <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Movs.</th>
+                          <th style={{ padding: '0.45rem 0.75rem', textAlign: 'right' }}>Total USD</th>
+                          <th style={{ padding: '0.45rem 0.75rem', textAlign: 'right' }}>Total Bs.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {overallRateBreakdown.nonEmptyGroups.map((rg) => (
+                          <tr key={`scr-rg-${rg.id}`} style={{ borderTop: '1px solid var(--border-glass)' }}>
+                            <td style={{ padding: '0.45rem 0.75rem', fontWeight: 700, color: rg.color }}>{rg.label}</td>
+                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontFamily: 'var(--font-code)' }}>{rg.count}</td>
+                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#10b981' }}>{formatUsd(rg.totalUsd)}</td>
+                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#38bdf8' }}>{rg.isDirectCurrency ? '0' : formatBs(rg.totalBs)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ borderTop: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.04)', fontWeight: 900 }}>
+                          <td style={{ padding: '0.5rem 0.75rem' }}>TOTAL TODAS LAS TASAS</td>
+                          <td style={{ padding: '0.5rem 0.5rem', textAlign: 'center', fontFamily: 'var(--font-code)' }}>{overallRateBreakdown.totals.count}</td>
+                          <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>{formatUsd(overallRateBreakdown.totals.totalUsd)}</td>
+                          <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#38bdf8' }}>{formatBs(overallRateBreakdown.totals.totalBs)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ border: '1px solid var(--border-glass)', borderRadius: '12px', overflow: 'hidden', background: 'rgba(15, 23, 42, 0.55)' }}>
+                    <div style={{ padding: '0.6rem 0.9rem', background: 'rgba(56, 189, 248, 0.12)', borderBottom: '1px solid var(--border-glass)', fontSize: '0.78rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
+                      Resumen Total por Caja / Banco
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(2, 6, 23, 0.45)', color: 'var(--text-muted)' }}>
+                          <th style={{ padding: '0.45rem 0.75rem', textAlign: 'left' }}>Caja / Banco</th>
+                          <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Movs.</th>
+                          <th style={{ padding: '0.45rem 0.75rem', textAlign: 'right' }}>Total USD</th>
+                          <th style={{ padding: '0.45rem 0.75rem', textAlign: 'right' }}>Total Bs.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {overallCajaBreakdown.rows.map((cj) => (
+                          <tr key={`scr-cj-${cj.key}`} style={{ borderTop: '1px solid var(--border-glass)' }}>
+                            <td style={{ padding: '0.45rem 0.75rem', fontWeight: 700, color: '#f8fafc' }}>{cj.cuentaNombre}</td>
+                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontFamily: 'var(--font-code)' }}>{cj.count}</td>
+                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#10b981' }}>{formatUsd(cj.totalUsd)}</td>
+                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#38bdf8' }}>{cj.totalBs > 0 ? formatBs(cj.totalBs) : '0'}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ borderTop: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.04)', fontWeight: 900 }}>
+                          <td style={{ padding: '0.5rem 0.75rem' }}>TOTAL POR CAJAS ({overallCajaBreakdown.rows.length})</td>
+                          <td style={{ padding: '0.5rem 0.5rem', textAlign: 'center', fontFamily: 'var(--font-code)' }}>{overallCajaBreakdown.totals.count}</td>
+                          <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>{formatUsd(overallCajaBreakdown.totals.totalUsd)}</td>
+                          <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#38bdf8' }}>{formatBs(overallCajaBreakdown.totals.totalBs)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -2495,7 +2649,7 @@ export function CxcMovementsModal({
                           }}
                         >
                           <span>DÍA: {dayGroup.fechaLarga.toUpperCase()} ({dayGroup.items.length} movs.)</span>
-                          <span style={{ whiteSpace: 'nowrap', fontSize: '8pt' }}>TOTAL DÍA: {formatUsd(dayGroup.totalUsd)} | {formatBs(dayGroup.totalBs)}</span>
+                          <span style={{ whiteSpace: 'nowrap', fontSize: '8pt' }}>TOTAL DÍA: {formatUsd(dayGroup.totalUsd)} | {dayGroup.totalBs > 0 ? formatBs(dayGroup.totalBs) : '0'}</span>
                         </div>
 
                         {(dayGroup.rateBreakdown?.nonEmptyGroups || []).map((rateGroup) => (
@@ -2517,7 +2671,7 @@ export function CxcMovementsModal({
                               }}
                             >
                               <span style={{ flex: '1 1 auto', minWidth: 0 }}>{rateGroup.printTitle} ({rateGroup.count} mov{rateGroup.count === 1 ? '' : 's.'})</span>
-                              <span style={{ whiteSpace: 'nowrap', flexShrink: 0, fontSize: '7.4pt' }}>SUBTOTAL {rateGroup.shortLabel}: {formatUsd(rateGroup.totalUsd)} | {formatBs(rateGroup.totalBs)}</span>
+                              <span style={{ whiteSpace: 'nowrap', flexShrink: 0, fontSize: '7.4pt' }}>SUBTOTAL {rateGroup.shortLabel}: {formatUsd(rateGroup.totalUsd)} | {rateGroup.isDirectCurrency ? '0' : formatBs(rateGroup.totalBs)}</span>
                             </div>
                             <table className="cxc-print-table">
                               <thead>
@@ -2545,9 +2699,9 @@ export function CxcMovementsModal({
                                     <td style={{ fontSize: '7.0pt' }}>{mov.formaPago}</td>
                                     <td style={{ fontSize: '7.0pt' }}>{mov.cuentaNombre}</td>
                                     <td style={{ fontFamily: 'monospace', fontSize: '7.0pt' }}>{mov.referencia || '—'}</td>
-                                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: '7.1pt', whiteSpace: 'nowrap' }}>{formatBs(mov.tasa)}</td>
+                                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: '7.1pt', whiteSpace: 'nowrap' }}>{mov.isDirectCurrency ? '0' : formatBs(mov.tasa)}</td>
                                     <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: '7.1pt', whiteSpace: 'nowrap' }}>{formatUsd(mov.montoUsd)}</td>
-                                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: '7.1pt', whiteSpace: 'nowrap' }}>{formatBs(mov.montoBs)}</td>
+                                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: '7.1pt', whiteSpace: 'nowrap' }}>{mov.isDirectCurrency ? '0' : formatBs(mov.montoBs)}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2579,14 +2733,47 @@ export function CxcMovementsModal({
                               </td>
                               <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{rg.count}</td>
                               <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatUsd(rg.totalUsd)}</td>
-                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatBs(rg.totalBs)}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{rg.isDirectCurrency ? '0' : formatBs(rg.totalBs)}</td>
                             </tr>
                           ))}
                           <tr style={{ background: '#e2e8f0', fontWeight: 900, fontSize: '9.5pt' }}>
                             <td>TOTAL GENERAL TODAS LAS TASAS ({summaryStats.daysCount} día(s))</td>
                             <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{overallRateBreakdown.totals.count}</td>
                             <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatUsd(overallRateBreakdown.totals.totalUsd)}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatBs(overallRateBreakdown.totals.totalBs)}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{overallRateBreakdown.totals.totalBs > 0 ? formatBs(overallRateBreakdown.totals.totalBs) : '0'}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Cuadro Final de Sumatoria Total por Caja / Banco */}
+                    <div className="cxc-print-footer-totals" style={{ marginTop: '10px' }}>
+                      <div style={{ fontSize: '8.8pt', fontWeight: 900, textTransform: 'uppercase', marginBottom: '4px', color: '#0f172a' }}>
+                        RESUMEN Y SUMATORIA FINAL POR CAJA / BANCO
+                      </div>
+                      <table className="cxc-print-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '48%', textAlign: 'left' }}>Caja / Banco Receptor</th>
+                            <th style={{ width: '14%', textAlign: 'center' }}>Movimientos</th>
+                            <th style={{ width: '19%', textAlign: 'right' }}>Total Divisas (USD)</th>
+                            <th style={{ width: '19%', textAlign: 'right' }}>Total Bolívares (Bs.)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {overallCajaBreakdown.rows.map((cj) => (
+                            <tr key={`sum-caja-${cj.key}`}>
+                              <td style={{ fontWeight: 700 }}>{cj.cuentaNombre}</td>
+                              <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{cj.count}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatUsd(cj.totalUsd)}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{cj.totalBs > 0 ? formatBs(cj.totalBs) : '0'}</td>
+                            </tr>
+                          ))}
+                          <tr style={{ background: '#e2e8f0', fontWeight: 900, fontSize: '9.5pt' }}>
+                            <td>TOTAL GENERAL POR CAJAS ({overallCajaBreakdown.rows.length} caja(s)/banco(s))</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{overallCajaBreakdown.totals.count}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatUsd(overallCajaBreakdown.totals.totalUsd)}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{overallCajaBreakdown.totals.totalBs > 0 ? formatBs(overallCajaBreakdown.totals.totalBs) : '0'}</td>
                           </tr>
                         </tbody>
                       </table>

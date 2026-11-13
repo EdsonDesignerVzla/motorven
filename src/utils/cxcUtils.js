@@ -4,6 +4,13 @@ import {
   dedupeCanonicalDocs
 } from '../services/fiscalService.js';
 import { round2 } from '../services/formatService.js';
+import {
+  DIRECT_CURRENCY_RATE_TYPES,
+  RATE_TYPE_META,
+  isDirectCurrencyRateType,
+  inferDirectCurrencyFromAccountOrMethod,
+  normalizeRateType
+} from './rateClassificationUtils.js';
 
 /**
  * Determina si una factura o nota de entrega está anulada bajo cualquier variante de campo.
@@ -392,7 +399,21 @@ export function consolidateClientReceivables({
     .sort((a, b) => b.saldoUsd - a.saldoUsd);
 }
 
-export const CXC_RATE_ORDER = ['BCV', 'EURO', 'KEYSTONE', 'PERSONALIZADA'];
+const makeDirectCxcBucket = (key, ordenIdx) => {
+  const meta = RATE_TYPE_META[key] || RATE_TYPE_META.USD;
+  return {
+    id: key,
+    label: meta.label,
+    shortLabel: meta.shortLabel,
+    printTitle: `RENGLÓN ${ordenIdx}: COBROS EN ${meta.label.toUpperCase()} (MONEDA DIRECTA)`,
+    color: meta.color,
+    badgeBg: meta.bg,
+    border: meta.border,
+    isDirectCurrency: true
+  };
+};
+
+export const CXC_RATE_ORDER = ['BCV', 'EURO', 'KEYSTONE', 'PERSONALIZADA', ...DIRECT_CURRENCY_RATE_TYPES];
 
 export const CXC_RATE_BUCKETS = {
   BCV: {
@@ -430,22 +451,21 @@ export const CXC_RATE_BUCKETS = {
     color: '#c084fc',
     badgeBg: 'rgba(192, 132, 252, 0.14)',
     border: 'rgba(192, 132, 252, 0.35)'
-  }
+  },
+  USD: makeDirectCxcBucket('USD', 5),
+  ZELLE: makeDirectCxcBucket('ZELLE', 6),
+  USDT: makeDirectCxcBucket('USDT', 7),
+  USDC: makeDirectCxcBucket('USDC', 8)
 };
 
 export function normalizeCxcRateType(rawType) {
   const up = String(rawType || '').toUpperCase().trim();
   if (!up) return null;
-  if (up === 'BCV' || up === 'TASA_BCV' || up === 'TASA BCV') return 'BCV';
-  if (up === 'EURO' || up === 'EUR' || up === 'TASA_EURO' || up === 'TASA EURO') return 'EURO';
-  if (up === 'KEYSTONE' || up === 'KEY' || up === 'TASA_KEYSTONE' || up === 'TASA KEYSTONE') return 'KEYSTONE';
+  const resolved = normalizeRateType(up, { fallback: '' });
+  if (resolved === 'EDITABLE') return 'PERSONALIZADA';
+  if (resolved && CXC_RATE_BUCKETS[resolved]) return resolved;
   if (
-    up === 'PERSONALIZADA' ||
-    up === 'PERSONALIZADO' ||
-    up === 'EDITABLE' ||
     up === 'EDITABLE_MANUAL' ||
-    up === 'CUSTOM' ||
-    up === 'MANUAL' ||
     up === 'TASA_PERSONALIZADA'
   ) {
     return 'PERSONALIZADA';
@@ -455,7 +475,8 @@ export function normalizeCxcRateType(rawType) {
 
 /**
  * Determina si un movimiento/cobro corresponde a un documento fiscal (Factura / Nota de Débito).
- * Todo documento fiscal clasifica obligatoriamente en el renglón de Tasa BCV.
+ * En documentos fiscales sin clasificación explícita distinta (Keystone, Personalizada o moneda directa),
+ * por defecto clasifica en BCV y nunca admite Euro.
  */
 export function isFiscalCollectionMovement(mov) {
   if (!mov || typeof mov !== 'object') return true;
@@ -468,21 +489,41 @@ export function isFiscalCollectionMovement(mov) {
 }
 
 /**
- * Clasifica un abono/movimiento CxC en uno de los 4 renglones de tasa:
- * 'BCV' | 'EURO' | 'KEYSTONE' | 'PERSONALIZADA'.
- * Regla obligatoria: Todo documento fiscal clasifica en 'BCV'.
+ * Clasifica un abono/movimiento CxC en uno de los renglones de tasa:
+ * 'BCV' | 'EURO' | 'KEYSTONE' | 'PERSONALIZADA' | 'USD' | 'ZELLE' | 'USDT' | 'USDC'.
+ * Regla obligatoria: Todo documento fiscal clasifica en 'BCV' o en su moneda directa si fue cobrado en divisa directa.
  */
 export function classifyCollectionRateType(mov, rates = {}) {
-  if (isFiscalCollectionMovement(mov)) return 'BCV';
-
   const explicit = normalizeCxcRateType(
     mov?.tipoTasa ??
     mov?.tipo_tasa ??
     (Array.isArray(mov?.formasPago) ? mov.formasPago[0]?.tipoTasa : undefined)
   );
-  if (explicit) return explicit;
-
   const obs = String(mov?.observaciones || mov?.descrip || '').toUpperCase();
+  const explicitDirectFromObs =
+    /\[ZELLE\]|\bDIVISA\s+ZELLE\b/.test(obs) ? 'ZELLE' :
+    /\[USDT\]|\bDIVISA\s+BINANCE\b|\bBINANCE\s*\(USDT\)/.test(obs) ? 'USDT' :
+    /\[USDC\]|\bDIVISAS?\s+KONTIGO\b|\bKONTIGO\s*\(USDC\)/.test(obs) ? 'USDC' :
+    /\[USD\]|\bDIVISA\s+(EFECTIVO|DIRECTA)\s+USD\b/.test(obs) ? 'USD' :
+    null;
+
+  const monUp = String(mov?.monedaPago || mov?.moneda_pago || '').toUpperCase().trim();
+  const rawBs = Number(mov?.montoBs ?? mov?.monto_bs ?? 0);
+
+  if (explicit) {
+    if (isFiscalCollectionMovement(mov) && explicit === 'EURO') return 'BCV';
+    return explicit;
+  }
+
+  const directFromAccount = inferDirectCurrencyFromAccountOrMethod(mov);
+  const directCandidate =
+    directFromAccount ||
+    explicitDirectFromObs ||
+    (rawBs <= 0 && isDirectCurrencyRateType(monUp) ? normalizeCxcRateType(monUp) : null);
+
+  if (directCandidate) return directCandidate;
+  if (isFiscalCollectionMovement(mov)) return 'BCV';
+
   if (/\[KEYSTONE\]|\bTASA\s+KEYSTONE\b|\bKEYSTONE\b/.test(obs)) return 'KEYSTONE';
   if (/\[EURO\]|\bTASA\s+EURO\b|\bEURO\b/.test(obs)) return 'EURO';
   if (/\[PERSONALIZADA\]|\bTASA\s+PERSONALIZADA\b|\bPERSONALIZADA\b/.test(obs)) return 'PERSONALIZADA';
@@ -535,15 +576,20 @@ export function groupMovementsByRateType(movements = [], rates = {}) {
     if (!mov) return;
     const rateType = classifyCollectionRateType(mov, rates);
     const bucket = bucketMap.get(rateType) || bucketMap.get('BCV');
+    const isDirect = isDirectCurrencyRateType(rateType);
+    const movBs = isDirect ? 0 : Number(mov.montoBs || 0);
     const enriched = {
       ...mov,
       tipoTasa: rateType,
-      tipoTasaLabel: bucket.label
+      tipoTasaLabel: bucket.label,
+      isDirectCurrency: isDirect,
+      tasa: isDirect ? 0 : Number(mov.tasa || 0),
+      montoBs: movBs
     };
     bucket.items.push(enriched);
     bucket.count += 1;
     bucket.totalUsd = round2(bucket.totalUsd + Number(mov.montoUsd || 0));
-    bucket.totalBs = round2(bucket.totalBs + Number(mov.montoBs || 0));
+    bucket.totalBs = round2(bucket.totalBs + movBs);
   });
 
   const groups = CXC_RATE_ORDER.map(k => bucketMap.get(k));
@@ -551,19 +597,70 @@ export function groupMovementsByRateType(movements = [], rates = {}) {
   const totalBs = round2(groups.reduce((acc, g) => acc + g.totalBs, 0));
   const count = groups.reduce((acc, g) => acc + g.count, 0);
 
+  const byType = {};
+  CXC_RATE_ORDER.forEach((k) => {
+    byType[k] = bucketMap.get(k);
+  });
+
   return {
     groups,
     nonEmptyGroups: groups.filter(g => g.count > 0),
-    byType: {
-      BCV: bucketMap.get('BCV'),
-      EURO: bucketMap.get('EURO'),
-      KEYSTONE: bucketMap.get('KEYSTONE'),
-      PERSONALIZADA: bucketMap.get('PERSONALIZADA')
-    },
+    byType,
     totals: {
       count,
       totalUsd,
       totalBs
+    }
+  };
+}
+
+/**
+ * Resume todos los movimientos CxC agrupados por Caja / Banco receptor.
+ * Las monedas directas conservan 0 en totalBs para evitar conversiones ficticias.
+ */
+export function summarizeDailyMovementsByCaja(movements = []) {
+  const map = new Map();
+
+  (Array.isArray(movements) ? movements : []).forEach((mov) => {
+    if (!mov) return;
+    const rawNombre = String(mov.cuentaNombre || mov.cajaOBanco || '').trim() || 'Tesorería / Sin Caja';
+    const key = rawNombre.toUpperCase();
+    const explicitTipo = normalizeCxcRateType(mov.tipoTasa ?? mov.tipo_tasa);
+    const isDirect = Boolean(
+      mov.isDirectCurrency ||
+      isDirectCurrencyRateType(mov.tipoTasa, { monedaPago: mov.monedaPago }) ||
+      (!explicitTipo && inferDirectCurrencyFromAccountOrMethod(mov))
+    );
+    const usd = Number(mov.montoUsd || 0);
+    const bs = isDirect ? 0 : Number(mov.montoBs || 0);
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        cuentaNombre: rawNombre,
+        accountType: mov.accountType || 'CAJA',
+        count: 0,
+        totalUsd: 0,
+        totalBs: 0
+      });
+    }
+    const row = map.get(key);
+    row.count += 1;
+    row.totalUsd = round2(row.totalUsd + usd);
+    row.totalBs = round2(row.totalBs + bs);
+  });
+
+  const rows = Array.from(map.values()).sort((a, b) => {
+    if (b.totalUsd !== a.totalUsd) return b.totalUsd - a.totalUsd;
+    return a.cuentaNombre.localeCompare(b.cuentaNombre);
+  });
+
+  return {
+    rows,
+    totals: {
+      count: rows.reduce((acc, r) => acc + r.count, 0),
+      totalUsd: round2(rows.reduce((acc, r) => acc + r.totalUsd, 0)),
+      totalBs: round2(rows.reduce((acc, r) => acc + r.totalBs, 0))
     }
   };
 }

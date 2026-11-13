@@ -48,6 +48,7 @@ import {
   getAllowedRateTypesForDoc,
   resolveDefaultRateValue,
   isFiscalDocumentForRatePolicy,
+  isDirectCurrencyRateType,
   RATE_TYPE_META
 } from '../utils/rateClassificationUtils';
 import OilstoneProductImage from '../components/OilstoneProductImage';
@@ -574,7 +575,7 @@ export default function SalesPOSView({
   }, [effectivePosRateType, customTasaPago, tasaBcv, tasaKeystone]);
 
   useEffect(() => {
-    if (isFiscalRateLocked && tipoTasa !== 'BCV' && tipoTasa !== 'USD') {
+    if (isFiscalRateLocked && tipoTasa === 'EURO') {
       setTipoTasa('BCV');
     }
   }, [isFiscalRateLocked, tipoTasa]);
@@ -768,7 +769,7 @@ export default function SalesPOSView({
       metodoPago: condicionPago === 'CREDITO' ? 'CREDITO' : metodoPago,
       tipoTasa: effectivePosRateType,
       tasaPago: effectivePosTasaPago,
-      monedaPago: effectivePosRateType === 'USD' ? 'USD' : 'BS',
+      monedaPago: isDirectCurrencyRateType(effectivePosRateType) ? 'USD' : 'BS',
       creditOverrideApproved,
       creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : (activeOrderInPOS?.creditOverrideAuthorizer || null),
       creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : (activeOrderInPOS?.creditOverrideJustification || null),
@@ -2040,9 +2041,11 @@ export default function SalesPOSView({
                 onChange={(e) => {
                   const nextMethod = e.target.value;
                   setMetodoPago(nextMethod);
-                  if (nextMethod === 'EFECTIVO_USD' || nextMethod === 'ZELLE') {
+                  if (nextMethod === 'EFECTIVO_USD') {
                     setTipoTasa('USD');
-                  } else if (tipoTasa === 'USD') {
+                  } else if (nextMethod === 'ZELLE') {
+                    setTipoTasa('ZELLE');
+                  } else if (isDirectCurrencyRateType(tipoTasa)) {
                     setTipoTasa('BCV');
                   }
                 }}
@@ -2060,7 +2063,7 @@ export default function SalesPOSView({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
                 <span style={{ fontWeight: 700, textTransform: 'uppercase' }}>Clasificación de Tasa:</span>
                 <span style={{ fontFamily: 'var(--font-code)', color: RATE_TYPE_META[effectivePosRateType]?.color || '#10b981', fontWeight: 700 }}>
-                  {isFiscalRateLocked ? 'Fiscal: Solo BCV / USD' : `Ref: Bs. ${effectivePosTasaPago.toFixed(2)}`}
+                  {isDirectCurrencyRateType(effectivePosRateType) ? 'Moneda Directa ($1 = $1)' : `Ref: Bs. ${effectivePosTasaPago.toFixed(2)}`}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
@@ -2078,7 +2081,7 @@ export default function SalesPOSView({
                     </option>
                   ))}
                 </select>
-                {!isFiscalRateLocked && effectivePosRateType === 'EDITABLE' && (
+                {effectivePosRateType === 'EDITABLE' && (
                   <input
                     type="number"
                     step="0.01"

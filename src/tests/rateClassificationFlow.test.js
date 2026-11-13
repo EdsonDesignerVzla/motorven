@@ -33,11 +33,15 @@ if (typeof globalThis.URL === 'undefined') {
 }
 
 import {
+  DIRECT_CURRENCY_RATE_TYPES,
+  RATE_TYPE_META,
   getAllowedRateTypesForDoc,
+  isDirectCurrencyRateType,
   isFiscalDocumentForRatePolicy,
   normalizeRateType,
   resolveDefaultRateValue,
   resolveEffectiveRateNumber,
+  resolveMonedaPago,
   resolveRecordRateType,
   summarizeByRateClassification
 } from '../utils/rateClassificationUtils.js';
@@ -60,20 +64,39 @@ console.log('--- INICIANDO PRUEBAS DE CLASIFICACIÓN E INMUTABILIDAD DE TASAS --
   assert.equal(isFiscalDocumentForRatePolicy('NOTA_ENTREGA'), false);
   assert.equal(isFiscalDocumentForRatePolicy('NE'), false);
 
-  assert.deepEqual(getAllowedRateTypesForDoc('FACTURA'), ['BCV', 'USD']);
-  assert.deepEqual(getAllowedRateTypesForDoc('FACT'), ['BCV', 'USD']);
-  assert.deepEqual(getAllowedRateTypesForDoc('NOTA_ENTREGA'), ['BCV', 'KEYSTONE', 'EDITABLE', 'USD']);
+  assert.deepEqual(
+    getAllowedRateTypesForDoc('FACTURA', { includeEuro: true }),
+    ['BCV', 'KEYSTONE', 'EDITABLE', 'USD', 'ZELLE', 'USDT', 'USDC']
+  );
+  assert.deepEqual(getAllowedRateTypesForDoc('FACT'), ['BCV', 'KEYSTONE', 'EDITABLE', 'USD', 'ZELLE', 'USDT', 'USDC']);
+  assert.deepEqual(getAllowedRateTypesForDoc('NOTA_ENTREGA'), ['BCV', 'KEYSTONE', 'EDITABLE', 'USD', 'ZELLE', 'USDT', 'USDC']);
   assert.deepEqual(
     getAllowedRateTypesForDoc('NOTA_ENTREGA', { includeEuro: true }),
-    ['BCV', 'EURO', 'KEYSTONE', 'EDITABLE', 'USD']
+    ['BCV', 'EURO', 'KEYSTONE', 'EDITABLE', 'USD', 'ZELLE', 'USDT', 'USDC']
   );
 
-  // Coerción obligatoria: documento fiscal jamás permite tasas paralelas/manuales
-  assert.equal(normalizeRateType('KEYSTONE', { tipoDoc: 'FACTURA' }), 'BCV');
-  assert.equal(normalizeRateType('EDITABLE', { tipoDoc: 'FACT' }), 'BCV');
+  // Etiquetas oficiales de monedas directas y propiedades compartidas
+  assert.equal(RATE_TYPE_META.USD.label, 'Divisa Efectivo USD');
+  assert.equal(RATE_TYPE_META.ZELLE.label, 'Divisa Zelle (USD)');
+  assert.equal(RATE_TYPE_META.USDT.label, 'Divisa Binance (USDT)');
+  assert.equal(RATE_TYPE_META.USDC.label, 'Divisas Kontigo (USDC)');
+  DIRECT_CURRENCY_RATE_TYPES.forEach((dt) => {
+    assert.equal(isDirectCurrencyRateType(dt), true);
+    assert.equal(normalizeRateType(dt, { tipoDoc: 'FACTURA' }), dt);
+    assert.equal(resolveDefaultRateValue(dt, { tasaBcv: 900 }), 1);
+    assert.equal(resolveMonedaPago(dt), 'USD');
+  });
+
+  // Documento fiscal conserva Keystone y Editable/Personalizada (+ BCV y monedas directas), excluyendo únicamente Euro
+  assert.equal(normalizeRateType('KEYSTONE', { tipoDoc: 'FACTURA' }), 'KEYSTONE');
+  assert.equal(normalizeRateType('EDITABLE', { tipoDoc: 'FACT' }), 'EDITABLE');
+  assert.equal(normalizeRateType('EURO', { tipoDoc: 'FACTURA' }), 'BCV');
   assert.equal(normalizeRateType('USD', { tipoDoc: 'FACTURA' }), 'USD');
   assert.equal(normalizeRateType('EDITABLE', { tipoDoc: 'NOTA_ENTREGA' }), 'EDITABLE');
   assert.equal(normalizeCxcRateType('EDITABLE'), 'PERSONALIZADA');
+  assert.equal(normalizeCxcRateType('ZELLE'), 'ZELLE');
+  assert.equal(normalizeCxcRateType('BINANCE'), 'USDT');
+  assert.equal(normalizeCxcRateType('KONTIGO'), 'USDC');
 
   assert.equal(resolveDefaultRateValue('BCV', { tasaBcv: 900, tasaKeystone: 930 }), 900);
   assert.equal(resolveDefaultRateValue('KEYSTONE', { tasaBcv: 900, tasaKeystone: 930 }), 930);
@@ -116,15 +139,24 @@ console.log('--- INICIANDO PRUEBAS DE CLASIFICACIÓN E INMUTABILIDAD DE TASAS --
   assert.equal(invPayload.tasaPago, 945.25);
   assert.equal(invPayload.monedaPago, 'BS');
 
-  // Venta fiscal forzada a BCV aunque intenten KEYSTONE
-  const fiscalPayload = buildProfitInvoicePayloadFromSale({
+  // Venta fiscal conserva KEYSTONE / EDITABLE y solo coerciona EURO a BCV
+  const fiscalKeystonePayload = buildProfitInvoicePayloadFromSale({
+    ...reloadedSale,
+    id: 'FACT-998',
+    numeroDoc: '000998',
+    tipoDoc: 'FACTURA',
+    tipoTasa: 'KEYSTONE'
+  }, 'OF');
+  assert.equal(fiscalKeystonePayload.tipoTasa, 'KEYSTONE');
+
+  const fiscalEuroPayload = buildProfitInvoicePayloadFromSale({
     ...reloadedSale,
     id: 'FACT-999',
     numeroDoc: '000999',
     tipoDoc: 'FACTURA',
-    tipoTasa: 'KEYSTONE'
+    tipoTasa: 'EURO'
   }, 'OF');
-  assert.equal(fiscalPayload.tipoTasa, 'BCV');
+  assert.equal(fiscalEuroPayload.tipoTasa, 'BCV');
 
   const mov = addCashMovement({
     tipo: 'INGRESO',
@@ -155,18 +187,27 @@ console.log('--- INICIANDO PRUEBAS DE CLASIFICACIÓN E INMUTABILIDAD DE TASAS --
     { tipoDoc: 'FACT', tipoTasa: 'BCV', tasaPago: 850, montoUsd: 100, montoBs: 85000 },
     { tipoDoc: 'NE', tipoTasa: 'KEYSTONE', tasaPago: 910, montoUsd: 200, montoBs: 182000 },
     { tipoDoc: 'NE', tipoTasa: 'EDITABLE', tasaPago: 950, montoUsd: 100, montoBs: 95000 },
-    { tipoDoc: 'FACT', tipoTasa: 'USD', tasaPago: 1, montoUsd: 50, montoBs: 0 }
+    { tipoDoc: 'FACT', tipoTasa: 'USD', tasaPago: 1, montoUsd: 50, montoBs: 0 },
+    { tipoDoc: 'NE', tipoTasa: 'ZELLE', tasaPago: 1, montoUsd: 60, montoBs: 0 },
+    { tipoDoc: 'NE', tipoTasa: 'USDT', tasaPago: 1, montoUsd: 40, montoBs: 0 },
+    { tipoDoc: 'NE', tipoTasa: 'USDC', tasaPago: 1, montoUsd: 30, montoBs: 0 }
   ];
 
   // Aunque hoy la tasa sea 1200, el resumen conserva montoBs histórico exacto
   const summary = summarizeByRateClassification(records, 1200);
-  assert.equal(summary.totalUsd, 450);
+  assert.equal(summary.totalUsd, 580);
   assert.equal(summary.totalBs, 362000);
   assert.equal(summary.byType.BCV.totalUsd, 100);
   assert.equal(summary.byType.KEYSTONE.totalBs, 182000);
   assert.equal(summary.byType.EDITABLE.totalBs, 95000);
   assert.equal(summary.byType.USD.totalUsd, 50);
   assert.equal(summary.byType.USD.totalBs, 0);
+  assert.equal(summary.byType.ZELLE.totalUsd, 60);
+  assert.equal(summary.byType.ZELLE.totalBs, 0);
+  assert.equal(summary.byType.USDT.totalUsd, 40);
+  assert.equal(summary.byType.USDT.totalBs, 0);
+  assert.equal(summary.byType.USDC.totalUsd, 30);
+  assert.equal(summary.byType.USDC.totalBs, 0);
   assert.equal(resolveRecordRateType(records[2]), 'EDITABLE');
   assert.equal(resolveEffectiveRateNumber(records[1], 1200), 910);
 

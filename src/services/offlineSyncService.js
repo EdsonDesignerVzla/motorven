@@ -670,7 +670,50 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
               const { error } = await handlers.supabase.from('commission_settlements').delete().eq('id', item.data.id);
               if (error) throw error;
             } else if (item.data) {
-              const { error } = await handlers.supabase.from('commission_settlements').upsert(item.data, { onConflict: 'id' });
+              const payload = handlers.mapCommissionSettlementToDb ? handlers.mapCommissionSettlementToDb(item.data) : item.data;
+              const { error } = await handlers.supabase.from('commission_settlements').upsert(payload, { onConflict: 'id' });
+              if (error) throw error;
+            }
+            syncSuccess = true;
+          }
+          break;
+
+        case 'expense':
+          if (handlers.supabase?.from) {
+            if (item.action === 'DELETE' && item.data?.id) {
+              const { error } = await handlers.supabase.from('expenses').delete().eq('id', item.data.id);
+              if (error) throw error;
+            } else if (item.data) {
+              const payload = handlers.mapExpenseToDb ? handlers.mapExpenseToDb(item.data) : item.data;
+              const { error } = await handlers.supabase.from('expenses').upsert(payload, { onConflict: 'id' });
+              if (error) throw error;
+            }
+            syncSuccess = true;
+          }
+          break;
+
+        case 'employee':
+          if (handlers.supabase?.from) {
+            if (item.action === 'DELETE' && item.data?.id) {
+              const { error } = await handlers.supabase.from('employees').delete().eq('id', item.data.id);
+              if (error) throw error;
+            } else if (item.data) {
+              const payload = handlers.mapEmployeeToDb ? handlers.mapEmployeeToDb(item.data) : item.data;
+              const { error } = await handlers.supabase.from('employees').upsert(payload, { onConflict: 'id' });
+              if (error) throw error;
+            }
+            syncSuccess = true;
+          }
+          break;
+
+        case 'payroll':
+          if (handlers.supabase?.from) {
+            if (item.action === 'DELETE' && item.data?.id) {
+              const { error } = await handlers.supabase.from('payroll').delete().eq('id', item.data.id);
+              if (error) throw error;
+            } else if (item.data) {
+              const payload = handlers.mapPayrollToDb ? handlers.mapPayrollToDb(item.data) : item.data;
+              const { error } = await handlers.supabase.from('payroll').upsert(payload, { onConflict: 'id' });
               if (error) throw error;
             }
             syncSuccess = true;

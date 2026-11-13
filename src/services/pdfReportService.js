@@ -16,6 +16,7 @@ import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { parseInvoiceDateInfo } from './creditPolicyService.js';
 import { getProductRetailPrice } from './pricingService.js';
+import { resolveProductListPrice, safePct, PRICE_LIST_TIERS } from '../utils/profitabilityUtils.js';
 import { REAL_PRODUCTS, REAL_CLIENTS, REAL_PROFIT_BANK_ACCOUNTS } from '../data/supabaseRealData.js';
 import { buildTrialBalance, buildGeneralLedger, buildFinancialStatements } from './accountingService.js';
 import { SYSTEM_METADATA, MODULES_DOCUMENTATION, WORKFLOWS_STEP_BY_STEP } from '../data/appDocumentationData.js';
@@ -31,9 +32,16 @@ import {
   resolveRecordRateType,
   resolveRateMeta,
   resolveEffectiveRateNumber,
+  isDirectCurrencyRateType,
   summarizeByRateClassification
 } from '../utils/rateClassificationUtils.js';
 import { classifyCollectionRateType } from '../utils/cxcUtils.js';
+import {
+  buildLibroVentasRows,
+  buildLibroComprasRows,
+  isFiscalDocEligible,
+  validateRif
+} from './fiscalService.js';
 
 // Paleta Institucional SIGNUM MOTORVEN
 const COLORS = {
@@ -1022,24 +1030,30 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
 // =========================================================================
 // 2. REPORTE DE RENTABILIDAD & BI (PRIORITARIO - CARTA VERTICAL)
 // =========================================================================
-export function generateProfitabilityPDF({ products = [], sales = [], config = {}, currentUser = null }) {
+export function generateProfitabilityPDF({
+  products = [],
+  sales = [],
+  priceTier = PRICE_LIST_TIERS.MAYOR,
+  config = {},
+  currentUser = null
+}) {
   const base = createBaseReport({
     title: 'ESTADO DE RENTABILIDAD, MÁRGENES & BUSINESS INTELLIGENCE',
-    subtitle: 'Contribución Marginal, Utilidad Operativa, Márgenes por Línea y Retorno de Inversión',
+    subtitle: `Contribución Marginal, Utilidad Operativa y Márgenes por SKU (${priceTier === PRICE_LIST_TIERS.DETAL ? 'Lista Detal' : 'Lista Mayor'})`,
     moduleCode: 'REN',
     currentUser,
     config
   });
 
   const totalCosto = products.reduce((acc, p) => acc + (Number(p.stock || 0) * Number(p.costoUsd || 0)), 0);
-  const totalVenta = products.reduce((acc, p) => acc + (Number(p.stock || 0) * Number(p.precioUsd || p.precioA || 0)), 0);
+  const totalVenta = products.reduce((acc, p) => acc + (Number(p.stock || 0) * resolveProductListPrice(p, priceTier)), 0);
   const utilidadProyectada = totalVenta - totalCosto;
-  const margenPromedio = totalVenta > 0 ? (utilidadProyectada / totalVenta) * 100 : 0;
+  const margenPromedio = safePct(utilidadProyectada, totalVenta);
   const tasa = Number(config?.tasaDolar) || 827.73;
 
   const cards = [
     { label: 'Inventario al Costo', value: formatUsd(totalCosto), subtext: formatBs(totalCosto * tasa), color: COLORS.navy },
-    { label: 'Valorización Venta', value: formatUsd(totalVenta), subtext: 'Ingreso Estimado', color: COLORS.cyan },
+    { label: 'Valorización Venta', value: formatUsd(totalVenta), subtext: `Lista ${priceTier}`, color: COLORS.cyan },
     { label: 'Utilidad Operativa', value: formatUsd(utilidadProyectada), subtext: 'Spread Comercial', color: COLORS.emerald },
     { label: 'Margen Promedio', value: `${margenPromedio.toFixed(1)}%`, subtext: 'P&L Operacional', color: COLORS.amber }
   ];
@@ -1050,16 +1064,16 @@ export function generateProfitabilityPDF({ products = [], sales = [], config = {
     base.doc,
     currentY,
     'ANÁLISIS DE RENTABILIDAD & MARGEN OPERATIVO OILSTONE',
-    `El margen bruto promedio proyectado sobre la cartera de lubricantes se sitúa en ${margenPromedio.toFixed(1)}%, generando un spread de utilidad neta de ${formatUsd(utilidadProyectada)}. Las líneas sintéticas y semisintéticas lideran la rentabilidad por litro, mientras los minerales de alto volumen mantienen el flujo de caja operativo estable.`,
+    `El margen bruto promedio proyectado sobre la cartera de lubricantes (Lista ${priceTier}) se sitúa en ${margenPromedio.toFixed(1)}%, generando un spread de utilidad bruta potencial de ${formatUsd(utilidadProyectada)}.`,
     base.tableWidth,
     base.startX
   );
 
   const tableData = products.map((p) => {
     const costo = Number(p.costoUsd || 0);
-    const precio = Number(p.precioUsd || p.precioA || 0);
+    const precio = resolveProductListPrice(p, priceTier);
     const ganancia = precio - costo;
-    const margen = precio > 0 ? (ganancia / precio) * 100 : 0;
+    const margen = safePct(ganancia, precio);
 
     return [
       p.codigo || 'SKU-00',
@@ -1125,6 +1139,157 @@ export function generateProfitabilityPDF({ products = [], sales = [], config = {
   ], base.tableWidth, base.startX);
 
   finalizeAndSave(base.doc, `Reporte_Rentabilidad_BI_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
+  return base.doc;
+}
+
+// =========================================================================
+// 2B. ESTADO DE RESULTADOS P&L OPERATIVO REAL / SIMULADO (WATERFALL + LÍNEAS)
+// =========================================================================
+export function generateOperationalPandLPDF({ financialData = {}, config = {}, currentUser = null }) {
+  const isSim = Boolean(financialData?.isSimulation);
+  const base = createBaseReport({
+    title: isSim ? 'ESTADO DE RESULTADOS (P&L) — SIMULACIÓN WHAT-IF' : 'ESTADO DE RESULTADOS (P&L) OPERATIVO REAL',
+    subtitle: isSim
+      ? 'Escenario Proyectado What-If — Márgenes, Flujo Operativo y Punto de Equilibrio'
+      : 'Cifras Reales de Operación: Ventas Netas, Devoluciones, CMV, Gastos, Nómina y EBITDA',
+    moduleCode: 'PNL',
+    currentUser,
+    config
+  });
+
+  const tasa = Number(config?.tasaDolar) || 0;
+  const rev = Number(financialData.facturadoAjustadoUsd || 0);
+  const utilidadBruta = Number(financialData.utilidadBrutaUsd || 0);
+  const margenContrib = Number(financialData.margenContribucionUsd || 0);
+  const ebitda = Number(financialData.ebitdaOperativoUsd || 0);
+
+  const cards = [
+    {
+      label: 'Ingresos Netos (Sin IVA)',
+      value: formatUsd(rev),
+      subtext: tasa > 0 ? formatBs(rev * tasa) : `${financialData.activeDocsCount || 0} docs`,
+      color: COLORS.navy
+    },
+    {
+      label: 'Utilidad Bruta',
+      value: formatUsd(utilidadBruta),
+      subtext: `${Number(financialData.margenBrutoPct || 0).toFixed(1)}% s/Ingresos`,
+      color: COLORS.cyan
+    },
+    {
+      label: 'Margen Contribución',
+      value: formatUsd(margenContrib),
+      subtext: `${Number(financialData.margenContribPct || 0).toFixed(1)}% Contribución`,
+      color: COLORS.emerald
+    },
+    {
+      label: 'EBITDA Operativo',
+      value: formatUsd(ebitda),
+      subtext: `${Number(financialData.ebitdaPct || 0).toFixed(1)}% Retorno`,
+      color: ebitda >= 0 ? COLORS.emerald : COLORS.red
+    }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  const fmtPct = (v) => `${safePct(v, rev).toFixed(1)}%`;
+  const waterfallRows = [
+    ['(+) Facturación Bruta Sin IVA', formatUsd(financialData.facturadoBrutoUsd || 0), tasa > 0 ? formatBs((financialData.facturadoBrutoUsd || 0) * tasa) : '-', '100.0%'],
+    ['(-) Devoluciones en Ventas', `-${formatUsd(financialData.devolucionesUsd || 0)}`, tasa > 0 ? formatBs((financialData.devolucionesUsd || 0) * tasa) : '-', fmtPct(-(financialData.devolucionesUsd || 0))],
+    ['(=) INGRESOS NETOS DE OPERACIÓN', formatUsd(rev), tasa > 0 ? formatBs(rev * tasa) : '-', rev > 0 ? '100.0%' : '0.0%'],
+    ['(-) Costo Mercancía Vendida (CMV)', `-${formatUsd(financialData.cmvAjustadoUsd || 0)}`, tasa > 0 ? formatBs((financialData.cmvAjustadoUsd || 0) * tasa) : '-', fmtPct(-(financialData.cmvAjustadoUsd || 0))],
+    ['(=) UTILIDAD BRUTA', formatUsd(utilidadBruta), tasa > 0 ? formatBs(utilidadBruta * tasa) : '-', fmtPct(utilidadBruta)],
+    ['(-) Fletes & Logística', `-${formatUsd(financialData.costoFletesUsd || 0)}`, tasa > 0 ? formatBs((financialData.costoFletesUsd || 0) * tasa) : '-', fmtPct(-(financialData.costoFletesUsd || 0))],
+    ['(-) Comisiones Fuerza de Ventas', `-${formatUsd(financialData.comisionesVendedoresUsd || 0)}`, tasa > 0 ? formatBs((financialData.comisionesVendedoresUsd || 0) * tasa) : '-', fmtPct(-(financialData.comisionesVendedoresUsd || 0))],
+    ['(-) Mermas & Ajustes de Salida', `-${formatUsd(financialData.costoMermasUsd || 0)}`, tasa > 0 ? formatBs((financialData.costoMermasUsd || 0) * tasa) : '-', fmtPct(-(financialData.costoMermasUsd || 0))],
+    ['(-) Retenciones ISLR & Tributos', `-${formatUsd(financialData.retencionesIslrUsd || 0)}`, tasa > 0 ? formatBs((financialData.retencionesIslrUsd || 0) * tasa) : '-', fmtPct(-(financialData.retencionesIslrUsd || 0))],
+    ['(=) MARGEN DE CONTRIBUCIÓN', formatUsd(margenContrib), tasa > 0 ? formatBs(margenContrib * tasa) : '-', fmtPct(margenContrib)],
+    ['(-) Nómina & Salarios Operativos', `-${formatUsd(financialData.costoNominaUsd || 0)}`, tasa > 0 ? formatBs((financialData.costoNominaUsd || 0) * tasa) : '-', fmtPct(-(financialData.costoNominaUsd || 0))],
+    ['(-) Gastos Operativos Fijos (OPEX)', `-${formatUsd(financialData.opexFijoUsd || 0)}`, tasa > 0 ? formatBs((financialData.opexFijoUsd || 0) * tasa) : '-', fmtPct(-(financialData.opexFijoUsd || 0))],
+    ['(=) EBITDA OPERATIVO FINAL', formatUsd(ebitda), tasa > 0 ? formatBs(ebitda * tasa) : '-', fmtPct(ebitda)]
+  ];
+
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CONCEPTO DEL ESTADO DE RESULTADOS (WATERFALL)', 'MONTO USD', 'EQUIVALENTE BS.', '% S/INGRESO']],
+    body: waterfallRows,
+    theme: 'grid',
+    headStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 7.2,
+      fontStyle: 'bold',
+      cellPadding: 1.8
+    },
+    styles: {
+      fontSize: 6.8,
+      cellPadding: 1.5,
+      textColor: COLORS.dark
+    },
+    columnStyles: {
+      0: { cellWidth: 85 },
+      1: { halign: 'right', cellWidth: 32, fontStyle: 'bold' },
+      2: { halign: 'right', cellWidth: 38 },
+      3: { halign: 'right', cellWidth: 24.9, fontStyle: 'bold' }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && String(data.row.raw?.[0] || '').startsWith('(=)')) {
+        data.cell.styles.fillColor = [241, 245, 249];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    }
+  });
+
+  const afterWaterfallY = (base.doc.lastAutoTable?.finalY || currentY) + 5;
+  const lines = Array.isArray(financialData.linesBreakdown) ? financialData.linesBreakdown : [];
+  if (lines.length > 0) {
+    autoTable(base.doc, {
+      startY: afterWaterfallY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['LÍNEA / CATEGORÍA', 'INGRESOS USD', 'CMV USD', 'UTILIDAD BRUTA', 'MARGEN %', 'LITROS']],
+      body: lines.map((ln) => [
+        ln.name,
+        formatUsd(ln.rev),
+        formatUsd(ln.cmv),
+        formatUsd(ln.marginUsd),
+        `${Number(ln.marginPct || 0).toFixed(1)}%`,
+        `${Number(ln.liters || 0).toLocaleString('es-VE', { maximumFractionDigits: 1 })} L`
+      ]),
+      theme: 'grid',
+      headStyles: {
+        fillColor: COLORS.navy,
+        textColor: [255, 255, 255],
+        fontSize: 7,
+        fontStyle: 'bold',
+        cellPadding: 1.6
+      },
+      styles: {
+        fontSize: 6.5,
+        cellPadding: 1.4,
+        textColor: COLORS.dark
+      },
+      columnStyles: {
+        0: { cellWidth: 52, fontStyle: 'bold' },
+        1: { halign: 'right', cellWidth: 28 },
+        2: { halign: 'right', cellWidth: 28 },
+        3: { halign: 'right', cellWidth: 28, fontStyle: 'bold' },
+        4: { halign: 'right', cellWidth: 22 },
+        5: { halign: 'right', cellWidth: 21.9 }
+      }
+    });
+  }
+
+  const finalYPnl = base.doc.lastAutoTable?.finalY || afterWaterfallY;
+  addGrandTotalBox(base.doc, finalYPnl + 3.5, [
+    { label: 'LITROS DESPACHADOS', value: `${Number(financialData.litersSold || 0).toLocaleString('es-VE')} L`, subtext: 'Volumen Neto', color: COLORS.navy },
+    { label: 'PUNTO DE EQUILIBRIO', value: formatUsd(financialData.puntoEquilibrioUsd || 0), subtext: 'Cobertura Fijos', color: COLORS.amber },
+    { label: 'EBITDA OPERATIVO', value: formatUsd(ebitda), subtext: `${Number(financialData.ebitdaPct || 0).toFixed(1)}% sobre ventas`, color: ebitda >= 0 ? COLORS.emerald : COLORS.red }
+  ], base.tableWidth, base.startX);
+
+  finalizeAndSave(base.doc, `Estado_Resultados_PnL_SIGNUM_${new Date().toISOString().slice(0, 10)}.pdf`, currentUser);
   return base.doc;
 }
 
@@ -1515,12 +1680,84 @@ export function generateTaxReportPDF({
 }) {
   const tasa = Number(config?.tasaDolar) || 827.73;
 
+  // Helpers locales para alinear PDFs de Libros Fiscales con fiscalService (sin inventar IVA 16% sobre exentos/NE)
+  const resolveClosureMetrics = (c = {}) => {
+    const numeroZ = String(c.numeroReporteZ ?? c.numeroZ ?? '').trim() || '0001';
+    const fechaIso = String(c.fechaCierre ?? c.fecha ?? '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+    const hora = c.horaCierre || (c.fecha ? String(c.fecha).slice(11, 19) : '') || '18:00:00';
+    const granTotalBs = Number(c.granTotalBs ?? c.totalVentasBs ?? c.totalBs ?? 0);
+    const granTotalUsd = Number(c.granTotalUsd ?? c.totalVentasUsd ?? (tasa > 0 ? granTotalBs / tasa : 0));
+    const baseImp16Bs = Number(c.baseImponible16Bs ?? c.baseGeneralBs ?? 0);
+    const iva16Bs = Number(c.iva16Bs ?? c.debitoGeneralBs ?? 0);
+    const baseImp8Bs = Number(c.baseImponible8Bs ?? c.baseReducidaBs ?? 0);
+    const iva8Bs = Number(c.iva8Bs ?? c.debitoReducidaBs ?? 0);
+    const igtfBs = Number(c.igtfBs ?? c.totalIgtfBs ?? 0);
+    const exentasBs = Number(c.ventasExentasBs ?? 0);
+    const totalFacturas = Number(c.totalFacturas ?? c.cantidadFacturas ?? 0);
+    const facturaInicial = c.facturaInicial || c.primeraFactura || 'S/N';
+    const facturaFinal = c.facturaFinal || c.ultimaFactura || 'S/N';
+    const tipo = String(c.tipo || 'Z').toUpperCase();
+    return {
+      numeroZ, fechaIso, hora, granTotalBs, granTotalUsd,
+      baseImp16Bs, iva16Bs, baseImp8Bs, iva8Bs, igtfBs, exentasBs,
+      totalFacturas, facturaInicial, facturaFinal, tipo,
+      firmaHashSha256: c.firmaHashSha256 || '4F8A9B2C1E7D6A5F3B2C1D0E9A8B7C6D5E4F3A2B1C0D9E8F7A6B5C4D3E2F1A0B'
+    };
+  };
+
+  const adaptSalesRowsForTaxPdf = (rawSales = []) => {
+    const normalized = (rawSales || [])
+      .filter(s => isFiscalDocEligible(s))
+      .map(s => {
+        const baseDoc = {
+          ...s,
+          numeroDoc: s.numeroDoc || s.factNum || s.id,
+          numeroControl: s.numeroControl || s.controlNum || s.nroControl
+        };
+        const hasBreakdown =
+          s.baseGeneralBs != null || s.baseGeneralUsd != null ||
+          s.ivaGeneralBs != null || s.ivaGeneralUsd != null ||
+          s.ivaBs != null || s.ivaUsd != null ||
+          s.baseExentaBs != null || s.baseExentaUsd != null ||
+          s.baseReducidaBs != null || s.baseAdicionalBs != null ||
+          s.subtotalUsd != null || s.subtotalBs != null ||
+          s.anulada || s.status === 'ANULADA';
+        if (hasBreakdown) return baseDoc;
+        const totUsd = Number(s.totalUsd ?? s.total ?? 0);
+        const baseU = Number((totUsd / 1.16).toFixed(2));
+        return { ...baseDoc, subtotalUsd: baseU, ivaUsd: Number((totUsd - baseU).toFixed(2)) };
+      });
+    return buildLibroVentasRows(normalized, config);
+  };
+
+  const adaptPurchaseRowsForTaxPdf = (rawPurchases = []) => {
+    const normalized = (rawPurchases || []).map(p => {
+      const baseDoc = {
+        ...p,
+        numeroFactura: p.numeroFactura || p.numeroFacturaProv || p.factNum || p.id,
+        numeroControl: p.numeroControl || p.nroControl || p.controlNum
+      };
+      const hasBreakdown =
+        p.baseGeneralBs != null || p.baseGeneralUsd != null ||
+        p.ivaGeneralBs != null || p.ivaGeneralUsd != null ||
+        p.ivaBs != null || p.ivaUsd != null ||
+        p.baseExentaBs != null || p.baseExentaUsd != null ||
+        p.subtotalUsd != null || p.subtotalBs != null ||
+        p.anulada || p.status === 'ANULADA';
+      if (hasBreakdown) return baseDoc;
+      const totUsd = Number(p.totalUsd ?? p.total ?? 0);
+      const baseU = Number((totUsd / 1.16).toFixed(2));
+      return { ...baseDoc, subtotalUsd: baseU, ivaUsd: Number((totUsd - baseU).toFixed(2)) };
+    });
+    return buildLibroComprasRows(normalized, config);
+  };
+
   // -------------------------------------------------------------------------
   // CASO 1: CIERRE Z o REPORTE X (Comprobante Fiscal Individual)
   // -------------------------------------------------------------------------
   if (reportType === 'CIERRE_Z' || reportType === 'CIERRE_X') {
     const isZ = reportType === 'CIERRE_Z';
-    const closure = (fiscalClosures && fiscalClosures.length > 0) ? fiscalClosures[0] : {};
+    const closure = resolveClosureMetrics((fiscalClosures && fiscalClosures.length > 0) ? fiscalClosures[0] : {});
     const base = createBaseReport({
       title: `COMPROBANTE FISCAL DE CIERRE DIARIO (${isZ ? 'REPORTE Z' : 'REPORTE X'})`,
       subtitle: `Control Oficial de Operaciones Mercantiles Diarias • Sistema Homologado SENIAT`,
@@ -1529,12 +1766,7 @@ export function generateTaxReportPDF({
       config
     });
 
-    const granTotalBs = Number(closure.granTotalBs || closure.totalBs || 0);
-    const granTotalUsd = Number(closure.granTotalUsd || (tasa > 0 ? granTotalBs / tasa : 0));
-    const baseImp16Bs = Number(closure.baseImponible16Bs || 0);
-    const iva16Bs = Number(closure.iva16Bs || 0);
-    const igtfBs = Number(closure.igtfBs || 0);
-    const exentasBs = Number(closure.ventasExentasBs || 0);
+    const { granTotalBs, granTotalUsd, baseImp16Bs, iva16Bs, baseImp8Bs, iva8Bs, igtfBs, exentasBs } = closure;
 
     const cards = [
       { label: `Gran Total ${isZ ? 'Z' : 'X'} (Bs.)`, value: formatBs(granTotalBs), subtext: formatUsd(granTotalUsd), color: COLORS.navy },
@@ -1549,7 +1781,7 @@ export function generateTaxReportPDF({
       base.doc,
       currentY,
       `METADATOS DE SEGURIDAD FISCAL & CERTIFICACIÓN (${isZ ? 'REPORTE Z' : 'REPORTE X'})`,
-      `Reporte N° ${closure.numeroReporteZ || '0001'} emitido el ${closure.fechaCierre ? String(closure.fechaCierre).slice(0, 10) : new Date().toISOString().slice(0, 10)} a las ${closure.horaCierre || '18:00:00'}. Total facturas auditadas: ${closure.totalFacturas || 0} (Desde: ${closure.facturaInicial || 'FAC-001'} Hasta: ${closure.facturaFinal || 'FAC-001'}). Firma Digital Hash SHA-256: ${closure.firmaHashSha256 || '4F8A9B2C1E7D6A5F3B2C1D0E9A8B7C6D5E4F3A2B1C0D9E8F7A6B5C4D3E2F1A0B'}`,
+      `Reporte N° ${closure.numeroZ} emitido el ${closure.fechaIso} a las ${closure.hora}. Total facturas auditadas: ${closure.totalFacturas} (Desde: ${closure.facturaInicial} Hasta: ${closure.facturaFinal}). Firma Digital Hash SHA-256: ${closure.firmaHashSha256}`,
       base.tableWidth,
       base.startX
     );
@@ -1558,8 +1790,8 @@ export function generateTaxReportPDF({
       ['Ventas Exentas o No Sujetas', '0.00%', formatBs(exentasBs), formatUsd(tasa > 0 ? exentasBs / tasa : 0)],
       ['Base Imponible Gravable General (G)', '16.00%', formatBs(baseImp16Bs), formatUsd(tasa > 0 ? baseImp16Bs / tasa : 0)],
       ['Débito Fiscal IVA 16% (G)', '16.00%', formatBs(iva16Bs), formatUsd(tasa > 0 ? iva16Bs / tasa : 0)],
-      ['Base Imponible Gravable Reducida (R)', '8.00%', formatBs(closure.baseImponible8Bs || 0), formatUsd(tasa > 0 ? (closure.baseImponible8Bs || 0) / tasa : 0)],
-      ['Débito Fiscal IVA 8% (R)', '8.00%', formatBs(closure.iva8Bs || 0), formatUsd(tasa > 0 ? (closure.iva8Bs || 0) / tasa : 0)],
+      ['Base Imponible Gravable Reducida (R)', '8.00%', formatBs(baseImp8Bs), formatUsd(tasa > 0 ? baseImp8Bs / tasa : 0)],
+      ['Débito Fiscal IVA 8% (R)', '8.00%', formatBs(iva8Bs), formatUsd(tasa > 0 ? iva8Bs / tasa : 0)],
       ['Percepción IGTF en Divisas', '3.00%', formatBs(igtfBs), formatUsd(tasa > 0 ? igtfBs / tasa : 0)],
       ['GRAN TOTAL LIQUIDABLE CIERRE', '-', formatBs(granTotalBs), formatUsd(granTotalUsd)]
     ];
@@ -1601,7 +1833,7 @@ export function generateTaxReportPDF({
       { label: 'DÉBITO FISCAL IVA', value: formatBs(iva16Bs), subtext: 'Liquidación SENIAT', color: COLORS.emerald }
     ], base.tableWidth, base.startX);
 
-    finalizeAndSave(base.doc, `Cierre_${isZ ? 'Z' : 'X'}_${closure.numeroReporteZ || '0001'}_${period}_SIGNUM.pdf`, currentUser);
+    finalizeAndSave(base.doc, `Cierre_${isZ ? 'Z' : 'X'}_${closure.numeroZ}_${period}_SIGNUM.pdf`, currentUser);
     return base.doc;
   }
 
@@ -1616,11 +1848,11 @@ export function generateTaxReportPDF({
       currentUser,
       config
     });
-    const dataset = fiscalClosures || [];
-    const totalZ = dataset.filter(c => (c.tipo || '').toUpperCase() === 'Z').length;
-    const totalAcumBs = dataset.reduce((acc, c) => acc + Number(c.granTotalBs || c.totalBs || 0), 0);
-    const totalIvaBs = dataset.reduce((acc, c) => acc + Number(c.iva16Bs || 0), 0);
-    const totalIgtfBs = dataset.reduce((acc, c) => acc + Number(c.igtfBs || 0), 0);
+    const dataset = (fiscalClosures || []).map(resolveClosureMetrics);
+    const totalZ = dataset.filter(c => c.tipo === 'Z').length;
+    const totalAcumBs = dataset.reduce((acc, c) => acc + c.granTotalBs, 0);
+    const totalIvaBs = dataset.reduce((acc, c) => acc + c.iva16Bs, 0);
+    const totalIgtfBs = dataset.reduce((acc, c) => acc + c.igtfBs, 0);
 
     const cards = [
       { label: 'Cierres Z Registrados', value: `${totalZ} Cierres`, subtext: `${dataset.length} Reportes Totales`, color: COLORS.navy },
@@ -1639,15 +1871,15 @@ export function generateTaxReportPDF({
       base.startX
     );
 
-    const tableData = dataset.map((c, idx) => [
-      c.numeroReporteZ ? `Z-${c.numeroReporteZ}` : `REP-${idx + 1}`,
-      c.tipo || 'Z',
-      c.fechaCierre ? `${String(c.fechaCierre).slice(0, 10)} ${c.horaCierre || ''}` : '2026-10-23',
-      `${c.facturaInicial || 'F-1'} al ${c.facturaFinal || 'F-1'}`,
-      formatBs(c.baseImponible16Bs || 0),
-      formatBs(c.iva16Bs || 0),
-      formatBs(c.granTotalBs || c.totalBs || 0),
-      String(c.firmaHashSha256 || 'HASH-SHA256').slice(0, 12) + '...'
+    const tableData = dataset.map(c => [
+      c.numeroZ.startsWith('Z') ? c.numeroZ : `Z-${c.numeroZ}`,
+      c.tipo,
+      `${c.fechaIso} ${c.hora}`,
+      `${c.facturaInicial} al ${c.facturaFinal}`,
+      formatBs(c.baseImp16Bs),
+      formatBs(c.iva16Bs),
+      formatBs(c.granTotalBs),
+      String(c.firmaHashSha256).slice(0, 12) + '...'
     ]);
 
     autoTable(base.doc, {
@@ -1704,15 +1936,48 @@ export function generateTaxReportPDF({
       currentUser,
       config
     });
-    const dataset = (withholdings && withholdings.length > 0) ? withholdings : purchases;
-    const totalRetenidoUsd = dataset.reduce((acc, w) => acc + Number(w.montoRetenidoUsd || (w.totalUsd || 0) * 0.02 || 0), 0);
-    const totalRetenidoBs = dataset.reduce((acc, w) => acc + Number(w.montoRetenidoBs || (w.montoRetenidoUsd ? w.montoRetenidoUsd * tasa : 0) || 0), 0);
-    const totalBaseUsd = dataset.reduce((acc, w) => acc + Number(w.baseImponibleUsd || w.totalUsd || 0), 0);
+    const dataset = withholdings || [];
+    const normalizedIslr = dataset.map((w, idx) => {
+      const rowRate = Number(w.tasaCambio || w.tasaBcv || w.tasaDolar || tasa) || tasa;
+      const isBsCurrency = w.moneda === 'BS' || w.moneda == null;
+      const baseBs = w.baseImponibleBs != null
+        ? Number(w.baseImponibleBs)
+        : (w.baseImponible != null
+          ? Number(w.baseImponible) * (isBsCurrency ? 1 : rowRate)
+          : Number(w.baseImponibleUsd ?? 0) * rowRate);
+      const baseUsd = w.baseImponibleUsd != null
+        ? Number(w.baseImponibleUsd)
+        : (rowRate > 0 ? baseBs / rowRate : 0);
+      const retBs = w.montoRetenidoBs != null
+        ? Number(w.montoRetenidoBs)
+        : (w.montoRetenido != null
+          ? Number(w.montoRetenido) * (isBsCurrency ? 1 : rowRate)
+          : Number(w.montoRetenidoUsd ?? 0) * rowRate);
+      const retUsd = w.montoRetenidoUsd != null
+        ? Number(w.montoRetenidoUsd)
+        : (rowRate > 0 ? retBs / rowRate : 0);
+      return {
+        comprobante: String(w.comprobante || w.nroComprobante || `RET-ISLR-${1000 + idx}`),
+        fecha: String(w.fechaEmision || w.fecha || '').slice(0, 10) || '-',
+        proveedor: w.proveedorNombre || w.proveedor || w.nombreProveedor || w.provNombre || 'Proveedor',
+        rif: w.proveedorRif || w.rif || w.rifProveedor || 'S/R',
+        factura: String(w.nroFacturaAfectada || w.factura || w.nroFactura || 'S/N'),
+        baseBs,
+        baseUsd,
+        pct: Number(w.porcentajeRetencion ?? 0),
+        retBs,
+        retUsd
+      };
+    });
+    const totalRetenidoUsd = normalizedIslr.reduce((acc, r) => acc + r.retUsd, 0);
+    const totalRetenidoBs = normalizedIslr.reduce((acc, r) => acc + r.retBs, 0);
+    const totalBaseUsd = normalizedIslr.reduce((acc, r) => acc + r.baseUsd, 0);
+    const totalBaseBs = normalizedIslr.reduce((acc, r) => acc + r.baseBs, 0);
 
     const cards = [
       { label: 'Total Retenido Bs.', value: formatBs(totalRetenidoBs), subtext: formatUsd(totalRetenidoUsd), color: COLORS.navy },
-      { label: 'Base Acumulada USD', value: formatUsd(totalBaseUsd), subtext: formatBs(totalBaseUsd * tasa), color: COLORS.cyan },
-      { label: 'Comprobantes Emitidos', value: `${dataset.length} Registros`, subtext: `Período: ${period}`, color: COLORS.emerald },
+      { label: 'Base Acumulada USD', value: formatUsd(totalBaseUsd), subtext: formatBs(totalBaseBs), color: COLORS.cyan },
+      { label: 'Comprobantes Emitidos', value: `${normalizedIslr.length} Registros`, subtext: `Período: ${period}`, color: COLORS.emerald },
       { label: 'Tasa BCV Aplicada', value: formatBs(tasa), subtext: 'Cotización Oficial', color: COLORS.amber }
     ];
 
@@ -1726,22 +1991,17 @@ export function generateTaxReportPDF({
       base.startX
     );
 
-    const tableData = dataset.map((w, idx) => {
-      const baseUsd = Number(w.baseImponibleUsd || w.totalUsd || 0);
-      const retUsd = Number(w.montoRetenidoUsd || baseUsd * 0.02);
-      const pct = w.porcentajeRetencion || 2;
-      return [
-        String(w.comprobante || w.nroComprobante || `RET-ISLR-${1000 + idx}`),
-        w.fecha ? String(w.fecha).slice(0, 10) : '2026-10-23',
-        w.proveedor || w.nombreProveedor || w.provNombre || 'Proveedor Mercantil',
-        w.rif || w.rifProveedor || 'J-00000000-0',
-        String(w.factura || w.nroFactura || `FAC-${100 + idx}`),
-        formatBs(baseUsd * tasa),
-        `${pct}%`,
-        formatBs(retUsd * tasa),
-        formatUsd(retUsd)
-      ];
-    });
+    const tableData = normalizedIslr.map(r => [
+      r.comprobante,
+      r.fecha,
+      r.proveedor,
+      r.rif,
+      r.factura,
+      formatBs(r.baseBs),
+      `${r.pct}%`,
+      formatBs(r.retBs),
+      formatUsd(r.retUsd)
+    ]);
 
     autoTable(base.doc, {
       startY: currentY,
@@ -1769,8 +2029,8 @@ export function generateTaxReportPDF({
     const finalYRet = base.doc.lastAutoTable?.finalY || currentY;
     addGrandTotalBox(base.doc, finalYRet + 3.5, [
       { label: 'TOTAL RETENIDO BS.', value: formatBs(totalRetenidoBs), subtext: formatUsd(totalRetenidoUsd), color: COLORS.navy },
-      { label: 'BASE ACUMULADA USD', value: formatUsd(totalBaseUsd), subtext: formatBs(totalBaseUsd * tasa), color: COLORS.cyan },
-      { label: 'COMPROBANTES EMITIDOS', value: `${dataset.length} Retenciones`, subtext: `Período ${period}`, color: COLORS.emerald }
+      { label: 'BASE ACUMULADA USD', value: formatUsd(totalBaseUsd), subtext: formatBs(totalBaseBs), color: COLORS.cyan },
+      { label: 'COMPROBANTES EMITIDOS', value: `${normalizedIslr.length} Retenciones`, subtext: `Período ${period}`, color: COLORS.emerald }
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Comprobantes_Retencion_ISLR_${period}_SIGNUM.pdf`, currentUser);
@@ -1788,15 +2048,38 @@ export function generateTaxReportPDF({
       currentUser,
       config
     });
-    const dataset = (igtfSales && igtfSales.length > 0) ? igtfSales : sales.filter(s => (s.igtfUsd > 0 || s.igtfBs > 0 || s.formaPago === 'EFECTIVO_USD' || s.formaPago === 'DIVISAS'));
-    const totalDivisasUsd = dataset.reduce((acc, s) => acc + Number(s.totalUsd || s.total || 0), 0);
-    const totalIgtfUsd = dataset.reduce((acc, s) => acc + Number(s.igtfUsd || (s.totalUsd || 0) * 0.03 || 0), 0);
-    const totalIgtfBs = totalIgtfUsd * tasa;
+    const dataset = (igtfSales && igtfSales.length > 0)
+      ? igtfSales
+      : sales.filter(s =>
+          isFiscalDocEligible(s) && !s.anulada && s.status !== 'ANULADA' &&
+          (Number(s.igtfUsd || 0) > 0 || Number(s.igtfBs || 0) > 0)
+        );
+    const normalizedIgtf = dataset.map((s, idx) => {
+      const sRate = Number(s.tasaDolar || s.tasaBcv || s.tasaPago || tasa) || tasa;
+      const usd = Number(s.totalUsd ?? s.total ?? 0);
+      const bs = Number(s.totalBs ?? (usd * sRate));
+      const igtfU = Number(s.igtfUsd ?? (s.igtfBs != null && sRate > 0 ? Number(s.igtfBs) / sRate : 0));
+      const igtfB = Number(s.igtfBs ?? (igtfU * sRate));
+      return {
+        factNum: String(s.factNum || s.id || `FAC-${1000 + idx}`),
+        fecha: s.fecha ? String(s.fecha).slice(0, 10) : '-',
+        cliente: s.clienteNombre || s.cliente || 'Consumidor Final',
+        rif: s.clienteRif || s.rif || 'S/R',
+        usd,
+        bs,
+        igtfU,
+        igtfB
+      };
+    });
+    const totalDivisasUsd = normalizedIgtf.reduce((acc, r) => acc + r.usd, 0);
+    const totalDivisasBs = normalizedIgtf.reduce((acc, r) => acc + r.bs, 0);
+    const totalIgtfUsd = normalizedIgtf.reduce((acc, r) => acc + r.igtfU, 0);
+    const totalIgtfBs = normalizedIgtf.reduce((acc, r) => acc + r.igtfB, 0);
 
     const cards = [
       { label: 'IGTF Percibido Bs.', value: formatBs(totalIgtfBs), subtext: formatUsd(totalIgtfUsd), color: COLORS.navy },
-      { label: 'Base Divisas Cobrada', value: formatUsd(totalDivisasUsd), subtext: formatBs(totalDivisasUsd * tasa), color: COLORS.cyan },
-      { label: 'Operaciones en Divisas', value: `${dataset.length} Cobros`, subtext: 'Alícuota Legal 3%', color: COLORS.emerald },
+      { label: 'Base Divisas Cobrada', value: formatUsd(totalDivisasUsd), subtext: formatBs(totalDivisasBs), color: COLORS.cyan },
+      { label: 'Operaciones en Divisas', value: `${normalizedIgtf.length} Cobros`, subtext: 'Alícuota Legal 3%', color: COLORS.emerald },
       { label: 'Tasa BCV Aplicada', value: formatBs(tasa), subtext: 'Cotización Oficial', color: COLORS.amber }
     ];
 
@@ -1810,22 +2093,17 @@ export function generateTaxReportPDF({
       base.startX
     );
 
-    const tableData = dataset.map((s, idx) => {
-      const usd = Number(s.totalUsd || s.total || 0);
-      const igtfU = Number(s.igtfUsd || usd * 0.03);
-      const bs = usd * tasa;
-      return [
-        String(s.id || s.factNum || `FAC-${1000 + idx}`),
-        s.fecha ? String(s.fecha).slice(0, 10) : '2026-10-23',
-        s.cliente || s.clienteNombre || 'Consumidor Final',
-        s.clienteRif || s.rif || 'V-00000000-0',
-        formatUsd(usd),
-        formatBs(bs),
-        '3.00%',
-        formatBs(igtfU * tasa),
-        formatUsd(igtfU)
-      ];
-    });
+    const tableData = normalizedIgtf.map(r => [
+      r.factNum,
+      r.fecha,
+      r.cliente,
+      r.rif,
+      formatUsd(r.usd),
+      formatBs(r.bs),
+      '3.00%',
+      formatBs(r.igtfB),
+      formatUsd(r.igtfU)
+    ]);
 
     autoTable(base.doc, {
       startY: currentY,
@@ -1853,8 +2131,8 @@ export function generateTaxReportPDF({
     const finalYIgtf = base.doc.lastAutoTable?.finalY || currentY;
     addGrandTotalBox(base.doc, finalYIgtf + 3.5, [
       { label: 'IGTF PERCIBIDO BS.', value: formatBs(totalIgtfBs), subtext: formatUsd(totalIgtfUsd), color: COLORS.navy },
-      { label: 'BASE DIVISAS COBRADA', value: formatUsd(totalDivisasUsd), subtext: formatBs(totalDivisasUsd * tasa), color: COLORS.cyan },
-      { label: 'OPERACIONES DIVISAS', value: `${dataset.length} Cobros`, subtext: 'Alícuota 3%', color: COLORS.emerald }
+      { label: 'BASE DIVISAS COBRADA', value: formatUsd(totalDivisasUsd), subtext: formatBs(totalDivisasBs), color: COLORS.cyan },
+      { label: 'OPERACIONES DIVISAS', value: `${normalizedIgtf.length} Cobros`, subtext: 'Alícuota 3%', color: COLORS.emerald }
     ], base.tableWidth, base.startX);
 
     finalizeAndSave(base.doc, `Libro_Especial_IGTF_3Pct_${period}_SIGNUM.pdf`, currentUser);
@@ -1872,10 +2150,14 @@ export function generateTaxReportPDF({
       currentUser,
       config
     });
-    const totVentasBs = sales.reduce((acc, s) => acc + (Number(s.totalUsd || s.total || 0) * tasa), 0);
-    const totComprasBs = purchases.reduce((acc, p) => acc + (Number(p.totalUsd || p.total || 0) * tasa), 0);
-    const debitoIvaBs = totVentasBs - (totVentasBs / 1.16);
-    const creditoIvaBs = totComprasBs - (totComprasBs / 1.16);
+    const ventasRows = adaptSalesRowsForTaxPdf(sales);
+    const comprasRows = adaptPurchaseRowsForTaxPdf(purchases);
+    const totVentasBs = ventasRows.reduce((acc, r) => acc + (r.totalVentasBs || 0), 0);
+    const baseVentasBs = ventasRows.reduce((acc, r) => acc + (r.baseImponible16Bs || 0) + (r.baseImponible8Bs || 0) + (r.baseImponible31Bs || 0), 0);
+    const debitoIvaBs = ventasRows.reduce((acc, r) => acc + (r.iva16Bs || 0) + (r.iva8Bs || 0) + (r.iva31Bs || 0), 0);
+    const totComprasBs = comprasRows.reduce((acc, r) => acc + (r.totalComprasBs || 0), 0);
+    const baseComprasBs = comprasRows.reduce((acc, r) => acc + (r.baseImponible16Bs || 0), 0);
+    const creditoIvaBs = comprasRows.reduce((acc, r) => acc + (r.creditoFiscal16Bs || 0), 0);
     const balanceIvaBs = debitoIvaBs - creditoIvaBs;
 
     const cards = [
@@ -1896,12 +2178,12 @@ export function generateTaxReportPDF({
     );
 
     const tableData = [
-      ['Total Ventas Facturadas (Bruto con IVA)', formatBs(totVentasBs), formatUsd(totVentasBs / tasa)],
-      ['Base Imponible de Ventas Gravables (16%)', formatBs(totVentasBs / 1.16), formatUsd((totVentasBs / 1.16) / tasa)],
-      ['Débito Fiscal IVA 16% Determinado', formatBs(debitoIvaBs), formatUsd(debitoIvaBs / tasa)],
-      ['Total Compras y Servicios Recibidos (Bruto con IVA)', formatBs(totComprasBs), formatUsd(totComprasBs / tasa)],
-      ['Base Imponible de Compras Gravables (16%)', formatBs(totComprasBs / 1.16), formatUsd((totComprasBs / 1.16) / tasa)],
-      ['Crédito Fiscal IVA 16% Deducible', formatBs(creditoIvaBs), formatUsd(creditoIvaBs / tasa)],
+      ['Total Ventas Fiscales Facturadas (Inc. Exentas/IVA)', formatBs(totVentasBs), formatUsd(totVentasBs / tasa)],
+      ['Base Imponible de Ventas Gravables (16% / 8% / 31%)', formatBs(baseVentasBs), formatUsd(baseVentasBs / tasa)],
+      ['Débito Fiscal IVA Determinado', formatBs(debitoIvaBs), formatUsd(debitoIvaBs / tasa)],
+      ['Total Compras y Servicios Recibidos (Inc. Exentas/IVA)', formatBs(totComprasBs), formatUsd(totComprasBs / tasa)],
+      ['Base Imponible de Compras Gravables (16% / 8%)', formatBs(baseComprasBs), formatUsd(baseComprasBs / tasa)],
+      ['Crédito Fiscal IVA Deducible', formatBs(creditoIvaBs), formatUsd(creditoIvaBs / tasa)],
       ['BALANCE NETO IVA (DÉBITO - CRÉDITO)', formatBs(balanceIvaBs), formatUsd(balanceIvaBs / tasa)]
     ];
 
@@ -1945,16 +2227,16 @@ export function generateTaxReportPDF({
     config
   });
 
-  const dataset = isVentas ? sales : purchases;
-  const totalFacturadoBs = dataset.reduce((acc, d) => acc + (Number(d.totalUsd || d.total || 0) * tasa), 0);
-  const baseImponibleBs = totalFacturadoBs / 1.16;
-  const ivaTotalBs = totalFacturadoBs - baseImponibleBs;
+  const bookRows = isVentas ? adaptSalesRowsForTaxPdf(sales) : adaptPurchaseRowsForTaxPdf(purchases);
+  const totalFacturadoBs = bookRows.reduce((acc, r) => acc + (isVentas ? (r.totalVentasBs || 0) : (r.totalComprasBs || 0)), 0);
+  const baseImponibleBs = bookRows.reduce((acc, r) => acc + (r.baseImponible16Bs || 0) + (r.baseImponible8Bs || 0) + (r.baseImponible31Bs || 0), 0);
+  const ivaTotalBs = bookRows.reduce((acc, r) => acc + (isVentas ? ((r.iva16Bs || 0) + (r.iva8Bs || 0) + (r.iva31Bs || 0)) : (r.creditoFiscal16Bs || 0)), 0);
 
   const cards = [
     { label: isVentas ? 'Total Ventas Facturadas' : 'Total Compras Registradas', value: formatBs(totalFacturadoBs), subtext: formatUsd(totalFacturadoBs / tasa), color: COLORS.navy },
-    { label: 'Base Imponible (16%)', value: formatBs(baseImponibleBs), subtext: 'Alícuota General', color: COLORS.cyan },
+    { label: 'Base Imponible Gravable', value: formatBs(baseImponibleBs), subtext: 'Alícuotas 16%/8%/31%', color: COLORS.cyan },
     { label: isVentas ? 'Débito Fiscal IVA' : 'Crédito Fiscal IVA', value: formatBs(ivaTotalBs), subtext: 'Liquidación SENIAT', color: COLORS.emerald },
-    { label: 'Documentos Período', value: `${dataset.length} Registros`, subtext: `Período: ${period}`, color: COLORS.amber }
+    { label: 'Documentos Fiscales', value: `${bookRows.length} Registros`, subtext: `Período: ${period}`, color: COLORS.amber }
   ];
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
@@ -1968,24 +2250,17 @@ export function generateTaxReportPDF({
     base.startX
   );
 
-  const tableData = dataset.map((d, idx) => {
-    const totalUsd = Number(d.totalUsd || d.total || 0);
-    const totBs = totalUsd * tasa;
-    const baseBs = totBs / 1.16;
-    const ivaBs = totBs - baseBs;
-
-    return [
-      String(idx + 1),
-      d.fecha ? String(d.fecha).slice(0, 10) : '2026-10-23',
-      String(d.factNum || d.id || `FAC-${1000 + idx}`),
-      String(d.controlNum || d.nroControl || `00-${String(idx + 1).padStart(6, '0')}`),
-      d.clienteNombre || d.cliente || d.proveedorNombre || d.proveedor || 'Consumidor Final',
-      d.clienteRif || d.rif || d.proveedorRif || 'J-00000000-0',
-      formatBs(baseBs),
-      formatBs(ivaBs),
-      formatBs(totBs)
-    ];
-  });
+  const tableData = bookRows.map(r => [
+    String(r.numOperacion),
+    String(r.fecha || '-').slice(0, 10),
+    String(r.numeroFactura || 'S/N'),
+    String(r.numeroControl || '-'),
+    String((isVentas ? r.nombreCliente : r.nombreProveedor) || 'Consumidor Final'),
+    String((isVentas ? r.rifCliente : r.rifProveedor) || 'S/R'),
+    formatBs((r.baseImponible16Bs || 0) + (r.baseImponible8Bs || 0) + (r.baseImponible31Bs || 0)),
+    formatBs(isVentas ? ((r.iva16Bs || 0) + (r.iva8Bs || 0) + (r.iva31Bs || 0)) : (r.creditoFiscal16Bs || 0)),
+    formatBs(isVentas ? (r.totalVentasBs || 0) : (r.totalComprasBs || 0))
+  ]);
 
   autoTable(base.doc, {
     startY: currentY,
@@ -8751,23 +9026,25 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
     rateType = resolveRecordRateType(inspectedReceipt, 'BCV');
   } else if (isFiscalDocumentForRatePolicy(inspectedReceipt)) {
     const monUp = String(inspectedReceipt.monedaPago || '').toUpperCase().trim();
-    rateType = rawMontoBs <= 0 && (monUp === 'USD' || monUp === 'US$' || explicitRateVal === 1) ? 'USD' : 'BCV';
+    const monDirect = isDirectCurrencyRateType(monUp) ? normalizeRateType(monUp, { fallback: 'USD' }) : 'USD';
+    rateType = rawMontoBs <= 0 && (isDirectCurrencyRateType(monUp) || explicitRateVal === 1) ? monDirect : 'BCV';
   } else {
     const monUp = String(inspectedReceipt.monedaPago || '').toUpperCase().trim();
-    if (rawMontoBs <= 0 && (monUp === 'USD' || monUp === 'US$' || monUp === 'USDT' || monUp === 'USDC' || explicitRateVal === 1)) {
-      rateType = 'USD';
+    if (rawMontoBs <= 0 && (isDirectCurrencyRateType(monUp) || explicitRateVal === 1)) {
+      rateType = normalizeRateType(monUp, { fallback: 'USD' });
     } else {
       const classified = classifyCollectionRateType(inspectedReceipt, resolveExchangeRates(config));
       rateType = normalizeRateType(classified, { fallback: 'BCV' });
     }
   }
 
+  const isDirectRate = isDirectCurrencyRateType(rateType);
   const rateMeta = resolveRateMeta(rateType, 'BCV');
   const tasa = effectiveHistoricalRate > 1
     ? effectiveHistoricalRate
-    : (rateType === 'USD' ? 1 : (Number(config?.tasaDolar || config?.tasaBcv) || 827.73));
+    : (isDirectRate ? 1 : (Number(config?.tasaDolar || config?.tasaBcv) || 827.73));
   const cobNum = String(receipt.cobNum || receipt.reciboNum || receipt.id || makeCorrelative('REC-COB')).trim();
-  const totalBs = rateType === 'USD' && !(rawMontoBs > 0)
+  const totalBs = isDirectRate && !(rawMontoBs > 0)
     ? 0
     : (rawMontoBs > 0 ? round2Pdf(rawMontoBs) : round2Pdf(totalUsd * tasa));
 
@@ -8777,9 +9054,9 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
     moduleCode: 'COB',
     currentUser,
     config,
-    rateLabel: rateType === 'USD' && totalBs <= 0 ? 'Moneda Cobro' : rateMeta.label,
+    rateLabel: isDirectRate && totalBs <= 0 ? 'Moneda Cobro' : rateMeta.label,
     rateValue: tasa,
-    rateDisplay: rateType === 'USD' && totalBs <= 0 ? 'Divisa Directa USD' : null
+    rateDisplay: isDirectRate && totalBs <= 0 ? rateMeta.label : null
   });
 
   let y = base.startY;
@@ -8787,7 +9064,7 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
     base.doc,
     y,
     'CONSTANCIA DE RECAUDACIÓN',
-    `Método / Cuenta: ${receipt.formaPago || receipt.metodo || 'Transferencia'} • Clasif.: ${rateMeta.badgeText} (${rateType === 'USD' && totalBs <= 0 ? 'Divisa USD' : formatBs(tasa)}) • Ref.: ${receipt.referencia || receipt.ref || 'N/A'}`,
+    `Método / Cuenta: ${receipt.formaPago || receipt.metodo || 'Transferencia'} • Clasif.: ${rateMeta.badgeText} (${isDirectRate && totalBs <= 0 ? rateMeta.label : formatBs(tasa)}) • Ref.: ${receipt.referencia || receipt.ref || 'N/A'}`,
     base.tableWidth,
     base.startX
   );
@@ -8811,7 +9088,7 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
         `Recibo N°: ${cobNum}`,
         `Fecha de Cobro: ${formatDateTimeVe(receipt.fecha || receipt.fechaCobro)}`,
         `Cuenta / Caja Receptora: ${receipt.cuentaNombre || receipt.formaPago || 'Caja / Banco'}`,
-        `Clasificación Tasa: ${rateMeta.label} (${rateType === 'USD' && totalBs <= 0 ? 'USD Directo' : formatBs(tasa)})`,
+        `Clasificación Tasa: ${rateMeta.label} (${isDirectRate && totalBs <= 0 ? rateMeta.shortLabel : formatBs(tasa)})`,
         `Referencia Bancaria: ${receipt.referencia || 'Directo'}`
       ]
     }
@@ -8823,6 +9100,7 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
     const restUsd = Number(d.saldoRestanteUsd ?? Math.max(0, antUsd - abUsd));
     const dRateType = resolveRecordRateType(d, rateType);
     const dRateMeta = resolveRateMeta(dRateType, rateType);
+    const dIsDirect = isDirectCurrencyRateType(dRateType);
     const dTasa = resolveEffectiveRateNumber(d, tasa) > 1 ? resolveEffectiveRateNumber(d, tasa) : tasa;
     const dRawBs = Number(d.montoBs ?? d.montoCobrado ?? (list.length === 1 && totalBs > 0 ? totalBs : round2Pdf(abUsd * dTasa)));
     return [
@@ -8830,10 +9108,10 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
       String(d.factNum || d.numeroDoc || 'DOC'),
       String(d.tipoDoc || inspectedReceipt.tipoDoc || 'FACTURA'),
       dRateMeta.badgeText,
-      dRateType === 'USD' && !(dRawBs > 0) ? 'USD' : formatBs(dTasa).replace(/^Bs\.\s*/, ''),
+      dIsDirect && !(dRawBs > 0) ? dRateMeta.shortLabel : formatBs(dTasa).replace(/^Bs\.\s*/, ''),
       formatUsd(antUsd),
       formatUsd(abUsd),
-      dRateType === 'USD' && !(dRawBs > 0) ? 'Divisa USD' : formatBs(dRawBs),
+      dIsDirect && !(dRawBs > 0) ? dRateMeta.label : formatBs(dRawBs),
       formatUsd(restUsd)
     ];
   });
@@ -8865,8 +9143,8 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
     base.doc,
     base.doc.lastAutoTable?.finalY || y,
     [
-      { label: 'TOTAL RECIBIDO EN DIVISAS', value: formatUsd(totalUsd), subtext: `${rateMeta.label}: ${rateType === 'USD' && totalBs <= 0 ? 'USD Directo' : formatBs(tasa)}`, color: COLORS.emerald },
-      { label: 'TOTAL RECIBIDO EN BOLÍVARES', value: rateType === 'USD' && totalBs <= 0 ? 'Divisa USD Directa' : formatBs(totalBs), subtext: `Ref. ${receipt.referencia || cobNum}`, color: COLORS.navy }
+      { label: 'TOTAL RECIBIDO EN DIVISAS', value: formatUsd(totalUsd), subtext: `${rateMeta.label}: ${isDirectRate && totalBs <= 0 ? rateMeta.shortLabel : formatBs(tasa)}`, color: COLORS.emerald },
+      { label: 'TOTAL RECIBIDO EN BOLÍVARES', value: isDirectRate && totalBs <= 0 ? rateMeta.label : formatBs(totalBs), subtext: `Ref. ${receipt.referencia || cobNum}`, color: COLORS.navy }
     ],
     ['DEPARTAMENTO DE COBRANZAS / CAJA', 'RECIBIDO CONFORME (CLIENTE)'],
     base.tableWidth,
@@ -9121,16 +9399,18 @@ export function generateSeniatRetentionVoucherPDF({
   const provRif = record.proveedorRif || record.rif || supplier?.rif || 'J-00000000-0';
   const provDir = record.proveedorDireccion || supplier?.direccion || 'Venezuela';
 
-  const docFactura = String(record.nroFacturaAfectada || record.numeroFactura || record.factNum || 'S/N');
-  const docControl = String(record.nroControl || record.numeroControl || '00-000000');
+  const docFactura = String(record.nroFacturaAfectada || record.numeroFactura || record.numeroFacturaProv || record.factNum || 'S/N');
+  const docControl = String(record.nroControl || record.numeroControl || record.controlNum || '00-000000');
 
-  const totalCompraBs = Number(record.montoTotalBs ?? ((Number(record.montoTotalFactura || record.totalUsd || 0)) * (record.moneda === 'BS' ? 1 : tasa)));
-  const baseImpBs = Number(record.baseImponibleBs ?? ((Number(record.baseImponible || record.subtotalUsd || 0)) * (record.moneda === 'BS' ? 1 : tasa)));
-  const ivaCausadoBs = isIslr ? 0 : Number(record.ivaBs ?? (baseImpBs * 0.16));
-  const pctRet = Number(isIslr ? (record.porcentajeRetencion || 2) : (record.porcentajeRetencionIva || 75));
+  const mult = record.moneda === 'BS' ? 1 : tasa;
+  const totalCompraBs = Number(record.montoTotalBs ?? record.totalBs ?? ((Number(record.montoTotalFactura ?? record.totalUsd ?? 0)) * mult));
+  const baseImpBs = Number(record.baseImponibleBs ?? record.baseGeneralBs ?? ((Number(record.baseImponible ?? record.baseGeneralUsd ?? record.subtotalUsd ?? 0)) * mult));
+  const explicitIvaBs = record.ivaBs ?? record.ivaGeneralBs ?? ((record.ivaGeneralUsd ?? record.ivaUsd) != null ? Number(record.ivaGeneralUsd ?? record.ivaUsd) * mult : undefined);
+  const ivaCausadoBs = isIslr ? 0 : Number(explicitIvaBs ?? (baseImpBs * 0.16));
+  const pctRet = Number(isIslr ? (record.porcentajeRetencion ?? 0) : (record.porcentajeRetencionIva ?? 0));
   const sustraendoBs = Number(record.sustraendo || 0);
   const retenidoBs = isIslr
-    ? Number(record.montoRetenido ?? Math.max(0, (baseImpBs * pctRet) / 100 - sustraendoBs))
+    ? Number(record.montoRetenidoBs ?? record.montoRetenido ?? Math.max(0, (baseImpBs * pctRet) / 100 - sustraendoBs))
     : Number(record.retencionIvaBs ?? ((ivaCausadoBs * pctRet) / 100));
 
   const base = createBaseReport({
@@ -9259,22 +9539,28 @@ export function generateSeniatRetentionTxt({ purchases = [], config = {}, period
   const agentRif = String(config?.rif || 'J304019274').replace(/[^A-Z0-9]/gi, '').toUpperCase();
   const period = periodoFiscal || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   const rows = (purchases || [])
-    .filter(p => Number(p.retencionIvaBs || 0) > 0)
+    .filter(p => {
+      if (!(Number(p.retencionIvaBs || 0) > 0)) return false;
+      const comp = String(p.numeroComprobanteRetencionIva || p.comprobanteRetencionIva || '').trim();
+      if (!/^\d{14}$/.test(comp)) return false;
+      const rifVal = validateRif(p.proveedorRif || p.rif || '');
+      return rifVal.isValid && !/^[VEJPG]0{9}$/.test(rifVal.clean || '');
+    })
     .map(p => {
-      const provRif = String(p.proveedorRif || p.rif || 'J000000000').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      const provRif = validateRif(p.proveedorRif || p.rif || '').clean;
       const fec = String(p.fecha || new Date().toISOString()).slice(0, 10);
       const tipoOp = 'C';
       const tipoDoc = p.tipoDoc === 'NOTA_CREDITO' ? '03' : (p.tipoDoc === 'NOTA_DEBITO' ? '02' : '01');
-      const nroFact = String(p.numeroFactura || p.factNum || '0').trim();
-      const nroCtrl = String(p.numeroControl || '00-000000').trim();
-      const tasa = Number(p.tasaDolar || config?.tasaDolar || 1);
-      const totBs = Number(p.totalBs ?? ((Number(p.totalUsd || 0)) * tasa)).toFixed(2);
-      const baseBs = Number(p.baseGeneralBs ?? ((Number(p.subtotalUsd || 0)) * tasa)).toFixed(2);
+      const nroFact = String(p.numeroFactura || p.numeroFacturaProv || p.factNum || '0').trim();
+      const nroCtrl = String(p.numeroControl || p.nroControl || '00-000000').trim();
+      const tasa = Number(p.tasaDolar || p.tasaBcv || config?.tasaDolar || 1);
+      const totBs = Number(p.totalBs ?? ((Number(p.totalUsd ?? 0)) * tasa)).toFixed(2);
+      const baseBs = Number(p.baseGeneralBs ?? ((Number(p.baseGeneralUsd ?? p.subtotalUsd ?? 0)) * tasa)).toFixed(2);
       const retBs = Number(p.retencionIvaBs || 0).toFixed(2);
       const docAfec = String(p.documentoAfectado || '0').trim();
-      const comp = String(p.numeroComprobanteRetencionIva || `${period}00000001`).trim();
-      const exentoBs = Number(p.baseExentaBs || 0).toFixed(2);
-      const alicuota = '16.00';
+      const comp = String(p.numeroComprobanteRetencionIva || p.comprobanteRetencionIva).trim();
+      const exentoBs = Number(p.baseExentaBs ?? ((Number(p.baseExentaUsd ?? 0)) * tasa)).toFixed(2);
+      const alicuota = Number(p.alicuota16 ?? p.alicuota ?? 16).toFixed(2);
       const nroExp = '0';
       return [agentRif, period, fec, tipoOp, tipoDoc, provRif, nroFact, nroCtrl, totBs, baseBs, retBs, docAfec, comp, exentoBs, alicuota, nroExp].join('\t');
     });

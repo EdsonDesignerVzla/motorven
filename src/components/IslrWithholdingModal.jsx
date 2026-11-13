@@ -21,6 +21,7 @@ import {
   Check
 } from 'lucide-react';
 import { formatBs, formatUsd } from '../services/formatService';
+import { generateNextIslrVoucherNumber } from '../services/fiscalService';
 import { saveSupabaseProfitIslrWithholding } from '../services/supabaseService';
 import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generatePaymentOrderPDF } from '../services/pdfReportService';
 
@@ -34,6 +35,7 @@ export default function IslrWithholdingModal({
   accountsPayable = [],
   purchases = [],
   suppliers = [],
+  profitSuppliers = [],
   config = {},
   currentUser = null,
   onRefresh
@@ -43,6 +45,30 @@ export default function IslrWithholdingModal({
   const [selectedVoucher, setSelectedVoucher] = useState(null);
   const [saving, setSaving] = useState(false);
   const [notification, setNotification] = useState(null);
+
+  const defaultRateStr = Number(config?.tasaDolar || 0) > 0 ? Number(config.tasaDolar).toFixed(2) : '';
+
+  const mergedSuppliers = useMemo(() => {
+    const byKey = new Map();
+    [...(profitSuppliers || []), ...(suppliers || [])].forEach((s) => {
+      if (!s) return;
+      const code = String(s.co_prov || s.coProv || s.codigo || s.id || '').trim();
+      const name = String(s.prov_des || s.provDes || s.nombre || '').trim();
+      const rif = String(s.rif || '').trim();
+      const key = (code || rif || name).toUpperCase();
+      if (!key || byKey.has(key)) return;
+      byKey.set(key, {
+        ...s,
+        co_prov: code || rif,
+        coProv: code || rif,
+        prov_des: name || code,
+        provDes: name || code,
+        rif,
+        direc1: s.direc1 || s.direccion || ''
+      });
+    });
+    return Array.from(byKey.values());
+  }, [profitSuppliers, suppliers]);
 
   // New Voucher Form State
   const [formData, setFormData] = useState({
@@ -60,7 +86,7 @@ export default function IslrWithholdingModal({
     porcentajeRetencion: '2',
     sustraendo: '0',
     moneda: 'BS',
-    tasaCambio: '36.50',
+    tasaCambio: defaultRateStr,
     montoTotalFactura: ''
   });
 
@@ -108,7 +134,7 @@ export default function IslrWithholdingModal({
 
   // Handle supplier change
   const handleSupplierSelect = (coProv) => {
-    const sup = suppliers.find(s => s.co_prov === coProv || s.coProv === coProv);
+    const sup = mergedSuppliers.find(s => s.co_prov === coProv || s.coProv === coProv || s.id === coProv);
     const ben = beneficiaries.find(b => b.codBen === coProv || b.cod_ben === coProv);
     if (sup) {
       setFormData(prev => ({
@@ -158,9 +184,7 @@ export default function IslrWithholdingModal({
     }
 
     setSaving(true);
-    const now = new Date();
-    const period = formData.periodoFiscal.replace('-', '');
-    const nroComp = `${period}${String(Math.floor(100000 + Math.random() * 900000))}`;
+    const nroComp = generateNextIslrVoucherNumber(withholdings, formData.periodoFiscal);
 
     const newVoucher = {
       nroComprobante: nroComp,
@@ -642,7 +666,7 @@ export default function IslrWithholdingModal({
                             nroControl: doc.nroControl || '',
                             baseImponible: (doc.montoNet || doc.monto_net || doc.saldo || 0).toString(),
                             montoTotalFactura: (doc.montoTotal || doc.monto_bru || 0).toString(),
-                            tasaCambio: (doc.tasa || 36.5).toString()
+                            tasaCambio: (doc.tasa || config?.tasaDolar || '').toString()
                           }));
                         }
                       }}
@@ -673,7 +697,7 @@ export default function IslrWithholdingModal({
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:border-amber-500"
                       >
                         <option value="">-- Seleccione Proveedor Registrado --</option>
-                        {suppliers.map(s => (
+                        {mergedSuppliers.map(s => (
                           <option key={s.id || s.co_prov} value={s.co_prov || s.coProv}>
                             {s.prov_des || s.provDes} ({s.rif || s.co_prov})
                           </option>
@@ -847,7 +871,7 @@ export default function IslrWithholdingModal({
                         value={formData.tasaCambio}
                         onChange={e => setFormData({ ...formData, tasaCambio: e.target.value })}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:border-amber-500 font-mono"
-                        placeholder="36.50"
+                        placeholder={defaultRateStr || '911.62'}
                       />
                     </div>
                   </div>

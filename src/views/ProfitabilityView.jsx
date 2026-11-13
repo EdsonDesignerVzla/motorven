@@ -26,17 +26,21 @@ import {
   CheckCircle2,
   FileSpreadsheet,
   Zap,
-  Info
+  Info,
+  Receipt
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import SkuProfitabilityModal from '../components/SkuProfitabilityModal';
 import OperationalPandLModal from '../components/OperationalPandLModal';
+import ExpensesPayrollPanel from '../components/ExpensesPayrollPanel';
 import MotorvenLogo from '../components/MotorvenLogo';
 import { generateProfitabilityPDF } from '../services/pdfReportService';
+import { aggregateSkuAnalytics, PRICE_LIST_TIERS } from '../utils/profitabilityUtils';
 
 export default function ProfitabilityView({
   products = [],
   profitInvoices = [],
+  sales = [],
   profitPurchases = [],
   profitSellers = [],
   profitTransports = [],
@@ -44,13 +48,28 @@ export default function ProfitabilityView({
   profitReturns = [],
   profitInventoryAdjustments = [],
   profitIslrWithholdings = [],
+  profitIncomeExpenseAccounts = [],
+  profitCashDesks = [],
+  profitBankAccounts = [],
   cashMovements = [],
+  commissionSettlements = [],
+  expenses = [],
+  payroll = [],
+  employees = [],
   clients = [],
   config,
   onSyncProfit,
+  onSaveExpense,
+  onDeleteExpense,
+  onSaveEmployee,
+  onDeleteEmployee,
+  onSavePayroll,
+  onDeletePayroll,
+  onAddCashMovement,
   currentUser
 }) {
-  const [activeSubTab, setActiveSubTab] = useState('sku'); // 'sku' | 'lines' | 'abc' | 'reports'
+  const [activeSubTab, setActiveSubTab] = useState('sku'); // 'sku' | 'lines' | 'abc' | 'expenses_payroll' | 'reports'
+  const [priceTier, setPriceTier] = useState(PRICE_LIST_TIERS.MAYOR); // 'MAYOR' | 'DETAL'
   const [searchFilter, setSearchFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [sortBy, setSortBy] = useState('utilidad_desc'); // 'utilidad_desc' | 'margen_desc' | 'ventas_desc' | 'stock_desc'
@@ -69,71 +88,25 @@ export default function ProfitabilityView({
     }
   };
 
-  // Cálculo de ventas y CMV acumulado por SKU a partir de facturas reales de Profit
+  // Cálculo unificado de ventas, devoluciones y margen por SKU (Profit + POS sin duplicar)
   const productAnalytics = useMemo(() => {
-    // Mapa de acumuladores por código de producto
-    const salesMap = {};
-
-    profitInvoices.forEach((fac) => {
-      if (fac.anulado) return;
-      const items = Array.isArray(fac.items) ? fac.items : [];
-      items.forEach((item) => {
-        const itemCode = (item.articuloId || item.codigo || '').trim();
-        if (!itemCode) return;
-        if (!salesMap[itemCode]) {
-          salesMap[itemCode] = {
-            unidadesVendidas: 0,
-            litrosVendidos: 0,
-            facturadoBs: 0,
-            facturadoUsd: 0,
-            facturasCount: 0
-          };
-        }
-        const cant = Number(item.cantidad || 0);
-        const lts = Number(item.litrosTotales || (cant * (item.litrosUnitarios || 12)));
-        const netoBs = Number(item.totalNeto || 0);
-        const netoUsd = fac.tasa && fac.tasa > 0 ? netoBs / fac.tasa : (fac.totNetoUsd || 0);
-
-        salesMap[itemCode].unidadesVendidas += cant;
-        salesMap[itemCode].litrosVendidos += lts;
-        salesMap[itemCode].facturadoBs += netoBs;
-        salesMap[itemCode].facturadoUsd += netoUsd;
-        salesMap[itemCode].facturasCount += 1;
-      });
+    const rawList = aggregateSkuAnalytics({
+      products,
+      profitInvoices,
+      sales,
+      profitReturns,
+      priceTier
     });
 
-    // Enriquecer el catálogo de productos con rentabilidad
-    return products.map((p) => {
-      const code = (p.codigo || p.id || '').trim();
-      const sData = salesMap[code] || {
-        unidadesVendidas: 0,
-        litrosVendidos: 0,
-        facturadoBs: 0,
-        facturadoUsd: 0,
-        facturasCount: 0
-      };
-
-      const costoUsd = Number(p.costoUsd || p.costo_usd || 0);
-      const precioA = Number(p.precioA || p.precio_a || 0);
-      const precioB = Number(p.precioB || p.precio_b || 0);
+    return rawList.map((p) => {
+      const costoUsd = p.costo;
+      const precioA = p.precioLista;
+      const precioB = p.precioDetal;
       const precioC = Number(p.precioC || p.precio_c || 0);
-      const stock = Number(p.stock || 0);
-      const litrosPorUnidad = resolveProductLitersPerUnit(p);
-
-      // Margen unitario Lista A
-      const margenUnitarioUsd = precioA - costoUsd;
-      const margenUnitarioPct = precioA > 0 ? (margenUnitarioUsd / precioA) * 100 : 0;
-
-      // Costo de Mercancía Vendida (CMV / COGS)
-      const cmvUsd = sData.unidadesVendidas * costoUsd;
-      // Utilidad Bruta Real
-      const utilidadBrutaUsd = sData.facturadoUsd - cmvUsd;
-      const margenRealPct = sData.facturadoUsd > 0 ? (utilidadBrutaUsd / sData.facturadoUsd) * 100 : margenUnitarioPct;
-
-      // Valorización de inventario actual
-      const inventarioCostoUsd = stock * costoUsd;
-      const inventarioVentaUsd = stock * precioA;
-      const inventarioUtilidadPotencialUsd = inventarioVentaUsd - inventarioCostoUsd;
+      const litrosPorUnidad = resolveProductLitersPerUnit(p) || p.litrosUnidad;
+      const margenUnitarioUsd = p.utilidadUnitUsd;
+      const margenUnitarioPct = p.margenListaPct;
+      const margenRealPct = p.facturadoHistoricoUsd > 0 ? p.margenHistoricoPct : margenUnitarioPct;
 
       return {
         ...p,
@@ -141,23 +114,22 @@ export default function ProfitabilityView({
         precioA,
         precioB,
         precioC,
-        stock,
         litrosPorUnidad,
         margenUnitarioUsd,
         margenUnitarioPct,
-        unidadesVendidas: sData.unidadesVendidas,
-        litrosVendidos: sData.litrosVendidos,
-        facturadoUsd: sData.facturadoUsd,
-        facturadoBs: sData.facturadoBs,
-        cmvUsd,
-        utilidadBrutaUsd,
+        unidadesVendidas: p.vendidasHistoricas,
+        litrosVendidos: p.litrosVendidosHistoricos,
+        facturadoUsd: p.facturadoHistoricoUsd,
+        facturadoBs: p.facturadoHistoricoUsd * tasa,
+        cmvUsd: p.cmvHistoricoUsd,
+        utilidadBrutaUsd: p.utilidadHistoricaUsd,
         margenRealPct,
-        inventarioCostoUsd,
-        inventarioVentaUsd,
-        inventarioUtilidadPotencialUsd
+        inventarioCostoUsd: p.valorCostoTotal,
+        inventarioVentaUsd: p.valorVentaTotal,
+        inventarioUtilidadPotencialUsd: p.utilidadPotencialUsd
       };
     });
-  }, [products, profitInvoices]);
+  }, [products, profitInvoices, sales, profitReturns, priceTier, tasa]);
 
   // Clasificación Pareto ABC acumulativa
   const abcAnalysis = useMemo(() => {
@@ -371,12 +343,20 @@ export default function ProfitabilityView({
       products: filteredProducts,
       sales: profitInvoices,
       purchases: profitPurchases,
+      priceTier,
       config,
       currentUser
     });
   };
 
-  const categoriesList = ['ALL', 'Gasolina', 'Diésel', 'Transmisión', 'Industrial', 'Hidráulico', 'Grasas', 'Frenos'];
+  const categoriesList = useMemo(() => {
+    const dynCats = new Set(
+      (Array.isArray(products) ? products : [])
+        .map((p) => String(p?.categoria || '').trim())
+        .filter(Boolean)
+    );
+    return ['ALL', ...Array.from(dynCats).sort()];
+  }, [products]);
 
   return (
     <div className="view-container">
@@ -409,6 +389,24 @@ export default function ProfitabilityView({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
+            <button
+              type="button"
+              onClick={() => setPriceTier(PRICE_LIST_TIERS.MAYOR)}
+              className={`btn btn-sm ${priceTier === PRICE_LIST_TIERS.MAYOR ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ borderRadius: 0, fontSize: '0.78rem' }}
+            >
+              Lista Mayor
+            </button>
+            <button
+              type="button"
+              onClick={() => setPriceTier(PRICE_LIST_TIERS.DETAL)}
+              className={`btn btn-sm ${priceTier === PRICE_LIST_TIERS.DETAL ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ borderRadius: 0, fontSize: '0.78rem' }}
+            >
+              Lista Detal
+            </button>
+          </div>
           <button
             onClick={() => setShowPandLModal(true)}
             className="btn btn-secondary"
@@ -464,7 +462,7 @@ export default function ProfitabilityView({
 
         <div className="card" style={{ padding: '1rem', margin: 0, background: 'var(--bg-surface)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600 }}>
-            <span>VALORIZACIÓN VENTA (A)</span>
+            <span>VALORIZACIÓN VENTA ({priceTier})</span>
             <Package size={15} color="#3b82f6" />
           </div>
           <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#3b82f6', marginTop: '0.25rem' }}>
@@ -529,6 +527,15 @@ export default function ProfitabilityView({
         >
           <Award size={15} />
           <span>Clasificación ABC (Pareto 80/20)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('expenses_payroll')}
+          className={`btn ${activeSubTab === 'expenses_payroll' ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
+        >
+          <Receipt size={15} />
+          <span>Gastos & Nómina ({expenses.length + payroll.length})</span>
         </button>
 
         <button
@@ -1138,13 +1145,36 @@ export default function ProfitabilityView({
         </div>
       )}
 
+      {/* SUB-TAB: GASTOS OPERATIVOS, EMPLEADOS Y NÓMINA */}
+      {activeSubTab === 'expenses_payroll' && (
+        <ExpensesPayrollPanel
+          expenses={expenses}
+          employees={employees}
+          payroll={payroll}
+          profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
+          profitCashDesks={profitCashDesks}
+          profitBankAccounts={profitBankAccounts}
+          config={config}
+          currentUser={currentUser}
+          onSaveExpense={onSaveExpense}
+          onDeleteExpense={onDeleteExpense}
+          onSaveEmployee={onSaveEmployee}
+          onDeleteEmployee={onDeleteEmployee}
+          onSavePayroll={onSavePayroll}
+          onDeletePayroll={onDeletePayroll}
+          onAddCashMovement={onAddCashMovement}
+        />
+      )}
+
       {/* Sku Profitability Modal */}
       {selectedProduct && (
         <SkuProfitabilityModal
           product={selectedProduct}
           profitInvoices={profitInvoices}
+          sales={sales}
           profitPurchases={profitPurchases}
           clients={clients}
+          priceTier={priceTier}
           config={config}
           onClose={() => setSelectedProduct(null)}
         />
@@ -1156,6 +1186,7 @@ export default function ProfitabilityView({
         onClose={() => setShowPandLModal(false)}
         products={products}
         profitInvoices={profitInvoices}
+        sales={sales}
         profitPurchases={profitPurchases}
         profitSellers={profitSellers}
         profitTransports={profitTransports}
@@ -1164,6 +1195,9 @@ export default function ProfitabilityView({
         profitInventoryAdjustments={profitInventoryAdjustments}
         profitIslrWithholdings={profitIslrWithholdings}
         cashMovements={cashMovements}
+        commissionSettlements={commissionSettlements}
+        expenses={expenses}
+        payroll={payroll}
         config={config}
         currentUser={currentUser}
         tasaBcv={tasa}

@@ -91,6 +91,19 @@ export default function MobileAppLayout({
   onUpdateGlobalTarget,
   onUpdateSellerPhoto,
   onUpdateSellerZone,
+  onCommissionSettlementsChange,
+  profitIncomeExpenseAccounts = [],
+  profitInventoryAdjustments = [],
+  commissionSettlements = [],
+  expenses = [],
+  payroll = [],
+  employees = [],
+  onSaveExpense,
+  onDeleteExpense,
+  onSaveEmployee,
+  onDeleteEmployee,
+  onSavePayroll,
+  onDeletePayroll,
   onLogout
 }) {
   const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'cxc' | 'inventario' | 'menu' | <module_id>
@@ -331,6 +344,7 @@ export default function MobileAppLayout({
               profitCollections={profitCollections}
               profitInvoices={profitInvoices}
               profitSellers={profitSellers}
+              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onSyncProfit={onSyncProfit}
               config={config}
               onAddCashMovement={onAddCashMovement}
@@ -351,6 +365,7 @@ export default function MobileAppLayout({
               cashDesks={profitCashDesks}
               bankAccounts={profitBankAccounts}
               cashMovements={cashMovements}
+              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={onAddCashMovement}
               onUpdateCashDesk={onUpdateCashDesk}
               onDeleteCashDesk={onDeleteCashDesk}
@@ -438,6 +453,8 @@ export default function MobileAppLayout({
               onUpdateSellerPhoto={onUpdateSellerPhoto || (async () => {})}
               onUpdateSellerZone={onUpdateSellerZone || (async () => {})}
               onUpdateGlobalTarget={onUpdateGlobalTarget || (async () => {})}
+              onAddCashMovement={onAddCashMovement}
+              onCommissionSettlementsChange={onCommissionSettlementsChange}
             />
           )}
 
@@ -445,10 +462,32 @@ export default function MobileAppLayout({
             <ProfitabilityView
               products={products}
               profitInvoices={profitInvoices}
+              sales={sales}
               profitPurchases={profitPurchases}
               profitSellers={profitSellers}
               profitZones={profitZones}
+              profitReturns={profitReturns}
+              profitInventoryAdjustments={profitInventoryAdjustments}
+              profitIslrWithholdings={profitIslrWithholdings}
+              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
+              profitCashDesks={profitCashDesks}
+              profitBankAccounts={profitBankAccounts}
+              cashMovements={cashMovements}
+              commissionSettlements={commissionSettlements}
+              expenses={expenses}
+              payroll={payroll}
+              employees={employees}
+              clients={clients}
               config={config}
+              onSyncProfit={onSyncProfit}
+              onSaveExpense={onSaveExpense}
+              onDeleteExpense={onDeleteExpense}
+              onSaveEmployee={onSaveEmployee}
+              onDeleteEmployee={onDeleteEmployee}
+              onSavePayroll={onSavePayroll}
+              onDeletePayroll={onDeletePayroll}
+              onAddCashMovement={onAddCashMovement}
+              currentUser={currentUser}
             />
           )}
 

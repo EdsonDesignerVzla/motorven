@@ -31,6 +31,7 @@ import {
 } from './fiscalService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import { getProductWarehouseStocks, validateWarehouseStockForDocument } from './formatService.js';
+import { isDirectCurrencyRateType, normalizeRateType } from '../utils/rateClassificationUtils.js';
 
 if (typeof globalThis.localStorage === 'undefined') {
   const memoryStore = new Map();
@@ -58,6 +59,9 @@ const KEYS = {
   USER_LOGS: 'signum_user_activity_logs',
   SELLERS: 'sm_sellers_v4_native',
   COMMISSION_SETTLEMENTS: 'sm_commission_settlements_v4',
+  EMPLOYEES: 'sm_employees_v4',
+  PAYROLL: 'sm_payroll_v4',
+  EXPENSES: 'sm_expenses_v4',
   NOTIFICATIONS: 'sm_notifications_v4'
 };
 
@@ -810,16 +814,21 @@ export const getCashMovements = () => {
 export const addCashMovement = (mov) => {
   const movements = getCashMovements();
   const resolvedTasa = Number(mov?.tasaPago ?? mov?.tasa_pago ?? mov?.tasa ?? 0);
-  const resolvedTipoTasa = mov?.tipoTasa || mov?.tipo_tasa || (String(mov?.monedaPago || mov?.moneda_pago || mov?.moneda || '').toUpperCase().includes('USD') ? 'USD' : 'BCV');
-  const resolvedMonedaPago = mov?.monedaPago || mov?.moneda_pago || (resolvedTipoTasa === 'USD' ? 'USD' : 'BS');
+  const rawMon = mov?.monedaPago || mov?.moneda_pago || mov?.moneda || '';
+  const resolvedTipoTasa = normalizeRateType(mov?.tipoTasa || mov?.tipo_tasa, {
+    monedaPago: rawMon,
+    fallback: isDirectCurrencyRateType(rawMon) ? normalizeRateType(rawMon, { fallback: 'USD' }) : 'BCV'
+  });
+  const isDirectRate = isDirectCurrencyRateType(resolvedTipoTasa);
+  const resolvedMonedaPago = mov?.monedaPago || mov?.moneda_pago || (isDirectRate ? 'USD' : 'BS');
   const newMov = {
     id: `MOV-${String(movements.length + 1).padStart(3, '0')}`,
     fecha: new Date().toISOString(),
     ...mov,
     tipoTasa: resolvedTipoTasa,
     tipo_tasa: resolvedTipoTasa,
-    tasaPago: resolvedTasa > 0 ? resolvedTasa : (resolvedTipoTasa === 'USD' ? 1 : 0),
-    tasa_pago: resolvedTasa > 0 ? resolvedTasa : (resolvedTipoTasa === 'USD' ? 1 : 0),
+    tasaPago: resolvedTasa > 0 ? resolvedTasa : (isDirectRate ? 1 : 0),
+    tasa_pago: resolvedTasa > 0 ? resolvedTasa : (isDirectRate ? 1 : 0),
     monedaPago: resolvedMonedaPago,
     moneda_pago: resolvedMonedaPago
   };
@@ -1061,6 +1070,54 @@ export const deleteCommissionSettlement = (id) => {
   localStorage.setItem(KEYS.COMMISSION_SETTLEMENTS, JSON.stringify(list));
   return list;
 };
+
+const getCollectionFromStorage = (storageKey) => {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+const saveCollectionItemToStorage = (storageKey, item, prefix) => {
+  const list = getCollectionFromStorage(storageKey);
+  const nowIso = new Date().toISOString();
+  const itemId = item?.id || `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+  const enriched = {
+    ...item,
+    id: itemId,
+    updatedAt: nowIso,
+    createdAt: item?.createdAt || nowIso
+  };
+  const idx = list.findIndex((r) => r.id === itemId);
+  if (idx >= 0) {
+    list[idx] = enriched;
+  } else {
+    list.unshift(enriched);
+  }
+  localStorage.setItem(storageKey, JSON.stringify(list));
+  return enriched;
+};
+
+const deleteCollectionItemFromStorage = (storageKey, id) => {
+  const list = getCollectionFromStorage(storageKey).filter((r) => r.id !== id);
+  localStorage.setItem(storageKey, JSON.stringify(list));
+  return list;
+};
+
+export const getStorageEmployees = () => getCollectionFromStorage(KEYS.EMPLOYEES);
+export const saveStorageEmployee = (emp) => saveCollectionItemToStorage(KEYS.EMPLOYEES, emp, 'EMP');
+export const deleteStorageEmployee = (id) => deleteCollectionItemFromStorage(KEYS.EMPLOYEES, id);
+
+export const getStoragePayroll = () => getCollectionFromStorage(KEYS.PAYROLL);
+export const saveStoragePayroll = (rec) => saveCollectionItemToStorage(KEYS.PAYROLL, rec, 'NOM');
+export const deleteStoragePayroll = (id) => deleteCollectionItemFromStorage(KEYS.PAYROLL, id);
+
+export const getStorageExpenses = () => getCollectionFromStorage(KEYS.EXPENSES);
+export const saveStorageExpense = (exp) => saveCollectionItemToStorage(KEYS.EXPENSES, exp, 'GAS');
+export const deleteStorageExpense = (id) => deleteCollectionItemFromStorage(KEYS.EXPENSES, id);
 
 export const getStorageNotifications = () => {
   try {

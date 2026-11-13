@@ -368,7 +368,11 @@ async function initDatabase() {
       suppliers: JSON.parse(JSON.stringify(realData.REAL_SUPPLIERS || [])),
       cash_movements: JSON.parse(JSON.stringify(realData.REAL_CASH_MOVEMENTS || [])),
       fiscal_closures: JSON.parse(JSON.stringify(realData.REAL_FISCAL_CLOSURES || [])),
-      notifications: JSON.parse(JSON.stringify(realData.REAL_NOTIFICATIONS || []))
+      notifications: JSON.parse(JSON.stringify(realData.REAL_NOTIFICATIONS || [])),
+      expenses: [],
+      payroll: [],
+      employees: [],
+      commission_settlements: []
     };
     saveDatabase();
   } catch (err) {

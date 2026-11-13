@@ -163,7 +163,18 @@ import {
   getSupabaseProfitInventoryAdjustmentsMerged,
   getSupabaseProfitWarehouseTransfersMerged,
   saveSupabaseNotification,
-  logUserActivity
+  logUserActivity,
+  getSupabaseProfitIncomeExpenseAccounts,
+  getSupabaseCommissionSettlements,
+  getSupabaseExpenses,
+  saveSupabaseExpense,
+  deleteSupabaseExpense,
+  getSupabaseEmployees,
+  saveSupabaseEmployee,
+  deleteSupabaseEmployee,
+  getSupabasePayroll,
+  saveSupabasePayroll,
+  deleteSupabasePayroll
 } from './services/supabaseService';
 import soundFX from './services/soundService';
 import {
@@ -384,6 +395,11 @@ function MainApp() {
   const [profitProductCategories, setProfitProductCategories] = useState(() => REAL_PROFIT_PRODUCT_CATEGORIES || []);
   const [profitProductSublines, setProfitProductSublines] = useState(() => REAL_PROFIT_PRODUCT_SUBLINES || []);
   const [profitCurrencies, setProfitCurrencies] = useState(() => REAL_PROFIT_CURRENCIES || []);
+  const [profitIncomeExpenseAccounts, setProfitIncomeExpenseAccounts] = useState([]);
+  const [commissionSettlements, setCommissionSettlements] = useState([]);
+  const [expenses, setExpensesState] = useState([]);
+  const [payroll, setPayrollState] = useState([]);
+  const [employees, setEmployeesState] = useState([]);
   const [pendingOrderToBill, setPendingOrderToBill] = useState(null);
   const [ordersSalesModalTab, setOrdersSalesModalTab] = useState('nuevo');
   const [ordersSalesModalOrder, setOrdersSalesModalOrder] = useState(null);
@@ -475,7 +491,8 @@ function MainApp() {
           pSups, pPurs, pCxp, pPays, pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers,
           pIslr, pBen, pOrders, pWithholdings, pAuditTrails,
           pWarehouses, pLines, pCategories, pSublines, pCurrs,
-          pReqs, pPOs, pRecs
+          pReqs, pPOs, pRecs,
+          pIncExpAccounts, pSettlements, pExpenses, pEmployees, pPayroll
         ] = await Promise.all([
           getSupabaseConfig(),
           getSupabaseProducts(),
@@ -513,7 +530,12 @@ function MainApp() {
           getSupabaseProfitCurrencies(),
           getSupabasePurchaseRequisitions(),
           getSupabasePurchaseOrders(),
-          getSupabaseGoodsReceiptNotesMerged()
+          getSupabaseGoodsReceiptNotesMerged(),
+          getSupabaseProfitIncomeExpenseAccounts(),
+          getSupabaseCommissionSettlements(),
+          getSupabaseExpenses(),
+          getSupabaseEmployees(),
+          getSupabasePayroll()
         ]);
         
         if (isMounted) {
@@ -552,6 +574,11 @@ function MainApp() {
           setProfitProductCategories(pCategories || []);
           setProfitProductSublines(pSublines || []);
           setProfitCurrencies(pCurrs || []);
+          setProfitIncomeExpenseAccounts(pIncExpAccounts || []);
+          setCommissionSettlements(pSettlements || []);
+          setExpensesState(pExpenses || []);
+          setEmployeesState(pEmployees || []);
+          setPayrollState(pPayroll || []);
           setSuppliersState(sups || []);
           setSalesState(sls || []);
           setPurchasesState(purs || []);
@@ -1743,7 +1770,8 @@ function MainApp() {
         latestProds, latestClis, latestOrds, latestBnks, latestCobs, latestFacs, latestSales,
         latestSups, latestPurs, latestCxp, latestPays, latestSellers, latestZones, latestTrans,
         latestReturns, latestAju, latestTra, latestIslr, latestBen, latestOrders, latestWithholdings,
-        latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs
+        latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs,
+        latestIncExp, latestSettlements, latestExpenses, latestEmployees, latestPayroll
       ] = await Promise.all([
         getSupabaseProducts(),
         getSupabaseClients(),
@@ -1770,7 +1798,12 @@ function MainApp() {
         getSupabaseProfitWarehouses(),
         getSupabaseProfitProductLines(),
         getSupabaseProfitProductCategories(),
-        getSupabaseProfitCurrencies()
+        getSupabaseProfitCurrencies(),
+        getSupabaseProfitIncomeExpenseAccounts(),
+        getSupabaseCommissionSettlements(),
+        getSupabaseExpenses(),
+        getSupabaseEmployees(),
+        getSupabasePayroll()
       ]);
       if (latestProds && latestProds.length > 0) setProductsState(latestProds);
       if (latestClis && latestClis.length > 0) setClientsState(latestClis);
@@ -1798,6 +1831,11 @@ function MainApp() {
       if (latestLines) setProfitProductLines(latestLines);
       if (latestCategories) setProfitProductCategories(latestCategories);
       if (latestCurrs) setProfitCurrencies(latestCurrs);
+      if (latestIncExp) setProfitIncomeExpenseAccounts(latestIncExp);
+      if (latestSettlements) setCommissionSettlements(latestSettlements);
+      if (latestExpenses) setExpensesState(latestExpenses);
+      if (latestEmployees) setEmployeesState(latestEmployees);
+      if (latestPayroll) setPayrollState(latestPayroll);
       return true;
     } catch (err) {
       console.warn('Sync Profit feedback:', err.message);
@@ -2686,6 +2724,42 @@ function MainApp() {
     if (fresh) setProfitBankAccounts(fresh);
   };
 
+  const handleSaveExpense = async (expense) => {
+    const saved = await saveSupabaseExpense(expense);
+    const fresh = await getSupabaseExpenses();
+    setExpensesState(fresh);
+    return saved;
+  };
+
+  const handleDeleteExpense = async (id) => {
+    const updated = await deleteSupabaseExpense(id);
+    setExpensesState(updated);
+  };
+
+  const handleSaveEmployee = async (employee) => {
+    const saved = await saveSupabaseEmployee(employee);
+    const fresh = await getSupabaseEmployees();
+    setEmployeesState(fresh);
+    return saved;
+  };
+
+  const handleDeleteEmployee = async (id) => {
+    const updated = await deleteSupabaseEmployee(id);
+    setEmployeesState(updated);
+  };
+
+  const handleSavePayroll = async (rec) => {
+    const saved = await saveSupabasePayroll(rec);
+    const fresh = await getSupabasePayroll();
+    setPayrollState(fresh);
+    return saved;
+  };
+
+  const handleDeletePayroll = async (id) => {
+    const updated = await deleteSupabasePayroll(id);
+    setPayrollState(updated);
+  };
+
   // Ejecutar Cierre Fiscal Diario (Reporte Z)
   const handleExecuteCierreZ = async (cierreZ, closedSaleIds = []) => {
     try {
@@ -2695,12 +2769,12 @@ function MainApp() {
       if (closedSaleIds.length > 0) {
         setSalesState(prev => prev.map(s => {
           if (closedSaleIds.includes(s.id)) {
-            return { ...s, cerrada: true, cierre_z_id: saved.id };
+            return { ...s, cerrada: true, cierre_z_id: saved.id, cierreZId: saved.id };
           }
           return s;
         }));
       }
-      notify.success(`Cierre Fiscal Z #${saved.numero_z || ''} generado exitosamente`);
+      notify.success(`Cierre Fiscal Z #${saved.numeroZ ?? saved.numero_z ?? ''} generado exitosamente`);
       return saved;
     } catch (err) {
       console.error("Error al registrar el Cierre Z:", err);
@@ -3630,6 +3704,19 @@ function MainApp() {
         onUpdateGlobalTarget={handleUpdateGlobalTarget}
         onUpdateSellerPhoto={handleUpdateSellerPhoto}
         onUpdateSellerZone={handleUpdateSellerZone}
+        onCommissionSettlementsChange={setCommissionSettlements}
+        profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
+        profitInventoryAdjustments={profitInventoryAdjustments}
+        commissionSettlements={commissionSettlements}
+        expenses={expenses}
+        payroll={payroll}
+        employees={employees}
+        onSaveExpense={handleSaveExpense}
+        onDeleteExpense={handleDeleteExpense}
+        onSaveEmployee={handleSaveEmployee}
+        onDeleteEmployee={handleDeleteEmployee}
+        onSavePayroll={handleSavePayroll}
+        onDeletePayroll={handleDeletePayroll}
         onLogout={handleLogout}
       />
     );
@@ -3838,6 +3925,8 @@ function MainApp() {
                 onUpdateGlobalTarget={handleUpdateGlobalTarget}
                 onUpdateSellerPhoto={handleUpdateSellerPhoto}
                 onUpdateSellerZone={handleUpdateSellerZone}
+                onAddCashMovement={handleAddCashMovement}
+                onCommissionSettlementsChange={setCommissionSettlements}
                 profitZones={profitZones}
                 currentUser={currentUser}
               />
@@ -3848,6 +3937,7 @@ function MainApp() {
             <ProfitabilityView
               products={products}
               profitInvoices={profitInvoices}
+              sales={sales}
               profitPurchases={profitPurchases}
               profitSellers={profitSellers}
               profitTransports={profitTransports}
@@ -3855,10 +3945,24 @@ function MainApp() {
               profitReturns={profitReturns}
               profitInventoryAdjustments={profitInventoryAdjustments}
               profitIslrWithholdings={profitIslrWithholdings}
+              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
+              profitCashDesks={profitCashDesks}
+              profitBankAccounts={profitBankAccounts}
               cashMovements={cashMovements}
+              commissionSettlements={commissionSettlements}
+              expenses={expenses}
+              payroll={payroll}
+              employees={employees}
               clients={clients}
               config={config}
               onSyncProfit={handleSyncProfit}
+              onSaveExpense={handleSaveExpense}
+              onDeleteExpense={handleDeleteExpense}
+              onSaveEmployee={handleSaveEmployee}
+              onDeleteEmployee={handleDeleteEmployee}
+              onSavePayroll={handleSavePayroll}
+              onDeletePayroll={handleDeletePayroll}
+              onAddCashMovement={handleAddCashMovement}
               currentUser={currentUser}
             />
           )}
@@ -3900,6 +4004,7 @@ function MainApp() {
               cashDesks={profitCashDesks}
               bankAccounts={profitBankAccounts}
               cashMovements={cashMovements}
+              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={handleAddCashMovement}
               onUpdateCashDesk={handleUpdateCashDesk}
               onDeleteCashDesk={handleDeleteCashDesk}
@@ -3960,6 +4065,7 @@ function MainApp() {
               sales={sales}
               purchases={purchases}
               suppliers={suppliers}
+              profitSuppliers={profitSuppliers}
               fiscalClosures={fiscalClosures}
               onExecuteCierreZ={handleExecuteCierreZ}
               config={config}

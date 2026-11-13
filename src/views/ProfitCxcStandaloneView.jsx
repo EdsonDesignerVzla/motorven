@@ -42,7 +42,7 @@ import { formatUsd, formatBs } from '../services/formatService';
 import { getNextInvoiceCorrelativo, getNextNotaEntregaCorrelativo } from '../services/fiscalService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
 import { isCxcInvoiceCancelled, inferCxcDocType } from '../utils/cxcUtils';
-import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber } from '../utils/rateClassificationUtils';
+import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber, isDirectCurrencyRateType, RATE_TYPE_META } from '../utils/rateClassificationUtils';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
@@ -636,7 +636,7 @@ export default function ProfitCxcStandaloneView() {
         tasa: tasaDoc,
         tipoTasa: resolveRecordRateType(inv, 'BCV'),
         tasaPago: resolveEffectiveRateNumber(inv, tasaDoc),
-        monedaPago: inv.monedaPago || inv.moneda_pago || (String(inv.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
+        monedaPago: inv.monedaPago || inv.moneda_pago || (isDirectCurrencyRateType(inv.tipoTasa ?? inv.tipo_tasa) ? 'USD' : 'BS'),
         estado,
         isCarteraActiva,
         observaciones: inv.observaciones || '',
@@ -2136,7 +2136,7 @@ export default function ProfitCxcStandaloneView() {
 
                     {/* 9c. Tasa Aplicada */}
                     <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: '11.5px', fontWeight: 700, color: '#334155', whiteSpace: 'nowrap' }}>
-                      {eff.tipoTasa === 'USD' ? 'Divisa USD' : formatBs(resolveEffectiveRateNumber(eff, tasaBcv))}
+                      {isDirectCurrencyRateType(eff.tipoTasa) ? (RATE_TYPE_META[eff.tipoTasa]?.shortLabel || 'Divisa USD') : formatBs(resolveEffectiveRateNumber(eff, tasaBcv))}
                     </td>
 
                     {/* 10. Monto Factura USD */}

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
 import { generateCashflowPDF, generateExpenseVoucherPDF } from '../services/pdfReportService';
+import { buildExpenseAccountOptions } from '../utils/profitabilityUtils';
 import {
   matchesCashDesk,
   matchesBankAccount,
@@ -73,6 +74,7 @@ export default function CashBankModal({
   cashDesks = [],
   bankAccounts = [],
   cashMovements = [],
+  profitIncomeExpenseAccounts = [],
   onAddMovement,
   onUpdateCashDesk,
   onDeleteCashDesk,
@@ -95,11 +97,18 @@ export default function CashBankModal({
   const [movTransferDestKind, setMovTransferDestKind] = useState('BANCO'); // 'CAJA' | 'BANCO'
   const [movTransferDestId, setMovTransferDestId] = useState('');
   const [movType, setMovType] = useState('EGRESO'); // 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA'
+  const [movCategoria, setMovCategoria] = useState('GASTO_OPERATIVO');
+  const [movCuentaGasto, setMovCuentaGasto] = useState('');
   const [movConcept, setMovConcept] = useState('');
   const [movMontoUsd, setMovMontoUsd] = useState('');
   const [movMontoBs, setMovMontoBs] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const expenseAccountOptions = useMemo(
+    () => buildExpenseAccountOptions(profitIncomeExpenseAccounts),
+    [profitIncomeExpenseAccounts]
+  );
 
   // Estado para arqueo interactivo
   const [arqueoDeskId, setArqueoDeskId] = useState('');
@@ -475,11 +484,14 @@ export default function CashBankModal({
       const nowIso = new Date().toISOString();
       const targetLabel = sourceRecord ? (sourceRecord.descripcion || sourceRecord.bancoNombre || sourceRecord.id) : 'Caja General';
       const targetId = sourceRecord ? (sourceRecord.id || sourceRecord.coCaja || sourceRecord.codCta) : '';
+      const selectedProfitAcc = expenseAccountOptions.profitAccounts.find((a) => a.code === movCuentaGasto);
       const newMov = {
         id: `MOV-${Date.now()}`,
         fecha: nowIso,
         tipo: movType,
-        categoria: movType === 'INGRESO' ? 'DEPOSITO_MANUAL' : 'GASTO_OPERATIVO',
+        categoria: movType === 'INGRESO' ? 'DEPOSITO_MANUAL' : (movCategoria || 'GASTO_OPERATIVO'),
+        cuentaGasto: selectedProfitAcc?.code || null,
+        cuentaGastoDesc: selectedProfitAcc?.descrip || '',
         concepto: movConcept.trim(),
         montoUsd: effectiveUsd,
         monto_usd: effectiveUsd,
@@ -510,6 +522,7 @@ export default function CashBankModal({
       }
 
       setMovConcept('');
+      setMovCuentaGasto('');
       setMovMontoUsd('');
       setMovMontoBs('');
       setShowNewMovForm(false);
@@ -1501,6 +1514,57 @@ export default function CashBankModal({
                         />
                       </div>
                     </div>
+
+                    {movType !== 'TRANSFERENCIA' && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                            Categoría P&L
+                          </label>
+                          <select
+                            className="filter-select"
+                            value={movCategoria}
+                            onChange={(e) => setMovCategoria(e.target.value)}
+                            style={{ width: '100%' }}
+                          >
+                            {movType === 'INGRESO' ? (
+                              <>
+                                <option value="DEPOSITO_MANUAL">Reposición / Aporte</option>
+                                <option value="VENTAS">Ventas / Ingreso Operativo</option>
+                                <option value="COBRO_CXC">Cobro CxC</option>
+                              </>
+                            ) : (
+                              expenseAccountOptions.standardCategories.map((c) => (
+                                <option key={c.id} value={c.id}>{c.label}</option>
+                              ))
+                            )}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                            Cuenta Profit Plus
+                          </label>
+                          <select
+                            className="filter-select"
+                            value={movCuentaGasto}
+                            onChange={(e) => {
+                              const code = e.target.value;
+                              setMovCuentaGasto(code);
+                              const acc = expenseAccountOptions.profitAccounts.find((a) => a.code === code);
+                              if (acc && movType === 'EGRESO' && ['NOMINA', 'COMISIONES', 'FLETES', 'IMPUESTOS'].includes(acc.pnlBucket)) {
+                                setMovCategoria(acc.pnlBucket);
+                              }
+                            }}
+                            style={{ width: '100%' }}
+                          >
+                            <option value="">-- Sin cuenta contable Profit --</option>
+                            {expenseAccountOptions.profitAccounts.map((acc) => (
+                              <option key={acc.id} value={acc.code}>{acc.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
 
                     <div style={{ marginBottom: '1rem' }}>
                       <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>

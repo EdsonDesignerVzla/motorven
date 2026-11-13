@@ -9,6 +9,9 @@ import {
   generateVatRetentionVoucherNumber,
   generateSeniatVatRetentionTxt,
   generateSeniatIslrXml,
+  encodeIso88591Bytes,
+  generateNextIslrVoucherNumber,
+  isFiscalDocEligible,
   buildLibroVentasRows,
   buildLibroComprasRows,
   generarReporteX,
@@ -537,6 +540,85 @@ assert.strictEqual(formatNumberVe(1000), '1.000,00');
 assert.strictEqual(formatUnitVe(1234.5), '1.234,50');
 assert.strictEqual(formatUnitVe(1234.6, 0), '1.235');
 console.log('  ✓ Precisión y formato americano (USD) / venezolano (Bs. y unidades) verificados.');
+
+// 15. Saneamiento de Libros Fiscales, Retenciones SENIAT (TXT/XML ISO-8859-1) y Cierre Z
+console.log('15. Verificando Saneamiento SENIAT: exclusión de NE, 0-fallback, anuladas, XML escaping y Cierre Z...');
+
+assert.strictEqual(isFiscalDocEligible({ tipoDoc: 'FACTURA', id: '000016' }), true);
+assert.strictEqual(isFiscalDocEligible({ tipoDoc: 'NOTA_CREDITO', numeroDoc: 'NC-001' }), true);
+assert.strictEqual(isFiscalDocEligible({ tipoDoc: 'NOTA_ENTREGA', id: 'NE-000100' }), false);
+assert.strictEqual(isFiscalDocEligible({ tipoDoc: 'FACTURA', id: 'NE-000100' }), false);
+assert.strictEqual(isFiscalDocEligible({ tipoDoc: 'COTIZACION', id: 'COT-001' }), false);
+
+const librosSalesFixture = [
+  // Debe excluirse por ser Nota de Entrega
+  { id: 'NE-000010', numeroDoc: 'NE-000010', tipoDoc: 'NOTA_ENTREGA', fecha: '2026-11-10', clienteNombre: 'No Fiscal', clienteRif: 'J-31115365-9', totalUsd: 100, totalBs: 91162, baseGeneralBs: 91162 },
+  // Factura exenta: baseGeneralBs = 0 debe mantenerse en 0 y NO absorber subtotalBs como Base 16%
+  { id: '000020', numeroDoc: '000020', controlNum: '00-000020', tipoDoc: 'FACTURA', fecha: '2026-11-10', clienteNombre: 'Exento S.A.', clienteRif: 'J-31115365-9', subtotalBs: 10000, baseExentaBs: 10000, baseGeneralBs: 0, ivaGeneralBs: 0, totalBs: 10000, totalUsd: 10.97, comprobanteRetencionIva: '20261100000055' },
+  // Factura gravada anulada: debe salir como 01-ANU y montos 0.00
+  { id: '000021', numeroDoc: '000021', controlNum: '00-000021', tipoDoc: 'FACTURA', fecha: '2026-11-11', clienteNombre: 'Anulada C.A.', clienteRif: 'J-31115365-9', status: 'ANULADA', anulada: true, baseGeneralBs: 50000, ivaGeneralBs: 8000, totalBs: 58000 },
+  // Factura gravada al 31% Adicional
+  { id: '000022', numeroDoc: '000022', controlNum: '00-000022', tipoDoc: 'FACTURA', fecha: '2026-11-12', clienteNombre: 'Lujo & Motor C.A.', clienteRif: 'J-2929465827', baseAdicionalBs: 10000, ivaAdicionalBs: 3100, baseGeneralBs: 0, ivaGeneralBs: 0, totalBs: 13100 }
+];
+const lvRows = buildLibroVentasRows(librosSalesFixture, { tasaDolar: 911.62 });
+assert.strictEqual(lvRows.length, 3, 'Libro de Ventas debe excluir NOTA_ENTREGA y conservar 3 documentos fiscales');
+assert.strictEqual(lvRows[0].baseImponible16Bs, 0, 'Factura exenta NO debe heredar subtotalBs en baseImponible16Bs');
+assert.strictEqual(lvRows[0].ventasExentasBs, 10000);
+assert.strictEqual(lvRows[0].comprobanteRetencion, '20261100000055');
+assert.strictEqual(lvRows[1].tipoTransaccion, '01-ANU');
+assert.strictEqual(lvRows[1].totalVentasBs, 0, 'Factura anulada debe reportar Bs. 0.00');
+assert.strictEqual(lvRows[2].baseImponible31Bs, 10000);
+assert.strictEqual(lvRows[2].iva31Bs, 3100);
+assert.strictEqual(lvRows[2].rifValido, false, 'Debe marcar RIF inválido de 10 dígitos en Libro de Ventas');
+
+const comprasFixture = [
+  // Compra con 0 IVA, sin comprobante de retención ni ISLR: NO debe inventar IVA 16%, retención 75%, ni comprobante
+  { id: 'COMP-001', numeroFacturaProv: 'F-900', numeroControl: '00-900', fecha: '2026-11-05', proveedorNombre: 'Prov Exento', proveedorRif: 'J-31115365-9', baseExentaUsd: 100, baseGeneralUsd: 0, ivaGeneralUsd: 0, totalUsd: 100, totalBs: 90000, tasaBcv: 900, retencionIvaBs: 0 },
+  // Nota de Crédito en compras
+  { id: 'NC-COMP-002', tipoDoc: 'NOTA_CREDITO', numeroFacturaProv: 'NC-10', numeroControl: '00-010', fecha: '2026-11-06', proveedorNombre: 'Prov Gravado', proveedorRif: 'J-30491823-2', baseGeneralBs: 10000, ivaGeneralBs: 1600, totalBs: 11600 }
+];
+const lcRows = buildLibroComprasRows(comprasFixture, { tasaDolar: 911.62 });
+assert.strictEqual(lcRows[0].creditoFiscal16Bs, 0, 'Libro de Compras NO debe inventar IVA 16% sobre compra sin IVA');
+assert.strictEqual(lcRows[0].retencionIvaBs, 0, 'Libro de Compras NO debe inventar Retención IVA 75%');
+assert.strictEqual(lcRows[0].comprobanteRetencion, '', 'Libro de Compras NO debe inventar número de comprobante inexistente');
+assert.strictEqual(lcRows[0].retencionIslrBs, 0, 'Libro de Compras NO debe inventar Retención ISLR 2%');
+assert.strictEqual(lcRows[1].tipoTransaccion, '03-REG');
+assert.strictEqual(lcRows[1].totalComprasBs, -11600, 'Nota de Crédito en compras debe ir en negativo');
+
+// TXT Retención IVA: excluye registros sin monto retenido / comprobante / RIF válido y respeta alícuota 0.00
+const txtSeniat = generateSeniatVatRetentionTxt([
+  { proveedorRif: 'J-31115365-9', montoRetenidoBs: 0, comprobanteNro: '20261100000001' },
+  { proveedorRif: 'J-31115365-9', montoRetenidoBs: 500, comprobanteNro: 'INVALID' },
+  { proveedorRif: 'J-00000000-0', montoRetenidoBs: 500, comprobanteNro: '20261100000002' },
+  { proveedorRif: 'J-30491823-9', montoRetenidoBs: 500, comprobanteNro: '20261100000004' },
+  { proveedorRif: 'J-30491823-2', montoRetenidoBs: 1200, comprobanteNro: '20261100000003', numeroFactura: 'F-1', numeroControl: '00-1', totalDocumentoBs: 11600, baseImponibleBs: 10000, alicuota: 8.00 }
+], { rif: 'J-31115365-9' });
+const txtLines = txtSeniat.split('\n').filter(Boolean);
+assert.strictEqual(txtLines.length, 1, 'Solo el registro con retención > 0, comprobante 14 dígitos y RIF válido debe entrar al TXT');
+assert(txtLines[0].includes('\t8.00\t0'), 'TXT debe preservar alícuota real (8.00) y no sobrescribir con 16.00');
+
+// XML ISLR + ISO-8859-1 + correlativo secuencial sin Math.random
+const islrVoucherNext = generateNextIslrVoucherNumber([{ nroComprobante: '20261100000007' }], '202611');
+assert.strictEqual(islrVoucherNext, '20261100000008');
+const islrXml = generateSeniatIslrXml([
+  { proveedorRif: 'J-30491823-2', nroFacturaAfectada: 'F-88&A', nroControl: '00-<88>', codigoConceptoIslr: '053', baseImponible: 10000, porcentajeRetencion: 3, moneda: 'BS' }
+], { rif: 'J-31115365-9' }, '202611');
+assert(islrXml.includes('F-88&amp;A') && islrXml.includes('00-&lt;88&gt;'), 'XML ISLR debe escapar caracteres reservados (&, <, >)');
+assert(islrXml.includes('<CodigoConcepto>053</CodigoConcepto>'), 'XML ISLR debe leer esquema profit_islr_withholdings');
+const latin1Bytes = encodeIso88591Bytes('ÑO');
+assert.deepStrictEqual(Array.from(latin1Bytes), [0xD1, 0x4F], 'ISO-8859-1 debe codificar Ñ como byte único 0xD1');
+
+// Reporte X y Cierre Z anti-colisión frente a Z-00000001 con numero_z="0000"
+const repX = generarReporteX({ sales: librosSalesFixture, config: { tasaDolar: 911.62 } });
+assert.strictEqual(repX.totalDocumentos, 2, 'Reporte X solo debe contar documentos fiscales no anulados (excluye NE y ANULADA)');
+const { cierreZ: cierreZTest } = await ejecutarCierreZ({
+  sales: [librosSalesFixture[1]],
+  previousClosures: [{ id: 'Z-00000001', tipo: 'Z', numeroZ: '0000', numeroCierre: 0, granTotalHistoricoBs: 1000 }],
+  config: { tasaDolar: 911.62, rif: 'J-31115365-9' }
+});
+assert.strictEqual(cierreZTest.id, 'Z-00000002', 'Cierre Z no debe colisionar con Z-00000001 aunque numero_z sea "0000"');
+assert.strictEqual(cierreZTest.numeroZ, 2);
+console.log('  ✓ Saneamiento SENIAT completo (Libros, Retenciones IVA/ISLR, Reporte X y Cierre Z) verificado.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS PRUEBAS UNITARIAS FISCALES PASARON EXITOSAMENTE (100% OK) ---');

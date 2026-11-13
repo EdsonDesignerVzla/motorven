@@ -131,6 +131,8 @@ export default function SellersView({
   onUpdateGlobalTarget,
   onUpdateSellerPhoto,
   onUpdateSellerZone,
+  onAddCashMovement,
+  onCommissionSettlementsChange,
   currentUser
 }) {
   const notify = useNotification();
@@ -524,6 +526,7 @@ export default function SellersView({
     if (confirmed) {
       const updated = await deleteSupabaseCommissionSettlement(id);
       setSettlements(updated);
+      if (onCommissionSettlementsChange) onCommissionSettlementsChange(updated);
       notify.success(`Liquidación ${id} anulada correctamente`);
     }
   };
@@ -532,8 +535,11 @@ export default function SellersView({
     try {
       const list = await getSupabaseCommissionSettlements();
       setSettlements(list);
+      if (onCommissionSettlementsChange) onCommissionSettlementsChange(list);
     } catch {
-      setSettlements(getCommissionSettlements());
+      const localList = getCommissionSettlements();
+      setSettlements(localList);
+      if (onCommissionSettlementsChange) onCommissionSettlementsChange(localList);
     }
     notify.success('Liquidación de comisiones guardada exitosamente.');
   };
@@ -1868,6 +1874,7 @@ export default function SellersView({
           tasaBcv={config?.tasaDolar || 827.73}
           initialMonth={selectedMonth}
           onSettlementSaved={handleSettlementSaved}
+          onAddCashMovement={onAddCashMovement}
         />
       )}
 

@@ -65,7 +65,12 @@ const DB_TABLE_TO_UI_ID = {
   profit_beneficiaries: 'beneficiaries',
   profit_payment_orders: 'payment_orders',
   profit_islr_withholdings: 'islr_withholdings',
-  profit_audit_trails: 'audit_trails'
+  profit_audit_trails: 'audit_trails',
+  profit_income_expense_accounts: 'income_expense_accounts',
+  commission_settlements: 'commission_settlements',
+  employees: 'employees',
+  payroll: 'payroll',
+  expenses: 'expenses'
 };
 
 let broadcastChannel = null;
