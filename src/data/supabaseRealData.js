@@ -1,6 +1,6 @@
 /**
  * DUMP REAL Y SINCRONIZADO DE LA BASE DE DATOS SUPABASE (PostgreSQL)
- * Generado el: 2026-11-13T21:07:32.447Z
+ * Generado el: 2026-11-14T02:13:25.529Z
  */
 import REAL_SIGNUM_MOTORVEN from './dump/signum_motorven.json' with { type: 'json' };
 import REAL_CONFIG from './dump/config.json' with { type: 'json' };
