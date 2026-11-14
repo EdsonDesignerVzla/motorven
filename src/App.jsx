@@ -3827,8 +3827,6 @@ function MainApp() {
                 onSaveClient={handleSaveClient}
                 onApproveClient={handleApproveClient}
                 onRejectClient={handleRejectClient}
-                onProceedToPOS={handleProceedToInvoiceFromOrder}
-                onProcessSale={handleProcessSale}
                 onSyncProfit={handleSyncProfit}
               />
             </ModuleErrorBoundary>

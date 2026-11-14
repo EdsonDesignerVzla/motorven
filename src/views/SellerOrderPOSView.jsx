@@ -44,25 +44,29 @@ import {
   resolveClientContributorType,
   computeContributorTypeCounts,
   calculateFiscalTaxes,
-  validateRif
+  validateRif,
+  getCanonicalDocKey,
+  dedupeCanonicalDocs
 } from '../services/fiscalService';
 import {
   resolveCreditDaysFromTerm,
   calculateExpirationDate,
   formatDateVe,
+  parseInvoiceDateInfo,
   evaluateClientCreditPolicy,
   evaluateClientCreditPortfolioSummary,
   isClientAssignedToSeller,
   encodeClientRequestMetadata,
   decodeClientRequestMetadata,
-  getAuthorizedApproverGroups
+  getAuthorizedApproverGroups,
+  canUserGrantCreditOverride
 } from '../services/creditPolicyService';
 import { generateSellerOrderPDF, generateThirdPartyStatementPDF } from '../services/pdfReportService';
 import { saveSupabaseNotification } from '../services/supabaseService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import ClientApprovalsModal from '../components/ClientApprovalsModal';
 import { canApproveClients, getClientApprovalStatus, isClientApproved } from '../services/authService';
-import { calculateSellerCommissionSummary, calculateProjectedOrderCommission } from '../services/commissionService';
+import { calculateSellerCommissionSummary, calculateProjectedOrderCommission, matchesSeller } from '../services/commissionService';
 import { useNotification } from '../context/NotificationContext';
 
 const normalizeCategoryText = (val) =>
@@ -122,18 +126,31 @@ export default function SellerOrderPOSView({
 
   // Comisiones en tiempo real del asesor activo (regla oficial MOTORVEN: base sin IVA, docs 100% pagados + proyección al día 4%)
   const sellerCommissionRealtime = useMemo(() => {
-    const nowMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
-    const monthInvoices = (profitInvoices || []).filter((inv) => {
-      const raw = String(inv?.fechaEmision || inv?.fec_emis || inv?.fecha || '').trim();
-      if (!raw) return true;
-      return raw.slice(0, 7) === nowMonthKey || /^\d{2}\/\d{2}\/\d{4}$/.test(raw) && `${raw.slice(6, 10)}-${raw.slice(3, 5)}` === nowMonthKey;
+    const nowMonthKey = getVeDateKey(new Date()).slice(0, 7);
+    const seenKeys = new Set();
+    const profitFiltered = dedupeCanonicalDocs(profitInvoices || []).filter((inv) => {
+      if (!inv || inv.anulada || inv.anulado) return false;
+      const ck = getCanonicalDocKey(inv);
+      if (ck) seenKeys.add(ck);
+      const raw = inv?.fechaEmision || inv?.fec_emis || inv?.fecEmis || inv?.fecha || inv?.created_at;
+      const dateKey = getVeDateKey(parseInvoiceDateInfo(raw)?.date || raw);
+      return Boolean(dateKey && dateKey.slice(0, 7) === nowMonthKey);
     });
+    const localSalesFiltered = dedupeCanonicalDocs(sales || []).filter((s) => {
+      if (!s || s.anulada || s.anulado || String(s.estado || s.status || '').toUpperCase() === 'ANULADA') return false;
+      const ck = getCanonicalDocKey(s);
+      if (ck && seenKeys.has(ck)) return false;
+      const raw = s?.fechaEmision || s?.fecha || s?.created_at;
+      const dateKey = getVeDateKey(parseInvoiceDateInfo(raw)?.date || raw);
+      return Boolean(dateKey && dateKey.slice(0, 7) === nowMonthKey);
+    });
+    const monthInvoices = [...profitFiltered, ...localSalesFiltered];
     const baseSummary = calculateSellerCommissionSummary(
       { coVen: sellerCode, venDes: sellerName },
-      { invoices: monthInvoices.length > 0 ? monthInvoices : profitInvoices, collections: profitCollections, tasaBcv }
+      { invoices: monthInvoices, collections: profitCollections, tasaBcv }
     );
     return baseSummary;
-  }, [profitInvoices, profitCollections, sellerCode, sellerName, tasaBcv]);
+  }, [profitInvoices, sales, profitCollections, sellerCode, sellerName, tasaBcv]);
 
   // Estados principales de la preventa / venta por oficina
   const [modalidadVenta, setModalidadVenta] = useState('PREVENTA'); // 'PREVENTA' | 'OFICINA'
@@ -172,6 +189,7 @@ export default function SellerOrderPOSView({
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [showClientApprovalsModal, setShowClientApprovalsModal] = useState(false);
   const userCanApproveClients = canApproveClients(currentUser);
+  const userCanGrantCreditOverride = canUserGrantCreditOverride(currentUser);
 
   // Estados de Cartera de Clientes del Vendedor y Alertas de Vencimiento
   const [showClientsPortfolioModal, setShowClientsPortfolioModal] = useState(false);
@@ -267,7 +285,8 @@ export default function SellerOrderPOSView({
 
       const rawDate = ord.fechaEmision || ord.fecha || ord.created_at;
       if (rawDate) {
-        const orderTime = new Date(rawDate).getTime();
+        const parsedOrderDate = parseInvoiceDateInfo(rawDate)?.date;
+        const orderTime = parsedOrderDate ? parsedOrderDate.getTime() : new Date(rawDate).getTime();
         if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) return;
       }
 
@@ -361,19 +380,52 @@ export default function SellerOrderPOSView({
   }, [clients, clientSearchText]);
 
   const pendingClientRequestsCount = useMemo(() => {
-    if (!Array.isArray(clients)) return 0;
-    if (userCanApproveClients) {
-      return clients.filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length;
-    }
     const uname = String(currentUser?.username || '').trim().toLowerCase();
     const coVen = String(currentUser?.co_ven || currentUser?.coVen || '').trim().toUpperCase();
-    return clients.filter(c => {
-      if (getClientApprovalStatus(c) !== 'PENDIENTE') return false;
-      const reqUname = String(c?.solicitadoPorUsername || c?.solicitado_por_username || '').trim().toLowerCase();
-      const ven = String(c?.vendedorAsignado || c?.vendedor_asignado || '').trim().toUpperCase();
-      return (uname && reqUname === uname) || (coVen && ven === coVen);
-    }).length;
-  }, [clients, userCanApproveClients, currentUser]);
+    const seenRifs = new Set();
+    let count = 0;
+
+    if (Array.isArray(clients)) {
+      clients.forEach((c) => {
+        if (getClientApprovalStatus(c) !== 'PENDIENTE') return;
+        const matchesUser = userCanApproveClients || (() => {
+          const reqUname = String(c?.solicitadoPorUsername || c?.solicitado_por_username || '').trim().toLowerCase();
+          const ven = String(c?.vendedorAsignado || c?.vendedor_asignado || '').trim().toUpperCase();
+          return (uname && reqUname === uname) || (coVen && ven === coVen);
+        })();
+        if (!matchesUser) return;
+        const rk = normalizeRifKey(c.rif || c.co_cli || c.id);
+        if (rk) seenRifs.add(rk);
+        count++;
+      });
+    }
+
+    if (Array.isArray(orders)) {
+      orders.forEach((o) => {
+        if (!o || String(o.tipoDoc || o.tipo_doc || '').toUpperCase() !== 'SOLICITUD_CLIENTE') return;
+        if (String(o.status || o.estado || '').toUpperCase() !== 'PENDIENTE_APROBACION') return;
+        const decoded = decodeClientRequestMetadata(o);
+        const matchesUser = userCanApproveClients || (() => {
+          const reqCoVen = String(decoded.vendedorCoVen || decoded.vendedorAsignado || '').trim().toUpperCase();
+          const reqUser = String(decoded.solicitadoPorUsername || '').trim().toLowerCase();
+          const reqSellerName = String(decoded.vendedorNombre || decoded.vendedorId || '').trim().toLowerCase();
+          const normSellerName = String(sellerName || '').trim().toLowerCase();
+          return (
+            (coVen && reqCoVen === coVen) ||
+            (uname && reqUser === uname) ||
+            (normSellerName && reqSellerName === normSellerName)
+          );
+        })();
+        if (!matchesUser) return;
+        const rk = normalizeRifKey(o.clienteRif || o.cliente_rif || decoded.rif || o.id);
+        if (rk && seenRifs.has(rk)) return;
+        if (rk) seenRifs.add(rk);
+        count++;
+      });
+    }
+
+    return count;
+  }, [clients, orders, userCanApproveClients, currentUser, sellerName]);
 
   const [clientTypeFilter, setClientTypeFilter] = useState('ALL');
   const clientContributorCounts = useMemo(
@@ -876,7 +928,11 @@ export default function SellerOrderPOSView({
       setLastEmittedOrder(savedOrder);
       clearCart();
       setShowSuccessModal(true);
-      notify.success(`¡${isNotaEntrega ? 'Nota de Entrega' : 'Factura Fiscal'} ${orderCorrelativo} enviada a Caja exitosamente!`);
+      if (effectiveStatus === 'RETENIDO_CREDITO') {
+        notify.warning(`Orden ${orderCorrelativo} guardada como RETENIDO POR CRÉDITO y enviada a Flujo Comercial / Gerencia para su aprobación.`);
+      } else {
+        notify.success(`¡${isNotaEntrega ? 'Nota de Entrega' : 'Factura Fiscal'} ${orderCorrelativo} enviada a Caja exitosamente!`);
+      }
     } catch (err) {
       console.error('Error emitiendo pedido:', err);
       notify.error('Error al registrar la preventa: ' + (err.message || 'Error de conexión'));
@@ -897,10 +953,10 @@ export default function SellerOrderPOSView({
       if (tDoc === 'SOLICITUD_CLIENTE') return false;
       const ordCoVen = String(o.vendedorCoVen || o.vendedor_co_ven || '').trim().toUpperCase();
       const ordVendedor = String(o.vendedorNombre || o.vendedorId || o.creadoPor || '').trim().toLowerCase();
-      const isSeller =
-        (normSellerCode && ordCoVen && ordCoVen === normSellerCode) ||
-        (normSellerName && ordVendedor && (ordVendedor === normSellerName || ordVendedor.includes(normSellerName)));
-      const orderDateVe = getVeDateKey(o.fechaEmision || o.fecha || o.created_at);
+      const isSeller = ordCoVen && normSellerCode
+        ? (ordCoVen === normSellerCode || matchesSeller({ coVen: sellerCode, venDes: sellerName }, o))
+        : Boolean(normSellerName && ordVendedor && ordVendedor === normSellerName);
+      const orderDateVe = getVeDateKey(parseInvoiceDateInfo(o.fechaEmision || o.fecha || o.created_at)?.date || (o.fechaEmision || o.fecha || o.created_at));
       return Boolean(isSeller && orderDateVe === todayVe);
     });
   }, [orders, sellerName, sellerCode]);
@@ -1151,14 +1207,14 @@ export default function SellerOrderPOSView({
         tipo: 'sistema',
         severidad: 'info',
         modulo: 'pedidos',
-        titulo: `Nueva Solicitud de Cliente: ${cleanName} (${cleanRif})`,
+        titulo: `Nueva Solicitud de Cliente: ${cleanName} (${formattedRif})`,
         mensaje: `El asesor ${sellerName} (${sellerCode}) envió la solicitud ${requestId} para aprobar a "${cleanName}" en Flujo Comercial.`,
         destinatario_rol: 'GERENCIA',
         destinatario_usuario: 'ALL',
         origen: 'PREVENTA_MOVIL',
         metadata: {
           solicitudId: requestId,
-          rif: cleanRif,
+          rif: formattedRif,
           vendedor: sellerName
         }
       }).catch(() => {});
@@ -1501,7 +1557,14 @@ export default function SellerOrderPOSView({
                 {(pendingClientRequestsCount > 0 || userCanApproveClients || onSaveClient) && (
                   <button
                     type="button"
-                    onClick={() => setShowClientApprovalsModal(true)}
+                    onClick={() => {
+                      if (!userCanApproveClients && sellerClientRequests.length > 0) {
+                        setPortfolioTab('SOLICITUDES');
+                        setShowClientsPortfolioModal(true);
+                      } else {
+                        setShowClientApprovalsModal(true);
+                      }
+                    }}
                     className="btn btn-secondary btn-sm"
                     style={{
                       fontSize: '0.72rem',
@@ -2296,7 +2359,7 @@ export default function SellerOrderPOSView({
                   value={condicionPago}
                   onChange={(e) => {
                     const nextVal = e.target.value;
-                    if (nextVal === '30_DIAS' && condicionPago !== '30_DIAS') {
+                    if (nextVal !== condicionPago) {
                       setCreditOverrideApproved(false);
                     }
                     setCondicionPago(nextVal);
@@ -2369,21 +2432,35 @@ export default function SellerOrderPOSView({
                       {effectiveIsAprobado ? '✓ CRÉDITO ' : '⚠ CRÉDITO '}
                       {effectiveStatusLabel}
                     </strong>
-                    <button
-                      type="button"
-                      onClick={() => setShowCreditApprovalModal(true)}
-                      className="btn btn-sm"
-                      style={{
+                    {userCanGrantCreditOverride ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowCreditApprovalModal(true)}
+                        className="btn btn-sm"
+                        style={{
+                          padding: '2px 7px',
+                          fontSize: '0.63rem',
+                          fontWeight: 800,
+                          background: creditOverrideApproved ? 'rgba(16, 185, 129, 0.22)' : 'linear-gradient(135deg, #f59e0b, #d97706)',
+                          color: creditOverrideApproved ? '#34d399' : '#fff',
+                          borderRadius: '6px'
+                        }}
+                      >
+                        {creditOverrideApproved ? '✓ Autorizado' : '🛡️ Aprobar Crédito'}
+                      </button>
+                    ) : !effectiveIsAprobado ? (
+                      <span style={{
                         padding: '2px 7px',
-                        fontSize: '0.63rem',
+                        fontSize: '0.62rem',
                         fontWeight: 800,
-                        background: creditOverrideApproved ? 'rgba(16, 185, 129, 0.22)' : 'linear-gradient(135deg, #f59e0b, #d97706)',
-                        color: creditOverrideApproved ? '#34d399' : '#fff',
+                        background: 'rgba(245, 158, 11, 0.16)',
+                        color: '#fbbf24',
+                        border: '1px solid rgba(245, 158, 11, 0.35)',
                         borderRadius: '6px'
-                      }}
-                    >
-                      {creditOverrideApproved ? '✓ Autorizado' : '🛡️ Aprobar Crédito'}
-                    </button>
+                      }}>
+                        🔒 Requiere Gerencia / Cobranzas
+                      </span>
+                    ) : null}
                   </div>
                   <div style={{ color: 'var(--text-muted)', lineHeight: 1.25 }}>
                     {effectiveMotivo}
@@ -2565,19 +2642,21 @@ export default function SellerOrderPOSView({
               width: '56px',
               height: '56px',
               borderRadius: '50%',
-              background: 'rgba(16, 185, 129, 0.15)',
-              border: '2px solid var(--semaforo-verde)',
+              background: lastEmittedOrder.status === 'RETENIDO_CREDITO' ? 'rgba(245, 158, 11, 0.16)' : 'rgba(16, 185, 129, 0.15)',
+              border: `2px solid ${lastEmittedOrder.status === 'RETENIDO_CREDITO' ? '#f59e0b' : 'var(--semaforo-verde)'}`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: 'var(--semaforo-verde)',
+              color: lastEmittedOrder.status === 'RETENIDO_CREDITO' ? '#fbbf24' : 'var(--semaforo-verde)',
               margin: '0 auto 12px'
             }}>
-              <CheckCircle2 size={32} />
+              {lastEmittedOrder.status === 'RETENIDO_CREDITO' ? <ShieldAlert size={30} /> : <CheckCircle2 size={32} />}
             </div>
 
             <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 900, color: 'var(--text-primary)' }}>
-              {lastEmittedOrder.status === 'FACTURADO'
+              {lastEmittedOrder.status === 'RETENIDO_CREDITO'
+                ? '⏳ Pedido Retenido por Política Crediticia'
+                : lastEmittedOrder.status === 'FACTURADO'
                 ? (lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? '¡Nota de Entrega Facturada Directamente!' : '¡Factura Fiscal Emitida Directamente!')
                 : (lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? '¡Nota de Entrega Enviada a Caja!' : '¡Factura Fiscal Enviada a Caja!')}
             </h3>
@@ -2604,8 +2683,17 @@ export default function SellerOrderPOSView({
             </div>
 
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '8px 0 14px', lineHeight: '1.5' }}>
-              La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({formatUnitVe(lastEmittedOrder.totalLitros || 0, 2)} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd || lastEmittedOrder.totalUsd)}
-              {Number(lastEmittedOrder.ivaUsd || 0) > 0 ? ` • Base ${formatUsd(lastEmittedOrder.subtotalUsd)} + IVA ${formatUsd(lastEmittedOrder.ivaUsd)}` : ''}) ya se encuentra en la <strong>bandeja de entrada de la Cajera en planta</strong> ({lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02' : 'Almacén 01'}) con restricción de <strong>NO MODIFICAR</strong>.
+              {lastEmittedOrder.status === 'RETENIDO_CREDITO' ? (
+                <>
+                  La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({formatUnitVe(lastEmittedOrder.totalLitros || 0, 2)} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd || lastEmittedOrder.totalUsd)}
+                  {Number(lastEmittedOrder.ivaUsd || 0) > 0 ? ` • Base ${formatUsd(lastEmittedOrder.subtotalUsd)} + IVA ${formatUsd(lastEmittedOrder.ivaUsd)}` : ''}) quedó en estado <strong>RETENIDO POR CRÉDITO</strong> y fue enviada a <strong>Flujo Comercial / Gerencia</strong> para revisión (todavía <strong>no</strong> pasa a la cola de Caja).
+                </>
+              ) : (
+                <>
+                  La orden para <strong>{lastEmittedOrder.clienteNombre}</strong> ({formatUnitVe(lastEmittedOrder.totalLitros || 0, 2)} Lts • {formatUsd(lastEmittedOrder.totalNetoUsd || lastEmittedOrder.totalUsd)}
+                  {Number(lastEmittedOrder.ivaUsd || 0) > 0 ? ` • Base ${formatUsd(lastEmittedOrder.subtotalUsd)} + IVA ${formatUsd(lastEmittedOrder.ivaUsd)}` : ''}) ya se encuentra en la <strong>bandeja de entrada de la Cajera en planta</strong> ({lastEmittedOrder.tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02' : 'Almacén 01'}) con restricción de <strong>NO MODIFICAR</strong>.
+                </>
+              )}
             </p>
 
             {/* Botones de Documento */}
@@ -2709,7 +2797,17 @@ export default function SellerOrderPOSView({
                 </div>
               ) : (
                 sellerTodayOrders.map((ord) => {
-                  const isBilled = ord.status === 'FACTURADO';
+                  const st = String(ord.status || '').toUpperCase();
+                  const isBilled = st === 'FACTURADO';
+                  const isRetained = st === 'RETENIDO_CREDITO';
+                  const isCancelled = st === 'RECHAZADO' || st === 'ANULADO' || st === 'ANULADA';
+                  const statusBadge = isBilled
+                    ? { label: '✅ FACTURADO EN CAJA', bg: 'rgba(16, 185, 129, 0.15)', color: 'var(--semaforo-verde)', border: 'var(--semaforo-verde)' }
+                    : isRetained
+                    ? { label: '🔒 RETENIDO POR CRÉDITO', bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '#ef4444' }
+                    : isCancelled
+                    ? { label: `⛔ ${st}`, bg: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', border: '#ef4444' }
+                    : { label: '⏳ EN COLA DE CAJA', bg: 'rgba(245, 158, 11, 0.15)', color: 'var(--motorven-gold)', border: 'var(--motorven-gold)' };
                   return (
                     <div
                       key={ord.id}
@@ -2735,11 +2833,11 @@ export default function SellerOrderPOSView({
                             padding: '1px 7px',
                             borderRadius: '10px',
                             fontWeight: 800,
-                            background: isBilled ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                            color: isBilled ? 'var(--semaforo-verde)' : 'var(--motorven-gold)',
-                            border: `1px solid ${isBilled ? 'var(--semaforo-verde)' : 'var(--motorven-gold)'}`
+                            background: statusBadge.bg,
+                            color: statusBadge.color,
+                            border: `1px solid ${statusBadge.border}`
                           }}>
-                            {isBilled ? '✅ FACTURADO EN CAJA' : '⏳ EN COLA DE CAJA'}
+                            {statusBadge.label}
                           </span>
                         </div>
                         <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '3px' }}>
@@ -3085,12 +3183,12 @@ export default function SellerOrderPOSView({
 
               <div>
                 <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
-                  Justificación de Aprobación:
+                  Justificación de Aprobación (Obligatoria):
                 </label>
                 <textarea
                   className="form-control"
                   rows={2}
-                  placeholder="Ej: Autorizado por Gerencia..."
+                  placeholder="Ej: Autorizado por Gerencia previa verificación..."
                   value={creditOverrideJustification}
                   onChange={(e) => setCreditOverrideJustification(e.target.value)}
                   style={{ fontSize: '0.8rem' }}
@@ -3110,8 +3208,16 @@ export default function SellerOrderPOSView({
                   className="btn btn-primary btn-sm"
                   style={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 800 }}
                   onClick={() => {
+                    if (!userCanGrantCreditOverride) {
+                      notify.error('Solo Gerencia, Administración o Cobranzas puede autorizar excepciones de crédito.');
+                      return;
+                    }
                     if (!authorizedApproverIds.has(creditOverrideAuthorizer)) {
                       notify.error('Seleccione un aprobador autorizado.');
+                      return;
+                    }
+                    if (String(creditOverrideJustification || '').trim().length < 5) {
+                      notify.error('Ingrese una justificación válida (mínimo 5 caracteres) para auditar la aprobación.');
                       return;
                     }
                     setCreditOverrideApproved(true);

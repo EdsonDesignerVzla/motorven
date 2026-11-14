@@ -220,12 +220,17 @@ export default function SalesPOSView({
     });
   }, [clients, clientSearch]);
 
-  // Lista de pedidos de preventa vigentes por facturar
+  // Lista de pedidos de preventa vigentes por facturar (excluyendo solicitudes de alta de cliente)
   const pendingSellerOrders = useMemo(() => {
     if (!Array.isArray(orders)) return [];
-    return orders.filter(
-      (o) => o && (o.status === 'PENDIENTE' || o.status === 'APROBADO' || o.status === 'EMITIDO')
-    );
+    return orders.filter((o) => {
+      if (!o) return false;
+      const tipo = String(o.tipoDoc || o.tipo_doc || '').trim().toUpperCase();
+      const mod = String(o.modalidadVenta || o.modalidad_venta || '').trim().toUpperCase();
+      if (tipo === 'SOLICITUD_CLIENTE' || mod === 'SOLICITUD_CLIENTE') return false;
+      const st = String(o.status || o.estado || '').trim().toUpperCase();
+      return st === 'PENDIENTE' || st === 'APROBADO' || st === 'EMITIDO';
+    });
   }, [orders]);
 
   // Cargar una Nota de Pedido directamente al carrito del POS (con restricción de NO MODIFICAR)

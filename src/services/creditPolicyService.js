@@ -1,4 +1,5 @@
 import { formatNumberUs } from './formatService.js';
+import { getCanonicalDocKey } from './fiscalService.js';
 
 export const CREDIT_APPROVERS_CATALOG = [
   {
@@ -143,6 +144,29 @@ export function parseInvoiceDateInfo(invOrDate, fallbackTimestamp = null) {
   }
 
   const rawStr = String(rawDate).trim();
+  const dmyMatch = rawStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (dmyMatch) {
+    const dayNum = Number(dmyMatch[1]);
+    const monthNum = Number(dmyMatch[2]);
+    const yearNum = Number(dmyMatch[3]);
+    if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+      const hasExplicitTime = dmyMatch[4] !== undefined;
+      const hourNum = hasExplicitTime ? Number(dmyMatch[4]) : 12;
+      const minNum = hasExplicitTime ? Number(dmyMatch[5]) : 0;
+      const secNum = dmyMatch[6] !== undefined ? Number(dmyMatch[6]) : 0;
+      const dmyDate = new Date(yearNum, monthNum - 1, dayNum, hourNum, minNum, secNum, 0);
+      if (!Number.isNaN(dmyDate.getTime())) {
+        const isoDateOnly = `${String(yearNum).padStart(4, '0')}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+        return {
+          date: dmyDate,
+          hasTime: hasExplicitTime,
+          isoDateOnly,
+          fullIso: dmyDate.toISOString()
+        };
+      }
+    }
+  }
+
   const dateOnlyMatch = rawStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const midnightUtcMatch = rawStr.match(/^(\d{4})-(\d{2})-(\d{2})T00:00:00(?:\.000)?(?:Z|[+-]00:00)?$/i);
   const dateMatch = dateOnlyMatch || midnightUtcMatch;
@@ -284,7 +308,8 @@ export function evaluateClientCreditPolicy({
   profitInvoices = [],
   sales = [],
   tasaBcv = 1,
-  montoOrdenUsd = 0
+  montoOrdenUsd = 0,
+  now = new Date()
 }) {
   if (!client) {
     return {
@@ -331,12 +356,16 @@ export function evaluateClientCreditPolicy({
 
   const allDocs = [];
   const seenIds = new Set();
+  const seenCanonicalKeys = new Set();
 
   (profitInvoices || []).forEach(f => {
     if (matchesClient(f)) {
       const docKey = f.id || f.factNum || f.fact_num;
-      if (docKey && !seenIds.has(docKey)) {
+      const canonicalKey = getCanonicalDocKey(f);
+      if ((docKey && !seenIds.has(docKey)) && (!canonicalKey || !seenCanonicalKeys.has(canonicalKey))) {
         seenIds.add(docKey);
+        if (canonicalKey) seenCanonicalKeys.add(canonicalKey);
+        const hasExplicitSaldo = f.saldoUsd !== undefined || f.saldo_usd !== undefined || f.saldoBs !== undefined || f.saldo_bs !== undefined;
         allDocs.push({
           id: docKey,
           numeroDoc: f.factNum || f.fact_num || f.id,
@@ -345,7 +374,8 @@ export function evaluateClientCreditPolicy({
           fechaVencimiento: f.fechaVencimiento || f.fecVenc || f.fec_venc,
           saldoUsd: Number(f.saldoUsd || f.saldo_usd || 0),
           saldoBs: Number(f.saldoBs || f.saldo_bs || 0),
-          status: f.status,
+          hasExplicitSaldo,
+          status: String(f.status || '').toUpperCase(),
           anulado: Boolean(f.anulada || f.anulado)
         });
       }
@@ -353,21 +383,31 @@ export function evaluateClientCreditPolicy({
   });
 
   (sales || []).forEach(s => {
+    if (!s) return;
+    const rawDocType = String(s.tipoDoc || s.tipo_doc || '').toUpperCase();
+    if (rawDocType === 'SOLICITUD_CLIENTE' || rawDocType === 'COTIZACION') return;
     if (matchesClient(s)) {
       const docKey = s.id || s.numeroDoc;
-      if (docKey && !seenIds.has(docKey)) {
+      const canonicalKey = getCanonicalDocKey(s);
+      if ((docKey && !seenIds.has(docKey)) && (!canonicalKey || !seenCanonicalKeys.has(canonicalKey))) {
         seenIds.add(docKey);
+        if (canonicalKey) seenCanonicalKeys.add(canonicalKey);
+        const hasExplicitSaldo = s.saldoUsd !== undefined || s.saldo_usd !== undefined || s.saldoBs !== undefined || s.saldo_bs !== undefined;
+        const normalizedCond = String(s.condicionPago || s.condicion_pago || '').toUpperCase();
+        const isCreditSale = normalizedCond === 'CREDITO' || Boolean(s.aCredito) || /^\d+_DIAS$/.test(normalizedCond);
         allDocs.push({
           id: docKey,
           numeroDoc: s.numeroDoc || s.id,
           tipoDoc: s.tipoDoc || 'FACTURA',
           fechaEmision: s.fecha || s.fechaEmision,
           fechaVencimiento: s.fechaVencimiento,
-          saldoUsd: Number(s.saldoUsd ?? (s.estado === 'PENDIENTE' || s.condicionPago === 'CREDITO' ? s.totalUsd : 0)),
-          saldoBs: Number(s.saldoBs ?? (s.estado === 'PENDIENTE' || s.condicionPago === 'CREDITO' ? s.totalBs : 0)),
-          status: s.estado || s.status,
-          condicionPago: s.condicionPago,
-          anulado: s.estado === 'ANULADA' || s.status === 'ANULADA'
+          saldoUsd: Number(s.saldoUsd ?? s.saldo_usd ?? (s.estado === 'PENDIENTE' || isCreditSale ? s.totalUsd : 0)),
+          saldoBs: Number(s.saldoBs ?? s.saldo_bs ?? (s.estado === 'PENDIENTE' || isCreditSale ? s.totalBs : 0)),
+          hasExplicitSaldo,
+          status: String(s.estado || s.status || '').toUpperCase(),
+          condicionPago: normalizedCond,
+          isCreditSale,
+          anulado: Boolean(s.anulada || s.anulado || s.estado === 'ANULADA' || s.status === 'ANULADA')
         });
       }
     }
@@ -375,26 +415,23 @@ export function evaluateClientCreditPolicy({
 
   const isPending = (doc) => {
     if (doc.anulado || doc.status === 'ANULADA' || doc.status === 'ANULADO') return false;
-    if (doc.status === 'PAGADA' || doc.status === 'PAGADO') return false;
+    if (doc.status === 'PAGADA' || doc.status === 'PAGADO' || doc.status === 'COBRADA' || doc.status === 'COBRADO') return false;
     const totalPendiente = doc.saldoUsd + (doc.saldoBs ? doc.saldoBs / (tasaBcv || 1) : 0);
-    return totalPendiente > 0.05 || doc.status === 'PENDIENTE' || doc.condicionPago === 'CREDITO';
+    if (doc.hasExplicitSaldo) return totalPendiente > 0.05;
+    return totalPendiente > 0.05 || doc.status === 'PENDIENTE' || Boolean(doc.isCreditSale);
   };
 
-  const now = new Date();
+  const evalNow = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
   const isDocOverdue = (doc) => {
     if (!isPending(doc)) return false;
-    if (doc.fechaVencimiento) {
-      const vDate = new Date(doc.fechaVencimiento);
-      if (!Number.isNaN(vDate.getTime())) {
-        return (now.getTime() - vDate.getTime()) > (24 * 60 * 60 * 1000);
-      }
+    const vInfo = doc.fechaVencimiento ? parseInvoiceDateInfo(doc.fechaVencimiento) : null;
+    if (vInfo?.date) {
+      return (evalNow.getTime() - vInfo.date.getTime()) > (24 * 60 * 60 * 1000);
     }
-    if (doc.fechaEmision) {
-      const eDate = new Date(doc.fechaEmision);
-      if (!Number.isNaN(eDate.getTime())) {
-        const limitDate = new Date(eDate.getTime() + (diasCreditoCliente * 24 * 60 * 60 * 1000));
-        return (now.getTime() - limitDate.getTime()) > (24 * 60 * 60 * 1000);
-      }
+    const eInfo = doc.fechaEmision ? parseInvoiceDateInfo(doc.fechaEmision) : null;
+    if (eInfo?.date) {
+      const limitDate = new Date(eInfo.date.getTime() + (diasCreditoCliente * 24 * 60 * 60 * 1000));
+      return (evalNow.getTime() - limitDate.getTime()) > (24 * 60 * 60 * 1000);
     }
     return false;
   };
@@ -524,6 +561,35 @@ export function getAuthorizedApproverGroups(config) {
 }
 
 /**
+ * Indica si el usuario autenticado posee privilegio jerárquico para otorgar una aprobación
+ * excepcional de crédito directamente en campo/oficina sin retener el pedido en Flujo Comercial.
+ */
+export function canUserGrantCreditOverride(userOrRole) {
+  if (!userOrRole) return false;
+  const rawRole = typeof userOrRole === 'object' ? (userOrRole.rol || userOrRole.role || '') : String(userOrRole);
+  const roleNorm = String(rawRole)
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const username = String(typeof userOrRole === 'object' ? (userOrRole.username || '') : '')
+    .trim()
+    .toLowerCase();
+
+  if (
+    roleNorm.includes('ADMINISTRADOR MASTER') ||
+    roleNorm.includes('GERENCIA') ||
+    roleNorm.includes('TECNOLOGIA') ||
+    roleNorm.includes('ADMINISTRACION') ||
+    roleNorm.includes('COBRANZA')
+  ) {
+    return true;
+  }
+
+  return ['edson designer', 'gerencia', 'manuel', 'sistemas', 'luiggy', 'rosibelcxc', 'jose'].includes(username);
+}
+
+/**
  * Determina si un cliente está asignado al vendedor / usuario actual.
  */
 export function isClientAssignedToSeller(client, currentUser, profitSellers = []) {
@@ -575,7 +641,8 @@ export function evaluateClientCreditPortfolioSummary({
     profitInvoices,
     sales,
     tasaBcv,
-    montoOrdenUsd: 0
+    montoOrdenUsd: 0,
+    now
   });
 
   if (!client) {
@@ -602,12 +669,12 @@ export function evaluateClientCreditPortfolioSummary({
   const documentosAbiertos = openDocs.map((doc) => {
     let expDate = null;
     if (doc.fechaVencimiento) {
-      const parsed = new Date(doc.fechaVencimiento);
-      if (!Number.isNaN(parsed.getTime())) expDate = parsed;
+      const parsed = parseInvoiceDateInfo(doc.fechaVencimiento)?.date;
+      if (parsed && !Number.isNaN(parsed.getTime())) expDate = parsed;
     }
     if (!expDate && doc.fechaEmision) {
-      const em = new Date(doc.fechaEmision);
-      if (!Number.isNaN(em.getTime())) {
+      const em = parseInvoiceDateInfo(doc.fechaEmision)?.date;
+      if (em && !Number.isNaN(em.getTime())) {
         expDate = new Date(em.getTime() + Math.max(0, diasCreditoCliente) * DAY_MS);
       }
     }
