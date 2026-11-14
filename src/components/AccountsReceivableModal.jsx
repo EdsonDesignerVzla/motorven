@@ -218,7 +218,9 @@ export function AccountsReceivableModal({
     onSaveClient,
     onDeleteClient,
     onApproveClient,
-    onRejectClient
+    onRejectClient,
+    preselectedClient = null,
+    onClearPreselectedClient
 }) {
     const userCanApproveClients = canApproveClients(currentUser);
     const [showNewClientModal, setShowNewClientModal] = useState(false);
@@ -249,6 +251,12 @@ export function AccountsReceivableModal({
 
     // Filtros del Reporte (Parte B)
     const [searchTerm, setSearchTerm] = useState('');
+    useEffect(() => {
+        if (preselectedClient) {
+            setSearchTerm(preselectedClient.rif || preselectedClient.nombre || preselectedClient.razonSocial || '');
+            if (onClearPreselectedClient) onClearPreselectedClient();
+        }
+    }, [preselectedClient, onClearPreselectedClient]);
     const [selectedClient, setSelectedClient] = useState('ALL');
     const [selectedSeller, setSelectedSeller] = useState('ALL');
     const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'VENCIDA' | 'POR_VENCER' | 'PAGADA'

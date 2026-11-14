@@ -84,7 +84,9 @@ export default function SalesPOSView({
   onRejectClient,
   currentUser,
   pendingOrderToBill = null,
-  onClearPendingOrder
+  onClearPendingOrder,
+  preselectedClient = null,
+  onClearPreselectedClient
 }) {
   const notify = useNotification();
   const safeConfig = config || {};
@@ -102,7 +104,14 @@ export default function SalesPOSView({
     () => (clients || []).filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length,
     [clients]
   );
-  const [selectedClient, setSelectedClient] = useState(() => (approvedClients && approvedClients.length > 0 ? (approvedClients[2] || approvedClients[0]) : null));
+  const [selectedClient, setSelectedClient] = useState(() => preselectedClient || (approvedClients && approvedClients.length > 0 ? (approvedClients[2] || approvedClients[0]) : null));
+
+  useEffect(() => {
+    if (preselectedClient) {
+      setSelectedClient(preselectedClient);
+      if (onClearPreselectedClient) onClearPreselectedClient();
+    }
+  }, [preselectedClient, onClearPreselectedClient]);
 
   useEffect(() => {
     if (!selectedClient && approvedClients && approvedClients.length > 0) {

@@ -401,6 +401,7 @@ function MainApp() {
   const [payroll, setPayrollState] = useState([]);
   const [employees, setEmployeesState] = useState([]);
   const [pendingOrderToBill, setPendingOrderToBill] = useState(null);
+  const [preselectedClient, setPreselectedClient] = useState(null);
   const [ordersSalesModalTab, setOrdersSalesModalTab] = useState('nuevo');
   const [ordersSalesModalOrder, setOrdersSalesModalOrder] = useState(null);
   const [showDebtCollectionModal, setShowDebtCollectionModal] = useState(false);
@@ -421,6 +422,11 @@ function MainApp() {
     setOrdersSalesModalTab(tab);
     setOrdersSalesModalOrder(order);
     setActiveTab('pedidos');
+  };
+
+  const handleSelectClientForModule = (client, targetTab = 'ventas') => {
+    if (client) setPreselectedClient(client);
+    setActiveTab(targetTab);
   };
 
   // Asegurar siempre modo claro en el elemento <html> y localStorage al cargar
@@ -3800,6 +3806,7 @@ function MainApp() {
               onRejectClient={handleRejectClient}
               profitZones={profitZones}
               onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
+              onSelectClientForModule={handleSelectClientForModule}
             />
           )}
 
@@ -3907,6 +3914,8 @@ function MainApp() {
               currentUser={currentUser}
               pendingOrderToBill={pendingOrderToBill}
               onClearPendingOrder={() => setPendingOrderToBill(null)}
+              preselectedClient={preselectedClient}
+              onClearPreselectedClient={() => setPreselectedClient(null)}
             />
           )}
 
@@ -4039,6 +4048,8 @@ function MainApp() {
               onDeleteClient={handleDeleteClient}
               onApproveClient={handleApproveClient}
               onRejectClient={handleRejectClient}
+              preselectedClient={preselectedClient}
+              onClearPreselectedClient={() => setPreselectedClient(null)}
             />
           )}
 

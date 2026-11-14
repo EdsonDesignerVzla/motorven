@@ -68,56 +68,20 @@ import { generateDashboardPDF, generateNotificationsPDF } from '../services/pdfR
 import { getSupabaseNotifications, seedInitialNotificationsIfEmpty } from '../services/supabaseService';
 import { getCanonicalDocKey, dedupeCanonicalDocs } from '../services/fiscalService';
 import { resolveExchangeRates, computeBankAccountValuation } from '../utils/treasuryAccountUtils';
+import { matchesSeller } from '../services/commissionService';
+import {
+  extractMonthNumber,
+  toDateKey,
+  getUnduplicatedSales,
+  summarizePendingOrders,
+  summarizeReceivablesAging
+} from '../services/dashboardMetricsService';
 
 function formatAdvisorName(name) {
   if (!name) return 'Asesor';
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) return parts[0];
   return `${parts[0]} ${parts[1][0]}.`;
-}
-
-function extractMonthNumber(dateVal) {
-  if (!dateVal) return '';
-  if (dateVal instanceof Date && !isNaN(dateVal)) {
-    return String(dateVal.getMonth() + 1).padStart(2, '0');
-  }
-  const str = String(dateVal).trim();
-  if (!str) return '';
-  const isoMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (isoMatch) {
-    return isoMatch[2].padStart(2, '0');
-  }
-  // Formato latinoamericano DD/MM/YYYY o DD-MM-YYYY
-  if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/.test(str)) {
-    const parts = str.split(/[\/\-]/);
-    if (parts.length >= 2) {
-      return parts[1].padStart(2, '0');
-    }
-  }
-  // Formato ISO estándar YYYY-MM-DD
-  try {
-    const d = new Date(str);
-    if (!isNaN(d.getTime())) {
-      return String(d.getUTCMonth() + 1).padStart(2, '0');
-    }
-  } catch (_) {}
-  return '';
-}
-
-// Normaliza cualquier fecha (ISO, DD/MM/YYYY o Date) a clave 'YYYY-MM-DD'
-function toDateKey(dateVal) {
-  if (!dateVal) return '';
-  if (dateVal instanceof Date) {
-    if (isNaN(dateVal.getTime())) return '';
-    return `${dateVal.getFullYear()}-${String(dateVal.getMonth() + 1).padStart(2, '0')}-${String(dateVal.getDate()).padStart(2, '0')}`;
-  }
-  const str = String(dateVal).trim();
-  const iso = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
-  const lat = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
-  if (lat) return `${lat[3]}-${lat[2].padStart(2, '0')}-${lat[1].padStart(2, '0')}`;
-  const d = new Date(str);
-  return isNaN(d.getTime()) ? '' : toDateKey(d);
 }
 
 function isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth = 'ALL') {
@@ -192,7 +156,10 @@ export default function DashboardView({
   onApproveClient,
   onRejectClient,
   onOpenOrdersSalesModal,
+  onSelectClientForModule
 }) {
+  const defaultFiscalYear = String(config?.ejercicioFiscalActivo || new Date().getFullYear());
+
   // Estados de Modales
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showClientsModal, setShowClientsModal] = useState(false);
@@ -202,13 +169,23 @@ export default function DashboardView({
   const [syncFeedback, setSyncFeedback] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Filtros de Comparativa de Lubricantes (por Año y Mes, con 2026 predeterminado)
-  const [comparativaYearFilter, setComparativaYearFilter] = useState('2026');
+  // Filtros de Comparativa de Lubricantes (por Año y Mes)
+  const [comparativaYearFilter, setComparativaYearFilter] = useState(defaultFiscalYear);
   const [comparativaMonthFilter, setComparativaMonthFilter] = useState('ALL');
 
-  // Filtros de Salud del Inventario y Caducidad (por Años y Meses, con 2026 predeterminado)
-  const [caducidadYearFilter, setCaducidadYearFilter] = useState('2026');
+  // Filtros de Salud del Inventario y Caducidad (por Años y Meses)
+  const [caducidadYearFilter, setCaducidadYearFilter] = useState(defaultFiscalYear);
   const [caducidadMonthFilter, setCaducidadMonthFilter] = useState('ALL');
+
+  // Fecha local de hoy (se refresca cada minuto para cubrir el cambio de día con el dashboard abierto)
+  const [todayKey, setTodayKey] = useState(() => toDateKey(new Date()));
+  useEffect(() => {
+    const id = setInterval(() => {
+      const k = toDateKey(new Date());
+      setTodayKey(prev => (prev === k ? prev : k));
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
 
   // Cargar notificaciones para badges de alerta en tiempo real
   useEffect(() => {
@@ -235,7 +212,7 @@ export default function DashboardView({
   // Filtro mensual y anual de Metas Cumplidas (Año en curso)
   const [selectedMonth, setSelectedMonth] = useState('ALL'); // 'ALL' = Cierre Anual Acumulado, '01'..'12' = Mes específico
 
-  const anioActivo = config?.ejercicioFiscalActivo || 2026;
+  const anioActivo = config?.ejercicioFiscalActivo || new Date().getFullYear();
   const fechaInicioEfectiva = config?.periodoFiscalInicio || `${anioActivo}-01-01`;
   const fechaFinEfectiva = config?.periodoFiscalFin || `${anioActivo}-12-31`;
 
@@ -285,9 +262,9 @@ export default function DashboardView({
     const valid = deduped.filter(f => {
       if (f.anulada) return false;
       const dateStr = f?.fechaEmision || f?.fecEmis || f?.fec_emis || f?.fecha || '';
-      if (!dateStr) return true;
-      const d = dateStr.substring(0, 10);
-      return d >= fechaInicioEfectiva && d <= fechaFinEfectiva;
+      const d = toDateKey(dateStr) || String(dateStr).substring(0, 10);
+      if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
+      return true;
     });
 
     if (selectedMonth === 'ALL') return valid;
@@ -298,20 +275,22 @@ export default function DashboardView({
     });
   }, [profitInvoices, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
-  // Cálculo dinámico de Litros Facturados locales
+  // Ventas locales POS deduplicadas contra profitInvoices para evitar doble conteo
+  const unduplicatedSales = useMemo(
+    () => getUnduplicatedSales(sales, profitInvoices),
+    [sales, profitInvoices]
+  );
+
+  // Cálculo dinámico de Litros Facturados locales no reflejados aún en profitInvoices
   const litrosRealesVendidos = useMemo(() => {
-    return (sales || []).filter(s => {
-      if (!s || s.anulada) return false;
-      const d = (s.fecha || '').substring(0, 10);
-      if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
-      if (selectedMonth === 'ALL') return true;
-      const m = extractMonthNumber(s.fecha);
-      return m === selectedMonth;
+    return unduplicatedSales.filter(s => {
+      const dateStr = s.fecha || s.fechaEmision || s.fecha_emision || '';
+      return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
     }).reduce((acc, s) => {
       const litrosVenta = s.items ? s.items.reduce((itemAcc, item) => itemAcc + (item.litros || (item.cantidad * (item.litrosPorUnidad || 0))), 0) : 0;
       return acc + litrosVenta;
     }, 0);
-  }, [sales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
+  }, [unduplicatedSales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Litros Facturados reales en el período seleccionado (desde Supabase profit_invoices)
   const litrosFacturadosPeriodo = useMemo(() => {
@@ -348,30 +327,15 @@ export default function DashboardView({
       const coVen = (seller?.coVen || seller?.co_ven || seller?.codigo || seller?.id || '').toString().trim();
       const venDes = (seller?.venDes || seller?.ven_des || seller?.nombre || '').toString().trim();
 
-      const matchesSeller = (fieldVal) => {
-        if (!fieldVal) return false;
-        const str = fieldVal.toString().trim().toLowerCase();
-        const targetCo = coVen.toLowerCase();
-        const targetDes = venDes.toLowerCase();
-        if (targetCo && (str === targetCo || str.startsWith(targetCo) || str.includes(targetCo))) return true;
-        if (targetDes && (str.includes(targetDes) || targetDes.includes(str))) return true;
-        return false;
-      };
-
-      // Facturas Supabase asignadas
-      const sInvoices = (filteredProfitInvoices || []).filter(f => matchesSeller(f?.vendedorId || f?.co_ven || f?.vendedor || f?.asesor));
+      // Facturas Supabase asignadas (coincidencia exacta anti-colisión)
+      const sInvoices = (filteredProfitInvoices || []).filter(f => matchesSeller(seller, f));
       const sInvoicesLitros = sInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros ?? f?.total_litros) || 0), 0);
 
-      // Ventas locales POS asignadas al vendedor dentro del período fiscal activo
-      const sSales = (sales || []).filter(s => {
-        if (s.anulada) return false;
-        const d = (s.fecha || '').substring(0, 10);
-        if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
-        if (selectedMonth !== 'ALL') {
-          const m = extractMonthNumber(s.fecha);
-          if (m !== selectedMonth) return false;
-        }
-        return matchesSeller(s?.vendedor || s?.vendedorId || s?.co_ven);
+      // Ventas locales POS no duplicadas asignadas al vendedor dentro del período fiscal activo
+      const sSales = unduplicatedSales.filter(s => {
+        const dateStr = s.fecha || s.fechaEmision || s.fecha_emision || '';
+        if (!isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth)) return false;
+        return matchesSeller(seller, s);
       });
       const sSalesLitros = sSales.reduce((acc, s) => {
         return acc + (s.items ? s.items.reduce((itemAcc, item) => itemAcc + (item.litros || (item.cantidad * (item.litrosPorUnidad || 0))), 0) : 0);
@@ -402,12 +366,13 @@ export default function DashboardView({
         pctAporteEmpresa: parseFloat(pctAporteEmpresa.toFixed(2))
       };
     }).sort((a, b) => b.litrosFinales - a.litrosFinales || b.pctAporteEmpresa - a.pctAporteEmpresa);
-  }, [effectiveSellersList, filteredProfitInvoices, sales, metaLitros, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
+  }, [effectiveSellersList, filteredProfitInvoices, unduplicatedSales, metaLitros, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
-  // Histórico de Metas y Cumplimiento real de todos los meses de 2026 calculado de Supabase
+  // Histórico de Metas y Cumplimiento real de todos los meses del ejercicio activo (sin duplicar POS/Profit)
   const monthlyHistoryData = useMemo(() => {
     const metaBaseMes = effectiveSellersList.reduce((acc, s) => acc + (Number(s?.metaLitrosMes ?? s?.meta_litros_mes) || 3000), 0) || 30000;
-    
+    const dedupedInvoices = dedupeCanonicalDocs(profitInvoices || []);
+
     const months = [
       { mes: 'Ene', num: '01' },
       { mes: 'Feb', num: '02' },
@@ -424,17 +389,19 @@ export default function DashboardView({
     ];
 
     return months.map(m => {
-      const invLiters = (profitInvoices || []).filter(f => {
-        if (f.anulada) return false;
+      const invLiters = dedupedInvoices.filter(f => {
+        if (!f || f.anulada) return false;
         const d = f.fechaEmision || f.fecEmis || f.fec_emis || f.fecha || '';
-        const monthNum = extractMonthNumber(d);
-        return monthNum === m.num;
+        const dk = toDateKey(d);
+        if (dk && (dk < fechaInicioEfectiva || dk > fechaFinEfectiva)) return false;
+        return extractMonthNumber(d) === m.num;
       }).reduce((acc, f) => acc + (Number(f.totalLitros ?? f.total_litros) || 0), 0);
 
-      const salesLiters = (sales || []).filter(s => {
-        const d = s.fecha || '';
-        const monthNum = extractMonthNumber(d);
-        return monthNum === m.num;
+      const salesLiters = unduplicatedSales.filter(s => {
+        const d = s.fecha || s.fechaEmision || s.fecha_emision || '';
+        const dk = toDateKey(d);
+        if (dk && (dk < fechaInicioEfectiva || dk > fechaFinEfectiva)) return false;
+        return extractMonthNumber(d) === m.num;
       }).reduce((acc, s) => {
         const litrosVenta = s.items ? s.items.reduce((itemAcc, item) => itemAcc + (item.litros || (item.cantidad * (item.litrosPorUnidad || 0))), 0) : 0;
         return acc + litrosVenta;
@@ -450,7 +417,7 @@ export default function DashboardView({
         pct
       };
     });
-  }, [effectiveSellersList, profitInvoices, sales]);
+  }, [effectiveSellersList, profitInvoices, unduplicatedSales, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Cumplimiento de la meta calculado por la sumatoria de los porcentajes de cumplimiento de cada asesor
   const cumplimientoPct = useMemo(() => {
@@ -467,16 +434,11 @@ export default function DashboardView({
 
   const semMeta = getSemaforoMeta(cumplimientoPct);
 
-  // Pedidos pendientes por facturar calculados en tiempo real desde orders de Supabase
-  const basePendiente = useMemo(() => {
-    if (!Array.isArray(orders) || orders.length === 0) return 0;
-    return orders
-      .filter(o => {
-        const st = (o.status || '').toUpperCase();
-        return st === 'PENDIENTE' || st === 'APROBADO';
-      })
-      .reduce((sum, o) => sum + (Number(o.totalLitros ?? o.total_litros) || 0), 0);
-  }, [orders]);
+  // Pedidos pendientes por facturar calculados en tiempo real desde orders (excluyendo SOLICITUD_CLIENTE)
+  const { basePendiente, pendingOrdersUsd } = useMemo(
+    () => summarizePendingOrders(orders),
+    [orders]
+  );
 
   const kpiData = useMemo(() => ({
     litrosFacturados: totalLitros,
@@ -492,63 +454,11 @@ export default function DashboardView({
     cumplimientoMetaPct: cumplimientoPct
   }), [totalLitros, basePendiente, metaLitros, metaMensualBase, cumplimientoPct]);
 
-  // Cartera de Clientes calculada directamente de profit_invoices y ventas a crédito
-  const { cxcDia, cxcVen } = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    let alDia = 0;
-    let vencida = 0;
-
-    const seenCxcKeys = new Set();
-
-    // Facturas Supabase (deduplicadas)
-    if (Array.isArray(profitInvoices)) {
-      dedupeCanonicalDocs(profitInvoices).forEach(f => {
-        if (!f || f.anulada) return;
-        const ck = getCanonicalDocKey(f);
-        if (ck) seenCxcKeys.add(ck);
-        let saldo = Number(f.saldoUsd ?? f.saldo_usd ?? 0);
-        if (saldo <= 0.01 && (f.saldoBs ?? f.saldo_bs) && tasaBcv > 0) {
-          saldo = Number(f.saldoBs ?? f.saldo_bs) / tasaBcv;
-        }
-        if (saldo <= 0.01) return;
-        const fVenc = f.fechaVencimiento || f.fecVenc || f.fec_venc || '';
-        if (!fVenc || fVenc >= today) {
-          alDia += saldo;
-        } else {
-          vencida += saldo;
-        }
-      });
-    }
-
-    // Ventas locales POS a crédito con saldo pendiente (sin duplicar las ya reflejadas en profitInvoices)
-    if (Array.isArray(sales)) {
-      dedupeCanonicalDocs(sales).forEach(s => {
-        if (!s || s.anulada) return;
-        const ck = getCanonicalDocKey(s);
-        if (ck && seenCxcKeys.has(ck)) return;
-        if (s.condicionPago === 'CREDITO' || s.aCredito) {
-          const saldo = Number(s.saldoPendiente ?? s.saldoUsd ?? (s.totalUsd && !s.pagado ? s.totalUsd : 0));
-          if (saldo > 0.01) {
-            const fVenc = s.fechaVencimiento || s.fechaVenc || '';
-            if (!fVenc || fVenc >= today) {
-              alDia += saldo;
-            } else {
-              vencida += saldo;
-            }
-          }
-        }
-      });
-    }
-
-    return {
-      cxcDia: parseFloat(alDia.toFixed(2)),
-      cxcVen: parseFloat(vencida.toFixed(2))
-    };
-  }, [profitInvoices, sales, tasaBcv]);
-
-  const cxcTot = cxcDia + cxcVen;
-  const cxcDiaPct = cxcTot > 0 ? parseFloat(((cxcDia / cxcTot) * 100).toFixed(2)) : 0;
-  const cxcVenPct = cxcTot > 0 ? parseFloat(((cxcVen / cxcTot) * 100).toFixed(2)) : 0;
+  // Cartera de Clientes calculada directamente de profit_invoices y ventas a crédito (fecha local VE + deduplicación)
+  const { cxcDia, cxcVen, cxcTot, cxcDiaPct, cxcVenPct } = useMemo(
+    () => summarizeReceivablesAging({ profitInvoices, sales, tasaBcv, todayKey }),
+    [profitInvoices, sales, tasaBcv, todayKey]
+  );
 
   const carteraClientesData = cxcTot > 0
     ? [
@@ -711,7 +621,7 @@ export default function DashboardView({
     const invTotal = (filteredProfitInvoices || []).reduce((acc, f) => {
       return acc + (Number(f.totNetoUsd ?? f.tot_neto_usd ?? f.totalNetoUsd ?? 0) || 0);
     }, 0);
-    const salesTotal = (sales || []).filter(s => {
+    const salesTotal = (unduplicatedSales || []).filter(s => {
       if (!s || s.anulada) return false;
       const d = (s.fecha || '').substring(0, 10);
       if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
@@ -719,7 +629,7 @@ export default function DashboardView({
       return extractMonthNumber(s.fecha) === selectedMonth;
     }).reduce((acc, s) => acc + (Number(s.totalUsd) || 0), 0);
     return parseFloat((invTotal + salesTotal).toFixed(2));
-  }, [filteredProfitInvoices, sales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
+  }, [filteredProfitInvoices, unduplicatedSales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Precio Promedio por Litro ($ / L) en el período
   const precioPromedioLitro = useMemo(() => {
@@ -728,15 +638,6 @@ export default function DashboardView({
   }, [totalFacturadoUsd, totalLitros]);
 
   // ── VENTAS DEL DÍA & ACUMULADO MENSUAL (Montos y Lubricantes) ─────────────────
-  // Fecha local de hoy (se refresca cada minuto para cubrir el cambio de día con el dashboard abierto)
-  const [todayKey, setTodayKey] = useState(() => toDateKey(new Date()));
-  useEffect(() => {
-    const id = setInterval(() => {
-      const k = toDateKey(new Date());
-      setTodayKey(prev => (prev === k ? prev : k));
-    }, 60000);
-    return () => clearInterval(id);
-  }, []);
 
   // Mes del acumulado (independiente del filtro de cumplimiento; por defecto el mes en curso)
   const [ventasMesFilter, setVentasMesFilter] = useState(() => String(new Date().getMonth() + 1).padStart(2, '0'));
@@ -1623,7 +1524,7 @@ export default function DashboardView({
     // Aplicar Filtros de Año y Mes sobre Salud del Inventario y Caducidad
     const filteredCaducidadList = analyzed.filter(p => {
       const matchYear = caducidadYearFilter === 'ALL' ||
-        (caducidadYearFilter === '2026' && p.yearLote === '2026') ||
+        (caducidadYearFilter === defaultFiscalYear && p.yearLote === defaultFiscalYear) ||
         (caducidadYearFilter === '2025' && p.yearLote === '2025') ||
         (caducidadYearFilter === '2024_ANT' && Number(p.yearLote) <= 2024);
 
@@ -1813,7 +1714,9 @@ export default function DashboardView({
 
   const enrichedKpiData = useMemo(() => {
     const facturacionTotalUsd = Number(totalFacturadoUsd || 0);
-    const preventaPendienteUsd = parseFloat((basePendiente * (precioPromedioLitro || 5.93)).toFixed(2));
+    const preventaPendienteUsd = pendingOrdersUsd > 0
+      ? pendingOrdersUsd
+      : parseFloat((basePendiente * (precioPromedioLitro || 5.93)).toFixed(2));
     const cobradoTotalUsd = parseFloat(Number(cobranzasData?.acumulada || 0).toFixed(2));
     const porcentajeCobranza = efectividadCobranzaPct;
     const disponibilidadTotalUsd = parseFloat(Number(totalDisponibilidad || 0).toFixed(2));
@@ -1852,6 +1755,7 @@ export default function DashboardView({
   }, [
     kpiData,
     totalFacturadoUsd,
+    pendingOrdersUsd,
     basePendiente,
     precioPromedioLitro,
     cobranzasData?.acumulada,
@@ -3693,9 +3597,9 @@ export default function DashboardView({
                   }}
                   title="Filtrar ventas por año (predeterminado año en curso)"
                 >
-                  <option value="2026">Año 2026 (En Curso)</option>
-                  <option value="2025">Año 2025</option>
-                  <option value="2024">Año 2024</option>
+                  <option value={defaultFiscalYear}>Año {defaultFiscalYear} (En Curso)</option>
+                  {defaultFiscalYear !== '2025' && <option value="2025">Año 2025</option>}
+                  {defaultFiscalYear !== '2024' && <option value="2024">Año 2024</option>}
                   <option value="ALL">Histórico Completo</option>
                 </select>
 
@@ -3731,11 +3635,11 @@ export default function DashboardView({
                 </select>
 
                 {/* Botón Reset a año en curso */}
-                {(comparativaYearFilter !== '2026' || comparativaMonthFilter !== 'ALL') && (
+                {(comparativaYearFilter !== defaultFiscalYear || comparativaMonthFilter !== 'ALL') && (
                   <button
                     type="button"
                     onClick={() => {
-                      setComparativaYearFilter('2026');
+                      setComparativaYearFilter(defaultFiscalYear);
                       setComparativaMonthFilter('ALL');
                     }}
                     style={{
@@ -3749,7 +3653,7 @@ export default function DashboardView({
                     }}
                     title="Restablecer al año en curso"
                   >
-                    ✕ Año 2026
+                    ✕ Año {defaultFiscalYear}
                   </button>
                 )}
 
@@ -3820,7 +3724,7 @@ export default function DashboardView({
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                           <span>Cód: {prod.codigo} | Stock: {prod.stock} cajas</span>
                           <span style={{ padding: '1px 4px', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', fontWeight: 700 }}>
-                            {prod.litrosVendidos === 0 ? 'Sin Ventas 2026' : `${prod.litrosVendidos} L vend.`}
+                            {prod.litrosVendidos === 0 ? `Sin Ventas ${comparativaYearFilter === 'ALL' ? 'Hist.' : comparativaYearFilter}` : `${prod.litrosVendidos} L vend.`}
                           </span>
                         </div>
                       </div>
@@ -3876,8 +3780,8 @@ export default function DashboardView({
                   }}
                   title="Filtrar por año de producción/llegada del lote"
                 >
-                  <option value="2026">Año 2026 (Año en curso)</option>
-                  <option value="2025">Año 2025 (1 Año)</option>
+                  <option value={defaultFiscalYear}>Año {defaultFiscalYear} (Año en curso)</option>
+                  {defaultFiscalYear !== '2025' && <option value="2025">Año 2025 (1 Año)</option>}
                   <option value="2024_ANT">Año 2024 o Anterior (&ge; 2 Años)</option>
                   <option value="ALL">Todos los Años</option>
                 </select>
@@ -3914,11 +3818,11 @@ export default function DashboardView({
                 </select>
 
                 {/* Botón Reset a año en curso */}
-                {(caducidadYearFilter !== '2026' || caducidadMonthFilter !== 'ALL') && (
+                {(caducidadYearFilter !== defaultFiscalYear || caducidadMonthFilter !== 'ALL') && (
                   <button
                     type="button"
                     onClick={() => {
-                      setCaducidadYearFilter('2026');
+                      setCaducidadYearFilter(defaultFiscalYear);
                       setCaducidadMonthFilter('ALL');
                     }}
                     style={{
@@ -3932,7 +3836,7 @@ export default function DashboardView({
                     }}
                     title="Restablecer al año en curso"
                   >
-                    ✕ Año 2026
+                    ✕ Año {defaultFiscalYear}
                   </button>
                 )}
 
@@ -4561,11 +4465,13 @@ export default function DashboardView({
         onRejectClient={onRejectClient}
         onSelectClientForPOS={(client) => {
           setShowClientsModal(false);
-          if (onNavigate) onNavigate('ventas');
+          if (onSelectClientForModule) onSelectClientForModule(client, 'ventas');
+          else if (onNavigate) onNavigate('ventas');
         }}
         onSelectClientForPayment={(client) => {
           setShowClientsModal(false);
-          if (onNavigate) onNavigate('caja');
+          if (onSelectClientForModule) onSelectClientForModule(client, 'cxc');
+          else if (onNavigate) onNavigate('cxc');
         }}
       />
 
@@ -4580,7 +4486,8 @@ export default function DashboardView({
         tasaBcv={tasaBcv}
         onSelectClientForSale={(client) => {
           setShowCreditScoreModal(false);
-          if (onNavigate) onNavigate('ventas');
+          if (onSelectClientForModule) onSelectClientForModule(client, 'ventas');
+          else if (onNavigate) onNavigate('ventas');
         }}
       />
 
