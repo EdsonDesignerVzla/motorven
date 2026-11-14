@@ -2820,12 +2820,17 @@ function MainApp() {
         notify.warning(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.id} guardado localmente sin conexión y encolado para sincronizar.`);
       } else if (enrichedSaved.status !== 'FACTURADO') {
         const isClientReq = String(enrichedSaved.tipoDoc || enrichedSaved.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
+        const stUpper = String(enrichedSaved.status || 'PENDIENTE').toUpperCase();
         if (isClientReq) {
-          if (enrichedSaved.status === 'PENDIENTE_APROBACION') {
+          if (stUpper === 'PENDIENTE_APROBACION') {
             soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
             notify.success(`Solicitud de cliente #${enrichedSaved.numeroDoc || enrichedSaved.id} enviada a Flujo Comercial para aprobación.`);
           }
-        } else {
+        } else if (stUpper === 'RETENIDO_CREDITO') {
+          notify.warning(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado en estado RETENIDO POR CRÉDITO (requiere aprobación antes de Caja).`);
+        } else if (stUpper === 'PENDIENTE') {
+          notify.info(`Borrador #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado sin enviar a Caja.`);
+        } else if (stUpper === 'APROBADO') {
           soundFX.cashierOrderChime(config?.sonidosNotificacion !== false);
           notify.success(`Pedido #${enrichedSaved.numeroDoc || enrichedSaved.orderNumber || ''} guardado y enviado a Caja exitosamente`);
         }
@@ -3859,7 +3864,6 @@ function MainApp() {
               onProceedToPOS={handleProceedToInvoiceFromOrder}
               onSaveCxcDocument={handleSaveCxcDocument}
               onUpdateInvoiceDocument={handleUpdateInvoiceDocument}
-              onSaveClient={handleSaveClient}
             />
           )}
 

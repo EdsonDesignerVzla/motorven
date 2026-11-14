@@ -815,3 +815,21 @@ export function decodeClientRequestMetadata(orderRecord = {}) {
   };
 }
 
+/**
+ * Evalúa si una preventa no facturada ya superó el corte operativo de 72 horas desde su emisión.
+ */
+export function isOrderReservationExpired(order, nowMs = Date.now()) {
+  if (!order) return false;
+  const st = String(order.status || '').toUpperCase();
+  if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'RETENIDO_CREDITO') return false;
+
+  const rawDate = order.fechaEmision || order.fecha || order.created_at;
+  if (!rawDate) return false;
+  const parsed = parseInvoiceDateInfo(rawDate);
+  const emissionTime = parsed?.date ? parsed.date.getTime() : NaN;
+  if (!Number.isFinite(emissionTime)) return false;
+
+  const HOURS_72_MS = 72 * 60 * 60 * 1000;
+  return (Number(nowMs) - emissionTime) > HOURS_72_MS;
+}
+

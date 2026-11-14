@@ -55,13 +55,17 @@ import {
   parseInvoiceDateInfo,
   formatInvoiceDateTimeDisplay,
   preserveDateWithTime,
-  toLocalYmd
+  toLocalYmd,
+  evaluateClientCreditPolicy,
+  getAuthorizedApproverGroups,
+  canUserGrantCreditOverride,
+  getClientAgreedCreditInfo,
+  isOrderReservationExpired
 } from '../services/creditPolicyService';
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
 import SalesInvoiceModal from './SalesInvoiceModal';
-import { isMasterOrGerencia, isClientApproved } from '../services/authService';
-import { CREDIT_APPROVERS_CATALOG } from './AppConfigModal';
+import { isMasterOrGerencia, isClientApproved, canApproveClients, normalizeRole } from '../services/authService';
 import {
   generateOrdersPDF,
   generateSellerOrderPDF,
@@ -140,21 +144,7 @@ const formatCondicionPago = (cond) => {
   return cond;
 };
 
-// Evalúa si una preventa no facturada ya superó el corte operativo de 72 horas desde su emisión
-export function isOrderReservationExpired(order) {
-  if (!order) return false;
-  const st = (order.status || '').toUpperCase();
-  if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'RETENIDO_CREDITO') return false;
-
-  const rawDate = order.fechaEmision || order.fecha || order.created_at;
-  if (!rawDate) return false;
-  const emissionTime = new Date(rawDate).getTime();
-  if (isNaN(emissionTime)) return false;
-
-  const now = Date.now();
-  const HOURS_72_MS = 72 * 60 * 60 * 1000;
-  return (now - emissionTime) > HOURS_72_MS;
-}
+export { isOrderReservationExpired };
 
 export default function OrdersSalesModal({
   isOpen,
@@ -265,24 +255,34 @@ export default function OrdersSalesModal({
   const [customCorrelativoInput, setCustomCorrelativoInput] = useState('');
   const [correlativoRefreshKey, setCorrelativoRefreshKey] = useState(0);
 
-  // Verificación de rol administrativo para privilegios de eliminación
+  // Verificación de rol administrativo para privilegios de edición y eliminación
   const isAdmin = useMemo(() => {
     if (!currentUser) return false;
-    const role = (currentUser.rol || currentUser.role || '').toUpperCase().trim();
-    const username = (currentUser.username || currentUser.usuario || currentUser.nombre || '').toLowerCase().trim();
+    if (isMasterOrGerencia(currentUser)) return true;
+    const normRole = normalizeRole(currentUser.rol || currentUser.role || '');
+    const username = String(currentUser.username || currentUser.usuario || '').toLowerCase().trim();
     return (
-      role.includes('MASTER') ||
-      role.includes('ADMINISTRADOR') ||
-      role.includes('GERENCIA') ||
-      role.includes('ADMINISTRACIÓN') ||
-      role.includes('TECNOLOGÍA') ||
-      role.includes('TI') ||
-      username.includes('edson') ||
-      username.includes('admin') ||
-      username.includes('gerencia') ||
-      username.includes('manuel')
+      normRole === 'ADMINISTRADOR MASTER' ||
+      normRole === 'GERENCIA' ||
+      normRole === 'ADMINISTRACIÓN' ||
+      normRole === 'TECNOLOGÍA & INFORMÁTICA' ||
+      normRole === 'TI' ||
+      username === 'edson designer' ||
+      username === 'manuel' ||
+      username === 'gerencia' ||
+      username === 'admin'
     );
   }, [currentUser]);
+
+  const userCanGrantCreditOverride = useMemo(
+    () => canUserGrantCreditOverride(currentUser),
+    [currentUser]
+  );
+
+  const userCanApproveClients = useMemo(
+    () => canApproveClients(currentUser),
+    [currentUser]
+  );
 
   // Correlativo actual calculado para la próxima factura
   const currentNextCorrelativo = useMemo(() => {
@@ -512,6 +512,10 @@ export default function OrdersSalesModal({
 
   const handleApproveClientRequest = async (reqItem) => {
     if (!reqItem || !reqItem.raw) return;
+    if (!userCanApproveClients) {
+      notify.error('No posee permisos autorizados para aprobar solicitudes de nuevos clientes.');
+      return;
+    }
     const ov = clientReqOverrides[reqItem.id] || {};
     const finalCodigo = String(ov.codigo || `CLI-${Date.now().toString().slice(-6)}`).trim().toUpperCase();
     const finalLimite = Number(ov.limiteCreditoUsd ?? reqItem.limiteCreditoUsd ?? 0);
@@ -585,6 +589,10 @@ export default function OrdersSalesModal({
 
   const handleRejectClientRequest = async (reqItem) => {
     if (!reqItem || !reqItem.raw) return;
+    if (!userCanApproveClients) {
+      notify.error('No posee permisos autorizados para rechazar solicitudes de nuevos clientes.');
+      return;
+    }
     const reason = String(rejectReasonByReqId[reqItem.id] || '').trim() || 'Rechazado por revisión comercial / documentación incompleta.';
     const reviewerName = currentUser?.nombre || currentUser?.username || 'Flujo Comercial / Gerencia';
     const nowIso = new Date().toISOString();
@@ -810,199 +818,36 @@ export default function OrdersSalesModal({
     [fechaEmisionForm, diasCreditoForm]
   );
 
-  // Evaluación de Estatus de Crédito Comercial (APROBADO vs NEGADO)
-  // Regla: No tener facturas o notas de entrega vencidas, ni más de 2 facturas pendientes, ni 2 notas de entrega pendientes, ni combinadas (1 factura + 1 nota de entrega)
-  const clientCreditEvaluation = useMemo(() => {
-    if (!activeClientObj) {
-      return {
-        evaluado: false,
-        isAprobado: false,
-        statusLabel: '',
-        motivo: 'Seleccione un cliente registrado para evaluar su condición comercial.',
-        tieneVencidas: false,
-        masDeDosFacturas: false,
-        dosOMasNotasEntrega: false,
-        dosCombinadas: false,
-        facturasPendientesCount: 0,
-        notasEntregaPendientesCount: 0,
-        vencidasCount: 0
-      };
-    }
+  const formOrderSubtotalUsd = useMemo(() => {
+    return (orderRows || []).reduce((acc, row) => {
+      if (!row?.articuloId || !(Number(row.cantidad) > 0)) return acc;
+      const prod = findProductById(row.articuloId);
+      const price = Number(row.precioUsd) > 0 ? Number(row.precioUsd) : resolveProductWholesalePrice(prod);
+      return acc + lineSubtotal(Number(row.cantidad) || 0, price);
+    }, 0);
+  }, [orderRows, safeProducts]);
 
-    const cRif = (activeClientObj.rif || '').trim().toUpperCase();
-    const cId = String(activeClientObj.id || '').trim();
-    const cCod = String(activeClientObj.codigo || '').trim();
-    const cNom = String(activeClientObj.nombre || activeClientObj.razonSocial || '').trim().toLowerCase();
-    const diasCreditoCliente = Number(activeClientObj.diasCredito || 15);
-
-    const matchesClient = (d) => {
-      if (!d) return false;
-      const dRif = String(d.clienteRif || d.rif || d.cliente_rif || '').trim().toUpperCase();
-      if (cRif && dRif && dRif === cRif) return true;
-      const dId = String(d.clienteId || d.cliente_id || d.id || '').trim();
-      if (cId && dId && dId === cId) return true;
-      if (cCod && dId && dId === cCod) return true;
-      const dNom = String(d.clienteNombre || d.cliente_nombre || d.nombre || '').trim().toLowerCase();
-      if (cNom && dNom && dNom === cNom) return true;
-      return false;
-    };
-
-    const allDocs = [];
-    const seenIds = new Set();
-
-    (profitInvoices || []).forEach(f => {
-      if (matchesClient(f)) {
-        const docKey = f.id || f.factNum || f.fact_num;
-        if (docKey && !seenIds.has(docKey)) {
-          seenIds.add(docKey);
-          allDocs.push({
-            id: docKey,
-            numeroDoc: f.factNum || f.fact_num || f.id,
-            tipoDoc: f.tipoDoc || f.tipo_doc || (String(f.factNum || '').toUpperCase().startsWith('NE') ? 'NOTA_ENTREGA' : 'FACTURA'),
-            fechaEmision: f.fechaEmision || f.fecEmis || f.fec_emis,
-            fechaVencimiento: f.fechaVencimiento || f.fecVenc || f.fec_venc,
-            saldoUsd: Number(f.saldoUsd || f.saldo_usd || 0),
-            saldoBs: Number(f.saldoBs || f.saldo_bs || 0),
-            status: f.status,
-            anulado: Boolean(f.anulada || f.anulado)
-          });
-        }
-      }
-    });
-
-    (sales || []).forEach(s => {
-      if (matchesClient(s)) {
-        const docKey = s.id || s.numeroDoc;
-        if (docKey && !seenIds.has(docKey)) {
-          seenIds.add(docKey);
-          allDocs.push({
-            id: docKey,
-            numeroDoc: s.numeroDoc || s.id,
-            tipoDoc: s.tipoDoc || 'FACTURA',
-            fechaEmision: s.fecha || s.fechaEmision,
-            fechaVencimiento: s.fechaVencimiento,
-            saldoUsd: Number(s.saldoUsd || (s.estado === 'PENDIENTE' || s.condicionPago === 'CREDITO' ? s.totalUsd : 0)),
-            saldoBs: Number(s.saldoBs || (s.estado === 'PENDIENTE' || s.condicionPago === 'CREDITO' ? s.totalBs : 0)),
-            status: s.estado || s.status,
-            anulado: s.estado === 'ANULADA' || s.status === 'ANULADA'
-          });
-        }
-      }
-    });
-
-    const isPending = (doc) => {
-      if (doc.anulado || doc.status === 'ANULADA' || doc.status === 'ANULADO') return false;
-      if (doc.status === 'PAGADA' || doc.status === 'PAGADO') return false;
-      const totalPendiente = doc.saldoUsd + (doc.saldoBs ? doc.saldoBs / (tasaBcv || 1) : 0);
-      return totalPendiente > 0.05 || doc.status === 'PENDIENTE' || doc.condicionPago === 'CREDITO';
-    };
-
-    const now = new Date();
-    const isDocOverdue = (doc) => {
-      if (!isPending(doc)) return false;
-      if (doc.fechaVencimiento) {
-        const vDate = new Date(doc.fechaVencimiento);
-        if (!isNaN(vDate.getTime())) {
-          return (now.getTime() - vDate.getTime()) > (24 * 60 * 60 * 1000);
-        }
-      }
-      if (doc.fechaEmision) {
-        const eDate = new Date(doc.fechaEmision);
-        if (!isNaN(eDate.getTime())) {
-          const limitDate = new Date(eDate.getTime() + (diasCreditoCliente * 24 * 60 * 60 * 1000));
-          return (now.getTime() - limitDate.getTime()) > (24 * 60 * 60 * 1000);
-        }
-      }
-      return false;
-    };
-
-    const facturasPendientes = [];
-    const notasEntregaPendientes = [];
-    const facturasVencidas = [];
-    const notasEntregaVencidas = [];
-
-    allDocs.forEach(d => {
-      if (!isPending(d)) return;
-
-      const t = String(d.tipoDoc || '').toUpperCase();
-      const num = String(d.numeroDoc || '').toUpperCase();
-      const esNE = t === 'NOTA_ENTREGA' || t.includes('ENTREGA') || num.startsWith('NE') || num.startsWith('OE');
-      const esVencido = isDocOverdue(d);
-
-      if (esNE) {
-        notasEntregaPendientes.push(d);
-        if (esVencido) notasEntregaVencidas.push(d);
-      } else if (t === 'FACTURA' || num.startsWith('FACT') || num.startsWith('FAC') || (!t && !num.startsWith('NC') && !num.startsWith('ND'))) {
-        facturasPendientes.push(d);
-        if (esVencido) facturasVencidas.push(d);
-      }
-    });
-
-    const tieneVencidas = facturasVencidas.length > 0 || notasEntregaVencidas.length > 0;
-    const masDeDosFacturas = facturasPendientes.length > 2;
-    const dosOMasNotasEntrega = notasEntregaPendientes.length >= 2;
-    const dosCombinadas = facturasPendientes.length >= 1 && notasEntregaPendientes.length >= 1;
-
-    const isNegado = tieneVencidas || masDeDosFacturas || dosOMasNotasEntrega || dosCombinadas;
-
-    let motivo = '';
-    if (tieneVencidas) {
-      const motivosVenc = [];
-      if (facturasVencidas.length > 0) motivosVenc.push(`${facturasVencidas.length} factura(s) vencida(s)`);
-      if (notasEntregaVencidas.length > 0) motivosVenc.push(`${notasEntregaVencidas.length} nota(s) de entrega vencida(s)`);
-      motivo = `Cliente posee ${motivosVenc.join(' y ')}.`;
-    } else if (masDeDosFacturas) {
-      motivo = `Cliente posee más de dos facturas pendientes (${facturasPendientes.length} facturas abiertas).`;
-    } else if (dosOMasNotasEntrega) {
-      motivo = `Cliente posee 2 o más notas de entrega pendientes (${notasEntregaPendientes.length} N.E. abiertas).`;
-    } else if (dosCombinadas) {
-      motivo = `Cliente posee documentos combinados pendientes (${facturasPendientes.length} factura y ${notasEntregaPendientes.length} nota de entrega).`;
-    } else {
-      motivo = 'Cliente solvente. Cumple con las políticas comerciales para despacho a crédito.';
-    }
-
-    return {
-      evaluado: true,
-      isAprobado: !isNegado,
-      statusLabel: !isNegado ? 'APROBADO' : 'NEGADO',
-      motivo,
-      tieneVencidas,
-      masDeDosFacturas,
-      dosOMasNotasEntrega,
-      dosCombinadas,
-      facturasPendientes,
-      notasEntregaPendientes,
-      facturasVencidas,
-      notasEntregaVencidas,
-      facturasPendientesCount: facturasPendientes.length,
-      notasEntregaPendientesCount: notasEntregaPendientes.length,
-      vencidasCount: facturasVencidas.length + notasEntregaVencidas.length
-    };
-  }, [activeClientObj, profitInvoices, sales, tasaBcv]);
+  // Evaluación de Estatus de Crédito Comercial centralizada (Profit + POS sin doble conteo y fechas DD/MM/YYYY)
+  const clientCreditEvaluation = useMemo(
+    () =>
+      evaluateClientCreditPolicy({
+        client: activeClientObj,
+        profitInvoices,
+        sales,
+        tasaBcv,
+        montoOrdenUsd: formOrderSubtotalUsd
+      }),
+    [activeClientObj, profitInvoices, sales, tasaBcv, formOrderSubtotalUsd]
+  );
 
   const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
   const [creditOverrideApproved, setCreditOverrideApproved] = useState(false);
 
-  // Lista de personal autorizado para aprobar créditos configurados con [✓]
-  const authorizedApproverIds = useMemo(() => {
-    if (Array.isArray(config?.aprobadoresCredito) && config.aprobadoresCredito.length > 0) {
-      return new Set(config.aprobadoresCredito);
-    }
-    return new Set([
-      'Edson Designer (Administrador Master / Dirección)',
-      'Ricardo Sánchez (Gerente General / Dirección)',
-      'Luiggy Silva (Administración & Finanzas)',
-      'José Martínez (Analista de Cobranzas y Crédito)'
-    ]);
-  }, [config?.aprobadoresCredito]);
-
-  // Grupos filtrados para el selector de aprobación (solo los que tienen el check activo)
-  const approverGroups = useMemo(() => {
-    return CREDIT_APPROVERS_CATALOG.map(group => ({
-      ...group,
-      people: group.people.filter(p => authorizedApproverIds.has(p.id))
-    })).filter(group => group.people.length > 0);
-  }, [authorizedApproverIds]);
+  // Lista e índice jerárquico de personal autorizado para aprobar créditos desde Configuración
+  const { authorizedApproverIds, approverGroups } = useMemo(
+    () => getAuthorizedApproverGroups(config),
+    [config]
+  );
 
   const [creditOverrideAuthorizer, setCreditOverrideAuthorizer] = useState(
     config?.aprobadorCreditoDefecto || 'Ricardo Sánchez (Gerente General / Dirección)'
@@ -1061,27 +906,16 @@ export default function OrdersSalesModal({
   const effectiveMotivo = creditOverrideApproved
     ? `Autorización Excepcional Otorgada por: ${creditOverrideAuthorizer}. Justificación: ${creditOverrideJustification || 'Autorizado por Gerencia'}.`
     : (isTermRequiresMandatoryApproval
-        ? (clientCreditEvaluation.tieneVencidas || clientCreditEvaluation.masDeDosFacturas || clientCreditEvaluation.dosOMasNotasEntrega || clientCreditEvaluation.dosCombinadas
+        ? (!clientCreditEvaluation.isAprobado
             ? `${clientCreditEvaluation.motivo} Además, el plazo a 30 Días siempre requiere aprobación obligatoria de Gerencia.`
             : 'Política Comercial Estricta: Todo crédito a 30 Días requiere obligatoriamente solicitar y obtener aprobación de Gerencia.')
         : clientCreditEvaluation.motivo);
 
   // Condición comercial acordada / actual del cliente en su ficha
-  const clientAgreedInfo = useMemo(() => {
-    if (!activeClientObj) return { dias: 0, termKey: 'CONTADO', label: 'Sin cliente' };
-    const dias = Number(activeClientObj.diasCredito || activeClientObj.dias_credito || 0);
-    const condicion = String(activeClientObj.condicionPago || activeClientObj.condicion || '').toUpperCase();
-
-    if (dias >= 30) return { dias: 30, termKey: '30_DIAS', label: 'Crédito 30 Días' };
-    if (dias >= 21) return { dias: 21, termKey: '21_DIAS', label: 'Crédito 21 Días' };
-    if (dias >= 15) return { dias: 15, termKey: '15_DIAS', label: 'Crédito 15 Días' };
-    if (dias >= 7) return { dias: 7, termKey: '7_DIAS', label: 'Crédito 7 Días' };
-    if (dias > 0) return { dias, termKey: '7_DIAS', label: `Crédito ${dias} Días` };
-    if (condicion.includes('CREDITO') || condicion.includes('CRÉDITO')) {
-      return { dias: 15, termKey: '15_DIAS', label: 'Crédito 15 Días' };
-    }
-    return { dias: 0, termKey: 'CONTADO', label: 'Contado' };
-  }, [activeClientObj]);
+  const clientAgreedInfo = useMemo(
+    () => getClientAgreedCreditInfo(activeClientObj),
+    [activeClientObj]
+  );
 
   // Sincronización bidireccional Vendedor <-> Zona habitual (profit_sellers.co_zon <-> profit_zones.co_zon en BD)
   const [zoneMismatchAlert, setZoneMismatchAlert] = useState(null);
@@ -1370,6 +1204,9 @@ export default function OrdersSalesModal({
         const cant = Number(row.cantidad) || 1;
         const litUnit = Number(row.litrosUnitarios || (prod ? resolveProductLitersPerUnit(prod) : 11.35));
         const price = Number(row.precioUsd) > 0 ? Number(row.precioUsd) : resolveProductWholesalePrice(prod);
+        const aplicaIva = prod ? prod.aplicaIva !== false : true;
+        const tipoAlicuota = prod?.tipoAlicuota || (aplicaIva ? 'GENERAL_16' : 'EXENTO_0');
+        const subUsd = lineSubtotal(cant, price);
 
         return {
           id: `${orderId}-${idx + 1}`,
@@ -1383,16 +1220,31 @@ export default function OrdersSalesModal({
           litrosTotales: cant * litUnit,
           precioUnitarioUsd: price,
           precioUsd: price,
-          totalUsd: cant * price
+          subtotalUsd: subUsd,
+          totalUsd: subUsd,
+          aplicaIva,
+          tipoAlicuota
         };
       });
 
+      const effectiveOverride = Boolean(creditOverrideApproved && userCanGrantCreditOverride);
+      const effectiveIsCreditNegado = Boolean(
+        paymentTerm !== 'CONTADO' && (!clientCreditEvaluation?.evaluado || (!effectiveOverride && (!clientCreditEvaluation.isAprobado || isTermRequiresMandatoryApproval)))
+      );
+
       let finalStatus = targetStatus;
-      if (isCreditNegado) {
-        if (targetStatus === 'APROBADO') {
-          finalStatus = 'RETENIDO_CREDITO';
-        }
+      if (effectiveIsCreditNegado && targetStatus === 'APROBADO') {
+        finalStatus = 'RETENIDO_CREDITO';
       }
+
+      const orderTaxes = calculateFiscalTaxes({
+        items: itemsFormatted,
+        tipoDoc: isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
+        metodoPago: paymentTerm === 'CONTADO' ? 'EFECTIVO_USD' : 'CREDITO',
+        condicionPago: paymentTerm === 'CONTADO' ? 'CONTADO' : 'CREDITO',
+        tasaBcv,
+        ...resolveConfigIgtfOptions(config)
+      });
 
       const nowIso = new Date().toISOString();
       const expIso = calculateExpirationDate(nowIso, diasCreditoForm).toISOString();
@@ -1418,19 +1270,19 @@ export default function OrdersSalesModal({
         vendedorId: selectedSeller,
         zonaVenta: selectedZone,
         condicionPago: paymentTerm,
-        creditOverrideApproved,
-        creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : null,
-        creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : null,
-        totalBrutoUsd: newOrderCalculations.subtotalUsd,
-        ivaUsd: 0,
-        totalNetoUsd: newOrderCalculations.subtotalUsd,
+        creditOverrideApproved: effectiveOverride,
+        creditOverrideAuthorizer: effectiveOverride ? creditOverrideAuthorizer : null,
+        creditOverrideJustification: effectiveOverride ? creditOverrideJustification : null,
+        totalBrutoUsd: orderTaxes.subtotalNetoUsd,
+        ivaUsd: isNotaEntrega ? 0 : orderTaxes.totalIvaUsd,
+        totalNetoUsd: isNotaEntrega ? orderTaxes.subtotalNetoUsd : Number((orderTaxes.subtotalNetoUsd + orderTaxes.totalIvaUsd).toFixed(2)),
         totalLitros: newOrderCalculations.totalLitros,
         totalCajas: newOrderCalculations.totalCajas,
         totalItems: itemsFormatted.length,
         status: finalStatus,
         direccionEntrega: deliveryAddress,
         observaciones: orderNotes,
-        comentarios: creditOverrideApproved
+        comentarios: effectiveOverride
           ? `${orderNotes ? orderNotes + '\n' : ''}[CRÉDITO AUTORIZADO EXCEPCIONALMENTE por ${creditOverrideAuthorizer}: ${creditOverrideJustification || 'Aprobación de Gerencia'}]`
           : orderNotes,
         profitOrigen: 'SIGNUM_POS',
@@ -1454,6 +1306,11 @@ export default function OrdersSalesModal({
         setFeedbackMsg({
           type: 'warning',
           text: `⚠️ ¡Solicitud enviada! Orden ${orderId} en estatus RETENIDO POR CRÉDITO. No se enviará a Caja hasta que esté aprobada. Motivo: ${effectiveMotivo}`
+        });
+      } else if (finalStatus === 'PENDIENTE') {
+        setFeedbackMsg({
+          type: 'info',
+          text: `📝 Borrador ${orderId} guardado en Pipeline (${isNotaEntrega ? 'Nota de Entrega' : 'Factura Fiscal'}). Aún no ha sido enviado a Caja.`
         });
       } else {
         setFeedbackMsg({
@@ -1511,12 +1368,19 @@ export default function OrdersSalesModal({
     let enTransito = 0;
     let facturados = 0;
     let retenidos = 0;
+    let anulados = 0;
+    let validCount = 0;
     let totalLitros = 0;
     let totalUsd = 0;
 
     orderList.forEach(o => {
       if (!o) return;
-      const st = o.status || 'PENDIENTE';
+      const st = String(o.status || 'PENDIENTE').toUpperCase();
+      if (st === 'ANULADO' || st === 'ANULADA' || st === 'RECHAZADO') {
+        anulados++;
+        return;
+      }
+      validCount++;
       if (st === 'PENDIENTE') preventas++;
       else if (st === 'APROBADO') aprobados++;
       else if (st === 'EN_TRANSITO') enTransito++;
@@ -1528,12 +1392,13 @@ export default function OrdersSalesModal({
     });
 
     return {
-      total: orderList.length,
+      total: validCount,
       preventas,
       aprobados,
       enTransito,
       facturados,
       retenidos,
+      anulados,
       totalLitros,
       totalUsd,
       activeCount: preventas + aprobados + enTransito + retenidos
@@ -2160,9 +2025,9 @@ export default function OrdersSalesModal({
     safeProfitSellers
   ]);
 
-  // Métricas y KPIs consolidados de facturación
+  // Métricas y KPIs consolidados de facturación (excluye documentos anulados)
   const invoiceKpis = useMemo(() => {
-    let totalFacturas = allInvoices.length;
+    let totalFacturas = 0;
     let contadoCount = 0;
     let creditoCount = 0;
     let contadoUsd = 0;
@@ -2170,6 +2035,10 @@ export default function OrdersSalesModal({
     let totalNetoUsd = 0;
 
     for (const inv of allInvoices) {
+      if (!inv) continue;
+      const stUpper = String(inv.estado || inv.status || '').toUpperCase().trim();
+      if (inv.anulada || inv.anulado || stUpper === 'ANULADA' || stUpper === 'ANULADO') continue;
+      totalFacturas++;
       const isCredit = checkIsCredit(inv);
       const montoUsd = resolveInvoiceTotalUsd(inv);
       totalNetoUsd += montoUsd;
@@ -2192,9 +2061,13 @@ export default function OrdersSalesModal({
     };
   }, [allInvoices]);
 
-  // Abrir modal de edición de datos de Factura o Nota de Entrega
+  // Abrir modal de edición de datos de Factura o Nota de Entrega (solo roles administrativos)
   const handleOpenEditInvoice = (inv) => {
     if (!inv) return;
+    if (!isAdmin) {
+      notify.error('Solo usuarios administrativos (Gerencia / Master / Administración / TI) pueden editar facturas emitidas.');
+      return;
+    }
     const correlativo = formatInvoiceCorrelativo(inv);
     const tipoDocNorm = resolveInvoiceTipoDoc(inv);
     const isCredit = checkIsCredit(inv);
@@ -2265,6 +2138,10 @@ export default function OrdersSalesModal({
   // Guardar cambios editados de Factura o Nota de Entrega (sin afectar inventario)
   const handleSaveEditedInvoice = async (e) => {
     if (e?.preventDefault) e.preventDefault();
+    if (!isAdmin) {
+      notify.error('Solo Master Admin / Gerencia pueden guardar cambios sobre facturas emitidas.');
+      return;
+    }
     if (!editingInvoice || isSavingEditedInvoice) return;
 
     const cleanNumDigits = String(editingInvoice.numeroDoc || '').replace(/[^0-9]/g, '');
@@ -3226,7 +3103,11 @@ export default function OrdersSalesModal({
                     <select
                       className="form-control"
                       value={paymentTerm}
-                      onChange={(e) => setPaymentTerm(e.target.value)}
+                      onChange={(e) => {
+                        setPaymentTerm(e.target.value);
+                        setCreditOverrideApproved(false);
+                        setCreditOverrideJustification('');
+                      }}
                       style={{ fontSize: '0.82rem', width: '100%' }}
                     >
                       <option value="CONTADO">
@@ -3335,7 +3216,11 @@ export default function OrdersSalesModal({
                         {paymentTerm !== clientAgreedInfo.termKey && (
                           <button
                             type="button"
-                            onClick={() => setPaymentTerm(clientAgreedInfo.termKey)}
+                            onClick={() => {
+                              setPaymentTerm(clientAgreedInfo.termKey);
+                              setCreditOverrideApproved(false);
+                              setCreditOverrideJustification('');
+                            }}
                             style={{
                               background: 'none',
                               border: 'none',
@@ -3373,22 +3258,28 @@ export default function OrdersSalesModal({
                             {effectiveMotivo}
                           </div>
                           {!effectiveIsAprobado && (
-                            <button
-                              type="button"
-                              onClick={() => setShowCreditApprovalModal(true)}
-                              className="btn btn-sm"
-                              style={{
-                                fontSize: '0.68rem',
-                                padding: '2px 8px',
-                                background: 'rgba(239, 68, 68, 0.2)',
-                                border: '1px solid #ef4444',
-                                color: '#ef4444',
-                                fontWeight: 800,
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              Aprobar Crédito
-                            </button>
+                            userCanGrantCreditOverride ? (
+                              <button
+                                type="button"
+                                onClick={() => setShowCreditApprovalModal(true)}
+                                className="btn btn-sm"
+                                style={{
+                                  fontSize: '0.68rem',
+                                  padding: '2px 8px',
+                                  background: 'rgba(239, 68, 68, 0.2)',
+                                  border: '1px solid #ef4444',
+                                  color: '#ef4444',
+                                  fontWeight: 800,
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                Aprobar Crédito
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fca5a5' }}>
+                                Requiere Gerencia / Master Admin
+                              </span>
+                            )
                           )}
                         </div>
                       </div>
@@ -3890,6 +3781,7 @@ export default function OrdersSalesModal({
                       <option value="EN_TRANSITO">3. En Tránsito ({kpis.enTransito})</option>
                       <option value="FACTURADO">4. Facturados ({kpis.facturados})</option>
                       <option value="RETENIDO_CREDITO">⛔ Retenidos por Crédito ({kpis.retenidos || 0})</option>
+                      <option value="ANULADO">🚫 Anulados ({kpis.anulados || 0})</option>
                     </select>
                   </div>
 
@@ -4025,38 +3917,69 @@ export default function OrdersSalesModal({
                                 ✅ Facturado (Ver O.E.)
                               </button>
                             ) : ord.status === 'RETENIDO_CREDITO' ? (
-                              <button
-                                type="button"
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  if (onUpdateOrderStatus) {
-                                    await onUpdateOrderStatus(ord.id, 'APROBADO');
-                                    setSelectedOrder({ ...ord, status: 'APROBADO' });
+                              userCanGrantCreditOverride ? (
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const approverName = currentUser?.nombre || currentUser?.username || 'Gerencia';
+                                    const approvedOrder = {
+                                      ...ord,
+                                      status: 'APROBADO',
+                                      creditOverrideApproved: true,
+                                      creditOverrideAuthorizer: ord.creditOverrideAuthorizer || approverName,
+                                      creditOverrideJustification: ord.creditOverrideJustification || `Liberado desde Pipeline por ${approverName}`,
+                                      fechaAprobacion: new Date().toISOString()
+                                    };
+                                    if (onSaveOrder) {
+                                      const saved = await onSaveOrder(approvedOrder);
+                                      setSelectedOrder(saved || approvedOrder);
+                                    } else if (onUpdateOrderStatus) {
+                                      await onUpdateOrderStatus(ord.id, 'APROBADO');
+                                      setSelectedOrder(approvedOrder);
+                                    }
                                     setFeedbackMsg({
                                       type: 'success',
-                                      text: `✅ ¡Crédito de la orden ${ord.numeroDoc || ord.id} APROBADO! Ahora ha sido enviada a Caja para facturación.`
+                                      text: `✅ ¡Crédito de la orden ${ord.numeroDoc || ord.id} APROBADO por ${approverName}! Ahora ha sido enviada a Caja para facturación.`
                                     });
-                                  }
-                                }}
-                                className="btn btn-sm"
-                                style={{
-                                  flex: 1,
-                                  fontSize: '0.72rem',
-                                  padding: '4px 6px',
-                                  background: 'rgba(217, 119, 6, 0.18)',
-                                  border: '1px solid #d97706',
-                                  color: '#f59e0b',
-                                  fontWeight: 800,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  gap: '4px'
-                                }}
-                                title="Crédito negado retenido. Haga clic para autorizar formalmente y enviar a Caja."
-                              >
-                                <ShieldCheck size={13} />
-                                <span>✓ Aprobar y Enviar a Caja</span>
-                              </button>
+                                  }}
+                                  className="btn btn-sm"
+                                  style={{
+                                    flex: 1,
+                                    fontSize: '0.72rem',
+                                    padding: '4px 6px',
+                                    background: 'rgba(217, 119, 6, 0.18)',
+                                    border: '1px solid #d97706',
+                                    color: '#f59e0b',
+                                    fontWeight: 800,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '4px'
+                                  }}
+                                  title="Crédito negado retenido. Haga clic para autorizar formalmente y enviar a Caja."
+                                >
+                                  <ShieldCheck size={13} />
+                                  <span>✓ Aprobar y Enviar a Caja</span>
+                                </button>
+                              ) : (
+                                <div
+                                  style={{
+                                    flex: 1,
+                                    fontSize: '0.7rem',
+                                    padding: '4px 6px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(239, 68, 68, 0.12)',
+                                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                                    color: '#fca5a5',
+                                    fontWeight: 700,
+                                    textAlign: 'center'
+                                  }}
+                                  title="Solo Master Admin o Gerencia autorizada pueden liberar órdenes retenidas por crédito."
+                                >
+                                  🔒 Requiere Gerencia
+                                </div>
+                              )
                             ) : (
                               <button
                                 type="button"
@@ -4298,15 +4221,28 @@ export default function OrdersSalesModal({
                       }}
                       style={{ fontSize: '0.85rem' }}
                     >
-                      <option value="">-- Seleccionar Nota de Pedido --</option>
-                      {safeOrders.map(o => {
-                        const isNE = isOrderNotaEntrega(o);
-                        return (
-                          <option key={o.id} value={o.id}>
-                            {isNE ? '[NE Alm 02]' : '[FF Alm 01]'} {o.numeroDoc || o.id} • {o.clienteNombre} ({formatUsd(o.totalNetoUsd)}) {o.status === 'FACTURADO' ? '✅ FACTURADO' : (o.status === 'RETENIDO_CREDITO' ? '⛔ RETENIDO (Crédito Negado)' : '⏳ PENDIENTE')}
-                          </option>
+                      <option value="">-- Seleccionar Nota de Pedido Aprobada para Caja --</option>
+                      {(() => {
+                        const readyForCaja = safeOrders.filter((o) =>
+                          ['APROBADO', 'EN_TRANSITO'].includes(String(o.status || '').toUpperCase())
                         );
-                      })}
+                        if (readyForCaja.length === 0) {
+                          return (
+                            <option value="" disabled>
+                              (No hay pedidos APROBADOS o EN TRÁNSITO pendientes por facturar)
+                            </option>
+                          );
+                        }
+                        return readyForCaja.map((o) => {
+                          const isNE = isOrderNotaEntrega(o);
+                          const stUpper = String(o.status || '').toUpperCase();
+                          return (
+                            <option key={o.id} value={o.id}>
+                              {isNE ? '[NE Alm 02]' : '[FF Alm 01]'} {o.numeroDoc || o.id} • {o.clienteNombre} ({formatUsd(o.totalNetoUsd)}) • {stUpper === 'EN_TRANSITO' ? '🚚 EN TRÁNSITO' : '✅ APROBADO (LISTO CAJA)'}
+                            </option>
+                          );
+                        });
+                      })()}
                     </select>
                   </div>
                 </div>
@@ -4490,32 +4426,50 @@ export default function OrdersSalesModal({
                           Esta orden posee condición a crédito <strong>NEGADA</strong>. Por políticas comerciales, <strong>NO se enviará ni facturará en Caja</strong> hasta que sea aprobada por Gerencia o Cobranzas.
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '6px' }}>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (onUpdateOrderStatus) {
-                                await onUpdateOrderStatus(selectedOrder.id, 'APROBADO');
-                                setSelectedOrder({ ...selectedOrder, status: 'APROBADO' });
+                          {userCanGrantCreditOverride ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const approverName = currentUser?.nombre || currentUser?.username || 'Gerencia';
+                                const approvedOrder = {
+                                  ...selectedOrder,
+                                  status: 'APROBADO',
+                                  creditOverrideApproved: true,
+                                  creditOverrideAuthorizer: selectedOrder.creditOverrideAuthorizer || approverName,
+                                  creditOverrideJustification: selectedOrder.creditOverrideJustification || `Liberado en Caja por ${approverName}`,
+                                  fechaAprobacion: new Date().toISOString()
+                                };
+                                if (onSaveOrder) {
+                                  const saved = await onSaveOrder(approvedOrder);
+                                  setSelectedOrder(saved || approvedOrder);
+                                } else if (onUpdateOrderStatus) {
+                                  await onUpdateOrderStatus(selectedOrder.id, 'APROBADO');
+                                  setSelectedOrder(approvedOrder);
+                                }
                                 setFeedbackMsg({
                                   type: 'success',
-                                  text: `✅ ¡Crédito de la orden ${selectedOrder.numeroDoc || selectedOrder.id} APROBADO por Gerencia! Facturación en Caja habilitada.`
+                                  text: `✅ ¡Crédito de la orden ${selectedOrder.numeroDoc || selectedOrder.id} APROBADO por ${approverName}! Facturación en Caja habilitada.`
                                 });
-                              }
-                            }}
-                            className="btn btn-primary"
-                            style={{
-                              fontSize: '0.8rem',
-                              fontWeight: 800,
-                              background: 'linear-gradient(135deg, #d97706, #b45309)',
-                              border: 'none',
-                              color: '#fff',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px'
-                            }}
-                          >
-                            <ShieldCheck size={16} /> Aprobar Crédito y Habilitar Facturación
-                          </button>
+                              }}
+                              className="btn btn-primary"
+                              style={{
+                                fontSize: '0.8rem',
+                                fontWeight: 800,
+                                background: 'linear-gradient(135deg, #d97706, #b45309)',
+                                border: 'none',
+                                color: '#fff',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                              }}
+                            >
+                              <ShieldCheck size={16} /> Aprobar Crédito y Habilitar Facturación
+                            </button>
+                          ) : (
+                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#fca5a5', padding: '6px 12px', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.14)', border: '1px solid rgba(239, 68, 68, 0.35)' }}>
+                              🔒 Solo Master Admin o Gerencia autorizada pueden liberar este crédito retenido.
+                            </div>
+                          )}
                         </div>
                       </div>
                     ) : selectedOrder.status === 'FACTURADO' ? (
@@ -5686,39 +5640,47 @@ export default function OrdersSalesModal({
                               />
                             </div>
                             <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                disabled={isSaving}
-                                onClick={() => handleRejectClientRequest(req)}
-                                className="btn btn-sm"
-                                style={{
-                                  background: 'rgba(239, 68, 68, 0.16)',
-                                  color: '#f87171',
-                                  border: '1px solid #ef4444',
-                                  fontWeight: 800,
-                                  padding: '6px 10px'
-                                }}
-                              >
-                                ✕ Rechazar
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isSaving}
-                                onClick={() => handleApproveClientRequest(req)}
-                                className="btn btn-sm"
-                                style={{
-                                  background: 'linear-gradient(135deg, #10b981, #059669)',
-                                  color: '#fff',
-                                  border: 'none',
-                                  fontWeight: 800,
-                                  padding: '6px 12px',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '5px'
-                                }}
-                              >
-                                <Check size={14} /> Aprobar Cliente
-                              </button>
+                              {userCanApproveClients ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={isSaving}
+                                    onClick={() => handleRejectClientRequest(req)}
+                                    className="btn btn-sm"
+                                    style={{
+                                      background: 'rgba(239, 68, 68, 0.16)',
+                                      color: '#f87171',
+                                      border: '1px solid #ef4444',
+                                      fontWeight: 800,
+                                      padding: '6px 10px'
+                                    }}
+                                  >
+                                    ✕ Rechazar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isSaving}
+                                    onClick={() => handleApproveClientRequest(req)}
+                                    className="btn btn-sm"
+                                    style={{
+                                      background: 'linear-gradient(135deg, #10b981, #059669)',
+                                      color: '#fff',
+                                      border: 'none',
+                                      fontWeight: 800,
+                                      padding: '6px 12px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '5px'
+                                    }}
+                                  >
+                                    <Check size={14} /> Aprobar Cliente
+                                  </button>
+                                </>
+                              ) : (
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fca5a5', padding: '4px 8px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                                  🔒 Solo Gerencia / Cobranzas / Caja pueden aprobar clientes
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}
@@ -6544,29 +6506,31 @@ export default function OrdersSalesModal({
                                           <span>Ver</span>
                                         </button>
 
-                                        {/* Botón Editar Datos de Factura / Nota de Entrega */}
-                                        <button
-                                          type="button"
-                                          onClick={() => handleOpenEditInvoice(inv)}
-                                          className="btn btn-sm"
-                                          style={{
-                                            background: 'rgba(245, 158, 11, 0.14)',
-                                            color: '#f59e0b',
-                                            border: '1px solid rgba(245, 158, 11, 0.38)',
-                                            borderRadius: '6px',
-                                            padding: '5px 8px',
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '4px',
-                                            fontWeight: 700,
-                                            fontSize: '0.74rem',
-                                            cursor: 'pointer'
-                                          }}
-                                          title={`Editar correlativo, fecha/hora, cliente, vendedor y montos de #${correlativo}`}
-                                        >
-                                          <Pencil size={13} />
-                                          <span>Editar</span>
-                                        </button>
+                                        {/* Botón Editar Datos de Factura / Nota de Entrega (Solo Administradores) */}
+                                        {isAdmin && (
+                                           <button
+                                             type="button"
+                                             onClick={() => handleOpenEditInvoice(inv)}
+                                             className="btn btn-sm"
+                                             style={{
+                                               background: 'rgba(245, 158, 11, 0.14)',
+                                               color: '#f59e0b',
+                                               border: '1px solid rgba(245, 158, 11, 0.38)',
+                                               borderRadius: '6px',
+                                               padding: '5px 8px',
+                                               display: 'inline-flex',
+                                               alignItems: 'center',
+                                               gap: '4px',
+                                               fontWeight: 700,
+                                               fontSize: '0.74rem',
+                                               cursor: 'pointer'
+                                             }}
+                                             title={`Editar correlativo, fecha/hora, cliente, vendedor y montos de #${correlativo}`}
+                                           >
+                                             <Pencil size={13} />
+                                             <span>Editar</span>
+                                           </button>
+                                         )}
 
                                         {/* Botón Eliminar con Doble Seguridad (Solo Administradores) */}
                                         {isAdmin && (
@@ -7923,7 +7887,16 @@ export default function OrdersSalesModal({
                 ) : (
                   <button
                     type="button"
+                    disabled={!userCanGrantCreditOverride || String(creditOverrideJustification || '').trim().length < 5}
                     onClick={() => {
+                      if (!userCanGrantCreditOverride) {
+                        notify.error('No tiene permisos para otorgar aprobaciones excepcionales de crédito.');
+                        return;
+                      }
+                      if (String(creditOverrideJustification || '').trim().length < 5) {
+                        notify.warning('Debe ingresar un motivo o justificación válida (mínimo 5 caracteres).');
+                        return;
+                      }
                       if (paymentTerm === 'CONTADO') {
                         setPaymentTerm('7_DIAS');
                       }
@@ -7938,13 +7911,25 @@ export default function OrdersSalesModal({
                     style={{
                       fontSize: '0.84rem',
                       fontWeight: 800,
-                      background: 'linear-gradient(135deg, #10b981, #059669)',
+                      background: (!userCanGrantCreditOverride || String(creditOverrideJustification || '').trim().length < 5)
+                        ? 'rgba(100, 116, 139, 0.45)'
+                        : 'linear-gradient(135deg, #10b981, #059669)',
                       border: 'none',
-                      boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)',
+                      boxShadow: (!userCanGrantCreditOverride || String(creditOverrideJustification || '').trim().length < 5)
+                        ? 'none'
+                        : '0 4px 14px rgba(16, 185, 129, 0.4)',
+                      cursor: (!userCanGrantCreditOverride || String(creditOverrideJustification || '').trim().length < 5)
+                        ? 'not-allowed'
+                        : 'pointer',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px'
                     }}
+                    title={
+                      !userCanGrantCreditOverride
+                        ? 'Requiere permisos de Gerencia / Master Admin'
+                        : (String(creditOverrideJustification || '').trim().length < 5 ? 'Escriba una justificación de al menos 5 caracteres para aprobar' : 'Aprobar y liberar crédito excepcionalmente')
+                    }
                   >
                     <ShieldCheck size={16} />
                     <span>APROBAR Y LIBERAR CRÉDITO</span>
