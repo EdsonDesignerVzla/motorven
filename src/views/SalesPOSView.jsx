@@ -31,7 +31,7 @@ import {
   Users,
   Warehouse
 } from 'lucide-react';
-import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
+import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, resolveDocumentWarehouseTarget, validateWarehouseStockForDocument } from '../services/formatService';
 import { calculateFiscalTaxes, resolveConfigIgtfOptions, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
 import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import {
@@ -41,7 +41,10 @@ import {
   formatDateVe,
   getClientAgreedCreditInfo,
   evaluateClientCreditPolicy,
-  getAuthorizedApproverGroups
+  getAuthorizedApproverGroups,
+  canUserGrantCreditOverride,
+  parseInvoiceDateInfo,
+  isOrderReservationExpired
 } from '../services/creditPolicyService';
 import {
   normalizeRateType,
@@ -62,6 +65,15 @@ import { canApproveClients, getClientApprovalStatus, isClientApproved } from '..
 import { matchesSeller } from '../services/commissionService';
 import { generateSalesPOSPDF, generateSellerOrderPDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
+
+const resolveDefaultPosClient = (approvedList = []) => {
+  if (!Array.isArray(approvedList) || approvedList.length === 0) return null;
+  return (
+    approvedList.find(c => c.id === 'CLI-003') ||
+    approvedList.find(c => /contado|mostrador/i.test(String(c?.nombre || c?.razonSocial || ''))) ||
+    approvedList[0]
+  );
+};
 
 export default function SalesPOSView({
   products = [],
@@ -91,6 +103,10 @@ export default function SalesPOSView({
   const notify = useNotification();
   const safeConfig = config || {};
   const userCanApproveClients = canApproveClients(currentUser);
+  const userCanGrantCreditOverride = useMemo(
+    () => canUserGrantCreditOverride(currentUser),
+    [currentUser]
+  );
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [showClientApprovalsModal, setShowClientApprovalsModal] = useState(false);
   const [showClientsDirectoryModal, setShowClientsDirectoryModal] = useState(false);
@@ -104,7 +120,7 @@ export default function SalesPOSView({
     () => (clients || []).filter(c => getClientApprovalStatus(c) === 'PENDIENTE').length,
     [clients]
   );
-  const [selectedClient, setSelectedClient] = useState(() => preselectedClient || (approvedClients && approvedClients.length > 0 ? (approvedClients[2] || approvedClients[0]) : null));
+  const [selectedClient, setSelectedClient] = useState(() => preselectedClient || resolveDefaultPosClient(approvedClients));
 
   useEffect(() => {
     if (preselectedClient) {
@@ -115,7 +131,7 @@ export default function SalesPOSView({
 
   useEffect(() => {
     if (!selectedClient && approvedClients && approvedClients.length > 0) {
-      setSelectedClient(approvedClients[2] || approvedClients[0]);
+      setSelectedClient(resolveDefaultPosClient(approvedClients));
     }
   }, [approvedClients, selectedClient]);
 
@@ -136,6 +152,7 @@ export default function SalesPOSView({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('TODOS');
   const [selectedSpecProduct, setSelectedSpecProduct] = useState(null);
+  const [isSubmittingSale, setIsSubmittingSale] = useState(false);
 
   // Estados de la Bandeja de Pedidos de Preventa (Vendedores en Calle)
   const [showOrdersDrawer, setShowOrdersDrawer] = useState(false);
@@ -220,7 +237,7 @@ export default function SalesPOSView({
     });
   }, [clients, clientSearch]);
 
-  // Lista de pedidos de preventa vigentes por facturar (excluyendo solicitudes de alta de cliente)
+  // Lista de pedidos de preventa listos y aprobados para facturar en Caja
   const pendingSellerOrders = useMemo(() => {
     if (!Array.isArray(orders)) return [];
     return orders.filter((o) => {
@@ -229,52 +246,72 @@ export default function SalesPOSView({
       const mod = String(o.modalidadVenta || o.modalidad_venta || '').trim().toUpperCase();
       if (tipo === 'SOLICITUD_CLIENTE' || mod === 'SOLICITUD_CLIENTE') return false;
       const st = String(o.status || o.estado || '').trim().toUpperCase();
-      return st === 'PENDIENTE' || st === 'APROBADO' || st === 'EMITIDO';
+      return st === 'APROBADO' || st === 'EMITIDO' || st === 'EN_TRANSITO';
     });
   }, [orders]);
 
   // Cargar una Nota de Pedido directamente al carrito del POS (con restricción de NO MODIFICAR)
   const handleLoadOrderToCart = (orderToLoad) => {
     if (!orderToLoad) return;
-    // 1. Vincular cliente
-    const matchedClient = clients.find(
+
+    const orderStatus = String(orderToLoad.status || orderToLoad.estado || '').trim().toUpperCase();
+    if (orderStatus === 'RETENIDO_CREDITO') {
+      notify.error(`⛔ El pedido ${orderToLoad.numeroDoc || orderToLoad.id} está RETENIDO POR CRÉDITO. Debe ser liberado por Gerencia en Flujo Comercial antes de facturar.`);
+      return;
+    }
+    if (orderStatus === 'PENDIENTE') {
+      notify.warning(`⏳ El pedido ${orderToLoad.numeroDoc || orderToLoad.id} es un borrador PENDIENTE y aún no ha sido enviado/aprobado para Caja.`);
+      return;
+    }
+    if (['FACTURADO', 'ANULADO', 'ANULADA', 'RECHAZADO', 'CANCELADO', 'CADUCADO'].includes(orderStatus)) {
+      notify.error(`El pedido ${orderToLoad.numeroDoc || orderToLoad.id} se encuentra en estado ${orderStatus} y no puede facturarse.`);
+      return;
+    }
+
+    // 1. Vincular cliente aprobado (sin fabricar cupos ficticios)
+    const findMatchingClient = (list = []) => list.find(
       (c) =>
-        c.rif === orderToLoad.clienteRif ||
-        c.id === orderToLoad.clienteId ||
-        c.nombre?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase() ||
-        c.razonSocial?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase()
+        c &&
+        ((orderToLoad.clienteRif && c.rif === orderToLoad.clienteRif) ||
+        (orderToLoad.clienteId && c.id === orderToLoad.clienteId) ||
+        (orderToLoad.clienteNombre && c.nombre?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase()) ||
+        (orderToLoad.clienteNombre && c.razonSocial?.toLowerCase() === orderToLoad.clienteNombre?.toLowerCase()))
     );
+    const matchedApprovedClient = findMatchingClient(approvedClients);
+    const matchedRawClient = matchedApprovedClient || findMatchingClient(clients);
+
+    if (matchedRawClient && !isClientApproved(matchedRawClient)) {
+      notify.error(`El cliente "${matchedRawClient.nombre || orderToLoad.clienteNombre}" está en estado ${getClientApprovalStatus(matchedRawClient)} y requiere aprobación antes de facturar.`);
+      return;
+    }
+
     const resolvedDays = resolveCreditDaysFromTerm(
       orderToLoad.condicionPago,
-      matchedClient?.diasCredito ?? 15,
+      matchedApprovedClient?.diasCredito ?? 15,
       orderToLoad.diasCredito
     );
 
-    if (matchedClient) {
-      setSelectedClient(matchedClient);
+    if (matchedApprovedClient) {
+      setSelectedClient(matchedApprovedClient);
     } else {
       setSelectedClient({
-        id: orderToLoad.clienteId || 'CLI-TEMP',
-        nombre: orderToLoad.clienteNombre || 'Cliente',
-        razonSocial: orderToLoad.clienteNombre || 'Cliente',
-        rif: orderToLoad.clienteRif || 'J-000000000',
-        tipoCliente: 'Mayorista',
-        domicilioFiscal: orderToLoad.direccionEntrega || 'Venezuela',
-        direccion: orderToLoad.direccionEntrega || 'Venezuela',
-        diasCredito: resolvedDays || 15,
-        limiteCreditoUsd: 5000,
+        id: orderToLoad.clienteId || 'CLI-SIN-REGISTRO',
+        nombre: orderToLoad.clienteNombre || 'Cliente No Registrado',
+        razonSocial: orderToLoad.clienteNombre || 'Cliente No Registrado',
+        rif: orderToLoad.clienteRif || '',
+        tipoCliente: 'Detal',
+        domicilioFiscal: orderToLoad.direccionEntrega || '',
+        direccion: orderToLoad.direccionEntrega || '',
+        diasCredito: 0,
+        limiteCreditoUsd: 0,
+        sinCredito: true,
         saldoPendienteUsd: 0
       });
     }
 
     // 1.1 Sincronizar Tipo de Documento y Almacén según la orden (Factura Fiscal -> Alm 01, Nota de Entrega -> Alm 02)
-    const isOrderNotaEntrega =
-      orderToLoad.tipoDoc === 'NOTA_ENTREGA' ||
-      orderToLoad.tipo_doc === 'NOTA_ENTREGA' ||
-      orderToLoad.modalidadVenta === 'OFICINA' ||
-      orderToLoad.almacen === '02' ||
-      orderToLoad.co_alma === '02' ||
-      String(orderToLoad.numeroDoc || orderToLoad.id || '').toUpperCase().startsWith('PED-NE');
+    const orderTarget = resolveDocumentWarehouseTarget(orderToLoad);
+    const isOrderNotaEntrega = orderTarget.effectiveTipoDoc === 'NOTA_ENTREGA';
 
     if (isOrderNotaEntrega) {
       setTipoDoc('NOTA_ENTREGA');
@@ -291,23 +328,22 @@ export default function SalesPOSView({
       setCreditTerm(resolveTermCodeFromDays(resolvedDays, orderToLoad.condicionPago));
     }
 
-    // 3. Sincronizar estado de aprobación crediticia si el pedido viene aprobado
-    if (orderToLoad.creditOverrideApproved || orderToLoad.status === 'APROBADO') {
-      setCreditOverrideApproved(Boolean(orderToLoad.creditOverrideApproved || !isOrderCash));
-      if (orderToLoad.creditOverrideAuthorizer) {
-        setCreditOverrideAuthorizer(orderToLoad.creditOverrideAuthorizer);
-      }
-      if (orderToLoad.creditOverrideJustification) {
-        setCreditOverrideJustification(orderToLoad.creditOverrideJustification);
-      }
+    // 3. Sincronizar estado de excepción crediticia SOLO si existió un override explícito en origen
+    const hasExplicitOverride = Boolean(orderToLoad.creditOverrideApproved === true);
+    if (hasExplicitOverride) {
+      setCreditOverrideApproved(true);
+      setCreditOverrideAuthorizer(orderToLoad.creditOverrideAuthorizer || defaultAuthorizer);
+      setCreditOverrideJustification(orderToLoad.creditOverrideJustification || '');
     } else {
       setCreditOverrideApproved(false);
+      setCreditOverrideAuthorizer(defaultAuthorizer);
+      setCreditOverrideJustification('');
     }
 
     // 4. Cargar renglones al carrito
     if (Array.isArray(orderToLoad.items) && orderToLoad.items.length > 0) {
       const loadedCart = orderToLoad.items.map((it) => {
-        const matchedProd = products.find((p) => p.id === it.articuloId || p.codigo === it.articuloId);
+        const matchedProd = products.find((p) => p.id === it.articuloId || p.codigo === it.articuloId || p.codigo === it.codigo);
         const precio = Number(it.precioUnitarioUsd) > 0
           ? Number(it.precioUnitarioUsd)
           : (Number(it.precioUsd) > 0 ? Number(it.precioUsd) : getProductWholesalePrice(matchedProd));
@@ -316,7 +352,7 @@ export default function SalesPOSView({
 
         return {
           articuloId: matchedProd?.id || it.articuloId,
-          codigo: matchedProd?.codigo || it.articuloId,
+          codigo: matchedProd?.codigo || it.codigo || it.articuloId,
           oem: matchedProd?.oem || 'OILSTONE',
           descripcion: it.articuloDescripcion || matchedProd?.descripcion || 'Lubricante Automotriz',
           viscosidad: matchedProd?.viscosidad || 'N/A',
@@ -337,8 +373,8 @@ export default function SalesPOSView({
       const loadedStockCheck = validateWarehouseStockForDocument({
         items: loadedCart,
         products,
-        tipoDoc: isOrderNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA',
-        almacen: isOrderNotaEntrega ? '02' : '01',
+        tipoDoc: orderTarget.effectiveTipoDoc,
+        almacen: orderTarget.warehouseCode,
         modalidadVenta: isOrderNotaEntrega ? 'OFICINA' : 'MOSTRADOR'
       });
       if (!loadedStockCheck.isValid) {
@@ -346,13 +382,16 @@ export default function SalesPOSView({
       }
     }
 
+    const parsedOrderEmission = parseInvoiceDateInfo(orderToLoad.fechaEmision || orderToLoad.fecha || orderToLoad.created_at);
+    const safeOrderEmissionDate = parsedOrderEmission?.date || new Date();
+    const parsedOrderExp = parseInvoiceDateInfo(orderToLoad.fechaVencimiento);
+    const safeOrderExpDate = parsedOrderExp?.date || calculateExpirationDate(safeOrderEmissionDate, resolvedDays);
+
     setActiveOrderInPOS({
       ...orderToLoad,
       diasCredito: resolvedDays,
-      fechaEmision: orderToLoad.fechaEmision || orderToLoad.fecha || new Date().toISOString(),
-      fechaVencimiento:
-        orderToLoad.fechaVencimiento ||
-        calculateExpirationDate(orderToLoad.fechaEmision || orderToLoad.fecha || new Date(), resolvedDays).toISOString()
+      fechaEmision: safeOrderEmissionDate.toISOString(),
+      fechaVencimiento: safeOrderExpDate.toISOString()
     });
     setShowOrdersDrawer(false);
     notify.success(`Nota de Pedido ${orderToLoad.numeroDoc || orderToLoad.id} cargada en Caja (Modo Solo Lectura: NO MODIFICABLE).`);
@@ -384,39 +423,52 @@ export default function SalesPOSView({
     return resolveProductUnit(product, 'Caja');
   };
 
+  const activeDocumentWarehouseTarget = useMemo(
+    () =>
+      resolveDocumentWarehouseTarget({
+        tipoDoc,
+        modalidadVenta,
+        documentoAfectado
+      }),
+    [tipoDoc, modalidadVenta, documentoAfectado]
+  );
+
   // -------------------------------------------------------------------------
   // CÁLCULO DE DISPONIBILIDAD ATP (Available-To-Promise)
   // Fórmula: Disponibilidad = Stock Físico Almacén - Comprometido Vigente - En Carrito
   // Política: Las órdenes de compra montadas por vendedores comprometen stock
-  // temporalmente y caducan a las 72 horas de su emisión.
-  // El stock real de almacén no se debita hasta que se emite la factura formal.
+  // temporalmente en SU respectivo almacén (01 o 02) y caducan a las 72 horas.
   // -------------------------------------------------------------------------
   const committedStockMap = useMemo(() => {
     const map = {};
-    const now = Date.now();
-    const HOURS_72_MS = 72 * 60 * 60 * 1000;
-
     if (!Array.isArray(orders)) return map;
 
     orders.forEach((order) => {
       if (!order) return;
-      const st = (order.status || '').toUpperCase();
+      if (activeOrderInPOS && (order.id === activeOrderInPOS.id || order.numeroDoc === activeOrderInPOS.numeroDoc)) {
+        return;
+      }
+      const st = String(order.status || '').toUpperCase();
       // Órdenes activas en pipeline que comprometen stock (no facturadas ni anuladas)
-      if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'RETENIDO_CREDITO') return;
+      if (st !== 'PENDIENTE' && st !== 'APROBADO' && st !== 'EN_PROCESO' && st !== 'EN_TRANSITO' && st !== 'RETENIDO_CREDITO') {
+        return;
+      }
 
-      // Verificar tiempo de emisión (caduca a las 72 horas)
-      const rawDate = order.fechaEmision || order.fecha || order.created_at;
-      if (rawDate) {
-        const orderTime = new Date(rawDate).getTime();
-        if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) {
-          return;
-        }
+      // Aislar reservas por almacén (Almacén 01 Fiscal vs Almacén 02 Notas de Entrega)
+      const orderTarget = resolveDocumentWarehouseTarget(order);
+      if (orderTarget.warehouseCode !== activeDocumentWarehouseTarget.warehouseCode) {
+        return;
+      }
+
+      // Verificar tiempo de emisión (caduca a las 72 horas sin desfase UTC-4 ni fallo en DD/MM/YYYY)
+      if (isOrderReservationExpired({ ...order, status: 'PENDIENTE' })) {
+        return;
       }
 
       const items = order.items || order.renglones || [];
       if (Array.isArray(items)) {
         items.forEach((it) => {
-          const key = it.articuloId || it.id || it.co_art || it.codigo;
+          const key = String(it.articuloId || it.id || it.co_art || it.codigo || '').trim();
           const qty = Number(it.cantidad || it.qty || 0);
           if (key && qty > 0) {
             map[key] = (map[key] || 0) + qty;
@@ -426,16 +478,21 @@ export default function SalesPOSView({
     });
 
     return map;
-  }, [orders]);
+  }, [orders, activeDocumentWarehouseTarget.warehouseCode, activeOrderInPOS]);
 
-  // Helper para consultar el stock comprometido vigente de un producto
+  // Helper para consultar el stock comprometido vigente de un producto sin duplicar claves equivalentes
   const getProductCommittedQty = (product) => {
     if (!product) return 0;
-    const byId = committedStockMap[product.id] || 0;
-    const byCoArt = product.co_art ? (committedStockMap[product.co_art] || 0) : 0;
-    const byCodigo = product.codigo ? (committedStockMap[product.codigo] || 0) : 0;
-    if (product.co_art && product.co_art === product.id) return byId;
-    return byId + byCoArt + byCodigo;
+    const uniqueKeys = new Set(
+      [product.id, product.co_art, product.codigo]
+        .map((k) => String(k || '').trim())
+        .filter(Boolean)
+    );
+    let sum = 0;
+    uniqueKeys.forEach((k) => {
+      sum += Number(committedStockMap[k] || 0);
+    });
+    return sum;
   };
 
   const addToCart = (product) => {
@@ -446,14 +503,15 @@ export default function SalesPOSView({
       return;
     }
     const wStocks = getProductWarehouseStocks(product);
-    const rawStock = Number(tipoDoc === 'NOTA_ENTREGA' ? wStocks.stock02 : wStocks.stock01);
+    const rawStock = Number(activeDocumentWarehouseTarget.warehouseCode === '02' ? wStocks.stock02 : wStocks.stock01);
     const committedQty = getProductCommittedQty(product);
     const maxAvailable = Math.max(0, rawStock - committedQty);
     const existingIndex = cartItems.findIndex(item => item.articuloId === product.id);
+    const enforcePositiveStock = activeDocumentWarehouseTarget.requiresPositiveStock;
 
     if (existingIndex >= 0) {
       const current = cartItems[existingIndex];
-      if (current.cantidad < maxAvailable) {
+      if (!enforcePositiveStock || current.cantidad < maxAvailable) {
         const newQty = current.cantidad + 1;
         const unitLts = Number(current.litrosPorUnidad) > 0 ? Number(current.litrosPorUnidad) : resolveProductLitersPerUnit(product);
         setCartItems(cartItems.map((item, idx) => idx === existingIndex
@@ -461,7 +519,7 @@ export default function SalesPOSView({
           : item
         ));
       } else {
-        const whLabel = tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturas Fiscales)';
+        const whLabel = activeDocumentWarehouseTarget.warehouseLabel;
         if (committedQty > 0) {
           notify.warning(`Disponibilidad libre alcanzada en ${whLabel} (${maxAvailable} un. disponibles. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} con reserva 72h)`);
         } else {
@@ -469,8 +527,8 @@ export default function SalesPOSView({
         }
       }
     } else {
-      if (maxAvailable <= 0) {
-        const whLabel = tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturas Fiscales)';
+      if (enforcePositiveStock && maxAvailable <= 0) {
+        const whLabel = activeDocumentWarehouseTarget.warehouseLabel;
         if (committedQty > 0) {
           notify.warning(`Este lubricante tiene existencia física (${rawStock} un. en ${whLabel}) pero está totalmente comprometido en órdenes de preventa activas (reserva 72 horas).`);
         } else {
@@ -517,7 +575,7 @@ export default function SalesPOSView({
       const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR;
       const next = prev.map(item => {
         if (item.precioPactado) return item;
-        const prod = products.find(p => p.id === item.articuloId);
+        const prod = products.find(p => p.id === item.articuloId || p.codigo === item.codigo);
         if (!prod) return item;
         const precio = resolveUnitPrice(prod, selectedClient, channel);
         if (!(precio > 0) || precio === item.precioUsd) return item;
@@ -539,12 +597,12 @@ export default function SalesPOSView({
     }
     const product = products.find(p => p.id === articuloId);
     const wStocks = product ? getProductWarehouseStocks(product) : { stock01: 0, stock02: 0, total: 0 };
-    const rawStock = Number(tipoDoc === 'NOTA_ENTREGA' ? wStocks.stock02 : wStocks.stock01);
+    const rawStock = Number(activeDocumentWarehouseTarget.warehouseCode === '02' ? wStocks.stock02 : wStocks.stock01);
     const committedQty = getProductCommittedQty(product);
     const maxAvailable = Math.max(0, rawStock - committedQty);
 
-    if (product && newQty > maxAvailable) {
-      const whLabel = tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturas Fiscales)';
+    if (activeDocumentWarehouseTarget.requiresPositiveStock && product && newQty > maxAvailable) {
+      const whLabel = activeDocumentWarehouseTarget.warehouseLabel;
       notify.warning(`Supera la disponibilidad para venta libre en ${whLabel} (${maxAvailable} un. Físico: ${rawStock}, Comprometido en O.C.: ${committedQty} con reserva 72h)`);
       return;
     }
@@ -594,16 +652,21 @@ export default function SalesPOSView({
     }
   }, [isFiscalRateLocked, tipoTasa]);
 
-  // Motor Fiscal SENIAT (En Notas de Entrega NO aplica IVA: 0%)
-  const resolvedPorcentajeRetIva =
-    selectedClient?.porcentajeRetencionIva ?? (selectedClient?.agenteRetencionIva ? 75 : 0);
+  // Motor Fiscal SENIAT (En Notas de Entrega y Cotizaciones NO aplica IVA ni IGTF/Retenciones)
+  const resolvedPorcentajeRetIva = selectedClient?.agenteRetencionIva
+    ? (Number(selectedClient.porcentajeRetencionIva) > 0 ? Number(selectedClient.porcentajeRetencionIva) : 75)
+    : 0;
+  const effectiveTaxRate = (!isFiscalRateLocked && !isDirectCurrencyRateType(effectivePosRateType))
+    ? effectivePosTasaPago
+    : tasaBcv;
   const fiscalTaxes = calculateFiscalTaxes({
     items: cartItems,
     tipoDoc,
     metodoPago,
     condicionPago,
-    tasaBcv,
+    tasaBcv: effectiveTaxRate,
     porcentajeRetencionIva: resolvedPorcentajeRetIva,
+    porcentajeRetencionIslr: 0,
     ...resolveConfigIgtfOptions(safeConfig)
   });
 
@@ -633,9 +696,10 @@ export default function SalesPOSView({
   }, [condicionPago, activeOrderInPOS, creditTerm, selectedClient]);
 
   const fechaEmisionActual = useMemo(() => {
-    if (activeOrderInPOS?.fechaEmision || activeOrderInPOS?.fecha) {
-      const parsed = new Date(activeOrderInPOS.fechaEmision || activeOrderInPOS.fecha);
-      if (!Number.isNaN(parsed.getTime())) return parsed;
+    const rawOrderDate = activeOrderInPOS?.fechaEmision || activeOrderInPOS?.fecha;
+    if (rawOrderDate) {
+      const parsed = parseInvoiceDateInfo(rawOrderDate)?.date;
+      if (parsed && !Number.isNaN(parsed.getTime())) return parsed;
     }
     return new Date();
   }, [activeOrderInPOS]);
@@ -662,15 +726,17 @@ export default function SalesPOSView({
 
   const isTermRequiresMandatoryApproval = condicionPago === 'CREDITO' && creditTerm === '30_DIAS';
 
+  const isOrderApprovedOverride = Boolean(
+    creditOverrideApproved &&
+    (userCanGrantCreditOverride || activeOrderInPOS?.creditOverrideApproved === true)
+  );
+
   const effectiveIsAprobado =
-    creditOverrideApproved ||
-    Boolean(activeOrderInPOS && activeOrderInPOS.status === 'APROBADO') ||
+    isOrderApprovedOverride ||
     (Boolean(clientCreditEvaluation.isAprobado) && !isTermRequiresMandatoryApproval);
 
-  const effectiveStatusLabel = creditOverrideApproved
+  const effectiveStatusLabel = isOrderApprovedOverride
     ? 'APROBADO (AUTORIZADO)'
-    : activeOrderInPOS && activeOrderInPOS.status === 'APROBADO'
-    ? 'APROBADO (PEDIDO VALIDADO)'
     : isTermRequiresMandatoryApproval
     ? 'NEGADO (REQUIERE APROBACIÓN 30D)'
     : clientCreditEvaluation.statusLabel;
@@ -679,10 +745,8 @@ export default function SalesPOSView({
     condicionPago === 'CREDITO' && (!clientCreditEvaluation?.evaluado || !effectiveIsAprobado)
   );
 
-  const effectiveMotivo = creditOverrideApproved
-    ? `Autorización Excepcional Otorgada por: ${creditOverrideAuthorizer}. Justificación: ${creditOverrideJustification || 'Autorizado por Gerencia'}.`
-    : activeOrderInPOS && activeOrderInPOS.status === 'APROBADO'
-    ? `Crédito validado en origen para la Nota de Pedido ${activeOrderInPOS.numeroDoc || activeOrderInPOS.id}.${activeOrderInPOS.creditOverrideAuthorizer ? ` Autorizado por: ${activeOrderInPOS.creditOverrideAuthorizer}.` : ''}`
+  const effectiveMotivo = isOrderApprovedOverride
+    ? `Autorización Excepcional Otorgada por: ${creditOverrideAuthorizer}. Justificación: ${creditOverrideJustification || activeOrderInPOS?.creditOverrideJustification || 'Autorizado por Gerencia'}.`
     : isTermRequiresMandatoryApproval
     ? !clientCreditEvaluation.isAprobado
       ? `${clientCreditEvaluation.motivo} Además, el plazo a 30 Días siempre requiere aprobación obligatoria de Gerencia.`
@@ -694,16 +758,34 @@ export default function SalesPOSView({
       validateWarehouseStockForDocument({
         items: cartItems,
         products,
-        tipoDoc,
-        almacen: tipoDoc === 'NOTA_ENTREGA' ? '02' : '01',
+        tipoDoc: activeDocumentWarehouseTarget.effectiveTipoDoc,
+        almacen: activeDocumentWarehouseTarget.warehouseCode,
         modalidadVenta
       }),
-    [cartItems, products, tipoDoc, modalidadVenta]
+    [cartItems, products, activeDocumentWarehouseTarget, modalidadVenta]
   );
 
   const handleFinalizeSale = async () => {
+    if (isSubmittingSale) return;
+
     if (cartItems.length === 0) {
       notify.warning('El carrito de facturación está vacío. Agregue lubricantes para continuar.');
+      return;
+    }
+
+    if (!selectedClient) {
+      notify.warning('Seleccione un cliente aprobado para emitir el documento.');
+      return;
+    }
+
+    const clientApprovalStatus = getClientApprovalStatus(selectedClient);
+    if (clientApprovalStatus === 'PENDIENTE' || clientApprovalStatus === 'RECHAZADO') {
+      notify.error(`El cliente "${selectedClient.nombre}" está en estatus ${clientApprovalStatus} y no puede facturar.`);
+      return;
+    }
+
+    if (tipoDoc === 'FACTURA' && !validateRif(selectedClient?.rif || '')) {
+      notify.warning('El cliente seleccionado no posee un RIF o Cédula fiscal válida para emitir Factura SENIAT.');
       return;
     }
 
@@ -721,13 +803,19 @@ export default function SalesPOSView({
       notify.error(
         `Operación a Crédito Retenida por Normas de Crédito: ${effectiveMotivo} Solicite aprobación excepcional para facturar.`
       );
-      setShowCreditApprovalModal(true);
+      if (userCanGrantCreditOverride) {
+        setShowCreditApprovalModal(true);
+      }
       return;
     }
 
+    const effectiveModalidadVenta = tipoDoc === 'NOTA_ENTREGA'
+      ? (activeOrderInPOS?.modalidadVenta || 'OFICINA')
+      : 'MOSTRADOR';
+
     const resolvedVendedor = activeOrderInPOS
       ? (activeOrderInPOS.vendedorNombre || activeOrderInPOS.vendedorId || currentUser?.nombre || 'Ricardo Sánchez')
-      : modalidadVenta === 'OFICINA'
+      : effectiveModalidadVenta === 'OFICINA'
       ? (officeSeller || currentUser?.nombre || 'Oficina Principal Motorven')
       : (currentUser?.nombre || 'Ricardo Sánchez');
 
@@ -748,7 +836,7 @@ export default function SalesPOSView({
         return String(matchedInCatalog.coVen || matchedInCatalog.co_ven).trim();
       }
       const userCoVen = String(currentUser?.co_ven || currentUser?.coVen || '').trim();
-      if (userCoVen && modalidadVenta !== 'OFICINA') return userCoVen;
+      if (userCoVen && effectiveModalidadVenta !== 'OFICINA') return userCoVen;
       return 'OF';
     })();
 
@@ -763,14 +851,16 @@ export default function SalesPOSView({
     const salePayload = {
       tipoDoc,
       numeroDoc: resolvedNextCorrelativo,
-      numeroControl: !isNaN(controlDigits) ? generateFiscalControlNumber(controlDigits) : undefined,
+      numeroControl: (tipoDoc === 'NOTA_ENTREGA' || tipoDoc === 'COTIZACION')
+        ? undefined
+        : (!isNaN(controlDigits) ? generateFiscalControlNumber(controlDigits) : undefined),
       porcentajeRetencionIva: resolvedPorcentajeRetIva,
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim() : '',
       pedidoOrigenId: activeOrderInPOS?.id || null,
       pedidoOrigenDoc: activeOrderInPOS?.numeroDoc || activeOrderInPOS?.id || null,
       preserveOriginOrderOnSale: Boolean(activeOrderInPOS),
       markOriginOrderBilled: Boolean(activeOrderInPOS),
-      modalidadVenta: activeOrderInPOS?.modalidadVenta || modalidadVenta,
+      modalidadVenta: effectiveModalidadVenta,
       clienteId: selectedClient?.id || 'CLI-003',
       clienteNombre: selectedClient?.nombre || selectedClient?.razonSocial || 'CLIENTE CONTADO / MOSTRADOR OILSTONE',
       clienteRif: selectedClient?.rif || 'V-18456789-6',
@@ -783,10 +873,11 @@ export default function SalesPOSView({
       metodoPago: condicionPago === 'CREDITO' ? 'CREDITO' : metodoPago,
       tipoTasa: effectivePosRateType,
       tasaPago: effectivePosTasaPago,
+      tasaDolar: tasaBcv,
       monedaPago: isDirectCurrencyRateType(effectivePosRateType) ? 'USD' : 'BS',
-      creditOverrideApproved,
-      creditOverrideAuthorizer: creditOverrideApproved ? creditOverrideAuthorizer : (activeOrderInPOS?.creditOverrideAuthorizer || null),
-      creditOverrideJustification: creditOverrideApproved ? creditOverrideJustification : (activeOrderInPOS?.creditOverrideJustification || null),
+      creditOverrideApproved: isOrderApprovedOverride,
+      creditOverrideAuthorizer: isOrderApprovedOverride ? creditOverrideAuthorizer : (activeOrderInPOS?.creditOverrideAuthorizer || null),
+      creditOverrideJustification: isOrderApprovedOverride ? creditOverrideJustification : (activeOrderInPOS?.creditOverrideJustification || null),
       items: cartItems,
       subtotalUsd,
       baseExentaUsd: fiscalTaxes.baseExentaUsd,
@@ -810,6 +901,7 @@ export default function SalesPOSView({
       ivaBs,
       igtfBs,
       totalBs,
+      retencionIvaUsd: fiscalTaxes.retencionIvaUsd,
       retencionIvaBs: fiscalTaxes.retencionIvaBs,
       totalLitros: Number((totalLitrosCarrito || 0).toFixed(2)),
       totalCajas: totalCajasCarrito,
@@ -819,6 +911,7 @@ export default function SalesPOSView({
     };
 
     try {
+      setIsSubmittingSale(true);
       const createdSale = await onProcessSale(salePayload);
       if (createdSale) {
         const finalDocNum = createdSale.numeroDoc || resolvedNextCorrelativo;
@@ -849,11 +942,17 @@ export default function SalesPOSView({
           zonaDespacho: activeOrderInPOS?.zonaVenta || '01 - Valencia'
         });
         setActiveOrderInPOS(null);
+        setCartItems([]);
+        setDocumentoAfectado('');
+        setCreditOverrideApproved(false);
+        setCreditOverrideJustification('');
         setShowSuccessModal(true);
       }
     } catch (err) {
       console.error("Error al procesar la venta:", err);
       notify.error("Error al emitir la factura en el sistema: " + (err.message || err));
+    } finally {
+      setIsSubmittingSale(false);
     }
   };
 
@@ -871,7 +970,7 @@ export default function SalesPOSView({
 
   const availableCount = filteredProducts.filter(p => {
     const wStocks = getProductWarehouseStocks(p);
-    const rawStock = tipoDoc === 'NOTA_ENTREGA' ? wStocks.stock02 : wStocks.stock01;
+    const rawStock = activeDocumentWarehouseTarget.warehouseCode === '02' ? wStocks.stock02 : wStocks.stock01;
     const committed = getProductCommittedQty(p);
     return (rawStock - committed) > 0;
   }).length;
@@ -1096,20 +1195,26 @@ export default function SalesPOSView({
               {['FACTURA', 'NOTA_CREDITO', 'NOTA_DEBITO', 'NOTA_ENTREGA', 'COTIZACION'].map((tipo) => (
                 <button
                   key={tipo}
+                  type="button"
+                  disabled={isOrderLocked && tipoDoc !== tipo}
+                  title={isOrderLocked ? 'Bloqueado: Tipo de documento fijado por Nota de Pedido enviada a caja' : undefined}
                   className="btn btn-sm"
                   onClick={() => {
+                    if (isOrderLocked) return;
+                    const nextModalidad = tipo === 'NOTA_ENTREGA' ? 'OFICINA' : 'MOSTRADOR';
                     setTipoDoc(tipo);
-                    if (!isOrderLocked) {
-                      if (tipo === 'NOTA_ENTREGA') setModalidadVenta('OFICINA');
-                      else if (tipo === 'FACTURA') setModalidadVenta('MOSTRADOR');
-                    }
-                    if (cartItems.length > 0 && (tipo === 'FACTURA' || tipo === 'NOTA_ENTREGA')) {
-                      const nextModalidad = tipo === 'NOTA_ENTREGA' ? 'OFICINA' : 'MOSTRADOR';
+                    setModalidadVenta(nextModalidad);
+                    const targetSwitch = resolveDocumentWarehouseTarget({
+                      tipoDoc: tipo,
+                      modalidadVenta: nextModalidad,
+                      documentoAfectado
+                    });
+                    if (cartItems.length > 0) {
                       const switchCheck = validateWarehouseStockForDocument({
                         items: cartItems,
                         products,
-                        tipoDoc: tipo,
-                        almacen: tipo === 'NOTA_ENTREGA' ? '02' : '01',
+                        tipoDoc: targetSwitch.effectiveTipoDoc,
+                        almacen: targetSwitch.warehouseCode,
                         modalidadVenta: nextModalidad
                       });
                       if (!switchCheck.isValid) {
@@ -1120,7 +1225,9 @@ export default function SalesPOSView({
                   style={{
                     background: tipoDoc === tipo ? 'var(--motorven-red)' : 'transparent',
                     color: tipoDoc === tipo ? '#fff' : '#94a3b8',
-                    fontWeight: tipoDoc === tipo ? 800 : 500
+                    fontWeight: tipoDoc === tipo ? 800 : 500,
+                    opacity: isOrderLocked && tipoDoc !== tipo ? 0.45 : 1,
+                    cursor: isOrderLocked && tipoDoc !== tipo ? 'not-allowed' : 'pointer'
                   }}
                 >
                   {tipo.replace('_', ' ')}
@@ -1136,24 +1243,35 @@ export default function SalesPOSView({
                 gap: '6px',
                 padding: '5px 12px',
                 borderRadius: '12px',
-                background: tipoDoc === 'NOTA_ENTREGA' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(2, 132, 199, 0.12)',
-                border: tipoDoc === 'NOTA_ENTREGA' ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(56, 189, 248, 0.35)',
+                background: activeDocumentWarehouseTarget.warehouseCode === '02' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(2, 132, 199, 0.12)',
+                border: activeDocumentWarehouseTarget.warehouseCode === '02' ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(56, 189, 248, 0.35)',
                 fontSize: '0.75rem',
                 fontWeight: 700,
-                color: tipoDoc === 'NOTA_ENTREGA' ? 'var(--motorven-emerald)' : '#38bdf8'
+                color: activeDocumentWarehouseTarget.warehouseCode === '02' ? 'var(--motorven-emerald)' : '#38bdf8'
               }}
-              title={tipoDoc === 'NOTA_ENTREGA' ? 'Las Notas de Entrega se descuentan del Almacén 02 (Bóveda / Central)' : 'Las Facturas Fiscales se descuentan del Almacén 01 (Principal / Mostrador)'}
+              title={activeDocumentWarehouseTarget.warehouseCode === '02'
+                ? 'Las Notas de Entrega se descuentan del Almacén 02 (Bóveda / Central)'
+                : 'Facturas y Cotizaciones validan contra el Almacén 01 (Principal / Mostrador)'}
             >
               <Warehouse size={13} />
-              {tipoDoc === 'NOTA_ENTREGA'
-                ? '02: Almacén Central (Notas de Entrega)'
-                : '01: Almacén Principal (Facturación Fiscal)'}
+              {`${activeDocumentWarehouseTarget.warehouseCode}: ${activeDocumentWarehouseTarget.warehouseLabel}`}
             </div>
 
             {/* BOTÓN IMPRIMIR REPORTE */}
             <button
               type="button"
-              onClick={() => generateSalesPOSPDF({ sales: profitInvoices && profitInvoices.length > 0 ? profitInvoices : [], config, currentUser, tipoDoc })}
+              onClick={() => {
+                const seenKeys = new Set();
+                const mergedReportSales = [...(Array.isArray(sales) ? sales : []), ...(Array.isArray(profitInvoices) ? profitInvoices : [])]
+                  .filter((doc) => {
+                    const key = String(doc?.numeroDoc || doc?.numeroFactura || doc?.id || '').trim().toUpperCase();
+                    if (!key) return true;
+                    if (seenKeys.has(key)) return false;
+                    seenKeys.add(key);
+                    return true;
+                  });
+                generateSalesPOSPDF({ sales: mergedReportSales, config, currentUser, tipoDoc });
+              }}
               className="btn btn-print-report"
               style={{ marginLeft: 'auto' }}
               title="Descargar Reporte Oficial de Ventas y Facturación en PDF"
@@ -1263,7 +1381,8 @@ export default function SalesPOSView({
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(205px, 1fr))', gap: '0.85rem' }}>
               {filteredProducts.map((p) => {
                 const wStocks = getProductWarehouseStocks(p);
-                const rawStock = Number(tipoDoc === 'NOTA_ENTREGA' ? wStocks.stock02 : wStocks.stock01);
+                const rawStock = Number(activeDocumentWarehouseTarget.warehouseCode === '02' ? wStocks.stock02 : wStocks.stock01);
+                const pLiters = resolveProductLitersPerUnit(p);
                 const committedQty = getProductCommittedQty(p);
                 const stockMin = Number(p.stockMinimo ?? p.stock_minimo ?? 10);
                 const cartItem = cartItems.find(item => item.articuloId === p.id);
@@ -1394,9 +1513,9 @@ export default function SalesPOSView({
                             <strong style={{ fontSize: '0.8rem', color: isOutOfStock ? '#ef4444' : 'var(--text-main, #f8fafc)', fontFamily: 'var(--font-code)' }}>
                               {disponibleReal} {unitLabel}
                             </strong>
-                            {p.litrosPorUnidad > 0 && disponibleReal > 0 && (
+                            {pLiters > 0 && disponibleReal > 0 && (
                               <span style={{ fontSize: '0.65rem', color: 'var(--neon-cyan, #38bdf8)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
-                                ({formatUnitVe(disponibleReal * p.litrosPorUnidad, 2)} L)
+                                ({formatUnitVe(disponibleReal * pLiters, 2)} L)
                               </span>
                             )}
                           </div>
@@ -1417,15 +1536,15 @@ export default function SalesPOSView({
                         >
                           <span
                             style={{
-                              color: tipoDoc === 'NOTA_ENTREGA' ? '#38bdf8' : '#34d399',
+                              color: activeDocumentWarehouseTarget.warehouseCode === '02' ? '#38bdf8' : '#34d399',
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '3px',
                               fontWeight: 700
                             }}
-                            title={`Existencia física en ${tipoDoc === 'NOTA_ENTREGA' ? 'Almacén 02 (Notas de Entrega)' : 'Almacén 01 (Facturas Fiscales)'}`}
+                            title={`Existencia física en ${activeDocumentWarehouseTarget.warehouseLabel}`}
                           >
-                            <Building2 size={10} /> {tipoDoc === 'NOTA_ENTREGA' ? 'Alm 02' : 'Alm 01'}: <strong style={{ color: 'var(--text-main)', marginLeft: '1px' }}>{rawStock}</strong>
+                            <Building2 size={10} /> Alm {activeDocumentWarehouseTarget.warehouseCode}: <strong style={{ color: 'var(--text-main)', marginLeft: '1px' }}>{rawStock}</strong>
                           </span>
 
                           {committedQty > 0 && (
@@ -1456,7 +1575,7 @@ export default function SalesPOSView({
                           {formatUsd(precioUsd)}
                         </div>
                         <div style={{ fontSize: '0.66rem', color: 'var(--motorven-gold)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {formatBs(precioUsd * config.tasaDolar)}
+                          {formatBs(precioUsd * tasaBcv)}
                         </div>
                       </div>
 
@@ -1521,8 +1640,26 @@ export default function SalesPOSView({
                 <button
                   type="button"
                   onClick={() => {
+                    const nextTipo = tipoDoc === 'NOTA_ENTREGA' ? 'FACTURA' : tipoDoc;
                     setModalidadVenta('MOSTRADOR');
                     if (tipoDoc === 'NOTA_ENTREGA') setTipoDoc('FACTURA');
+                    const targetSwitch = resolveDocumentWarehouseTarget({
+                      tipoDoc: nextTipo,
+                      modalidadVenta: 'MOSTRADOR',
+                      documentoAfectado
+                    });
+                    if (cartItems.length > 0) {
+                      const switchCheck = validateWarehouseStockForDocument({
+                        items: cartItems,
+                        products,
+                        tipoDoc: targetSwitch.effectiveTipoDoc,
+                        almacen: targetSwitch.warehouseCode,
+                        modalidadVenta: 'MOSTRADOR'
+                      });
+                      if (!switchCheck.isValid) {
+                        notify.warning(switchCheck.message);
+                      }
+                    }
                   }}
                   className="btn btn-sm"
                   style={{
@@ -1545,6 +1682,23 @@ export default function SalesPOSView({
                   onClick={() => {
                     setModalidadVenta('OFICINA');
                     setTipoDoc('NOTA_ENTREGA');
+                    const targetSwitch = resolveDocumentWarehouseTarget({
+                      tipoDoc: 'NOTA_ENTREGA',
+                      modalidadVenta: 'OFICINA',
+                      documentoAfectado
+                    });
+                    if (cartItems.length > 0) {
+                      const switchCheck = validateWarehouseStockForDocument({
+                        items: cartItems,
+                        products,
+                        tipoDoc: targetSwitch.effectiveTipoDoc,
+                        almacen: targetSwitch.warehouseCode,
+                        modalidadVenta: 'OFICINA'
+                      });
+                      if (!switchCheck.isValid) {
+                        notify.warning(switchCheck.message);
+                      }
+                    }
                   }}
                   className="btn btn-sm"
                   style={{
@@ -1867,7 +2021,7 @@ export default function SalesPOSView({
             )}
             {selectedClient?.agenteRetencionIva && (
               <div style={{ fontSize: '0.68rem', color: 'var(--motorven-gold)', marginTop: '2px' }}>
-                🏛️ Agente Retención IVA ({selectedClient.porcentajeRetencionIva || 75}%)
+                🏛️ Agente Retención IVA ({Number(selectedClient.porcentajeRetencionIva) > 0 ? selectedClient.porcentajeRetencionIva : 75}%)
               </div>
             )}
 
@@ -2033,6 +2187,9 @@ export default function SalesPOSView({
                 onClick={() => {
                   if (isOrderLocked) return;
                   setCondicionPago('CREDITO');
+                  if (isDirectCurrencyRateType(tipoTasa)) {
+                    setTipoTasa('BCV');
+                  }
                 }}
                 style={{
                   background: condicionPago === 'CREDITO' ? 'var(--motorven-gold)' : 'var(--bg-btn-secondary)',
@@ -2085,7 +2242,15 @@ export default function SalesPOSView({
                   className="form-control"
                   style={{ flex: 1, fontSize: '0.74rem', padding: '0.35rem 0.55rem' }}
                   value={effectivePosRateType}
-                  onChange={(e) => setTipoTasa(e.target.value)}
+                  onChange={(e) => {
+                    const nextRate = e.target.value;
+                    setTipoTasa(nextRate);
+                    if (condicionPago === 'CONTADO') {
+                      if (nextRate === 'USD') setMetodoPago('EFECTIVO_USD');
+                      else if (nextRate === 'ZELLE') setMetodoPago('ZELLE');
+                      else if (['EFECTIVO_USD', 'ZELLE'].includes(metodoPago)) setMetodoPago('PAGO_MOVIL');
+                    }
+                  }}
                   disabled={isOrderLocked && isFiscalRateLocked}
                 >
                   {allowedPosRateTypes.map((rt) => (
@@ -2129,8 +2294,9 @@ export default function SalesPOSView({
                         disabled={isOrderLocked}
                         onClick={() => {
                           if (isOrderLocked) return;
-                          if (t.key === '30_DIAS' && creditTerm !== '30_DIAS') {
+                          if (t.key !== creditTerm) {
                             setCreditOverrideApproved(false);
+                            setCreditOverrideJustification('');
                           }
                           setCreditTerm(t.key);
                         }}
@@ -2188,24 +2354,41 @@ export default function SalesPOSView({
                     </span>
 
                     {!isOrderLocked && (
-                      <button
-                        type="button"
-                        onClick={() => setShowCreditApprovalModal(true)}
-                        className="btn btn-sm"
-                        style={{
-                          padding: '2px 7px',
-                          fontSize: '0.63rem',
-                          fontWeight: 800,
-                          background: creditOverrideApproved
-                            ? 'rgba(16, 185, 129, 0.22)'
-                            : 'linear-gradient(135deg, #f59e0b, #d97706)',
-                          color: creditOverrideApproved ? '#34d399' : '#fff',
-                          border: creditOverrideApproved ? '1px solid #10b981' : 'none',
-                          borderRadius: '6px'
-                        }}
-                      >
-                        {creditOverrideApproved ? '✓ Autorizado' : '🛡️ Aprobar Crédito'}
-                      </button>
+                      userCanGrantCreditOverride ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowCreditApprovalModal(true)}
+                          className="btn btn-sm"
+                          style={{
+                            padding: '2px 7px',
+                            fontSize: '0.63rem',
+                            fontWeight: 800,
+                            background: creditOverrideApproved
+                              ? 'rgba(16, 185, 129, 0.22)'
+                              : 'linear-gradient(135deg, #f59e0b, #d97706)',
+                            color: creditOverrideApproved ? '#34d399' : '#fff',
+                            border: creditOverrideApproved ? '1px solid #10b981' : 'none',
+                            borderRadius: '6px'
+                          }}
+                        >
+                          {creditOverrideApproved ? '✓ Autorizado' : '🛡️ Aprobar Crédito'}
+                        </button>
+                      ) : (
+                        <span
+                          style={{
+                            padding: '2px 7px',
+                            fontSize: '0.61rem',
+                            fontWeight: 700,
+                            borderRadius: '6px',
+                            background: 'rgba(148, 163, 184, 0.14)',
+                            color: '#cbd5e1',
+                            border: '1px solid rgba(148, 163, 184, 0.35)'
+                          }}
+                          title="Solo Presidencia, Gerencia o Crédito y Cobranzas pueden otorgar aprobaciones excepcionales de crédito"
+                        >
+                          🔒 Requiere Gerencia
+                        </span>
+                      )
                     )}
                   </div>
                   <div style={{ color: 'var(--text-muted)', lineHeight: 1.25 }}>
@@ -2319,13 +2502,18 @@ export default function SalesPOSView({
               padding: '0.68rem 1rem',
               fontSize: '0.92rem',
               flexShrink: 0,
-              opacity: (cartItems.length === 0 || !cartWarehouseValidation.isValid) ? 0.55 : 1,
-              cursor: (cartItems.length === 0 || !cartWarehouseValidation.isValid) ? 'not-allowed' : 'pointer'
+              opacity: (isSubmittingSale || cartItems.length === 0 || !cartWarehouseValidation.isValid) ? 0.55 : 1,
+              cursor: (isSubmittingSale || cartItems.length === 0 || !cartWarehouseValidation.isValid) ? 'not-allowed' : 'pointer'
             }}
             onClick={handleFinalizeSale}
-            disabled={cartItems.length === 0 || !cartWarehouseValidation.isValid}
+            disabled={isSubmittingSale || cartItems.length === 0 || !cartWarehouseValidation.isValid}
           >
-            <CheckCircle size={18} /> {tipoDoc === 'NOTA_ENTREGA' ? 'EMITIR NOTA DE ENTREGA' : 'REALIZAR FACTURA'}
+            <CheckCircle size={18} />{' '}
+            {isSubmittingSale
+              ? 'PROCESANDO DOCUMENTO...'
+              : tipoDoc === 'NOTA_ENTREGA'
+              ? 'EMITIR NOTA DE ENTREGA'
+              : 'REALIZAR FACTURA'}
           </button>
         </div>
       </div>
@@ -2404,7 +2592,8 @@ export default function SalesPOSView({
                 {/* KPI de Disponibilidad en Bodega (ATP) */}
                 {(() => {
                   const specStocks = getProductWarehouseStocks(selectedSpecProduct);
-                  const specRaw = Number(tipoDoc === 'NOTA_ENTREGA' ? specStocks.stock02 : specStocks.stock01);
+                  const specRaw = Number(activeDocumentWarehouseTarget.warehouseCode === '02' ? specStocks.stock02 : specStocks.stock01);
+                  const specLiters = resolveProductLitersPerUnit(selectedSpecProduct);
                   const specCommitted = getProductCommittedQty(selectedSpecProduct);
                   const specDisp = Math.max(0, specRaw - specCommitted);
                   const isZero = specDisp <= 0;
@@ -2424,15 +2613,15 @@ export default function SalesPOSView({
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Package size={15} color={isZero ? '#ef4444' : '#10b981'} />
                           <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)' }}>
-                            Disponible ({tipoDoc === 'NOTA_ENTREGA' ? 'Alm 02: N/Entrega' : 'Alm 01: Fiscal'}):
+                            Disponible ({activeDocumentWarehouseTarget.warehouseCode === '02' ? 'Alm 02: N/Entrega' : 'Alm 01: Fiscal'}):
                           </span>
                           <strong style={{ fontSize: '0.82rem', color: isZero ? '#ef4444' : '#10b981', fontFamily: 'var(--font-code)' }}>
                             {isZero ? (specCommitted > 0 ? 'COMPROMETIDO EN O.C.' : 'AGOTADO EN ALMACÉN') : `${specDisp} ${unitLabel}`}
                           </strong>
                         </div>
-                        {(selectedSpecProduct.litrosPorUnidad || 0) > 0 && specDisp > 0 && (
+                        {specLiters > 0 && specDisp > 0 && (
                           <span style={{ fontSize: '0.7rem', color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>
-                            {formatUnitVe(specDisp * (selectedSpecProduct.litrosPorUnidad || 1), 2)} Lts. Libres
+                            {formatUnitVe(specDisp * specLiters, 2)} Lts. Libres
                           </span>
                         )}
                       </div>
@@ -2491,7 +2680,11 @@ export default function SalesPOSView({
           products={products}
           clients={clients}
           client={selectedClient}
-          onClose={() => setShowSuccessModal(false)}
+          onClose={() => {
+            setShowSuccessModal(false);
+            setCartItems([]);
+            setDocumentoAfectado('');
+          }}
           onNewSale={() => {
             setShowSuccessModal(false);
             setCartItems([]);
@@ -2600,20 +2793,7 @@ export default function SalesPOSView({
                 filteredDrawerOrders.map((ord) => {
                   const client = clients.find(c => c && (c.id === ord.clienteId || c.rif === ord.clienteRif));
                   const isCredit = ord.condicionPago && ord.condicionPago !== 'CONTADO';
-                  const isExpired = (() => {
-                    const now = new Date();
-                    const year = now.getFullYear();
-                    const month = String(now.getMonth() + 1).padStart(2, '0');
-                    const day = String(now.getDate()).padStart(2, '0');
-                    const todayLocal = `${year}-${month}-${day}`;
-                    const todayIso = now.toISOString().slice(0, 10);
-                    let orderDate = '';
-                    if (ord.fechaEmision) orderDate = String(ord.fechaEmision).slice(0, 10);
-                    else if (ord.fecha) orderDate = String(ord.fecha).slice(0, 10);
-                    else if (ord.created_at) orderDate = String(ord.created_at).slice(0, 10);
-                    if (orderDate && orderDate !== todayLocal && orderDate !== todayIso) return true;
-                    return now.getHours() >= 17;
-                  })();
+                  const isExpired = isOrderReservationExpired({ ...ord, status: 'PENDIENTE' });
 
                   return (
                     <div
@@ -2908,8 +3088,16 @@ export default function SalesPOSView({
                   className="btn btn-primary btn-sm"
                   style={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 800 }}
                   onClick={() => {
+                    if (!userCanGrantCreditOverride) {
+                      notify.error('Solo usuarios con rol de Presidencia, Gerencia o Crédito y Cobranzas pueden autorizar excepciones de crédito.');
+                      return;
+                    }
                     if (!authorizedApproverIds.has(creditOverrideAuthorizer)) {
                       notify.error('Seleccione un aprobador autorizado en Configuración.');
+                      return;
+                    }
+                    if (String(creditOverrideJustification || '').trim().length < 5) {
+                      notify.warning('Ingrese una justificación de auditoría de al menos 5 caracteres para aprobar el crédito.');
                       return;
                     }
                     setCreditOverrideApproved(true);

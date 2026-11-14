@@ -283,7 +283,9 @@ export const calculateFiscalTaxes = ({
   porcentajeIgtf = 3.00
 }) => {
   const tasa = Number(tasaBcv) > 0 ? Number(tasaBcv) : 827.73;
-  const isNotaEntrega = String(tipoDoc || '').trim().toUpperCase() === 'NOTA_ENTREGA';
+  const tipoUpper = String(tipoDoc || '').trim().toUpperCase();
+  const isNotaEntrega = tipoUpper === 'NOTA_ENTREGA';
+  const isCotizacion = tipoUpper === 'COTIZACION';
 
   let baseExentaUsd = 0;
   let baseGeneralUsd = 0;
@@ -332,24 +334,24 @@ export const calculateFiscalTaxes = ({
   const totalIvaUsd = isNotaEntrega ? 0 : roundTo2Decimals(ivaGeneralUsd + ivaReducidoUsd + ivaAdicionalUsd);
 
   // Percepción de IGTF (configurable, por defecto 3%)
-  // Aplica sobre pagos en divisas o criptomonedas no soberanas (no aplica en Notas de Entrega)
+  // Aplica sobre pagos en divisas o criptomonedas no soberanas (no aplica en Notas de Entrega ni Cotizaciones)
   const parsedIgtfRate = Number(porcentajeIgtf);
   const effectiveIgtfRate = Number.isFinite(parsedIgtfRate) ? Math.max(0, parsedIgtfRate) : 3;
   const esPagoEnDivisas = ['EFECTIVO_USD', 'ZELLE', 'USDT', 'DIVISAS'].includes(metodoPago);
-  const aplicaIgtf = !isNotaEntrega && esSujetoPasivoEspecial && effectiveIgtfRate > 0 && esPagoEnDivisas && condicionPago === 'CONTADO';
+  const aplicaIgtf = !isNotaEntrega && !isCotizacion && esSujetoPasivoEspecial && effectiveIgtfRate > 0 && esPagoEnDivisas && condicionPago === 'CONTADO';
 
   const baseIgtfUsd = aplicaIgtf ? roundTo2Decimals(subtotalNetoUsd + totalIvaUsd) : 0;
   const igtfUsd = aplicaIgtf ? roundTo2Decimals(baseIgtfUsd * (effectiveIgtfRate / 100)) : 0;
 
   const totalFacturaUsd = roundTo2Decimals(subtotalNetoUsd + totalIvaUsd + igtfUsd);
 
-  // Retención de IVA (75% o 100%)
-  const retencionIvaUsd = (!isNotaEntrega && porcentajeRetencionIva > 0)
+  // Retención de IVA (75% o 100% — no aplica en NE ni Cotizaciones)
+  const retencionIvaUsd = (!isNotaEntrega && !isCotizacion && porcentajeRetencionIva > 0)
     ? roundTo2Decimals(totalIvaUsd * (porcentajeRetencionIva / 100))
     : 0;
 
-  // Retención de ISLR (generalmente 2% sobre la base imponible de bienes muebles)
-  const retencionIslrUsd = (!isNotaEntrega && porcentajeRetencionIslr > 0)
+  // Retención de ISLR (no aplica en NE ni Cotizaciones)
+  const retencionIslrUsd = (!isNotaEntrega && !isCotizacion && porcentajeRetencionIslr > 0)
     ? roundTo2Decimals(subtotalGravableUsd * (porcentajeRetencionIslr / 100))
     : 0;
 
@@ -1771,29 +1773,60 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
   const direccion = safeConfig.direccion || 'ZONA INDUSTRIAL III, BARQUISIMETO / CARACAS';
   const telefono = safeConfig.telefono || '+58 (251) 269.13.96';
   
-  const fechaObj = new Date(sale.fecha || new Date());
+  const rawFecha = sale.fechaEmision || sale.fecha || sale.created_at || sale.createdAt;
+  let fechaObj = new Date();
+  if (rawFecha instanceof Date && !Number.isNaN(rawFecha.getTime())) {
+    fechaObj = rawFecha;
+  } else if (typeof rawFecha === 'string' && rawFecha.trim()) {
+    const rawStr = rawFecha.trim();
+    const dmy = rawStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    const ymd = rawStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (dmy) {
+      fechaObj = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]), Number(dmy[4] || 12), Number(dmy[5] || 0), Number(dmy[6] || 0));
+    } else if (ymd) {
+      fechaObj = new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]), 12, 0, 0);
+    } else {
+      const parsed = new Date(rawStr);
+      if (!Number.isNaN(parsed.getTime())) fechaObj = parsed;
+    }
+  }
   const fechaStr = fechaObj.toLocaleDateString('es-VE');
   const horaStr = fechaObj.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  const docTitle = sale.tipoDoc === 'NOTA_CREDITO'
+  const tipoDocUpper = String(sale.tipoDoc || 'FACTURA').trim().toUpperCase();
+  const isNotaEntrega = tipoDocUpper === 'NOTA_ENTREGA';
+  const isCotizacion = tipoDocUpper === 'COTIZACION';
+  const docTitle = tipoDocUpper === 'NOTA_CREDITO'
     ? 'NOTA DE CRÉDITO'
-    : (sale.tipoDoc === 'NOTA_DEBITO'
+    : (tipoDocUpper === 'NOTA_DEBITO'
       ? 'NOTA DE DÉBITO'
-      : (sale.tipoDoc === 'NOTA_ENTREGA' ? 'NOTA DE ENTREGA' : 'FACTURA FISCAL'));
+      : (isNotaEntrega
+        ? 'NOTA DE ENTREGA'
+        : (isCotizacion ? 'COTIZACIÓN COMERCIAL' : 'FACTURA FISCAL')));
+
+  const tasaDoc = Number(sale.tasaPago || sale.tasaDolar || safeConfig.tasaDolar || 827.73) || 827.73;
+  const totalUsdVal = Number(sale.totalUsd || 0);
+  const totalBsVal = Number(sale.totalBs || 0) > 0 ? Number(sale.totalBs) : round2(totalUsdVal * tasaDoc);
 
   const lines = [
     center(razonSocial),
     center(marca),
     center(`RIF: ${rif}`),
     center(direccion),
-    center(`TEL: ${telefono}`),
-    center('SENIAT - PROVIDENCIA SNAT/2011/00071'),
+    center(`TEL: ${telefono}`)
+  ];
+  if (!isNotaEntrega && !isCotizacion) {
+    lines.push(center('SENIAT - PROVIDENCIA SNAT/2011/00071'));
+  }
+  lines.push(
     sep,
     center(`*** ${docTitle} ***`),
-    center(`N°: ${sale.numeroDoc || 'FACT-000000'}`),
-    pad('N° DE CONTROL:', sale.numeroControl || '00-001043'),
-    sep
-  ];
+    center(`N°: ${sale.numeroDoc || (isNotaEntrega ? 'NE-000000' : (isCotizacion ? 'COT-000000' : 'FACT-000000'))}`)
+  );
+  if (!isNotaEntrega && !isCotizacion) {
+    lines.push(pad('N° DE CONTROL:', sale.numeroControl || 'POR ASIGNAR'));
+  }
+  lines.push(sep);
 
   if (sale.documentoAfectado) {
     lines.push(
@@ -1807,19 +1840,20 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
     pad('HORA DE EMISIÓN:', horaStr),
     pad('VENDEDOR / CAJERO:', sale.vendedor || 'CAJA MOSTRADOR'),
     pad('CONDICIÓN:', `${sale.condicionPago || 'CONTADO'} (${sale.metodoPago || 'EFECTIVO USD'})`),
-    pad('TASA OFICIAL BCV:', formatBs(sale.tasaDolar || safeConfig.tasaDolar || 827.73)),
+    pad(sale.tipoTasa && sale.tipoTasa !== 'BCV' ? `TASA (${sale.tipoTasa}):` : 'TASA OFICIAL BCV:', formatBs(tasaDoc)),
     dash,
     center('DATOS DEL ADQUIRENTE / RECEPTOR'),
     dash,
     pad('NOMBRE / RAZÓN:', (sale.clienteNombre || 'CLIENTE MOSTRADOR').substring(0, 24)),
-    pad('C.I. / RIF:', sale.clienteRif || 'V-18456789-6'),
+    pad('C.I. / RIF:', sale.clienteRif || 'S/R'),
     dash,
     pad('CANT x DESCRIPCIÓN', 'TOTAL USD'),
     dash
   );
 
   (sale.items || []).forEach(item => {
-    const desc = `${item.cantidad}x ${item.descripcion || item.codigo || 'LUBRICANTE'} [${item.tipoAlicuota || 'G 16%'}]`;
+    const taxTag = isNotaEntrega ? 'ENT' : (item.tipoAlicuota || 'G 16%');
+    const desc = `${item.cantidad}x ${item.descripcion || item.codigo || 'LUBRICANTE'} [${taxTag}]`;
     const totUsd = formatUsd(item.subtotalUsd || (item.cantidad * item.precioUsd) || 0);
     if (desc.length > 30) {
       lines.push(desc.substring(0, 42));
@@ -1829,46 +1863,60 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
     }
   });
 
-  lines.push(
-    dash,
-    center('LIQUIDACIÓN DE BASES E IMPUESTOS'),
-    dash
-  );
-
-  if (Number(sale.baseExentaBs || 0) > 0 || Number(sale.baseExentaUsd || 0) > 0) {
-    lines.push(pad('VENTAS EXENTAS (E):', `Bs. ${Number(sale.baseExentaBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`));
-  }
-
-  lines.push(
-    pad('BASE IMPONIBLE (G 16%):', `Bs. ${Number(sale.baseGeneralBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
-    pad('DÉBITO FISCAL (16%):', `Bs. ${Number(sale.ivaGeneralBs || sale.ivaBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`)
-  );
-
-  if (Number(sale.baseReducidaBs || 0) > 0) {
+  if (isNotaEntrega) {
     lines.push(
-      pad('BASE REDUCIDA (R 8%):', `Bs. ${Number(sale.baseReducidaBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`),
-      pad('DÉBITO REDUCIDO (8%):', `Bs. ${Number(sale.ivaReducidaBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`)
+      dash,
+      pad('SUBTOTAL ENTREGA (SIN IVA):', formatUsd(sale.subtotalUsd ?? totalUsdVal))
     );
-  }
-
-  if (Number(sale.igtfBs || 0) > 0 || Number(sale.igtfUsd || 0) > 0) {
+  } else {
     lines.push(
-      pad('PERCEPCIÓN IGTF (3%):', `Bs. ${Number(sale.igtfBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`)
+      dash,
+      center('LIQUIDACIÓN DE BASES E IMPUESTOS'),
+      dash
     );
-  }
 
-  if (Number(sale.retencionIvaBs || 0) > 0) {
+    if (Number(sale.baseExentaBs || 0) > 0 || Number(sale.baseExentaUsd || 0) > 0) {
+      lines.push(pad('VENTAS EXENTAS (E):', formatBs(Number(sale.baseExentaBs || (Number(sale.baseExentaUsd || 0) * tasaDoc)))));
+    }
+
     lines.push(
-      pad('RETENCIÓN IVA APLICADA:', `-Bs. ${Number(sale.retencionIvaBs || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`)
+      pad('BASE IMPONIBLE (G 16%):', formatBs(Number(sale.baseGeneralBs || 0))),
+      pad('DÉBITO FISCAL (16%):', formatBs(Number(sale.ivaGeneralBs || sale.ivaBs || 0)))
     );
+
+    if (Number(sale.baseReducidaBs || 0) > 0) {
+      lines.push(
+        pad('BASE REDUCIDA (R 8%):', formatBs(Number(sale.baseReducidaBs || 0))),
+        pad('DÉBITO REDUCIDO (8%):', formatBs(Number(sale.ivaReducidaBs || 0)))
+      );
+    }
+
+    if (Number(sale.baseAdicionalBs || 0) > 0) {
+      lines.push(
+        pad('BASE ADICIONAL (A 31%):', formatBs(Number(sale.baseAdicionalBs || 0))),
+        pad('DÉBITO ADICIONAL (31%):', formatBs(Number(sale.ivaAdicionalBs || 0)))
+      );
+    }
+
+    if (Number(sale.igtfBs || 0) > 0 || Number(sale.igtfUsd || 0) > 0) {
+      lines.push(
+        pad('PERCEPCIÓN IGTF (3%):', formatBs(Number(sale.igtfBs || 0)))
+      );
+    }
+
+    if (Number(sale.retencionIvaBs || 0) > 0) {
+      lines.push(
+        pad('RETENCIÓN IVA APLICADA:', `-${formatBs(Number(sale.retencionIvaBs || 0))}`)
+      );
+    }
   }
 
   lines.push(
     sep,
-    pad('TOTAL FACTURA (USD):', formatUsd(sale.totalUsd || 0)),
-    pad('TOTAL A PAGAR (VES):', formatBs(sale.totalBs || 0)),
+    pad(isNotaEntrega ? 'TOTAL ENTREGA (USD):' : 'TOTAL DOCUMENTO (USD):', formatUsd(totalUsdVal)),
+    pad('EQUIVALENTE (VES):', formatBs(totalBsVal)),
     sep,
-    center('DOCUMENTO FISCAL VENEZUELA'),
+    center(isNotaEntrega ? 'DOCUMENTO DE DESPACHO INTERNO' : (isCotizacion ? 'PRESUPUESTO INFORMATIVO' : 'DOCUMENTO FISCAL VENEZUELA')),
     center('GRACIAS POR SU COMPRA'),
     center('GRUPO MOTORVEN - ACEITES & LUBRICANTES'),
     sep,

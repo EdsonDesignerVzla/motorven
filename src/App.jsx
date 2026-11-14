@@ -2349,6 +2349,16 @@ function MainApp() {
         }
       }
 
+      // Refrescar inventario en pantalla tras descuento de Almacén 01 / Almacén 02
+      if (!saleData.skipStockAdjustment) {
+        try {
+          const updatedProds = await getSupabaseProducts();
+          if (Array.isArray(updatedProds) && updatedProds.length > 0) {
+            setProductsState(updatedProds);
+          }
+        } catch (_) {}
+      }
+
       return newSale;
     } catch (err) {
       console.error(err);

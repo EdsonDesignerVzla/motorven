@@ -379,6 +379,7 @@ export const validateWarehouseStockForDocument = ({
 
   const zeroStockItems = [];
   const invalidQtyItems = [];
+  const insufficientStockItems = [];
 
   for (const item of list) {
     if (!item) continue;
@@ -410,6 +411,16 @@ export const validateWarehouseStockForDocument = ({
         warehouseCode: target.warehouseCode,
         warehouseLabel: target.warehouseLabel
       });
+    } else if (stockAvailable !== null && requestedQty > 0 && requestedQty > stockAvailable) {
+      insufficientStockItems.push({
+        articuloId: matchedProd?.id || key || codigo,
+        codigo: matchedProd?.codigo || codigo,
+        descripcion,
+        stock: stockAvailable,
+        requestedQty,
+        warehouseCode: target.warehouseCode,
+        warehouseLabel: target.warehouseLabel
+      });
     }
 
     if (!(requestedQty > 0)) {
@@ -432,6 +443,11 @@ export const validateWarehouseStockForDocument = ({
       .map(i => `${i.codigo}${i.descripcion && i.descripcion !== i.codigo ? ` (${i.descripcion})` : ''}`)
       .join(', ');
     message = `No se permite emitir la ${docLabel}: hay ${zeroStockItems.length} producto(s)/SKU con stock en 0 en ${target.warehouseLabel}: ${skuList}.`;
+  } else if (insufficientStockItems.length > 0) {
+    const skuList = insufficientStockItems
+      .map(i => `${i.codigo} (solicitado: ${i.requestedQty}, disp: ${i.stock})`)
+      .join(', ');
+    message = `Stock insuficiente en ${target.warehouseLabel} para ${docLabel}: ${skuList}.`;
   } else if (invalidQtyItems.length > 0) {
     const skuList = invalidQtyItems
       .map(i => `${i.codigo}${i.descripcion && i.descripcion !== i.codigo ? ` (${i.descripcion})` : ''}`)
@@ -440,9 +456,10 @@ export const validateWarehouseStockForDocument = ({
   }
 
   return {
-    isValid: zeroStockItems.length === 0 && invalidQtyItems.length === 0,
+    isValid: zeroStockItems.length === 0 && insufficientStockItems.length === 0 && invalidQtyItems.length === 0,
     ...target,
     zeroStockItems,
+    insufficientStockItems,
     invalidQtyItems,
     message
   };

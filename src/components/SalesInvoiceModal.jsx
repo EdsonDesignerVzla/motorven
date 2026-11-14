@@ -17,7 +17,7 @@ import {
   Truck
 } from 'lucide-react';
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
-import { parseInvoiceDateInfo } from '../services/creditPolicyService';
+import { parseInvoiceDateInfo, resolveCreditDaysFromTerm } from '../services/creditPolicyService';
 import { formatBs, formatUsd, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
 import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, generateCreditDebitNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
@@ -66,10 +66,6 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   const resolvedClientInfo = resolveDocumentClientInfo(sale, client, clients);
 
   const safeConfig = config || {};
-  const tasaBcv = Number(sale.tasaDolar || safeConfig.tasaDolar) || 827.73;
-  const resolvedItemsForText = resolveDeliveryNoteLineItems(sale, products, tasaBcv);
-  const rawTicketText = formatSaleInvoiceTicketText({ ...sale, items: resolvedItemsForText }, safeConfig);
-
   const isNc = sale.tipoDoc === 'NOTA_CREDITO';
   const isNd = sale.tipoDoc === 'NOTA_DEBITO';
   const isCot = sale.tipoDoc === 'COTIZACION' || String(sale.numeroDoc || '').toUpperCase().startsWith('COT');
@@ -78,7 +74,23 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
     sale.tipo_doc === 'NOTA_ENTREGA' ||
     String(sale.numeroDoc || sale.nroFactura || sale.factNum || '').toUpperCase().startsWith('NE');
   const isFacturaOrNotaEntrega = isNe || (!isNc && !isNd && !isCot);
-  const invoiceTotalBs = Number(sale.totalBs) || (Number(sale.totalUsd || 0) * tasaBcv);
+
+  const tasaBcv = Number(sale.tasaDolar || safeConfig.tasaDolar) || 827.73;
+  const docRateType = String(sale.tipoTasa || 'BCV').toUpperCase();
+  const effectiveDocRate = (docRateType !== 'USD' && docRateType !== 'ZELLE' && Number(sale.tasaPago || 0) > 0)
+    ? Number(sale.tasaPago)
+    : tasaBcv;
+  const rateLabel = docRateType === 'KEYSTONE'
+    ? 'Tasa Keystone'
+    : docRateType === 'EDITABLE'
+    ? 'Tasa Pactada'
+    : docRateType === 'EURO'
+    ? 'Tasa Euro'
+    : 'Tasa BCV';
+
+  const resolvedItemsForText = resolveDeliveryNoteLineItems(sale, products, effectiveDocRate);
+  const rawTicketText = formatSaleInvoiceTicketText({ ...sale, items: resolvedItemsForText }, safeConfig);
+  const invoiceTotalBs = Number(sale.totalBs) > 0 ? Number(sale.totalBs) : (Number(sale.totalUsd || 0) * effectiveDocRate);
 
   const docTitle = isNc
     ? 'NOTA DE CRÉDITO'
@@ -95,7 +107,9 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   };
 
   const handleDownloadTxt = () => {
-    const filename = `${sale.tipoDoc || 'FACTURA'}_${sale.numeroDoc || '000000'}_${new Date().toISOString().slice(0, 10)}.txt`;
+    const nowLocal = new Date();
+    const localDateTag = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
+    const filename = `${sale.tipoDoc || 'FACTURA'}_${sale.numeroDoc || '000000'}_${localDateTag}.txt`;
     const blob = new Blob([rawTicketText], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -124,7 +138,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
         generateCreditDebitNotePDF({ docData: sale, config: safeConfig, currentUser });
         return;
       }
-      generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, clients, client, autoPrint: true });
+      generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, products, clients, client, autoPrint: true });
       return;
     }
 
@@ -314,7 +328,9 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   const horaStr = parsedFechaInfo.hasTime
     ? fechaObj.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : '—';
-  const diasCreditoDoc = sale.condicionPago === 'CONTADO' ? 0 : Number(sale.diasCredito ?? 0);
+  const diasCreditoDoc = sale.condicionPago === 'CONTADO'
+    ? 0
+    : resolveCreditDaysFromTerm(sale.condicionPago, Number(client?.diasCredito ?? 15), sale.diasCredito);
   const parsedVencInfo = sale.fechaVencimiento ? parseInvoiceDateInfo(sale.fechaVencimiento) : null;
   const fechaVencObj = (parsedVencInfo && parsedVencInfo.date)
     ? parsedVencInfo.date
@@ -472,7 +488,12 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 {docTitle} Emitida Exitosamente
               </h3>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                N° Documento: <strong style={{ color: 'var(--text-primary)' }}>{sale.numeroDoc}</strong> | Control: <strong style={{ color: 'var(--motorven-red)' }}>{sale.numeroControl || '00-001043'}</strong>
+                N° Documento: <strong style={{ color: 'var(--text-primary)' }}>{sale.numeroDoc}</strong>
+                {!isNe && !isCot && sale.numeroControl && (
+                  <>
+                    {' '}| Control: <strong style={{ color: 'var(--motorven-red)' }}>{sale.numeroControl}</strong>
+                  </>
+                )}
                 {totalPages > 1 && viewMode === 'CARTA' && (
                   <span style={{ marginLeft: '8px', color: '#60a5fa', fontWeight: 600 }}>
                     • Consta de {totalPages} páginas tamaño carta
@@ -685,7 +706,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                   } else if (isNc || isNd) {
                     generateCreditDebitNotePDF({ docData: sale, config: safeConfig, currentUser });
                   } else {
-                    generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, clients, client });
+                    generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, products, clients, client });
                   }
                 }}
                 style={{
@@ -779,9 +800,11 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 <div style={{ fontWeight: 'bold', fontSize: '0.88rem' }}>
                   N°: {sale.numeroDoc}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#374151' }}>
-                  N° DE CONTROL: <strong>{sale.numeroControl || '00-001043'}</strong>
-                </div>
+                {!isNe && !isCot && sale.numeroControl && (
+                  <div style={{ fontSize: '0.75rem', color: '#374151' }}>
+                    N° DE CONTROL: <strong>{sale.numeroControl}</strong>
+                  </div>
+                )}
               </div>
 
               {sale.documentoAfectado && (
@@ -801,8 +824,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 <div>CAJERO: {sale.vendedor || 'CAJA MOSTRADOR'}</div>
                 <div>CONDICIÓN: {sale.condicionPago || 'CONTADO'} ({diasCreditoDoc} DÍAS) - {sale.metodoPago || 'EFECTIVO USD'}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>TASA BCV:</span>
-                  <strong>{formatBs(tasaBcv)} / USD</strong>
+                  <span>{rateLabel.toUpperCase()}:</span>
+                  <strong>{formatBs(effectiveDocRate)} / USD</strong>
                 </div>
                 <div style={{ borderBottom: '1px dotted #9ca3af', margin: '4px 0' }} />
                 <div>CLIENTE: <strong>{sale.clienteNombre}</strong></div>
@@ -824,7 +847,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                       {item.cantidad} x {item.codigo ? `[${item.codigo}] ` : ''}{item.descripcion}
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: '#4b5563' }}>
-                      <span>P.U. ${formatUsd(item.precioUsd)} ({isNe ? '0%' : (item.tipoAlicuota || '16%')})</span>
+                      <span>P.U. {formatUsd(item.precioUsd)} ({isNe ? '0%' : (item.tipoAlicuota || '16%')})</span>
                       <strong style={{ color: '#111827' }}>{formatUsd(item.subtotalUsd || (item.cantidad * item.precioUsd))}</strong>
                     </div>
                   </div>
@@ -841,28 +864,50 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                     <span>{formatBs(sale.baseExentaBs)}</span>
                   </div>
                 )}
-                {isNe ? (
+                {isNe || isCot ? (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>SUBTOTAL (NO FISCAL):</span>
-                    <span>{formatBs(sale.subtotalBs ?? (Number(sale.totalBs || 0) - Number(sale.igtfBs || 0)))}</span>
+                    <span>{isCot ? 'SUBTOTAL COTIZADO:' : 'SUBTOTAL (NO FISCAL):'}</span>
+                    <span>{formatBs(sale.subtotalBs ?? (invoiceTotalBs - Number(sale.igtfBs || 0)))}</span>
                   </div>
                 ) : (
                   <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>BASE IMPONIBLE (G 16%):</span>
-                      <span>{formatBs(sale.baseGeneralBs)}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>DÉBITO FISCAL (16%):</span>
-                      <span>{formatBs(sale.ivaGeneralBs || sale.ivaBs)}</span>
-                    </div>
+                    {(Number(sale.baseGeneralBs || 0) > 0 || Number(sale.ivaGeneralBs || sale.ivaBs || 0) > 0 || (Number(sale.baseReducidaBs || 0) === 0 && Number(sale.baseAdicionalBs || 0) === 0 && Number(sale.baseExentaBs || 0) === 0)) && (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>BASE IMPONIBLE (G 16%):</span>
+                          <span>{formatBs(sale.baseGeneralBs)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>DÉBITO FISCAL (16%):</span>
+                          <span>{formatBs(sale.ivaGeneralBs ?? (Number(sale.baseGeneralBs || 0) > 0 ? sale.ivaBs : 0))}</span>
+                        </div>
+                      </>
+                    )}
+                    {Number(sale.baseReducidaBs || 0) > 0 && (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>BASE REDUCIDA (8%):</span>
+                          <span>{formatBs(sale.baseReducidaBs)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>IVA REDUCIDO (8%):</span>
+                          <span>{formatBs(sale.ivaReducidaBs ?? sale.ivaReducidoBs)}</span>
+                        </div>
+                      </>
+                    )}
+                    {Number(sale.baseAdicionalBs || 0) > 0 && (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>BASE ADICIONAL (31%):</span>
+                          <span>{formatBs(sale.baseAdicionalBs)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>IVA ADICIONAL (31%):</span>
+                          <span>{formatBs(sale.ivaAdicionalBs)}</span>
+                        </div>
+                      </>
+                    )}
                   </>
-                )}
-                {Number(sale.baseReducidaBs || 0) > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>IVA REDUCIDO (8%):</span>
-                    <span>{formatBs(sale.ivaReducidaBs)}</span>
-                  </div>
                 )}
                 {Number(sale.igtfBs || 0) > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', color: '#b45309' }}>
@@ -885,7 +930,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.88rem' }}>
                   <span>TOTAL BS:</span>
-                  <span>{formatBs(sale.totalBs)}</span>
+                  <span>{formatBs(invoiceTotalBs)}</span>
                 </div>
               </div>
 
@@ -893,10 +938,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
               {/* Pie Legal */}
               <div style={{ textAlign: 'center', fontSize: '0.62rem', color: '#6b7280', marginTop: '6px' }}>
-                <div>DOCUMENTO FISCAL VENEZUELA</div>
+                <div>{isNe ? 'DOCUMENTO COMERCIAL NO FISCAL' : isCot ? 'PRESUPUESTO / COTIZACIÓN COMERCIAL' : 'DOCUMENTO FISCAL VENEZUELA'}</div>
                 <div>GRACIAS POR SU COMPRA</div>
                 <div style={{ fontWeight: 'bold', color: '#111827', marginTop: '2px' }}>
-                  GRUPO MOTORVEN - LUBRICANTES
+                  {safeConfig.empresaNombre || 'GRUPO MOTORVEN - LUBRICANTES'}
                 </div>
               </div>
             </div>
@@ -916,7 +961,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 width: '100%',
                 transform: zoomMode === 'FIT' ? 'scale(0.65)' : 'none',
                 transformOrigin: 'top center',
-                marginBottom: zoomMode === 'FIT' ? (totalPages > 1 && activePage === 'ALL' ? '-480px' : '-310px') : '1.5rem'
+                marginBottom: zoomMode === 'FIT' ? (activePage === 'ALL' ? `-${Math.round(totalPages * 310)}px` : '-310px') : '1.5rem'
               }}
             >
               {pages.map((pageItems, pageIdx) => {
@@ -929,10 +974,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                 const itemsBefore = pages.slice(0, pageIdx).reduce((acc, p) => acc + p.length, 0);
 
                 // Subtotales acumulados
-                const currentAccumulatedUsd = getItemsSubtotal(sale.items.slice(0, itemsBefore + pageItems.length));
-                const currentAccumulatedBs = currentAccumulatedUsd * tasaBcv;
-                const prevAccumulatedUsd = getItemsSubtotal(sale.items.slice(0, itemsBefore));
-                const prevAccumulatedBs = prevAccumulatedUsd * tasaBcv;
+                const currentAccumulatedUsd = getItemsSubtotal(resolvedDocItems.slice(0, itemsBefore + pageItems.length));
+                const currentAccumulatedBs = currentAccumulatedUsd * effectiveDocRate;
+                const prevAccumulatedUsd = getItemsSubtotal(resolvedDocItems.slice(0, itemsBefore));
+                const prevAccumulatedBs = prevAccumulatedUsd * effectiveDocRate;
 
                 return (
                   <div
@@ -995,13 +1040,13 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                                 <div>
                                   <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#0b1e36', letterSpacing: '0.5px', lineHeight: 1.1 }}>
-                                    MOTORVEN, C.A.
+                                    {safeConfig.empresaNombre || 'MOTORVEN, C.A.'}
                                   </div>
                                   <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#e11d48', marginTop: '2px' }}>
-                                    RIF: J-40829110-4 | Distribuidora Mayorista de Lubricantes e Insumos
+                                    RIF: {safeConfig.rif || 'J-40829110-4'} | Distribuidora Mayorista de Lubricantes e Insumos
                                   </div>
                                   <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '1px' }}>
-                                    Sede Central — Calle 48 con Av. Pedro León Torres, Barquisimeto, Edo. Lara
+                                    {safeConfig.direccionFiscal || safeConfig.direccion || 'Sede Central — Calle 48 con Av. Pedro León Torres, Barquisimeto, Edo. Lara'}
                                   </div>
                                 </div>
 
@@ -1010,7 +1055,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                     Emisión: {fechaStr}, {horaStr}
                                   </div>
                                   <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 800, marginTop: '2px' }}>
-                                    Tasa BCV: {formatBs(tasaBcv)} / USD
+                                    {rateLabel}: {formatBs(effectiveDocRate)} / USD
                                   </div>
                                 </div>
                               </div>
@@ -1072,11 +1117,11 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Despachado de:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.almacenOrigen || '02 - Almacén 02 (Despacho General)'}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Pedido • Vendedor:</span>
-                                    <strong style={{ color: '#0f172a' }}>{sale.orderId || 'VENTA DIRECTA POS'} • {sale.vendedor || 'OFICINA PRINCIPAL'}</strong>
+                                    <strong style={{ color: '#0f172a' }}>{sale.pedidoOrigenDoc || sale.pedidoOrigenId || sale.orderId || 'VENTA DIRECTA POS'} • {sale.vendedor || 'OFICINA PRINCIPAL'}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Unidad / Transp.:</span>
-                                    <strong style={{ color: '#0f172a' }}>{sale.transporte || 'Retiro Directo por Cliente en Rampa'}</strong>
-                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Método • Tasa BCV:</span>
-                                    <strong style={{ color: '#0f172a' }}>{sale.metodoPago || 'EFECTIVO USD'} • {formatBs(tasaBcv)}/USD</strong>
+                                    <strong style={{ color: '#0f172a' }}>{sale.transportista || sale.transporte || 'Retiro Directo por Cliente en Rampa'}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Método • {rateLabel}:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.metodoPago || 'EFECTIVO USD'} • {formatBs(effectiveDocRate)}/USD</strong>
                                   </div>
                                 </div>
                               </div>
@@ -1085,7 +1130,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             <div style={{ background: '#0b1e36', color: '#ffffff', borderRadius: '4px', padding: '6px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', fontSize: '0.75rem', fontWeight: 800 }}>
                               <span>NOTA DE ENTREGA N° {correlativoDisplay} — CONTINUACIÓN</span>
                               <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#cbd5e1' }}>
-                                {sale.clienteNombre} ({sale.clienteRif}) | Viene de Pág. {pageNumber - 1}: ${formatUsd(prevAccumulatedUsd)}
+                                {sale.clienteNombre} ({sale.clienteRif}) | Viene de Pág. {pageNumber - 1}: {formatUsd(prevAccumulatedUsd)}
                               </span>
                             </div>
                           )}
@@ -1111,8 +1156,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 const qty = Number(it.cantidad || 1);
                                 const unitUsd = Number(it.precioUsd || 0);
                                 const subUsd = Number(it.subtotalUsd || qty * unitUsd);
-                                const subBs = subUsd * tasaBcv;
-                                const litrosUnit = Number(it.litrosPorUnidad || 12);
+                                const subBs = subUsd * effectiveDocRate;
+                                const litrosUnit = resolveProductLitersPerUnit(it);
                                 const volRow = Number(it.volumenTotal || qty * litrosUnit);
                                 return (
                                   <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
@@ -1216,8 +1261,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 </div>
                               </div>
                               <div style={{ fontSize: '0.62rem', color: '#475569', maxWidth: '410px', lineHeight: '1.3' }}>
-                                <div><strong>SIGNUM ERP • MOTORVEN, C.A.</strong> — Nota de Entrega N° <strong>{correlativoDisplay}</strong></div>
-                                <div>Monto en <strong>{formatBs(invoiceTotalBs)}</strong> referencial a la fecha de emisión (Tasa BCV: {formatBs(tasaBcv)}/USD).</div>
+                                <div><strong>SIGNUM ERP • {safeConfig.empresaNombre || 'MOTORVEN, C.A.'}</strong> — Nota de Entrega N° <strong>{correlativoDisplay}</strong></div>
+                                <div>Monto en <strong>{formatBs(invoiceTotalBs)}</strong> referencial a la fecha de emisión ({rateLabel}: {formatBs(effectiveDocRate)}/USD).</div>
                               </div>
                             </div>
 
@@ -1304,7 +1349,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '0.65rem' }}>
                               <div style={{ textAlign: 'right', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '4px 14px', background: '#f8fafc' }}>
                                 <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                  {isNe ? 'NOTA DE ENTREGA N°' : (isNc ? 'NOTA DE CRÉDITO N°' : (isNd ? 'NOTA DE DÉBITO N°' : 'FACTURA N°'))}
+                                  {isNe ? 'NOTA DE ENTREGA N°' : (isCot ? 'COTIZACIÓN N°' : (isNc ? 'NOTA DE CRÉDITO N°' : (isNd ? 'NOTA DE DÉBITO N°' : 'FACTURA N°')))}
                                 </div>
                                 <div style={{ fontSize: '1.45rem', fontWeight: 900, fontFamily: 'monospace', color: '#0f172a', letterSpacing: '2px' }}>
                                   {correlativoDisplay}
@@ -1343,8 +1388,8 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                   <span>{sale.metodoPago || 'EFECTIVO USD'}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
-                                  <span style={{ color: '#64748b' }}>Tasa Oficial BCV:</span>
-                                  <strong style={{ color: '#d97706' }}>{formatBs(tasaBcv)} / USD</strong>
+                                  <span style={{ color: '#64748b' }}>{rateLabel}:</span>
+                                  <strong style={{ color: '#d97706' }}>{formatBs(effectiveDocRate)} / USD</strong>
                                 </div>
                               </div>
                             </div>
@@ -1354,10 +1399,10 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             {/* Encabezado de Continuación (sin cabecera institucional) */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #cbd5e1', paddingBottom: '0.45rem', marginBottom: '0.65rem' }}>
                               <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#475569' }}>
-                                CONTINUACIÓN FACTURA N° <span style={{ fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 900, color: '#0f172a' }}>{correlativoDisplay}</span>
+                                CONTINUACIÓN {isCot ? 'COTIZACIÓN' : (isNc ? 'NOTA DE CRÉDITO' : (isNd ? 'NOTA DE DÉBITO' : 'FACTURA'))} N° <span style={{ fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 900, color: '#0f172a' }}>{correlativoDisplay}</span>
                               </div>
                               <div style={{ fontSize: '0.72rem', color: '#0369a1', fontWeight: 700 }}>
-                                TRANSPORTE (VIENE DE PÁG. {pageNumber - 1}): ${formatUsd(prevAccumulatedUsd)} (Bs. {formatBs(prevAccumulatedBs)})
+                                TRANSPORTE (VIENE DE PÁG. {pageNumber - 1}): {formatUsd(prevAccumulatedUsd)} ({formatBs(prevAccumulatedBs)})
                               </div>
                             </div>
                           </>
@@ -1386,7 +1431,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             {pageItems.map((it, idx) => {
                               const globalIdx = itemsBefore + idx + 1;
                               const subUsd = it.subtotalUsd || (it.cantidad * it.precioUsd);
-                              const subBs = subUsd * tasaBcv;
+                              const subBs = subUsd * effectiveDocRate;
                               return (
                                 <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
                                   <td style={{ padding: '5px 8px', textAlign: 'center', fontWeight: 600 }}>{globalIdx}</td>
@@ -1428,7 +1473,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                               SUBTOTAL ACUMULADO HOJA {pageNumber}:
                             </span>
                             <span style={{ color: '#1e3a8a', fontWeight: 800 }}>
-                              ${formatUsd(currentAccumulatedUsd)} (Bs. {formatBs(currentAccumulatedBs)}) — CONTINÚA EN PÁGINA {pageNumber + 1}/{totalPages}...
+                              {formatUsd(currentAccumulatedUsd)} ({formatBs(currentAccumulatedBs)}) — CONTINÚA EN PÁGINA {pageNumber + 1}/{totalPages}...
                             </span>
                           </div>
                         )}
@@ -1467,14 +1512,63 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
                             {/* Tarjeta de Totales Fiscales */}
                             <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.75rem 0.85rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
-                                <span>{isNe ? 'Subtotal Neto (Sin IVA):' : 'Base Imponible General (16%):'}</span>
-                                <strong>{formatUsd(isNe ? (sale.subtotalUsd || sale.totalUsd) : sale.baseGeneralUsd)} ({formatBs(isNe ? (sale.subtotalBs || sale.totalBs) : sale.baseGeneralBs)})</strong>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
-                                <span>{isNe ? 'IVA (0% - Sin IVA):' : 'Débito Fiscal IVA (16%):'}</span>
-                                <strong>{formatUsd(isNe ? 0 : (sale.ivaGeneralUsd || sale.ivaUsd))} ({formatBs(isNe ? 0 : (sale.ivaGeneralBs || sale.ivaBs))})</strong>
-                              </div>
+                              {(isNe || isCot) ? (
+                                <>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                    <span>{isCot ? 'Subtotal Cotizado:' : 'Subtotal Neto (Sin IVA):'}</span>
+                                    <strong>{formatUsd(sale.subtotalUsd || sale.totalUsd)} ({formatBs(sale.subtotalBs ?? invoiceTotalBs)})</strong>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                    <span>{isCot ? 'Régimen Fiscal:' : 'IVA (0% - Sin IVA):'}</span>
+                                    <strong>{isCot ? 'Cotización Referencial' : `${formatUsd(0)} (${formatBs(0)})`}</strong>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  {Number(sale.baseExentaUsd || 0) > 0 && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                      <span>Base Exenta (E):</span>
+                                      <strong>{formatUsd(sale.baseExentaUsd)} ({formatBs(sale.baseExentaBs)})</strong>
+                                    </div>
+                                  )}
+                                  {(Number(sale.baseGeneralUsd || 0) > 0 || Number(sale.ivaGeneralUsd || sale.ivaUsd || 0) > 0 || (Number(sale.baseReducidaUsd || 0) === 0 && Number(sale.baseAdicionalUsd || 0) === 0 && Number(sale.baseExentaUsd || 0) === 0)) && (
+                                    <>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                        <span>Base Imponible General (16%):</span>
+                                        <strong>{formatUsd(sale.baseGeneralUsd)} ({formatBs(sale.baseGeneralBs)})</strong>
+                                      </div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                        <span>Débito Fiscal IVA (16%):</span>
+                                        <strong>{formatUsd(sale.ivaGeneralUsd ?? (Number(sale.baseGeneralUsd || 0) > 0 ? sale.ivaUsd : 0))} ({formatBs(sale.ivaGeneralBs ?? (Number(sale.baseGeneralBs || 0) > 0 ? sale.ivaBs : 0))})</strong>
+                                      </div>
+                                    </>
+                                  )}
+                                  {Number(sale.baseReducidaUsd || 0) > 0 && (
+                                    <>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                        <span>Base Imponible Reducida (8%):</span>
+                                        <strong>{formatUsd(sale.baseReducidaUsd)} ({formatBs(sale.baseReducidaBs)})</strong>
+                                      </div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                        <span>IVA Reducido (8%):</span>
+                                        <strong>{formatUsd(sale.ivaReducidaUsd ?? sale.ivaReducidoUsd)} ({formatBs(sale.ivaReducidaBs ?? sale.ivaReducidoBs)})</strong>
+                                      </div>
+                                    </>
+                                  )}
+                                  {Number(sale.baseAdicionalUsd || 0) > 0 && (
+                                    <>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                        <span>Base Imponible Adicional (31%):</span>
+                                        <strong>{formatUsd(sale.baseAdicionalUsd)} ({formatBs(sale.baseAdicionalBs)})</strong>
+                                      </div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#475569' }}>
+                                        <span>IVA Adicional (31%):</span>
+                                        <strong>{formatUsd(sale.ivaAdicionalUsd)} ({formatBs(sale.ivaAdicionalBs)})</strong>
+                                      </div>
+                                    </>
+                                  )}
+                                </>
+                              )}
 
                               {Number(sale.igtfUsd || 0) > 0 && (
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.72rem', color: '#b45309' }}>
@@ -1494,7 +1588,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
 
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
-                                  <div style={{ fontSize: '0.62rem', textTransform: 'uppercase', color: '#64748b' }}>Total de la Factura:</div>
+                                  <div style={{ fontSize: '0.62rem', textTransform: 'uppercase', color: '#64748b' }}>Total {isCot ? 'Cotizado' : 'de la Factura'}:</div>
                                   <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#059669', fontFamily: 'monospace' }}>
                                     {formatUsd(sale.totalUsd)}
                                   </div>
@@ -1502,7 +1596,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 <div style={{ textAlign: 'right' }}>
                                   <div style={{ fontSize: '0.62rem', color: '#64748b' }}>Total Oficial en Bolívares:</div>
                                   <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#d97706', fontFamily: 'monospace' }}>
-                                    {formatBs(sale.totalBs)}
+                                    {formatBs(invoiceTotalBs)}
                                   </div>
                                 </div>
                               </div>
