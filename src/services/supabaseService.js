@@ -1115,7 +1115,9 @@ const mapSaleToDb = (s) => ({
   moneda_pago: s.monedaPago || s.moneda_pago || (String(s.tipoTasa ?? s.tipo_tasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
   vendedor: s.vendedor,
   cierre_z_id: s.cierreZId || s.cierre_z_id || null,
-  cerrada: Boolean(s.cerrada)
+  cerrada: Boolean(s.cerrada),
+  pedido_origen_id: s.pedidoOrigenId || s.pedido_origen_id || null,
+  pedido_origen_doc: s.pedidoOrigenDoc || s.pedido_origen_doc || null
 });
 
 const mapSaleFromDb = (s) => {
@@ -1207,7 +1209,9 @@ const mapSaleFromDb = (s) => {
     monedaPago: s.moneda_pago ?? s.monedaPago ?? (String(s.tipo_tasa ?? s.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
     vendedor: s.vendedor,
     cierreZId: s.cierre_z_id || s.cierreZId || null,
-    cerrada: Boolean(s.cerrada)
+    cerrada: Boolean(s.cerrada),
+    pedidoOrigenId: s.pedido_origen_id || s.pedidoOrigenId || null,
+    pedidoOrigenDoc: s.pedido_origen_doc || s.pedidoOrigenDoc || null
   };
 };
 
@@ -3199,27 +3203,61 @@ export const processSupabaseSale = async (saleData) => {
 
     const [config, salesRes, invoicesRes] = await Promise.all([
       getSupabaseConfig(),
-      withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc,fecha,fecha_emision,pedido_origen_id,estado')),
+      withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc,fecha,fecha_emision,pedido_origen_id,pedido_origen_doc,estado')),
       withTimeout(supabase.from('profit_invoices').select('id,fact_num,factNum,tipo_doc,tipoDoc,fechaEmision,fec_emis')).catch(() => ({ data: [] }))
     ]);
     if (salesRes?.error) throw salesRes.error;
     const dbSales = salesRes?.data || [];
     const count = Array.isArray(dbSales) ? dbSales.length : 0;
-    const originOrderId = String(saleData.pedidoOrigenId || saleData.orderId || '').trim();
-    if (originOrderId) {
+    const originOrderId = String(saleData.pedidoOrigenId || saleData.orderId || saleData.pedido_origen_id || '').trim();
+    const originOrderDoc = String(saleData.pedidoOrigenDoc || saleData.pedido_origen_doc || '').trim();
+    if (originOrderId || originOrderDoc) {
       const alreadyInvoicedSale = dbSales.find(
-        s =>
-          s &&
-          String(s.pedido_origen_id || s.pedidoOrigenId || '').trim() === originOrderId &&
-          !['ANULADA', 'ANULADO'].includes(String(s.estado || '').toUpperCase().trim())
+        s => {
+          if (!s) return false;
+          if (['ANULADA', 'ANULADO'].includes(String(s.estado || '').toUpperCase().trim())) return false;
+          const sOriginId = String(s.pedido_origen_id || s.pedidoOrigenId || '').trim();
+          const sOriginDoc = String(s.pedido_origen_doc || s.pedidoOrigenDoc || '').trim();
+          return (originOrderId && sOriginId === originOrderId) ||
+                 (originOrderDoc && sOriginDoc === originOrderDoc) ||
+                 (originOrderId && sOriginDoc === originOrderId) ||
+                 (originOrderDoc && sOriginId === originOrderDoc);
+        }
       );
       if (alreadyInvoicedSale) {
         const dupErr = new Error(
-          `El pedido ${originOrderId} ya fue facturado previamente (#${alreadyInvoicedSale.numero_doc || alreadyInvoicedSale.id}).`
+          `El pedido ${originOrderDoc || originOrderId} ya fue facturado previamente (#${alreadyInvoicedSale.numero_doc || alreadyInvoicedSale.id}).`
         );
         dupErr.isValidationError = true;
         dupErr.code = 'ORDER_ALREADY_INVOICED';
         throw dupErr;
+      }
+
+      // Validación cruzada contra la tabla de pedidos (orders)
+      try {
+        const queryFilter = [
+          originOrderId ? `id.eq.${originOrderId}` : null,
+          originOrderDoc ? `numero_doc.eq.${originOrderDoc}` : null,
+          originOrderId ? `numero_doc.eq.${originOrderId}` : null
+        ].filter(Boolean).join(',');
+        if (queryFilter) {
+          const { data: matchedOrders } = await withTimeout(
+            supabase.from('orders').select('id,numero_doc,status,nro_factura').or(queryFilter)
+          );
+          const alreadyBilledOrder = (matchedOrders || []).find(
+            o => String(o.status || '').toUpperCase().trim() === 'FACTURADO'
+          );
+          if (alreadyBilledOrder) {
+            const dupErr = new Error(
+              `El pedido ${alreadyBilledOrder.numero_doc || alreadyBilledOrder.id} ya se encuentra en estado FACTURADO (#${alreadyBilledOrder.nro_factura || 'N/A'}).`
+            );
+            dupErr.isValidationError = true;
+            dupErr.code = 'ORDER_ALREADY_INVOICED';
+            throw dupErr;
+          }
+        }
+      } catch (orderCheckErr) {
+        if (orderCheckErr.code === 'ORDER_ALREADY_INVOICED') throw orderCheckErr;
       }
     }
 

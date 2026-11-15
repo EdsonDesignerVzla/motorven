@@ -282,6 +282,11 @@ export default function OrdersPipelineView({
 
   // Facturar en POS
   const handleFacturarEnPOS = (order) => {
+    if (!order) return;
+    if (['FACTURADO', 'ANULADO', 'ANULADA', 'RECHAZADO', 'CANCELADO', 'CADUCADO'].includes(String(order.status || '').toUpperCase().trim())) {
+      notify.error(`El pedido ${order.numeroDoc || order.id} ya se encuentra ${order.status} y no puede enviarse a facturación.`);
+      return;
+    }
     if (onProceedToInvoice) {
       onProceedToInvoice(order);
     }
@@ -784,7 +789,7 @@ export default function OrdersPipelineView({
                             >
                               Ver Ficha
                             </button>
-                            {order.status !== 'FACTURADO' && (
+                            {!['FACTURADO', 'ANULADO', 'ANULADA', 'RECHAZADO', 'CANCELADO', 'CADUCADO'].includes(order.status) && (
                               <button
                                 className="btn btn-primary btn-sm"
                                 onClick={() => handleFacturarEnPOS(order)}
@@ -1218,7 +1223,7 @@ export default function OrdersPipelineView({
                 >
                   Cerrar
                 </button>
-                {selectedOrder.status !== 'FACTURADO' && (
+                {!['FACTURADO', 'ANULADO', 'ANULADA', 'RECHAZADO', 'CANCELADO', 'CADUCADO'].includes(selectedOrder.status) && (
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={() => {

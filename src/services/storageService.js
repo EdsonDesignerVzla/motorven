@@ -427,6 +427,41 @@ export const saveSale = (saleData, options = {}) => {
     }
   }
 
+  const originOrderId = String(saleData.pedidoOrigenId || saleData.orderId || saleData.pedido_origen_id || '').trim();
+  const originOrderDoc = String(saleData.pedidoOrigenDoc || saleData.pedido_origen_doc || '').trim();
+  if (originOrderId || originOrderDoc) {
+    const alreadyInvoiced = sales.find(s => {
+      if (!s) return false;
+      if (['ANULADA', 'ANULADO'].includes(String(s.estado || '').toUpperCase().trim())) return false;
+      const sOriginId = String(s.pedidoOrigenId || s.pedido_origen_id || '').trim();
+      const sOriginDoc = String(s.pedidoOrigenDoc || s.pedido_origen_doc || '').trim();
+      return (originOrderId && sOriginId === originOrderId) ||
+             (originOrderDoc && sOriginDoc === originOrderDoc) ||
+             (originOrderId && sOriginDoc === originOrderId) ||
+             (originOrderDoc && sOriginId === originOrderDoc);
+    });
+    if (alreadyInvoiced) {
+      const dupErr = new Error(`El pedido ${originOrderDoc || originOrderId} ya fue facturado previamente (#${alreadyInvoiced.numeroDoc || alreadyInvoiced.id}).`);
+      dupErr.isValidationError = true;
+      dupErr.code = 'ORDER_ALREADY_INVOICED';
+      throw dupErr;
+    }
+
+    const currentOrders = typeof getOrders === 'function' ? getOrders() : [];
+    const alreadyBilledOrder = currentOrders.find(o => {
+      if (!o) return false;
+      const matchesId = originOrderId && (String(o.id || '').trim() === originOrderId || String(o.numeroDoc || '').trim() === originOrderId);
+      const matchesDoc = originOrderDoc && (String(o.numeroDoc || '').trim() === originOrderDoc || String(o.id || '').trim() === originOrderDoc);
+      return (matchesId || matchesDoc) && String(o.status || '').toUpperCase().trim() === 'FACTURADO';
+    });
+    if (alreadyBilledOrder) {
+      const dupErr = new Error(`El pedido ${alreadyBilledOrder.numeroDoc || alreadyBilledOrder.id} ya se encuentra en estado FACTURADO (#${alreadyBilledOrder.nroFactura || 'N/A'}).`);
+      dupErr.isValidationError = true;
+      dupErr.code = 'ORDER_ALREADY_INVOICED';
+      throw dupErr;
+    }
+  }
+
   const isNotaEntrega =
     String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
     String(saleData.numeroDoc || saleData.id || '').toUpperCase().startsWith('NE-') ||

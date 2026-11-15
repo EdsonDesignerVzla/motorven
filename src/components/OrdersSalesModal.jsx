@@ -4274,7 +4274,7 @@ export default function OrdersSalesModal({
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        {onProceedToPOS && selectedOrder.status !== 'RETENIDO_CREDITO' && (
+                        {onProceedToPOS && selectedOrder.status !== 'RETENIDO_CREDITO' && !['FACTURADO', 'ANULADO', 'ANULADA', 'RECHAZADO', 'CANCELADO', 'CADUCADO'].includes(selectedOrder.status) && (
                           <button
                             type="button"
                             onClick={() => onProceedToPOS(selectedOrder)}
