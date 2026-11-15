@@ -28,22 +28,61 @@ const firstPositive = (...values) => {
   return 0;
 };
 
-/** Precio Detal / Minorista / Venta de Calle (USD) con respaldo completo. */
-export const getProductRetailPrice = (p) => {
+/** Normaliza el código de almacén a '01' o '02' */
+export const normalizeWarehouseCode = (wh) => {
+  if (!wh) return null;
+  const s = String(wh).replace(/^ALM-?/i, '').trim();
+  if (s === '01' || s === '1' || s.endsWith('01') || s.toLowerCase().includes('principal') || s.toLowerCase().includes('fiscal')) return '01';
+  if (s === '02' || s === '2' || s.endsWith('02') || s.toLowerCase().includes('central') || s.toLowerCase().includes('entrega')) return '02';
+  return null;
+};
+
+/** Precio Detal / Minorista / Venta de Calle (USD) con soporte opcional por almacén. */
+export const getProductRetailPrice = (p, warehouse = null) => {
   if (!p) return 0;
+  const wh = normalizeWarehouseCode(warehouse);
+  if (wh === '01') {
+    const p01 = firstPositive(p.precioUsdDetal01, p.precio_usd_detal_01, p.precioDetal01, p.precio01);
+    if (p01 > 0) return p01;
+  } else if (wh === '02') {
+    const p02 = firstPositive(p.precioUsdDetal02, p.precio_usd_detal_02, p.precioDetal02, p.precio02);
+    if (p02 > 0) return p02;
+  }
   return firstPositive(
     p.precioUsdDetal, p.precio_usd_detal, p.precioUsd, p.precioVenta, p.precio,
     p.precioUsdMayor, p.precio_usd_mayor, p.precioMayor
   );
 };
 
-/** Precio Mayorista / Venta por Oficina (USD) con respaldo completo. */
-export const getProductWholesalePrice = (p) => {
+/** Precio Mayorista / Venta por Oficina (USD) con soporte opcional por almacén. */
+export const getProductWholesalePrice = (p, warehouse = null) => {
   if (!p) return 0;
+  const wh = normalizeWarehouseCode(warehouse);
+  if (wh === '01') {
+    const p01 = firstPositive(p.precioUsdMayor01, p.precio_usd_mayor_01, p.precioMayor01);
+    if (p01 > 0) return p01;
+  } else if (wh === '02') {
+    const p02 = firstPositive(p.precioUsdMayor02, p.precio_usd_mayor_02, p.precioMayor02);
+    if (p02 > 0) return p02;
+  }
   return firstPositive(
     p.precioUsdMayor, p.precio_usd_mayor, p.precioMayor,
     p.precioUsdDetal, p.precio_usd_detal, p.precioUsd, p.precioVenta, p.precio
   );
+};
+
+/** Costo Unitario (USD) con soporte opcional por almacén. */
+export const getProductCost = (p, warehouse = null) => {
+  if (!p) return 0;
+  const wh = normalizeWarehouseCode(warehouse);
+  if (wh === '01') {
+    const c01 = firstPositive(p.costoUsd01, p.costo_usd_01, p.costo01);
+    if (c01 > 0) return c01;
+  } else if (wh === '02') {
+    const c02 = firstPositive(p.costoUsd02, p.costo_usd_02, p.costo02);
+    if (c02 > 0) return c02;
+  }
+  return firstPositive(p.costoUsd, p.costo_usd, p.costoUnitarioUsd, p.costo);
 };
 
 const normalize = (txt) =>
@@ -70,19 +109,20 @@ export const PRICE_CHANNEL = {
 };
 
 /**
- * Precio unitario oficial (USD) de un producto según canal y cliente.
+ * Precio unitario oficial (USD) de un producto según canal, cliente y almacén.
  * @param {object} product
  * @param {object|null} client
  * @param {'MOSTRADOR'|'PREVENTA'|'OFICINA'} channel
+ * @param {'01'|'02'|null} warehouse
  */
-export const resolveUnitPrice = (product, client = null, channel = PRICE_CHANNEL.MOSTRADOR) => {
+export const resolveUnitPrice = (product, client = null, channel = PRICE_CHANNEL.MOSTRADOR, warehouse = null) => {
   if (!product) return 0;
-  if (channel === PRICE_CHANNEL.OFICINA) return getProductWholesalePrice(product);
+  if (channel === PRICE_CHANNEL.OFICINA) return getProductWholesalePrice(product, warehouse);
   if (channel === PRICE_CHANNEL.PREVENTA) {
     // Preventa Móvil / Venta de Calle: refleja los precios de minoristas o venta de calle para todos los productos
-    return getProductRetailPrice(product);
+    return getProductRetailPrice(product, warehouse);
   }
-  return isWholesaleClient(client) ? getProductWholesalePrice(product) : getProductRetailPrice(product);
+  return isWholesaleClient(client) ? getProductWholesalePrice(product, warehouse) : getProductRetailPrice(product, warehouse);
 };
 
 /** Redondeo monetario a 2 decimales (evita errores de coma flotante). */

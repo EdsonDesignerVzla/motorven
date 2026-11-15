@@ -734,6 +734,12 @@ const mapProductToDb = (p) => {
   const precioUsdDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? 0) || 0;
   const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || 0;
   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || 0;
+  const costoUsd01 = Number(p.costoUsd01 ?? p.costo_usd_01 ?? costoUsd) || 0;
+  const costoUsd02 = Number(p.costoUsd02 ?? p.costo_usd_02 ?? costoUsd) || 0;
+  const precioUsdDetal01 = Number(p.precioUsdDetal01 ?? p.precio_usd_detal_01 ?? precioUsdDetal) || 0;
+  const precioUsdDetal02 = Number(p.precioUsdDetal02 ?? p.precio_usd_detal_02 ?? precioUsdDetal) || 0;
+  const precioUsdMayor01 = Number(p.precioUsdMayor01 ?? p.precio_usd_mayor_01 ?? (precioUsdMayor > 0 ? precioUsdMayor : precioUsdDetal01)) || 0;
+  const precioUsdMayor02 = Number(p.precioUsdMayor02 ?? p.precio_usd_mayor_02 ?? (precioUsdMayor > 0 ? precioUsdMayor : precioUsdDetal02)) || 0;
   const litrosPorUnidad = resolveProductLitersPerUnit(p);
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stockMinimo ?? p.stock_minimo ?? 0) || 0;
@@ -773,10 +779,22 @@ const mapProductToDb = (p) => {
     costo_usd: costoUsd,
     costoUsd,
     costo: costoUsd,
+    costo_usd_01: costoUsd01,
+    costoUsd01,
+    costo_usd_02: costoUsd02,
+    costoUsd02,
     precio_usd_detal: precioUsdDetal,
     precioUsdDetal,
+    precio_usd_detal_01: precioUsdDetal01,
+    precioUsdDetal01,
+    precio_usd_detal_02: precioUsdDetal02,
+    precioUsdDetal02,
     precio_usd_mayor: precioUsdMayor,
     precioUsdMayor,
+    precio_usd_mayor_01: precioUsdMayor01,
+    precioUsdMayor01,
+    precio_usd_mayor_02: precioUsdMayor02,
+    precioUsdMayor02,
     precio: precioUsdDetal,
     precioUsd: precioUsdDetal,
     precioVenta: precioUsdDetal,
@@ -813,6 +831,12 @@ const mapProductFromDb = (p) => {
   const precioUsdDetal = Number(p.precioUsdDetal ?? p.precio_usd_detal ?? p.precio ?? p.precioVenta ?? 0) || Number(p.precio_usd_detal ?? p.precioUsdDetal ?? 0) || 0;
   const precioUsdMayor = Number(p.precioUsdMayor ?? p.precio_usd_mayor ?? (precioUsdDetal > 0 ? precioUsdDetal : 0)) || Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? 0) || 0;
   const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || Number(p.costo_usd ?? p.costoUsd ?? 0) || 0;
+  const costoUsd01 = Number(p.costoUsd01 ?? p.costo_usd_01 ?? costoUsd) || 0;
+  const costoUsd02 = Number(p.costoUsd02 ?? p.costo_usd_02 ?? costoUsd) || 0;
+  const precioUsdDetal01 = Number(p.precioUsdDetal01 ?? p.precio_usd_detal_01 ?? precioUsdDetal) || 0;
+  const precioUsdDetal02 = Number(p.precioUsdDetal02 ?? p.precio_usd_detal_02 ?? precioUsdDetal) || 0;
+  const precioUsdMayor01 = Number(p.precioUsdMayor01 ?? p.precio_usd_mayor_01 ?? (precioUsdMayor > 0 ? precioUsdMayor : precioUsdDetal01)) || 0;
+  const precioUsdMayor02 = Number(p.precioUsdMayor02 ?? p.precio_usd_mayor_02 ?? (precioUsdMayor > 0 ? precioUsdMayor : precioUsdDetal02)) || 0;
   const litrosPorUnidad = resolveProductLitersPerUnit(p);
   const comprometido = Number(p.comprometido ?? 0) || 0;
   const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 0) || 0;
@@ -850,10 +874,22 @@ const mapProductFromDb = (p) => {
     costoUsd,
     costo_usd: costoUsd,
     costo: costoUsd,
+    costoUsd01,
+    costo_usd_01: costoUsd01,
+    costoUsd02,
+    costo_usd_02: costoUsd02,
     precioUsdDetal,
     precio_usd_detal: precioUsdDetal,
+    precioUsdDetal01,
+    precio_usd_detal_01: precioUsdDetal01,
+    precioUsdDetal02,
+    precio_usd_detal_02: precioUsdDetal02,
     precioUsdMayor,
     precio_usd_mayor: precioUsdMayor,
+    precioUsdMayor01,
+    precio_usd_mayor_01: precioUsdMayor01,
+    precioUsdMayor02,
+    precio_usd_mayor_02: precioUsdMayor02,
     precio: precioUsdDetal,
     precioUsd: precioUsdDetal,
     precioVenta: precioUsdDetal,
@@ -2100,6 +2136,12 @@ export const saveSupabaseProduct = async (product) => {
   const mayorRaw = Number(product.precioUsdMayor ?? product.precio_usd_mayor ?? product.precioMayor ?? 0) || 0;
   const mayor = mayorRaw > 0 ? mayorRaw : detal;
   const costo = Number(product.costoUsd ?? product.costo_usd ?? product.costo ?? 0) || 0;
+  const costo01 = Number(product.costoUsd01 ?? product.costo_usd_01 ?? costo) || 0;
+  const costo02 = Number(product.costoUsd02 ?? product.costo_usd_02 ?? costo) || 0;
+  const detal01 = Number(product.precioUsdDetal01 ?? product.precio_usd_detal_01 ?? detal) || 0;
+  const detal02 = Number(product.precioUsdDetal02 ?? product.precio_usd_detal_02 ?? detal) || 0;
+  const mayor01 = Number(product.precioUsdMayor01 ?? product.precio_usd_mayor_01 ?? (mayor > 0 ? mayor : detal01)) || 0;
+  const mayor02 = Number(product.precioUsdMayor02 ?? product.precio_usd_mayor_02 ?? (mayor > 0 ? mayor : detal02)) || 0;
   const lpu = resolveProductLitersPerUnit(product);
 
   const normalized = {
@@ -2109,14 +2151,26 @@ export const saveSupabaseProduct = async (product) => {
     costoUsd: costo,
     costo_usd: costo,
     costo: costo,
+    costoUsd01: costo01,
+    costo_usd_01: costo01,
+    costoUsd02: costo02,
+    costo_usd_02: costo02,
     precioUsdDetal: detal,
     precio_usd_detal: detal,
     precio: detal,
     precioUsd: detal,
     precioVenta: detal,
+    precioUsdDetal01: detal01,
+    precio_usd_detal_01: detal01,
+    precioUsdDetal02: detal02,
+    precio_usd_detal_02: detal02,
     precioUsdMayor: mayor,
     precio_usd_mayor: mayor,
     precioMayor: mayor,
+    precioUsdMayor01: mayor01,
+    precio_usd_mayor_01: mayor01,
+    precioUsdMayor02: mayor02,
+    precio_usd_mayor_02: mayor02,
     stockAlmacen01: stocks.stock01,
     stock_almacen_01: stocks.stock01,
     stockAlmacen02: stocks.stock02,
@@ -2167,9 +2221,9 @@ export const saveSupabaseProduct = async (product) => {
         viscosidad: mapped.viscosidad || '',
         unidad: mapped.unidad || 'Caja',
         litros_por_unidad: Number(mapped.litrosPorUnidad || mapped.litros_por_unidad || 0),
-        costo_usd: Number(mapped.costoUsd || mapped.costo_usd || 0),
-        precio_usd_detal: Number(mapped.precioUsdDetal || mapped.precio_usd_detal || 0),
-        precio_usd_mayor: Number(mapped.precioUsdMayor || mapped.precio_usd_mayor || 0),
+        costo_usd: Number(mapped.costoUsd01 ?? mapped.costo_usd_01 ?? mapped.costoUsd ?? mapped.costo_usd ?? 0),
+        precio_usd_detal: Number(mapped.precioUsdDetal01 ?? mapped.precio_usd_detal_01 ?? mapped.precioUsdDetal ?? mapped.precio_usd_detal ?? 0),
+        precio_usd_mayor: Number(mapped.precioUsdMayor01 ?? mapped.precio_usd_mayor_01 ?? mapped.precioUsdMayor ?? mapped.precio_usd_mayor ?? 0),
         co_alma: '01',
         des_alma: '01 Almacén Principal (Fiscal)',
         alma_des: 'ALMACÉN PRINCIPAL / MOSTRADOR',
@@ -2191,9 +2245,9 @@ export const saveSupabaseProduct = async (product) => {
         viscosidad: mapped.viscosidad || '',
         unidad: mapped.unidad || 'Caja',
         litros_por_unidad: Number(mapped.litrosPorUnidad || mapped.litros_por_unidad || 0),
-        costo_usd: Number(mapped.costoUsd || mapped.costo_usd || 0),
-        precio_usd_detal: Number(mapped.precioUsdDetal || mapped.precio_usd_detal || 0),
-        precio_usd_mayor: Number(mapped.precioUsdMayor || mapped.precio_usd_mayor || 0),
+        costo_usd: Number(mapped.costoUsd02 ?? mapped.costo_usd_02 ?? mapped.costoUsd ?? mapped.costo_usd ?? 0),
+        precio_usd_detal: Number(mapped.precioUsdDetal02 ?? mapped.precio_usd_detal_02 ?? mapped.precioUsdDetal ?? mapped.precio_usd_detal ?? 0),
+        precio_usd_mayor: Number(mapped.precioUsdMayor02 ?? mapped.precio_usd_mayor_02 ?? mapped.precioUsdMayor ?? mapped.precio_usd_mayor ?? 0),
         co_alma: '02',
         des_alma: '02 Almacén Central (Notas de Entrega)',
         alma_des: 'ALMACÉN CENTRAL / BÓVEDA',

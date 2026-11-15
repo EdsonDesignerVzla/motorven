@@ -1292,7 +1292,7 @@ export default function OrdersPipelineView({
                   const uni = resolveProductUnit(prod || it, 'Caja');
                   const litUnit = prod ? resolveProductLitersPerUnit(prod) : 11.35;
                   const cant = Number(it.cantidad || 1);
-                  const price = Number(it.precioUsd) > 0 ? Number(it.precioUsd) : getProductWholesalePrice(prod);
+                  const price = Number(it.precioUsd) > 0 ? Number(it.precioUsd) : getProductWholesalePrice(prod, newOrderActiveWh);
 
                   return {
                     id: `${orderId}-${idx + 1}`,
@@ -1488,7 +1488,7 @@ export default function OrdersPipelineView({
                             }
                             const updated = [...newOrderItems];
                             updated[idx].articuloId = val;
-                            updated[idx].precioUsd = p ? getProductWholesalePrice(p) : 0;
+                            updated[idx].precioUsd = p ? getProductWholesalePrice(p, newOrderActiveWh) : 0;
                             updated[idx].unidad = p ? resolveProductUnit(p, 'Caja') : 'Caja';
                             setNewOrderItems(updated);
                           }}
@@ -1501,7 +1501,7 @@ export default function OrdersPipelineView({
                             const whStock = newOrderActiveWh === '02' ? pStocks.stock02 : pStocks.stock01;
                             return (
                               <option key={p.id || p.codigo} value={p.id || p.codigo} disabled={whStock <= 0}>
-                                {p.codigo} - {p.descripcion} ({formatUsd(getProductWholesalePrice(p))}) [Alm {newOrderActiveWh}: {whStock}{whStock <= 0 ? ' · AGOTADO' : ''}]
+                                {p.codigo} - {p.descripcion} ({formatUsd(getProductWholesalePrice(p, newOrderActiveWh))}) [Alm {newOrderActiveWh}: {whStock}{whStock <= 0 ? ' · AGOTADO' : ''}]
                               </option>
                             );
                           })}

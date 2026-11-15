@@ -552,8 +552,9 @@ export default function SellerOrderPOSView({
     }
 
     const qtyToAdd = Math.min(addQty, disponibleReal);
+    const targetWh = isNota ? '02' : '01';
     const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
-    const precio = resolveUnitPrice(product, selectedClient, currentChannel);
+    const precio = resolveUnitPrice(product, selectedClient, currentChannel, targetWh);
     if (!(precio > 0)) {
       notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
       return;
@@ -612,7 +613,7 @@ export default function SellerOrderPOSView({
       .map((it) => {
         const fresh = (products || []).find((p) => p && (p.id === it.product?.id || p.codigo === it.product?.codigo));
         const prod = fresh || it.product;
-        const precio = resolveUnitPrice(prod, selectedClient, currentChannel);
+        const precio = resolveUnitPrice(prod, selectedClient, currentChannel, targetWh);
         const wStocks = getProductWarehouseStocks(prod);
         const rawStock = Number(targetWh === '02' ? wStocks.stock02 : wStocks.stock01);
         const committed = getProductCommittedQty(prod, targetWh);
@@ -1947,7 +1948,7 @@ export default function SellerOrderPOSView({
                 } = getProductAvailability(p);
                 const unitLabel = resolveProductUnit(p, 'Caja');
                 const currentChannel = isNota ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA;
-                const precioUsd = resolveUnitPrice(p, selectedClient, currentChannel);
+                const precioUsd = resolveUnitPrice(p, selectedClient, currentChannel, isNota ? '02' : '01');
                 const litrosUnit = Number(p.litrosPorUnidad || resolveProductLitersPerUnit(p) || 0);
                 const stockConfig = isOutOfStock
                   ? { label: committed > 0 ? 'Comprometido' : 'Agotado', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.35)', dot: '#ef4444' }
@@ -2939,13 +2940,13 @@ export default function SellerOrderPOSView({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--semaforo-verde)', fontFamily: 'var(--font-tech)' }}>
-                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA))}
+                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA, modalidadVenta === 'OFICINA' ? '02' : '01'))}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>
-                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA) * tasaBcv)}
+                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.PREVENTA, modalidadVenta === 'OFICINA' ? '02' : '01') * tasaBcv)}
                   </span>
                   <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
-                    ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista' : 'Precio Minorista / Venta de Calle'})
+                    ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista • Alm 02' : 'Precio Minorista / Venta de Calle • Alm 01'})
                   </span>
                 </div>
 

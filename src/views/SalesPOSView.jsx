@@ -537,7 +537,7 @@ export default function SalesPOSView({
         return;
       }
       const channel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR;
-      const precioUsd = resolveUnitPrice(product, selectedClient, channel);
+      const precioUsd = resolveUnitPrice(product, selectedClient, channel, activeDocumentWarehouseTarget.warehouseCode);
       if (!(precioUsd > 0)) {
         notify.warning(`El producto ${product.codigo || ''} no tiene precio de venta configurado en Inventario.`);
         return;
@@ -566,8 +566,8 @@ export default function SalesPOSView({
   };
 
   // Sincronización automática de precios del carrito:
-  // si cambia el cliente (Mayorista ↔ Detal) o se actualiza el precio en Inventario,
-  // los renglones del carrito se recalculan con el precio oficial vigente.
+  // si cambia el cliente (Mayorista ↔ Detal), el almacén o se actualiza el precio en Inventario,
+  // los renglones del carrito se recalculan con el precio oficial vigente del almacén activo.
   // Los renglones cargados desde una Nota de Pedido conservan su precio pactado.
   useEffect(() => {
     setCartItems(prev => {
@@ -577,14 +577,14 @@ export default function SalesPOSView({
         if (item.precioPactado) return item;
         const prod = products.find(p => p.id === item.articuloId || p.codigo === item.codigo);
         if (!prod) return item;
-        const precio = resolveUnitPrice(prod, selectedClient, channel);
+        const precio = resolveUnitPrice(prod, selectedClient, channel, activeDocumentWarehouseTarget.warehouseCode);
         if (!(precio > 0) || precio === item.precioUsd) return item;
         changed = true;
         return { ...item, precioUsd: precio, subtotalUsd: lineSubtotal(item.cantidad, precio) };
       });
       return changed ? next : prev;
     });
-  }, [products, selectedClient, modalidadVenta]);
+  }, [products, selectedClient, modalidadVenta, activeDocumentWarehouseTarget.warehouseCode]);
 
   const updateQuantity = (articuloId, newQty) => {
     if (isOrderLocked) {
@@ -1394,7 +1394,7 @@ export default function SalesPOSView({
                 const unitLabel = getReadableUnit(p);
 
                 const posChannel = modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR;
-                const precioUsd = resolveUnitPrice(p, selectedClient, posChannel);
+                const precioUsd = resolveUnitPrice(p, selectedClient, posChannel, activeDocumentWarehouseTarget.warehouseCode);
 
                 const stockConfig = isOutOfStock
                   ? { label: committedQty > 0 ? 'Comprometido' : 'Agotado', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.35)', dot: '#ef4444' }
@@ -2579,13 +2579,13 @@ export default function SalesPOSView({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
-                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR))}
+                    {formatUsd(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR, activeDocumentWarehouseTarget.warehouseCode))}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--motorven-gold)' }}>
-                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR) * (Number(safeConfig.tasaDolar) || 0))}
+                    {formatBs(resolveUnitPrice(selectedSpecProduct, selectedClient, modalidadVenta === 'OFICINA' ? PRICE_CHANNEL.OFICINA : PRICE_CHANNEL.MOSTRADOR, activeDocumentWarehouseTarget.warehouseCode) * (Number(safeConfig.tasaDolar) || 0))}
                   </span>
                   <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
-                    ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista / Oficina' : (isWholesaleClient(selectedClient) ? 'Precio Mayorista' : 'Precio Detal')})
+                    ({modalidadVenta === 'OFICINA' ? 'Precio Mayorista / Oficina' : (isWholesaleClient(selectedClient) ? 'Precio Mayorista' : 'Precio Detal')} • Alm {activeDocumentWarehouseTarget.warehouseCode})
                   </span>
                 </div>
 

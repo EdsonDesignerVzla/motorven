@@ -29,7 +29,7 @@ import {
   Download
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST, getProductWarehouseStocks } from '../services/formatService';
-import { getProductRetailPrice, getProductWholesalePrice } from '../services/pricingService';
+import { getProductRetailPrice, getProductWholesalePrice, getProductCost } from '../services/pricingService';
 import OilstoneProductImage from '../components/OilstoneProductImage';
 import { canManageProducts, canViewCosts } from '../services/authService';
 import InventoryKardexModal from '../components/InventoryKardexModal';
@@ -597,9 +597,9 @@ export default function InventoryView({
 
     if (product) {
       const stocks = getProductWarehouseStocks(product);
-      const retailPrice = getProductRetailPrice(product);
-      const wholesalePrice = getProductWholesalePrice(product);
-      const costPrice = Number(product.costoUsd ?? product.costo_usd ?? product.costo ?? 0);
+      const retailPrice = getProductRetailPrice(product, targetWh);
+      const wholesalePrice = getProductWholesalePrice(product, targetWh);
+      const costPrice = getProductCost(product, targetWh);
       setEditingProduct({
         ...product,
         activeWarehouse: targetWh,
@@ -744,19 +744,49 @@ export default function InventoryView({
       const mayorRaw = Math.max(0, Number(editingProduct.precioUsdMayor ?? editingProduct.precio_usd_mayor ?? editingProduct.precioMayor ?? 0) || 0);
       const mayor = mayorRaw > 0 ? mayorRaw : detal;
       const costo = Math.max(0, Number(editingProduct.costoUsd ?? editingProduct.costo_usd ?? editingProduct.costo ?? 0) || 0);
+
+      const isWh02 = activeModalWarehouse === '02';
+      const existingProduct = products?.find(p => String(p.id) === String(editingProduct.id) || String(p.codigo) === String(editingProduct.codigo));
+
+      const prevCost01 = Number(editingProduct.costoUsd01 ?? existingProduct?.costoUsd01 ?? existingProduct?.costo_usd_01 ?? existingProduct?.costoUsd ?? existingProduct?.costo_usd ?? costo) || 0;
+      const prevCost02 = Number(editingProduct.costoUsd02 ?? existingProduct?.costoUsd02 ?? existingProduct?.costo_usd_02 ?? existingProduct?.costoUsd ?? existingProduct?.costo_usd ?? costo) || 0;
+      const prevDetal01 = Number(editingProduct.precioUsdDetal01 ?? existingProduct?.precioUsdDetal01 ?? existingProduct?.precio_usd_detal_01 ?? existingProduct?.precioUsdDetal ?? existingProduct?.precio_usd_detal ?? detal) || 0;
+      const prevDetal02 = Number(editingProduct.precioUsdDetal02 ?? existingProduct?.precioUsdDetal02 ?? existingProduct?.precio_usd_detal_02 ?? existingProduct?.precioUsdDetal ?? existingProduct?.precio_usd_detal ?? detal) || 0;
+      const prevMayor01 = Number(editingProduct.precioUsdMayor01 ?? existingProduct?.precioUsdMayor01 ?? existingProduct?.precio_usd_mayor_01 ?? existingProduct?.precioUsdMayor ?? existingProduct?.precio_usd_mayor ?? mayor) || 0;
+      const prevMayor02 = Number(editingProduct.precioUsdMayor02 ?? existingProduct?.precioUsdMayor02 ?? existingProduct?.precio_usd_mayor_02 ?? existingProduct?.precioUsdMayor ?? existingProduct?.precio_usd_mayor ?? mayor) || 0;
+
+      const finalCost01 = isWh02 ? prevCost01 : costo;
+      const finalCost02 = isWh02 ? costo : prevCost02;
+      const finalDetal01 = isWh02 ? prevDetal01 : detal;
+      const finalDetal02 = isWh02 ? detal : prevDetal02;
+      const finalMayor01 = isWh02 ? prevMayor01 : mayor;
+      const finalMayor02 = isWh02 ? mayor : prevMayor02;
+
       const payloadToSave = {
         ...editingProduct,
-        costoUsd: costo,
-        costo_usd: costo,
-        costo: costo,
-        precioUsdDetal: detal,
-        precio_usd_detal: detal,
-        precio: detal,
-        precioUsd: detal,
-        precioVenta: detal,
-        precioUsdMayor: mayor,
-        precio_usd_mayor: mayor,
-        precioMayor: mayor,
+        costoUsd: isWh02 ? (finalCost01 > 0 ? finalCost01 : costo) : costo,
+        costo_usd: isWh02 ? (finalCost01 > 0 ? finalCost01 : costo) : costo,
+        costo: isWh02 ? (finalCost01 > 0 ? finalCost01 : costo) : costo,
+        costoUsd01: finalCost01,
+        costo_usd_01: finalCost01,
+        costoUsd02: finalCost02,
+        costo_usd_02: finalCost02,
+        precioUsdDetal: isWh02 ? (finalDetal01 > 0 ? finalDetal01 : detal) : detal,
+        precio_usd_detal: isWh02 ? (finalDetal01 > 0 ? finalDetal01 : detal) : detal,
+        precio: isWh02 ? (finalDetal01 > 0 ? finalDetal01 : detal) : detal,
+        precioUsd: isWh02 ? (finalDetal01 > 0 ? finalDetal01 : detal) : detal,
+        precioVenta: isWh02 ? (finalDetal01 > 0 ? finalDetal01 : detal) : detal,
+        precioUsdDetal01: finalDetal01,
+        precio_usd_detal_01: finalDetal01,
+        precioUsdDetal02: finalDetal02,
+        precio_usd_detal_02: finalDetal02,
+        precioUsdMayor: isWh02 ? (finalMayor01 > 0 ? finalMayor01 : mayor) : mayor,
+        precio_usd_mayor: isWh02 ? (finalMayor01 > 0 ? finalMayor01 : mayor) : mayor,
+        precioMayor: isWh02 ? (finalMayor01 > 0 ? finalMayor01 : mayor) : mayor,
+        precioUsdMayor01: finalMayor01,
+        precio_usd_mayor_01: finalMayor01,
+        precioUsdMayor02: finalMayor02,
+        precio_usd_mayor_02: finalMayor02,
         stockAlmacen01: s01,
         stock_almacen_01: s01,
         stockAlmacen02: s02,
@@ -1306,10 +1336,10 @@ export default function InventoryView({
                       ? Math.max(1, Math.round((Number(p.stockMinimo) || 5) * 0.6))
                       : (Number(p.stockMinimo) || 5));
                   const sem = getSemaforoStatus(currentStock, effMin);
-                  const precioUsdDetal = getProductRetailPrice(p);
-                  const precioUsdMayor = getProductWholesalePrice(p);
+                  const precioUsdDetal = getProductRetailPrice(p, normSelW);
+                  const precioUsdMayor = getProductWholesalePrice(p, normSelW);
                   const precioBsDetal = precioUsdDetal * (Number(config?.tasaDolar) || 886.22);
-                  const costoUsd = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0);
+                  const costoUsd = getProductCost(p, normSelW);
                   const totalLitrosStock = formatUnitVe(currentStock * resolveProductLitersPerUnit(p), 2);
 
                   return (
@@ -1419,18 +1449,18 @@ export default function InventoryView({
                       {/* Margen Detal */}
                       {canSeeCosts && (
                         <td style={{ textAlign: 'center' }}>
-                          {p.costoUsd > 0 ? (
+                          {costoUsd > 0 ? (
                             <span
                               style={{
                                 fontSize: '0.74rem',
                                 fontWeight: 700,
                                 padding: '2px 6px',
                                 borderRadius: '4px',
-                                background: p.precioUsdDetal > p.costoUsd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                                color: p.precioUsdDetal > p.costoUsd ? '#34d399' : '#f87171'
+                                background: precioUsdDetal > costoUsd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                color: precioUsdDetal > costoUsd ? '#34d399' : '#f87171'
                               }}
                             >
-                              +{(((p.precioUsdDetal - p.costoUsd) / p.costoUsd) * 100).toFixed(0)}%
+                              +{(((precioUsdDetal - costoUsd) / costoUsd) * 100).toFixed(0)}%
                             </span>
                           ) : (
                             <span style={{ color: '#64748b', fontSize: '0.75rem' }}>-</span>
@@ -1847,39 +1877,69 @@ export default function InventoryView({
                 </div>
               </div>
 
-              <div className="form-row" style={{ background: 'rgba(255,255,255,0.03)', padding: '1rem', borderRadius: '12px', marginBottom: '1.2rem' }}>
-                <div className="form-group">
-                  <label className="form-label">Costo ($ USD)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="form-control"
-                    value={editingProduct.costoUsd}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, costoUsd: parseFloat(e.target.value) || 0 })}
-                    required
-                  />
+              <div style={{
+                background: activeModalWarehouse === '02' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(2, 132, 199, 0.08)',
+                padding: '1rem',
+                borderRadius: '12px',
+                marginBottom: '1.2rem',
+                border: `1px solid ${activeModalWarehouse === '02' ? 'rgba(16, 185, 129, 0.35)' : 'rgba(56, 189, 248, 0.35)'}`
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <span style={{
+                    fontSize: '0.82rem',
+                    fontWeight: 800,
+                    color: activeModalWarehouse === '02' ? 'var(--motorven-emerald)' : '#38bdf8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}>
+                    💰 Precios y Costo: {activeModalWarehouse === '02' ? 'Almacén Central 02 (Notas de Entrega)' : 'Almacén Principal 01 (Facturas Fiscales)'}
+                  </span>
+                  <span style={{
+                    fontSize: '0.68rem',
+                    padding: '2px 8px',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    background: activeModalWarehouse === '02' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(2, 132, 199, 0.2)',
+                    color: activeModalWarehouse === '02' ? 'var(--motorven-emerald)' : '#38bdf8'
+                  }}>
+                    INDEPENDIENTE DE ALM {activeModalWarehouse === '02' ? '01' : '02'}
+                  </span>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Precio Detal ($ USD)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="form-control"
-                    value={editingProduct.precioUsdDetal}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, precioUsdDetal: parseFloat(e.target.value) || 0 })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Precio Mayor ($ USD)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="form-control"
-                    value={editingProduct.precioUsdMayor}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, precioUsdMayor: parseFloat(e.target.value) || 0 })}
-                    required
-                  />
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Costo ($ USD)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="form-control"
+                      value={editingProduct.costoUsd}
+                      onChange={(e) => setEditingProduct({ ...editingProduct, costoUsd: parseFloat(e.target.value) || 0 })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Precio Detal ($ USD)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="form-control"
+                      value={editingProduct.precioUsdDetal}
+                      onChange={(e) => setEditingProduct({ ...editingProduct, precioUsdDetal: parseFloat(e.target.value) || 0 })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Precio Mayor ($ USD)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="form-control"
+                      value={editingProduct.precioUsdMayor}
+                      onChange={(e) => setEditingProduct({ ...editingProduct, precioUsdMayor: parseFloat(e.target.value) || 0 })}
+                      required
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -2603,27 +2663,38 @@ export default function InventoryView({
                 })()}
 
                 {/* Precios Detal y Mayorista */}
-                <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', background: 'var(--surface-input, rgba(255,255,255,0.03))', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
-                  <div>
-                    <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Precio Detal</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--motorven-emerald, #10b981)', fontFamily: 'var(--font-tech)' }}>
-                      {formatUsd(getProductRetailPrice(selectedSpecProduct))}
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold, #f59e0b)' }}>
-                      {formatBs(getProductRetailPrice(selectedSpecProduct) * (Number(config?.tasaDolar) || 886.22))}
-                    </div>
-                  </div>
+                {(() => {
+                  const modalWh = selectedSpecProduct._warehouseContext || (normSelW === '01' || normSelW === '02' ? normSelW : '01');
+                  const retailPr = getProductRetailPrice(selectedSpecProduct, modalWh);
+                  const wholesalePr = getProductWholesalePrice(selectedSpecProduct, modalWh);
+                  return (
+                    <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', background: 'var(--surface-input, rgba(255,255,255,0.03))', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
+                      <div>
+                        <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
+                          Precio Detal (Alm {modalWh})
+                        </div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--motorven-emerald, #10b981)', fontFamily: 'var(--font-tech)' }}>
+                          {formatUsd(retailPr)}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--motorven-gold, #f59e0b)' }}>
+                          {formatBs(retailPr * (Number(config?.tasaDolar) || 886.22))}
+                        </div>
+                      </div>
 
-                  <div style={{ borderLeft: '1px solid var(--border-glass)', paddingLeft: '12px' }}>
-                    <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Precio Mayorista</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--motorven-cyan, #00f0ff)', fontFamily: 'var(--font-tech)' }}>
-                      {formatUsd(getProductWholesalePrice(selectedSpecProduct))}
+                      <div style={{ borderLeft: '1px solid var(--border-glass)', paddingLeft: '12px' }}>
+                        <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
+                          Precio Mayorista (Alm {modalWh})
+                        </div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--motorven-cyan, #00f0ff)', fontFamily: 'var(--font-tech)' }}>
+                          {formatUsd(wholesalePr)}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                          {formatBs(wholesalePr * (Number(config?.tasaDolar) || 886.22))}
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      {formatBs(getProductWholesalePrice(selectedSpecProduct) * (Number(config?.tasaDolar) || 886.22))}
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
             </div>
 
