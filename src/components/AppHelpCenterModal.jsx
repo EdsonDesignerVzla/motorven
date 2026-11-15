@@ -44,7 +44,8 @@ import {
   SYSTEM_METADATA,
   MODULES_DOCUMENTATION,
   FREQUENTLY_ASKED_QUESTIONS,
-  WORKFLOWS_STEP_BY_STEP
+  WORKFLOWS_STEP_BY_STEP,
+  BEGINNER_FIRST_STEPS_GUIDE
 } from '../data/appDocumentationData';
 import { ROLE_PERMISSIONS, normalizeRole } from '../services/authService';
 import { generateManualPDF } from '../services/pdfReportService';
@@ -60,7 +61,7 @@ export default function AppHelpCenterModal({
   config = {}
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('modulos');
+  const [activeTab, setActiveTab] = useState('primeros_pasos');
   const [expandedFaqIndex, setExpandedFaqIndex] = useState(null);
 
   // ── Calcular IDs de módulos accesibles para el usuario ──────────────────
@@ -490,10 +491,11 @@ export default function AppHelpCenterModal({
           {/* Selector de Pestañas Superiores */}
           <div className="help-modal-top-tabs" style={{ display: 'flex', gap: '5px', flexWrap: 'nowrap', overflowX: 'auto', scrollbarWidth: 'none', minWidth: 0 }}>
             {[
-              { id: 'modulos', label: 'Módulos & Componentes', icon: Layers },
+              { id: 'primeros_pasos', label: '🚀 Empieza Aquí (Desde Cero)', icon: Sparkles },
+              { id: 'modulos', label: 'Módulos & Tareas Paso a Paso', icon: Layers },
+              { id: 'guias', label: 'Flujos Operativos (SOP)', icon: FileText, count: filteredWorkflows.length },
               { id: 'botones', label: 'Guía de Botones', icon: Activity, count: allButtons.length },
               { id: 'modales', label: 'Catálogo de Modales', icon: Compass, count: allModals.length },
-              { id: 'guias', label: 'Flujos Paso a Paso', icon: FileText, count: filteredWorkflows.length },
               { id: 'faq', label: 'Preguntas Frecuentes', icon: HelpCircle, count: filteredFaqs.length }
             ].map((tab) => {
               const Icon = tab.icon;
@@ -545,6 +547,240 @@ export default function AppHelpCenterModal({
         {/* Contenido Principal con Scroll */}
         <div className="help-modal-body-layout" style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
           
+          {/* TAB 0: 🚀 PRIMEROS PASOS / GUÍA PARA PRINCIPIANTES */}
+          {activeTab === 'primeros_pasos' && (
+            <div style={{ flex: 1, minWidth: 0, padding: '1.5rem 2rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem', boxSizing: 'border-box' }}>
+              
+              {/* Banner de Bienvenida */}
+              <div
+                style={{
+                  padding: '1.5rem 1.8rem',
+                  borderRadius: '16px',
+                  background: 'linear-gradient(135deg, rgba(0, 43, 122, 0.15) 0%, rgba(2, 132, 199, 0.12) 100%)',
+                  border: '1px solid rgba(2, 132, 199, 0.35)',
+                  boxShadow: 'var(--shadow-card)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '1.5rem',
+                  flexWrap: 'wrap'
+                }}
+              >
+                <div style={{ flex: 1, minWidth: '280px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg, var(--motorven-navy), var(--motorven-cyan))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                      <Sparkles size={20} />
+                    </div>
+                    <h3 style={{ fontSize: '1.3rem', fontWeight: 900, margin: 0, color: 'var(--text-heading)' }}>
+                      {BEGINNER_FIRST_STEPS_GUIDE?.welcome?.title || '¡Bienvenido a SIGNUM MOTORVEN! (Tu Primer Día)'}
+                    </h3>
+                  </div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.55 }}>
+                    {BEGINNER_FIRST_STEPS_GUIDE?.welcome?.summary}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('modulos')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '10px 18px',
+                    borderRadius: '10px',
+                    background: 'linear-gradient(135deg, var(--motorven-navy) 0%, #0284c7 100%)',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 800,
+                    fontSize: '0.825rem',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(0, 43, 122, 0.3)',
+                    flexShrink: 0
+                  }}
+                >
+                  <span>Explorar Módulos & Tareas</span>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+
+              {/* SECCIÓN 1: El Circuito Vital de la Empresa */}
+              <div>
+                <div style={{ marginBottom: '0.85rem' }}>
+                  <h4 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--motorven-cyan)', margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Activity size={18} />
+                    <span>{BEGINNER_FIRST_STEPS_GUIDE?.coreCircuit?.title}</span>
+                  </h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
+                    {BEGINNER_FIRST_STEPS_GUIDE?.coreCircuit?.description}
+                  </p>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '0.85rem' }}>
+                  {BEGINNER_FIRST_STEPS_GUIDE?.coreCircuit?.steps.map((st) => (
+                    <div
+                      key={st.step}
+                      style={{
+                        padding: '1rem',
+                        borderRadius: '12px',
+                        background: 'var(--bg-card-glass)',
+                        border: '1px solid var(--border-glass)',
+                        boxShadow: 'var(--shadow-card)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '8px'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                          <span style={{ width: '24px', height: '24px', borderRadius: '999px', background: 'rgba(2, 132, 199, 0.15)', color: 'var(--motorven-cyan)', border: '1px solid var(--motorven-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 800 }}>
+                            {st.step}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'var(--bg-btn-secondary)', color: 'var(--text-muted)' }}>
+                            {st.module}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-heading)', marginBottom: '4px' }}>
+                          {st.title}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                          {st.whatHappens}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SECCIÓN 2: Los 2 Almacenes Explicados Fácil */}
+              <div>
+                <div style={{ marginBottom: '0.85rem' }}>
+                  <h4 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--motorven-navy-light)', margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Package size={18} />
+                    <span>{BEGINNER_FIRST_STEPS_GUIDE?.theTwoWarehouses?.title}</span>
+                  </h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
+                    {BEGINNER_FIRST_STEPS_GUIDE?.theTwoWarehouses?.description}
+                  </p>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1rem' }}>
+                  {BEGINNER_FIRST_STEPS_GUIDE?.theTwoWarehouses?.warehouses.map((wh) => (
+                    <div
+                      key={wh.code}
+                      style={{
+                        padding: '1.2rem',
+                        borderRadius: '14px',
+                        background: wh.code === '01'
+                          ? 'linear-gradient(135deg, rgba(2, 132, 199, 0.08) 0%, rgba(37, 99, 235, 0.04) 100%)'
+                          : 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(5, 150, 105, 0.04) 100%)',
+                        border: `1.5px solid ${wh.code === '01' ? 'rgba(2, 132, 199, 0.35)' : 'rgba(16, 185, 129, 0.35)'}`,
+                        boxShadow: 'var(--shadow-card)'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '1rem', fontWeight: 900, color: wh.code === '01' ? 'var(--motorven-cyan)' : 'var(--semaforo-verde)' }}>
+                          {wh.name}
+                        </div>
+                        <span style={{ fontSize: '0.68rem', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', background: wh.code === '01' ? 'rgba(2, 132, 199, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: wh.code === '01' ? 'var(--motorven-cyan)' : 'var(--semaforo-verde)' }}>
+                          Código {wh.code}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-heading)', marginBottom: '8px' }}>
+                        {wh.forWhat}
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {wh.rules.map((r, rIdx) => (
+                          <li key={rIdx}>{r}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SECCIÓN 3: Manejo de Monedas ($ y Bs.) */}
+              <div
+                style={{
+                  padding: '1.1rem 1.3rem',
+                  borderRadius: '12px',
+                  background: 'var(--bg-card-glass)',
+                  border: '1px solid var(--border-glass)',
+                  boxShadow: 'var(--shadow-card)'
+                }}
+              >
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: '#f59e0b', margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <DollarSign size={17} />
+                  <span>{BEGINNER_FIRST_STEPS_GUIDE?.currencyGuide?.title}</span>
+                </h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '0.75rem' }}>
+                  {BEGINNER_FIRST_STEPS_GUIDE?.currencyGuide?.points.map((pt, pIdx) => (
+                    <div key={pIdx} style={{ padding: '0.75rem 0.9rem', borderRadius: '8px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-glass)', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                      {pt}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SECCIÓN 4: Las 7 Reglas de Oro */}
+              <div>
+                <h4 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--semaforo-verde)', margin: '0 0 0.85rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={18} />
+                  <span>Las 7 Reglas de Oro de SIGNUM MOTORVEN</span>
+                </h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '0.75rem' }}>
+                  {BEGINNER_FIRST_STEPS_GUIDE?.goldenRules?.map((gr, gIdx) => (
+                    <div
+                      key={gIdx}
+                      style={{
+                        padding: '0.9rem 1.1rem',
+                        borderRadius: '10px',
+                        background: 'var(--bg-card-glass)',
+                        border: '1px solid var(--border-glass)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px'
+                      }}
+                    >
+                      <div style={{ fontSize: '0.825rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                        {gr.rule}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                        {gr.explanation}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Botón Inferior de Llamada a la Acción */}
+              <div style={{ textAlign: 'center', padding: '1rem 0 0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('modulos')}
+                  style={{
+                    padding: '12px 24px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, var(--motorven-navy) 0%, #0284c7 100%)',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 800,
+                    fontSize: '0.9rem',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(0, 43, 122, 0.35)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '10px'
+                  }}
+                >
+                  <span>¿Listo para trabajar? Mira las tareas paso a paso de cada módulo</span>
+                  <ChevronRight size={18} />
+                </button>
+              </div>
+
+            </div>
+          )}
+
           {/* TAB 1: MÓDULOS & COMPONENTES */}
           {activeTab === 'modulos' && (
             <div className="help-modal-modules-layout" style={{ display: 'flex', width: '100%', height: '100%', minHeight: 0, overflow: 'hidden' }}>
@@ -681,6 +917,171 @@ export default function AppHelpCenterModal({
                     {currentModule.summary}
                   </p>
                 </div>
+
+                {/* 🎓 SECCIÓN PEDAGÓGICA: ¿Para qué sirve este módulo? (Desde Cero) */}
+                {currentModule.beginnerIntro && (
+                  <div
+                    style={{
+                      padding: '1.2rem 1.4rem',
+                      borderRadius: '14px',
+                      background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.08) 0%, rgba(37, 99, 235, 0.04) 100%)',
+                      border: '1px solid rgba(2, 132, 199, 0.35)',
+                      boxShadow: 'var(--shadow-card)'
+                    }}
+                  >
+                    <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--motorven-cyan)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Sparkles size={17} />
+                      <span>🌱 Guía desde Cero: ¿Qué hace este módulo y para qué te sirve?</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '0.85rem' }}>
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '0.85rem 1rem', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--motorven-cyan)', textTransform: 'uppercase', marginBottom: '3px' }}>
+                          💡 ¿Qué es en palabras sencillas?
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                          {currentModule.beginnerIntro.whatIsIt}
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '0.85rem 1rem', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--semaforo-verde)', textTransform: 'uppercase', marginBottom: '3px' }}>
+                          🏢 ¿Por qué es vital para la empresa?
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                          {currentModule.beginnerIntro.whyItMatters}
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '0.85rem 1rem', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--motorven-navy-light)', textTransform: 'uppercase', marginBottom: '3px' }}>
+                          ⏰ ¿Cuándo debes entrar aquí?
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                          {currentModule.beginnerIntro.whenToUse}
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '0.85rem 1rem', borderRadius: '10px', border: '1px solid var(--border-glass)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', marginBottom: '3px' }}>
+                          ⚠️ ¿Qué pasa si no se usa o se usa mal?
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                          {currentModule.beginnerIntro.whatIfSkipped}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 📋 SECCIÓN PEDAGÓGICA: ¿Cómo realizar cada tarea aquí? (Paso a Paso) */}
+                {currentModule.commonTasks && currentModule.commonTasks.length > 0 && (
+                  <div>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--semaforo-verde)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                      <CheckCircle2 size={16} />
+                      <span>¿Cómo realizar cada tarea en este módulo? (Guía Paso a Paso)</span>
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                      {currentModule.commonTasks.map((t, tIdx) => (
+                        <div
+                          key={tIdx}
+                          style={{
+                            padding: '1rem 1.2rem',
+                            borderRadius: '12px',
+                            background: 'var(--bg-card-glass)',
+                            border: '1px solid var(--border-glass)',
+                            boxShadow: 'var(--shadow-card)'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+                            <div style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                              {t.title}
+                            </div>
+                            {t.objective && (
+                              <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: 'rgba(16, 185, 129, 0.12)', color: 'var(--semaforo-verde)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+                                🎯 Objetivo: {t.objective}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', margin: '8px 0' }}>
+                            {t.steps.map((st, sIdx) => (
+                              <div key={sIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                                <span style={{
+                                  width: '20px',
+                                  height: '20px',
+                                  borderRadius: '999px',
+                                  background: 'var(--bg-btn-secondary)',
+                                  color: 'var(--motorven-cyan)',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 800,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                  marginTop: '1px'
+                                }}>
+                                  {sIdx + 1}
+                                </span>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                                  {st.replace(/^\d+\.\s*/, '')}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          {t.proTip && (
+                            <div style={{ marginTop: '8px', padding: '7px 11px', borderRadius: '7px', background: 'rgba(2, 132, 199, 0.08)', borderLeft: '3px solid var(--motorven-cyan)', fontSize: '0.73rem', color: 'var(--text-main)' }}>
+                              <span style={{ fontWeight: 800, color: 'var(--motorven-cyan)' }}>💡 Consejo de Oro: </span>
+                              {t.proTip}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 📖 SECCIÓN PEDAGÓGICA: Glosario Rápido del Módulo */}
+                {currentModule.glossary && currentModule.glossary.length > 0 && (
+                  <div>
+                    <h4 style={{ fontSize: '0.85rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--motorven-navy-light)', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <BookOpen size={15} />
+                      <span>Glosario Rápido: Términos que debes conocer aquí</span>
+                    </h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))', gap: '0.7rem' }}>
+                      {currentModule.glossary.map((g, gIdx) => (
+                        <div key={gIdx} style={{ padding: '0.8rem 0.95rem', borderRadius: '9px', background: 'var(--bg-card-glass)', border: '1px solid var(--border-glass)' }}>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--motorven-cyan)', marginBottom: '3px' }}>
+                            {g.term}
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                            {g.definition}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ⚠️ SECCIÓN PEDAGÓGICA: Errores Comunes y Cómo Evitarlos */}
+                {currentModule.mistakesToAvoid && currentModule.mistakesToAvoid.length > 0 && (
+                  <div>
+                    <h4 style={{ fontSize: '0.85rem', fontWeight: 800, textTransform: 'uppercase', color: '#f59e0b', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <ShieldAlert size={15} />
+                      <span>Errores Comunes de Principiantes y Cómo Evitarlos</span>
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                      {currentModule.mistakesToAvoid.map((m, mIdx) => (
+                        <div key={mIdx} style={{ padding: '0.9rem 1.1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                          <div style={{ fontSize: '0.825rem', fontWeight: 800, color: '#f59e0b', marginBottom: '3px' }}>
+                            ❌ Error típico: {m.mistake}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                            <strong>¿Por qué es malo?:</strong> {m.why}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--semaforo-verde)' }}>
+                            <strong>✅ Solución correcta:</strong> {m.solution}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Sección 1: Componentes y Paneles */}
                 <div>
