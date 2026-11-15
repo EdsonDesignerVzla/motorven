@@ -13,7 +13,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import qrcode from 'qrcode-generator';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
-import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
+import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, round2 } from './formatService.js';
 import { parseInvoiceDateInfo } from './creditPolicyService.js';
 import { getProductRetailPrice } from './pricingService.js';
 import { resolveProductListPrice, safePct, PRICE_LIST_TIERS } from '../utils/profitabilityUtils.js';
@@ -9581,6 +9581,553 @@ export function generateSeniatRetentionTxt({ purchases = [], config = {}, period
   }
   return content;
 }
+
+// =========================================================================
+// 33. SOLICITUD DE LÍNEA DE CRÉDITO COMERCIAL & PAGARÉ MERCANTIL EJECUTIVO
+// =========================================================================
+export function generateCreditApplicationAndPromissoryNotePDF({
+  client = {},
+  config = {},
+  currentUser = null
+}) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const clientName = client.nombre || client.cliDes || client.descripcion || 'CLIENTE SOLICITANTE';
+  const clientRif = client.rif || client.coCli || 'J-00000000-0';
+  const repLegal = client.responsable || client.contacto || client.repLegal || 'Representante Legal Autorizado';
+  const ciRep = client.ciRepLegal || client.cedula || 'V-00.000.000';
+  const direccion = client.direccion || client.direc1 || 'Venezuela';
+  const telefonos = client.telefonos || client.telefono || 'N/A';
+  const email = client.email || 'N/A';
+  const ramo = client.ramo || client.tipoCliente || 'Comercial / Lubricantes Automotrices e Industriales';
+  const vendedor = client.vendedor || client.coVen || 'Fuerza de Ventas Central';
+  const diasCred = Number(client.diasCredito || client.diasCred || 15);
+  const limiteUsd = Number(client.limiteCreditoUsd || client.limCred || client.limiteCredito || 0);
+  const limiteBs = limiteUsd * tasa;
+  const safeSlug = String(clientRif || clientName).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 24);
+
+  const base = createBaseReport({
+    title: 'SOLICITUD DE LÍNEA DE CRÉDITO COMERCIAL & PAGARÉ MERCANTIL',
+    subtitle: 'Instrumento de Garantía Mercantil y Apertura de Crédito • Código de Comercio Art. 486',
+    moduleCode: 'CRED',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'DATOS GENERALES DE LA EMPRESA SOLICITANTE (DEUDOR PRINCIPAL)',
+    'Identificación fiscal, domicilio, contacto ejecutivo y condiciones crediticias requeridas',
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'IDENTIFICACIÓN DEL SOLICITANTE / DEUDOR',
+      lines: [
+        clientName,
+        `RIF / C.I.: ${clientRif} • Ramo: ${ramo}`,
+        `Representante Legal: ${repLegal} (C.I. ${ciRep})`,
+        `Domicilio Fiscal: ${direccion}`,
+        `Teléfono: ${telefonos} • Email: ${email}`
+      ]
+    },
+    {
+      title: 'CONDICIONES CREDITICIAS SOLICITADAS',
+      lines: [
+        `Límite de Crédito Solicitado: ${formatUsd(limiteUsd)} (${formatBs(limiteBs)})`,
+        `Plazo de Crédito Solicitado: ${diasCred} Días Continuos`,
+        `Vendedor Asignado: ${vendedor}`,
+        `Tasa de Liquidación Aplicable: Tasa Oficial BCV a fecha de pago`,
+        `Fecha de Instrumentación: ${formatDateVe(new Date())}`
+      ]
+    }
+  );
+
+  const termsRows = [
+    ['Instrumento de Garantía', 'Pagaré Mercantil Ejecutivo a la Vista con Aval y Cláusula de Aceleración de Plazos', 'OBLIGATORIO'],
+    ['Moneda de Pago & Conversión', 'Dólares estadounidenses ($ USD) o Bolívares convertidos a Tasa Oficial del BCV al momento del pago', 'ESTRICTO BCV'],
+    ['Plazo y Vencimiento Facturas', `${diasCred} días continuos contados estrictamente desde la fecha de recepción de la mercancía`, 'NO PRORROGABLE'],
+    ['Reserva de Dominio (LOTD)', 'La mercancía despachada se mantiene bajo propiedad de SIGNUM MOTORVEN, C.A. hasta su cancelación total', 'RESERVA TOTAL'],
+    ['Interés de Mora / Penalización', '1% mensual sobre saldos vencidos más gastos directos de cobranza judicial y extrajudicial', 'TASA LEGAL'],
+    ['Referencia Bancaria Verificada', `${client.bancoRef || 'Cuenta Corriente Empresarial Activa en Banco Nacional'}`, 'VALIDADA']
+  ];
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CLÁUSULA / CRITERIO COMERCIAL', 'ESPECIFICACIÓN Y CONDICIONES PACTADAS', 'VALIDACIÓN']],
+    body: termsRows,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.6, fontStyle: 'bold', cellPadding: 1.4, halign: 'center' },
+    styles: { fontSize: 5.4, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    columnStyles: {
+      0: { cellWidth: 44, fontStyle: 'bold', textColor: COLORS.navy },
+      1: { cellWidth: 108 },
+      2: { halign: 'center', cellWidth: 27.9, fontStyle: 'bold', textColor: COLORS.emerald }
+    }
+  });
+
+  y = base.doc.lastAutoTable?.finalY ? base.doc.lastAutoTable.finalY + 3 : y + 30;
+
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'PAGARÉ MERCANTIL CON FUERZA EJECUTIVA (CÓDIGO DE COMERCIO ART. 486)',
+    'Obligación pura, simple, incondicional y exigible por la vía ejecutiva mercantil venezolana',
+    base.tableWidth,
+    base.startX
+  );
+
+  const pagareH = 32;
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
+  if (y + pagareH > safeBottomY - 24) {
+    base.doc.addPage();
+    y = continuationTopY;
+  }
+
+  base.doc.setFillColor(...COLORS.lightBg);
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.setLineWidth(0.3);
+  base.doc.roundedRect(base.startX, y, base.tableWidth, pagareH, 1.2, 1.2, 'FD');
+
+  const legalText = `POR ESTE PAGARÉ MERCANTIL, que emitimos conforme a los Artículos 486, 487 y concordantes del Código de Comercio de la República Bolivariana de Venezuela, la sociedad mercantil ${clientName.toUpperCase()}, RIF ${clientRif}, con domicilio en ${direccion}, representada por ${repLegal} (C.I. ${ciRep}), declara que DEBE y se obliga a PAGAR incondicionalmente a la orden de SIGNUM MOTORVEN, C.A. (RIF J-30401927-4 / J-50478166-0), en su sede en Barquisimeto, Estado Lara, la cantidad neta de hasta: ${formatUsd(limiteUsd)} (${formatBs(limiteBs)} a Tasa Oficial BCV), por concepto de mercancías recibidas a entera satisfacción.\n\nCONDICIONES ESPECIALES: 1. VENCIMIENTO Y MORA: El incumplimiento en el pago de cualquiera de las facturas comerciales emitidas dentro de este límite de crédito producirá la pérdida del beneficio del plazo y la exigibilidad inmediata de la totalidad del saldo deudor. 2. RENUNCIA AL PROTESTO: El deudor renuncia expresamente a los avisos de rechazo y al protesto del presente título valor. 3. DOMICILIO ESPECIAL: Para todos los efectos judiciales dimanantes del presente título, las partes eligen como domicilio especial la ciudad de Barquisimeto, Estado Lara, a cuyos tribunales declaran someterse expresamente.`;
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.2);
+  base.doc.setTextColor(...COLORS.dark);
+  const splitLegal = base.doc.splitTextToSize(legalText, base.tableWidth - 6);
+  base.doc.text(splitLegal, base.startX + 3, y + 4.0);
+
+  y += pagareH + 3;
+
+  placeTotalsAndSignatures(
+    base.doc,
+    y,
+    [
+      { label: 'LÍMITE TOTAL SOLICITADO', value: formatUsd(limiteUsd), subtext: formatBs(limiteBs), color: COLORS.navy },
+      { label: 'PLAZO MÁXIMO AUTORIZADO', value: `${diasCred} DÍAS`, subtext: 'Días continuos por factura', color: COLORS.emerald }
+    ],
+    [
+      'SOLICITANTE / DEUDOR PRINCIPAL\n(Firma, Huella y C.I.)',
+      'FIADOR SOLIDARIO Y AVALISTA\n(Firma, Huella y C.I.)',
+      'GERENCIA DE CRÉDITO Y COBRANZAS\n(SIGNUM MOTORVEN, C.A.)'
+    ],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Solicitud_Credito_Pagare_${safeSlug}.pdf`, currentUser, {
+    legalFooter: 'Documento mercantil con fuerza ejecutiva según el Art. 486 del Código de Comercio venezolano • Conservar original físico firmado.'
+  });
+
+  return base.doc;
+}
+
+// =========================================================================
+// 34. RECIBO INDIVIDUAL DE PAGO DE SALARIO & BENEFICIOS SOCIALES LOTTT
+// =========================================================================
+export function generatePayrollSlipPDF({
+  employee = {},
+  payrollItem = {},
+  config = {},
+  currentUser = null
+}) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const empNombre = employee.nombre || employee.nombreCompleto || payrollItem.empleadoNombre || 'TRABAJADOR REGISTRADO';
+  const empCedula = employee.cedula || employee.ci || payrollItem.empleadoCedula || 'V-00.000.000';
+  const empCargo = employee.cargo || payrollItem.cargo || 'OPERADOR';
+  const empDepto = employee.departamento || employee.depto || 'OPERACIONES';
+  const empFechaIngreso = formatDateVe(employee.fechaIngreso || employee.fec_ingreso || '2024-01-01');
+  const frecuencia = String(payrollItem.frecuencia || employee.frecuencia || 'QUINCENAL').toUpperCase();
+  const periodo = String(payrollItem.periodo || `Nómina ${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`).trim();
+  const fechaPago = formatDateVe(payrollItem.fechaPago || payrollItem.fecha || new Date());
+  const factor = frecuencia === 'MENSUAL' ? 1.0 : (frecuencia === 'SEMANAL' ? 0.25 : 0.5);
+
+  const salarioBaseMensualUsd = Number(employee.salarioBaseUsd ?? payrollItem.salarioBaseUsd ?? payrollItem.salarioUsd ?? 200);
+  const bonoFijoMensualUsd = Number(employee.bonoFijoUsd ?? payrollItem.bonoFijoUsd ?? payrollItem.bonoUsd ?? 100);
+
+  const sueldoPeriodoUsd = Number(payrollItem.salarioUsd ?? (salarioBaseMensualUsd * factor));
+  const bonoPeriodoUsd = Number(payrollItem.bonoUsd ?? (bonoFijoMensualUsd * factor));
+  const bonoExtraUsd = Number(payrollItem.bonoExtraUsd ?? payrollItem.bonosExtraUsd ?? 0);
+
+  // Deducciones legales de ley en Venezuela sobre sueldo básico:
+  // IVSS: 4% (Art. 59 Ley Seguro Social)
+  // FAOV: 1% (Ley Banavih)
+  // Paro Forzoso / Empleo: 0.5% (Régimen Prestacional de Empleo)
+  const ivssUsd = round2(sueldoPeriodoUsd * 0.04);
+  const faovUsd = round2(sueldoPeriodoUsd * 0.01);
+  const paroUsd = round2(sueldoPeriodoUsd * 0.005);
+  const deduccionesAdicionalesUsd = Number(payrollItem.deduccionesUsd ?? 0);
+
+  const totalAsignacionesUsd = round2(sueldoPeriodoUsd + bonoPeriodoUsd + bonoExtraUsd);
+  const totalDeduccionesUsd = round2(ivssUsd + faovUsd + paroUsd + deduccionesAdicionalesUsd);
+  const netoPagarUsd = Math.max(0, round2(totalAsignacionesUsd - totalDeduccionesUsd));
+
+  const safeSlug = String(empCedula || empNombre).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 20);
+
+  const base = createBaseReport({
+    title: 'RECIBO INDIVIDUAL DE PAGO DE SALARIO & BENEFICIOS SOCIALES',
+    subtitle: 'Constancia Legal de Remuneración y Deducciones de Ley • LOTTT Art. 106 • G.O. N° 6.076',
+    moduleCode: 'NOM',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'DATOS PATRONALES Y DEL TRABAJADOR',
+    `Modalidad: ${frecuencia} • Período: ${periodo} • Fecha de Liquidación: ${fechaPago}`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'DATOS DE LA EMPRESA / PATRONO',
+      lines: [
+        config?.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.',
+        `RIF Patrono: ${config?.rif || 'J-30401927-4'} • N° Patronal IVSS: B-48291038`,
+        `Domicilio: ${config?.direccion || 'Barquisimeto, Estado Lara, Venezuela'}`,
+        `Actividad: Comercialización y Distribución de Lubricantes Automotrices`
+      ]
+    },
+    {
+      title: 'DATOS DEL TRABAJADOR',
+      lines: [
+        `${empNombre} (C.I. ${empCedula})`,
+        `Cargo: ${empCargo} • Departamento: ${empDepto}`,
+        `Fecha de Ingreso: ${empFechaIngreso} • Frecuencia: ${frecuencia}`,
+        `Salario Base Mensual: ${formatUsd(salarioBaseMensualUsd)} (${formatBs(salarioBaseMensualUsd * tasa)})`
+      ]
+    }
+  );
+
+  const rows = [
+    ['A-001', 'Sueldo Básico del Período (Art. 104 LOTTT)', 'ASIGNACIÓN', `${frecuencia === 'MENSUAL' ? '30' : '15'} días`, formatUsd(sueldoPeriodoUsd), formatBs(sueldoPeriodoUsd * tasa)],
+    ['A-002', 'Cestaticket Socialista de Alimentación (Decreto Presidencial)', 'ASIGNACIÓN', 'Beneficio Social', formatUsd(bonoPeriodoUsd), formatBs(bonoPeriodoUsd * tasa)]
+  ];
+
+  if (bonoExtraUsd > 0) {
+    rows.push(['A-003', 'Bonificación por Productividad / Horas Extra', 'ASIGNACIÓN', 'Incentivo Operativo', formatUsd(bonoExtraUsd), formatBs(bonoExtraUsd * tasa)]);
+  }
+
+  rows.push(['D-001', 'Seguro Social Obligatorio - IVSS (Art. 59 Ley SSO)', 'DEDUCCIÓN', '4.00% s/Sueldo', formatUsd(ivssUsd), formatBs(ivssUsd * tasa)]);
+  rows.push(['D-002', 'Fondo Ahorro Obligatorio Vivienda - FAOV (Banavih)', 'DEDUCCIÓN', '1.00% s/Sueldo', formatUsd(faovUsd), formatBs(faovUsd * tasa)]);
+  rows.push(['D-003', 'Régimen Prestacional de Empleo / Paro Forzoso', 'DEDUCCIÓN', '0.50% s/Sueldo', formatUsd(paroUsd), formatBs(paroUsd * tasa)]);
+
+  if (deduccionesAdicionalesUsd > 0) {
+    rows.push(['D-004', 'Anticipos de Quincena / Préstamos al Personal', 'DEDUCCIÓN', 'Convenio Privado', formatUsd(deduccionesAdicionalesUsd), formatBs(deduccionesAdicionalesUsd * tasa)]);
+  }
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['CÓD.', 'CONCEPTO / BENEFICIO LABORAL', 'TIPO', 'BASE / %', 'MONTO ($ USD)', 'MONTO (BS.)']],
+    body: rows,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.6, fontStyle: 'bold', cellPadding: 1.4, halign: 'center' },
+    styles: { fontSize: 5.4, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 14, fontStyle: 'bold' },
+      1: { cellWidth: 78 },
+      2: { halign: 'center', cellWidth: 22, fontStyle: 'bold' },
+      3: { halign: 'center', cellWidth: 22 },
+      4: { halign: 'right', fontStyle: 'bold', cellWidth: 21 },
+      5: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 22.9 }
+    },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.column.index === 2) {
+        const val = String(data.cell.raw || '');
+        if (val === 'ASIGNACIÓN') {
+          data.cell.styles.textColor = COLORS.emerald;
+        } else {
+          data.cell.styles.textColor = COLORS.red;
+        }
+      }
+    }
+  });
+
+  y = base.doc.lastAutoTable?.finalY ? base.doc.lastAutoTable.finalY + 3 : y + 40;
+
+  const decH = 14;
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
+  if (y + decH > safeBottomY - 24) {
+    base.doc.addPage();
+    y = continuationTopY;
+  }
+
+  base.doc.setFillColor(...COLORS.lightBg);
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.setLineWidth(0.3);
+  base.doc.roundedRect(base.startX, y, base.tableWidth, decH, 1.2, 1.2, 'FD');
+
+  const confText = `DECLARACIÓN DE CONFORMIDAD (ART. 106 LOTTT): Certifico haber recibido a entera satisfacción de SIGNUM MOTORVEN, C.A., la cantidad líquida descrita en el presente recibo como pago total de mis asignaciones salariales y beneficios socioeconómicos correspondientes al período indicado, declarando expresamente encontrarme al día y sin reclamo pendiente por concepto de sueldos o beneficios laborales de ley.`;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.2);
+  base.doc.setTextColor(...COLORS.dark);
+  const splitConf = base.doc.splitTextToSize(confText, base.tableWidth - 6);
+  base.doc.text(splitConf, base.startX + 3, y + 4.0);
+
+  y += decH + 3;
+
+  placeTotalsAndSignatures(
+    base.doc,
+    y,
+    [
+      { label: 'TOTAL ASIGNACIONES', value: formatUsd(totalAsignacionesUsd), subtext: formatBs(totalAsignacionesUsd * tasa), color: COLORS.emerald },
+      { label: 'TOTAL DEDUCCIONES LEY', value: formatUsd(totalDeduccionesUsd), subtext: formatBs(totalDeduccionesUsd * tasa), color: COLORS.red },
+      { label: 'NETO A COBRAR / TRANSFERIDO', value: formatUsd(netoPagarUsd), subtext: formatBs(netoPagarUsd * tasa), color: COLORS.navy }
+    ],
+    [
+      'TRABAJADOR / RECEPTOR\n(Firma, Huella y C.I.)',
+      'GERENCIA DE RECURSOS HUMANOS\n(SIGNUM MOTORVEN, C.A.)'
+    ],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Recibo_Nomina_${safeSlug}_${periodo.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`, currentUser, {
+    legalFooter: 'Constancia de pago emitida de conformidad con el Artículo 106 de la LOTTT • Documento probatorio de cumplimiento patronal.'
+  });
+
+  return base.doc;
+}
+
+// =========================================================================
+// 35. COMPROBANTE ANUAL DE RETENCIONES DE I.S.L.R. (COMPROBANTE ARC)
+// =========================================================================
+export function generateAnnualArcRetentionPDF({
+  supplier = {},
+  year = null,
+  retentionRecords = [],
+  config = {},
+  currentUser = null
+}) {
+  const tasa = Number(config?.tasaDolar) || 827.73;
+  const targetYear = Number(year || new Date().getFullYear());
+  const provNombre = supplier.nombre || supplier.provDes || supplier.prov_des || supplier.razonSocial || 'PROVEEDOR REGISTRADO';
+  const provRif = supplier.rif || supplier.coProv || supplier.co_prov || 'J-00000000-0';
+  const provDir = supplier.direccion || supplier.direc1 || 'Venezuela';
+  const safeSlug = String(provRif || provNombre).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 20);
+
+  const base = createBaseReport({
+    title: 'COMPROBANTE ANUAL DE RETENCIONES DE I.S.L.R. (COMPROBANTE ARC)',
+    subtitle: `Relación Anual Acumulada de Retenciones de ISLR • Ejercicio Fiscal ${targetYear} • Art. 24 Decreto 1.808`,
+    moduleCode: 'ARC',
+    currentUser,
+    config,
+    rateValue: tasa
+  });
+
+  let y = base.startY;
+
+  y = addSectionHeader(
+    base.doc,
+    y,
+    'IDENTIFICACIÓN DEL AGENTE DE RETENCIÓN Y DEL BENEFICIARIO (SUJETO RETENIDO)',
+    `Ejercicio Gravable Anual: ${targetYear} • Normativa: Reglamento Parcial de Retenciones ISLR (SENIAT)`,
+    base.tableWidth,
+    base.startX
+  );
+
+  y = renderTwoColMetaCard(
+    base.doc,
+    base.startX,
+    y,
+    base.tableWidth,
+    {
+      title: 'AGENTE DE RETENCIÓN (SIGNUM MOTORVEN, C.A.)',
+      lines: [
+        config?.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.',
+        `RIF Agente: ${config?.rif || 'J-30401927-4'}`,
+        `Domicilio Fiscal: ${config?.direccion || 'Barquisimeto, Estado Lara, Venezuela'}`,
+        `Teléfono: ${config?.telefono || '+58 (251) 269.13.96'}`
+      ]
+    },
+    {
+      title: 'SUJETO RETENIDO / PROVEEDOR BENEFICIARIO',
+      lines: [
+        provNombre,
+        `RIF / C.I. Sujeto Retenido: ${provRif}`,
+        `Domicilio: ${provDir}`,
+        `Año Fiscal Liquidado: ${targetYear}`
+      ]
+    }
+  );
+
+  const monthNames = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+  ];
+
+  const monthlyData = monthNames.map((name, idx) => ({
+    mesNum: idx + 1,
+    mesNombre: name,
+    periodo: `${targetYear}${String(idx + 1).padStart(2, '0')}`,
+    docCount: 0,
+    baseBs: 0,
+    retenidoBs: 0,
+    baseUsd: 0,
+    retenidoUsd: 0
+  }));
+
+  let totBaseBs = 0;
+  let totRetBs = 0;
+  let totBaseUsd = 0;
+  let totRetUsd = 0;
+  let totDocs = 0;
+
+  (retentionRecords || []).forEach(r => {
+    if (!r) return;
+    const rRif = String(r.proveedorRif || r.rif || r.coProv || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanProvRif = String(provRif).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (rRif && cleanProvRif && !rRif.includes(cleanProvRif) && !cleanProvRif.includes(rRif)) {
+      return;
+    }
+
+    const fec = String(r.fechaEmision || r.fecha || r.createdAt || '');
+    const per = String(r.periodoFiscal || '').replace(/[^0-9]/g, '');
+    let monthIdx = -1;
+
+    if (per && per.length >= 6 && per.startsWith(String(targetYear))) {
+      monthIdx = parseInt(per.slice(4, 6), 10) - 1;
+    } else if (fec.startsWith(String(targetYear))) {
+      monthIdx = parseInt(fec.slice(5, 7), 10) - 1;
+    }
+
+    if (monthIdx >= 0 && monthIdx < 12) {
+      const mult = r.moneda === 'BS' ? 1 : tasa;
+      const bBs = Number(r.baseImponibleBs ?? r.baseImponible ?? ((Number(r.baseImponibleUsd || 0)) * mult));
+      const retBs = Number(r.montoRetenidoBs ?? r.montoRetenido ?? ((Number(r.montoRetenidoUsd || 0)) * mult));
+      const bUsd = r.moneda === 'BS' ? (bBs / tasa) : Number(r.baseImponibleUsd ?? (bBs / tasa));
+      const retUsd = r.moneda === 'BS' ? (retBs / tasa) : Number(r.montoRetenidoUsd ?? (retBs / tasa));
+
+      monthlyData[monthIdx].docCount += 1;
+      monthlyData[monthIdx].baseBs += bBs;
+      monthlyData[monthIdx].retenidoBs += retBs;
+      monthlyData[monthIdx].baseUsd += bUsd;
+      monthlyData[monthIdx].retenidoUsd += retUsd;
+
+      totDocs += 1;
+      totBaseBs += bBs;
+      totRetBs += retBs;
+      totBaseUsd += bUsd;
+      totRetUsd += retUsd;
+    }
+  });
+
+  const tableRows = monthlyData.map((m) => [
+    m.mesNombre.toUpperCase(),
+    m.periodo,
+    String(m.docCount),
+    formatBs(m.baseBs),
+    formatBs(m.retenidoBs),
+    formatUsd(m.baseUsd),
+    formatUsd(m.retenidoUsd)
+  ]);
+
+  tableRows.push([
+    'TOTALES ANUALES ACUMULADOS',
+    String(targetYear),
+    String(totDocs),
+    formatBs(totBaseBs),
+    formatBs(totRetBs),
+    formatUsd(totBaseUsd),
+    formatUsd(totRetUsd)
+  ]);
+
+  autoTable(base.doc, {
+    startY: y,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['MES CALENDARIO', 'PERÍODO', 'CANT. DOCS', 'BASE SUJETA A ISLR (BS.)', 'ISLR RETENIDO (BS.)', 'BASE EQUIV. ($)', 'RETENIDO ($)']],
+    body: tableRows,
+    theme: 'grid',
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.5, fontStyle: 'bold', cellPadding: 1.4, halign: 'center' },
+    styles: { fontSize: 5.3, cellPadding: 1.2, textColor: COLORS.dark, valign: 'middle' },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { cellWidth: 32, fontStyle: 'bold' },
+      1: { halign: 'center', cellWidth: 18 },
+      2: { halign: 'center', cellWidth: 16 },
+      3: { halign: 'right', cellWidth: 30 },
+      4: { halign: 'right', fontStyle: 'bold', textColor: COLORS.emerald, cellWidth: 30 },
+      5: { halign: 'right', cellWidth: 26 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.navy, cellWidth: 27.9 }
+    },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.row.index === tableRows.length - 1) {
+        base.doc.setDrawColor(...COLORS.navy);
+        base.doc.setLineWidth(0.4);
+        base.doc.line(data.cell.x, data.cell.y + data.cell.height, data.cell.x + data.cell.width, data.cell.y + data.cell.height);
+      }
+    }
+  });
+
+  y = base.doc.lastAutoTable?.finalY ? base.doc.lastAutoTable.finalY + 3 : y + 60;
+
+  const decH = 14;
+  const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
+  if (y + decH > safeBottomY - 24) {
+    base.doc.addPage();
+    y = continuationTopY;
+  }
+
+  base.doc.setFillColor(...COLORS.lightBg);
+  base.doc.setDrawColor(...COLORS.border);
+  base.doc.setLineWidth(0.3);
+  base.doc.roundedRect(base.startX, y, base.tableWidth, decH, 1.2, 1.2, 'FD');
+
+  const juradaText = `CERTIFICACIÓN Y DECLARACIÓN JURADA (ART. 24 DECRETO 1.808): SIGNUM MOTORVEN, C.A., en su condición de Agente de Retención, certifica que los montos aquí relacionados corresponden fielmente a las retenciones del Impuesto Sobre la Renta efectuadas al Sujeto Retenido y enteradas a la orden del Tesoro Nacional en el SENIAT durante el ejercicio ${targetYear}. Este documento constituye constancia válida para su Declaración Definitiva de Rentas.`;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(5.2);
+  base.doc.setTextColor(...COLORS.dark);
+  const splitJurada = base.doc.splitTextToSize(juradaText, base.tableWidth - 6);
+  base.doc.text(splitJurada, base.startX + 3, y + 4.0);
+
+  y += decH + 3;
+
+  placeTotalsAndSignatures(
+    base.doc,
+    y,
+    [
+      { label: 'TOTAL BASE ANUAL ISLR', value: formatBs(totBaseBs), subtext: formatUsd(totBaseUsd), color: COLORS.navy },
+      { label: 'TOTAL ISLR RETENIDO Y ENTERADO', value: formatBs(totRetBs), subtext: formatUsd(totRetUsd), color: COLORS.emerald }
+    ],
+    [
+      'AGENTE DE RETENCIÓN\n(Firma Autorizada y Sello SIGNUM MOTORVEN)',
+      'SUJETO RETENIDO / BENEFICIARIO\n(Recibido Conforme, Fecha y Firma)'
+    ],
+    base.tableWidth,
+    base.startX
+  );
+
+  finalizeAndSave(base.doc, `Comprobante_ARC_ISLR_${safeSlug}_${targetYear}.pdf`, currentUser, {
+    legalFooter: `Comprobante Anual ARC expedido de conformidad con el Artículo 24 del Decreto N° 1.808 (SENIAT) • Ejercicio ${targetYear}.`
+  });
+
+  return base.doc;
+}
+
 
 
 

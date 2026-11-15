@@ -36,7 +36,7 @@ import {
 } from '../services/fiscalService';
 import FiscalTicketModal from '../components/FiscalTicketModal';
 import IslrWithholdingModal from '../components/IslrWithholdingModal';
-import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF } from '../services/pdfReportService';
+import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generateAnnualArcRetentionPDF } from '../services/pdfReportService';
 
 export default function TaxReportsView({
   sales = [],
@@ -418,6 +418,23 @@ export default function TaxReportsView({
     });
   };
 
+  const handleGenerateAnnualArcReport = () => {
+    const firstSupplier = (suppliers && suppliers.length > 0 ? suppliers[0] : (profitSuppliers && profitSuppliers.length > 0 ? profitSuppliers[0] : null));
+    const targetYear = Number(mesFiltro?.slice(0, 4) || new Date().getFullYear());
+    const targetProv = firstSupplier || {
+      nombre: profitIslrWithholdings?.[0]?.proveedorNombre || 'PROVEEDOR GENERAL REGISTRADO',
+      rif: profitIslrWithholdings?.[0]?.proveedorRif || 'J-00000000-0',
+      direccion: profitIslrWithholdings?.[0]?.proveedorDireccion || 'Venezuela'
+    };
+    generateAnnualArcRetentionPDF({
+      supplier: targetProv,
+      year: targetYear,
+      retentionRecords: profitIslrWithholdings || [],
+      config: safeConfig,
+      currentUser
+    });
+  };
+
   return (
     <div>
       {/* Cabecera Principal */}
@@ -448,6 +465,21 @@ export default function TaxReportsView({
           >
             <Receipt size={18} />
             Retenciones ISLR SENIAT & Pagos
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => {
+              if (profitIslrWithholdings && profitIslrWithholdings.length > 0) {
+                handleGenerateAnnualArcReport();
+              } else {
+                setShowIslrModal(true);
+              }
+            }}
+            title="Generar Comprobante Anual de Retenciones ISLR (Formulario ARC - Art. 24 Decreto 1.808)"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <FileText size={18} color="var(--motorven-gold)" />
+            Comprobante Anual ARC
           </button>
           {reportType === 'LIBRO_VENTAS' && (
             <button className="btn btn-secondary" onClick={exportLibroVentasCsv}>

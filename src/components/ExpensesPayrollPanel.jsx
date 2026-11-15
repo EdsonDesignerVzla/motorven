@@ -7,9 +7,12 @@ import {
   Trash2,
   Building2,
   CheckCircle2,
-  Wallet
+  Wallet,
+  Printer,
+  FileText
 } from 'lucide-react';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
+import { generatePayrollSlipPDF } from '../services/pdfReportService';
 import {
   EXPENSE_STANDARD_CATEGORIES,
   buildExpenseAccountOptions,
@@ -97,6 +100,59 @@ export default function ExpensesPayrollPanel({
   const notify = (msg) => {
     setFeedback(msg);
     setTimeout(() => setFeedback(''), 3500);
+  };
+
+  const handlePrintEmployeePaySlip = (emp) => {
+    if (!emp) return;
+    try {
+      generatePayrollSlipPDF({
+        employee: emp,
+        payrollItem: {
+          periodo: `Nómina ${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+          frecuencia: emp.frecuencia || 'QUINCENAL',
+          salarioUsd: Number(emp.salarioBaseUsd || 0) * (emp.frecuencia === 'MENSUAL' ? 1 : 0.5),
+          bonoUsd: Number(emp.bonoFijoUsd || 0) * (emp.frecuencia === 'MENSUAL' ? 1 : 0.5),
+          fechaPago: new Date().toISOString().split('T')[0]
+        },
+        config,
+        currentUser
+      });
+      notify(`Recibo LOTTT de ${emp.nombre} generado en PDF`);
+    } catch (err) {
+      console.error('Error generando recibo LOTTT:', err);
+      notify('Error al generar recibo individual LOTTT');
+    }
+  };
+
+  const handlePrintPayrollRunSlips = (run) => {
+    if (!run) return;
+    try {
+      const detalles = Array.isArray(run.detalles) && run.detalles.length > 0 ? run.detalles : employees;
+      if (!detalles || detalles.length === 0) {
+        notify('No hay trabajadores vinculados a esta nómina');
+        return;
+      }
+      detalles.forEach((det, idx) => {
+        const empMatch = employees.find(e => e.id === det.employeeId || e.id === det.empleadoId || e.cedula === det.cedula || e.cedula === det.empleadoCedula) || det;
+        setTimeout(() => {
+          generatePayrollSlipPDF({
+            employee: empMatch,
+            payrollItem: {
+              ...det,
+              periodo: run.periodo,
+              frecuencia: run.frecuencia,
+              fechaPago: run.fechaPago
+            },
+            config,
+            currentUser
+          });
+        }, idx * 250);
+      });
+      notify(`Generando ${detalles.length} recibos individuales LOTTT...`);
+    } catch (err) {
+      console.error('Error generando recibos de nómina:', err);
+      notify('Error al generar recibos de la corrida');
+    }
   };
 
   const activeEmployees = useMemo(
@@ -546,7 +602,16 @@ export default function ExpensesPayrollPanel({
                       <td style={{ textAlign: 'right' }}>{formatUsd(emp.salarioBaseUsd)}</td>
                       <td style={{ textAlign: 'right' }}>{formatUsd(emp.bonoFijoUsd)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatUsd(Number(emp.salarioBaseUsd || 0) + Number(emp.bonoFijoUsd || 0))}</td>
-                      <td style={{ textAlign: 'center' }}>
+                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => handlePrintEmployeePaySlip(emp)}
+                          className="btn btn-sm btn-secondary"
+                          style={{ marginRight: '6px', fontSize: '0.7rem', padding: '3px 8px' }}
+                          title="Generar Recibo Individual de Pago LOTTT (Art. 106)"
+                        >
+                          <Printer size={13} style={{ marginRight: '4px' }} /> Recibo
+                        </button>
                         {onDeleteEmployee && (
                           <button type="button" onClick={() => onDeleteEmployee(emp.id)} className="btn btn-sm btn-secondary" title="Eliminar empleado">
                             <Trash2 size={13} color="#ef4444" />
@@ -666,7 +731,16 @@ export default function ExpensesPayrollPanel({
                       <td style={{ textAlign: 'right' }}>{formatUsd(p.totalBonosUsd)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>{formatUsd(p.totalNetoUsd)}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatBs(p.totalNetoBs || (p.totalNetoUsd * tasaBcv))}</td>
-                      <td style={{ textAlign: 'center' }}>
+                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => handlePrintPayrollRunSlips(p)}
+                          className="btn btn-sm btn-secondary"
+                          style={{ marginRight: '6px', fontSize: '0.7rem', padding: '3px 8px' }}
+                          title="Descargar Recibos Individuales LOTTT de esta corrida"
+                        >
+                          <Printer size={13} style={{ marginRight: '4px' }} /> Recibos LOTTT
+                        </button>
                         {onDeletePayroll && (
                           <button type="button" onClick={() => onDeletePayroll(p.id)} className="btn btn-sm btn-secondary" title="Eliminar nómina">
                             <Trash2 size={13} color="#ef4444" />

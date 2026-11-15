@@ -23,7 +23,7 @@ import {
   Power,
   FileText
 } from 'lucide-react';
-import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { generateAccountsReceivablePDF, generateCreditApplicationAndPromissoryNotePDF } from '../services/pdfReportService';
 import { canApproveClients, getClientApprovalStatus, isClientApproved } from '../services/authService';
 import {
   SENIAT_CONTRIBUTOR_TYPES,
@@ -286,6 +286,21 @@ export default function ClientsDirectoryModal({
   const handleRequestDeleteClient = (client) => {
     if (!client || !onDeleteClient || !userCanApproveClients) return;
     setClientToDelete(client);
+  };
+
+  const handlePrintCreditApplication = (client) => {
+    if (!client) return;
+    try {
+      generateCreditApplicationAndPromissoryNotePDF({
+        client,
+        config: { tasaDolar: tasaBcv },
+        currentUser
+      });
+      notify?.success?.('Solicitud de Crédito y Pagaré Mercantil generado con éxito en PDF');
+    } catch (err) {
+      console.error('Error generando Solicitud y Pagaré Mercantil:', err);
+      notify?.error?.('Error al generar la Solicitud y Pagaré Mercantil');
+    }
   };
 
   const handleConfirmDeleteClient = async () => {
@@ -901,6 +916,23 @@ export default function ClientsDirectoryModal({
                           <span>Cobro / Abono</span>
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => handlePrintCreditApplication(selectedClient)}
+                        style={{
+                          fontSize: '0.75rem',
+                          padding: '6px 10px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          color: 'var(--motorven-navy-light)'
+                        }}
+                        title="Descargar Solicitud de Línea de Crédito Comercial y Pagaré Mercantil Ejecutivo (Código de Comercio Art. 486)"
+                      >
+                        <FileText size={13} />
+                        <span>Solicitud & Pagaré</span>
+                      </button>
                       {userCanApproveClients && onSaveClient && (
                         <>
                           <button
@@ -1235,6 +1267,25 @@ export default function ClientsDirectoryModal({
                       <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
                         {selectedClient.vendedorAsignado || 'Sin Vendedor Asignado'}
                       </div>
+                    </div>
+
+                    <div className="clients-info-card" style={{ gridColumn: '1 / -1', background: 'rgba(0, 43, 122, 0.08)', border: '1px solid rgba(0, 43, 122, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: '0.85rem', color: 'var(--motorven-navy-light)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <ShieldCheck size={16} /> Instrumento Mercantil de Garantía (Código de Comercio Art. 486)
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          Genera la planilla formal de apertura de crédito comercial vinculada al Pagaré Mercantil Ejecutivo a la vista con aval solidario.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => handlePrintCreditApplication(selectedClient)}
+                        style={{ fontSize: '0.75rem', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        <FileText size={14} /> Imprimir Solicitud & Pagaré
+                      </button>
                     </div>
                   </div>
                 )}

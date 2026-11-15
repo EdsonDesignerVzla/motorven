@@ -23,7 +23,7 @@ import {
 import { formatBs, formatUsd } from '../services/formatService';
 import { generateNextIslrVoucherNumber } from '../services/fiscalService';
 import { saveSupabaseProfitIslrWithholding } from '../services/supabaseService';
-import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generatePaymentOrderPDF } from '../services/pdfReportService';
+import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generatePaymentOrderPDF, generateAnnualArcRetentionPDF } from '../services/pdfReportService';
 
 export default function IslrWithholdingModal({
   isOpen,
@@ -93,6 +93,31 @@ export default function IslrWithholdingModal({
   const notify = (msg, type = 'success') => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handlePrintArc = (supplierOrRecord, customYear) => {
+    try {
+      const year = customYear || new Date().getFullYear();
+      const provNombre = supplierOrRecord.proveedorNombre || supplierOrRecord.provDes || supplierOrRecord.prov_des || supplierOrRecord.nombre || 'PROVEEDOR REGISTRADO';
+      const provRif = supplierOrRecord.proveedorRif || supplierOrRecord.rif || supplierOrRecord.coProv || supplierOrRecord.co_prov || '';
+      const provDir = supplierOrRecord.proveedorDireccion || supplierOrRecord.direccion || supplierOrRecord.direc1 || 'Venezuela';
+
+      generateAnnualArcRetentionPDF({
+        supplier: {
+          nombre: provNombre,
+          rif: provRif,
+          direccion: provDir
+        },
+        year,
+        retentionRecords: withholdings,
+        config,
+        currentUser
+      });
+      notify(`Comprobante Anual ARC (${year}) de ${provNombre} generado en PDF`);
+    } catch (err) {
+      console.error('Error generando Comprobante ARC:', err);
+      notify('Error al generar Comprobante Anual ARC', 'error');
+    }
   };
 
   // Filtered concepts
@@ -621,6 +646,16 @@ export default function IslrWithholdingModal({
                                   >
                                     <Printer className="w-3.5 h-3.5" color="#ffffff" />
                                     Comprobante PDF
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePrintArc(w)}
+                                    className="btn btn-secondary text-xs flex items-center gap-1"
+                                    style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                    title="Descargar Comprobante Anual de Retenciones ARC (Art. 24 Decreto 1.808)"
+                                  >
+                                    <FileText className="w-3.5 h-3.5 text-amber-400" />
+                                    ARC Anual
                                   </button>
                                 </div>
                               </td>
