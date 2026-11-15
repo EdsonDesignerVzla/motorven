@@ -358,7 +358,17 @@ function MainApp() {
             o.items.length === 0 ||
             o.items.some(it => String(it?.articuloId || it?.productoId || it?.codigo || '').startsWith('OIL-'))
           );
-        if (Array.isArray(parsed) && parsed.length >= 1 && !hasBadItems) return parsed;
+        const cleanList = Array.isArray(parsed)
+          ? parsed.filter(o => {
+              if (!o || !o.id) return false;
+              const idUpper = String(o.id).toUpperCase();
+              const docUpper = String(o.numeroDoc || o.numero_doc || '').toUpperCase();
+              if (idUpper.includes('TEST') || docUpper.includes('TEST')) return false;
+              if (!Array.isArray(o.items) || o.items.length === 0) return false;
+              return true;
+            })
+          : [];
+        if (cleanList.length >= 1 && !hasBadItems) return cleanList;
       }
     } catch (_) {}
     return REAL_ORDERS || [];
@@ -1366,6 +1376,30 @@ function MainApp() {
       if (timerId) clearInterval(timerId);
     };
   }, [config, notify]);
+
+  // Limpieza automática y auto-reconciliación de órdenes huérfanas o pruebas en localStorage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('sm_orders_v4_pipeline');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter(o => {
+            if (!o || !o.id) return false;
+            const idUpper = String(o.id).toUpperCase();
+            const docUpper = String(o.numeroDoc || o.numero_doc || '').toUpperCase();
+            if (idUpper.includes('TEST') || docUpper.includes('TEST')) return false;
+            if (!Array.isArray(o.items) || o.items.length === 0) return false;
+            return true;
+          });
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem('sm_orders_v4_pipeline', JSON.stringify(cleaned));
+            setOrdersState(cleaned.length > 0 ? cleaned : REAL_ORDERS);
+          }
+        }
+      }
+    } catch (_) {}
+  }, []);
 
   // Alerta automática diaria cuando falten <= 3 días para el vencimiento de crédito de clientes
   useEffect(() => {

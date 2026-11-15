@@ -44,9 +44,32 @@ export default function Navigation({
   onToggleSidebar,
   orders = []
 }) {
-  const pendingOrdersCount = useMemo(() => {
+  const ventasOrdersCount = useMemo(() => {
     if (!Array.isArray(orders)) return 0;
-    return orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length;
+    return orders.filter(o => {
+      if (!o) return false;
+      const tDoc = String(o.tipoDoc || o.tipo_doc || '').trim().toUpperCase();
+      if (tDoc === 'SOLICITUD_CLIENTE') return false;
+      const idUpper = String(o.id || '').toUpperCase();
+      const docUpper = String(o.numeroDoc || o.numero_doc || '').toUpperCase();
+      if (idUpper.includes('TEST') || docUpper.includes('TEST')) return false;
+      const st = String(o.status || o.estado || '').trim().toUpperCase();
+      return (st === 'APROBADO' || st === 'EN_CAJA' || st === 'EMITIDO') && Array.isArray(o.items) && o.items.length > 0;
+    }).length;
+  }, [orders]);
+
+  const pipelineOrdersCount = useMemo(() => {
+    if (!Array.isArray(orders)) return 0;
+    return orders.filter(o => {
+      if (!o) return false;
+      const tDoc = String(o.tipoDoc || o.tipo_doc || '').trim().toUpperCase();
+      if (tDoc === 'SOLICITUD_CLIENTE') return false;
+      const idUpper = String(o.id || '').toUpperCase();
+      const docUpper = String(o.numeroDoc || o.numero_doc || '').toUpperCase();
+      if (idUpper.includes('TEST') || docUpper.includes('TEST')) return false;
+      const st = String(o.status || o.estado || '').trim().toUpperCase();
+      return !['FACTURADO', 'ANULADO', 'ANULADA', 'CADUCADO', 'EXPIRADO', 'RECHAZADO'].includes(st) && Array.isArray(o.items) && o.items.length > 0;
+    }).length;
   }, [orders]);
   const allMenuItems = [
     { id: 'dashboard', label: 'Dashboard Ejecutivo', icon: LayoutDashboard },
@@ -123,11 +146,14 @@ export default function Navigation({
               {visibleMenuItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
-                const isOrderRelated = item.id === 'ventas' || item.id === 'pedidos';
-                const showBadge = isOrderRelated && pendingOrdersCount > 0;
+                const badgeCount = item.id === 'ventas' ? ventasOrdersCount : (item.id === 'pedidos' ? pipelineOrdersCount : 0);
+                const showBadge = badgeCount > 0;
+                const badgeTitle = item.id === 'ventas'
+                  ? `${item.label} (${badgeCount} orden${badgeCount === 1 ? '' : 'es'} en cola de caja)`
+                  : `${item.label} (${badgeCount} orden${badgeCount === 1 ? '' : 'es'} en flujo comercial)`;
                 return (
                   <li key={item.id} className={`nav-item ${isActive ? 'active' : ''}`} style={{ position: 'relative' }}>
-                    <button onClick={() => handleSelectTab(item.id)} title={showBadge ? `${item.label} (${pendingOrdersCount} pedidos de calle pendientes)` : item.label} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                    <button onClick={() => handleSelectTab(item.id)} title={showBadge ? badgeTitle : item.label} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
                       <span className="nav-icon-wrapper" style={{ position: 'relative', display: 'inline-flex' }}>
                         <Icon size={18} />
                         {sidebarCollapsed && showBadge && (
@@ -147,7 +173,7 @@ export default function Navigation({
                             justifyContent: 'center',
                             boxShadow: '0 0 6px rgba(220, 38, 38, 0.7)'
                           }}>
-                            {pendingOrdersCount}
+                            {badgeCount}
                           </span>
                         )}
                       </span>
@@ -163,7 +189,7 @@ export default function Navigation({
                           boxShadow: '0 0 8px rgba(239, 68, 68, 0.45)',
                           animation: 'pulse 2s infinite'
                         }}>
-                          {pendingOrdersCount}
+                          {badgeCount}
                         </span>
                       )}
                     </button>

@@ -699,31 +699,45 @@ export default function HeaderBar({
               )}
 
               {/* 2.1b Alerta de Pedidos de Preventa Pendientes en Caja */}
-              {Array.isArray(orders) && orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => onNavigate && onNavigate('ventas')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    padding: '4px 10px',
-                    borderRadius: '20px',
-                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(245, 158, 11, 0.25))',
-                    border: '1.5px solid #f59e0b',
-                    color: '#fbbf24',
-                    fontSize: '0.78rem',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    boxShadow: '0 0 10px rgba(245, 158, 11, 0.3)',
-                    animation: 'pulse 2.5s infinite'
-                  }}
-                  title={`${orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length} orden(es) de preventa esperando facturación en caja (Clic para ir a Ventas & POS)`}
-                >
-                  <Bell size={13} color="#f59e0b" />
-                  <span>{orders.filter(o => o && (o.status === 'APROBADO' || o.status === 'PENDIENTE')).length} en Caja</span>
-                </button>
-              )}
+              {(() => {
+                if (!Array.isArray(orders)) return null;
+                const cajaOrders = orders.filter(o => {
+                  if (!o) return false;
+                  const tDoc = String(o.tipoDoc || o.tipo_doc || '').trim().toUpperCase();
+                  if (tDoc === 'SOLICITUD_CLIENTE') return false;
+                  const idUpper = String(o.id || '').toUpperCase();
+                  const docUpper = String(o.numeroDoc || o.numero_doc || '').toUpperCase();
+                  if (idUpper.includes('TEST') || docUpper.includes('TEST')) return false;
+                  const st = String(o.status || o.estado || '').trim().toUpperCase();
+                  return (st === 'APROBADO' || st === 'EN_CAJA' || st === 'EMITIDO') && Array.isArray(o.items) && o.items.length > 0;
+                });
+                if (cajaOrders.length === 0) return null;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate && onNavigate('ventas')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '4px 10px',
+                      borderRadius: '20px',
+                      background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(245, 158, 11, 0.25))',
+                      border: '1.5px solid #f59e0b',
+                      color: '#fbbf24',
+                      fontSize: '0.78rem',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      boxShadow: '0 0 10px rgba(245, 158, 11, 0.3)',
+                      animation: 'pulse 2.5s infinite'
+                    }}
+                    title={`${cajaOrders.length} orden(es) de preventa esperando facturación en caja (Clic para ir a Ventas & POS)`}
+                  >
+                    <Bell size={13} color="#f59e0b" />
+                    <span>{cajaOrders.length} en Caja</span>
+                  </button>
+                );
+              })()}
 
               {/* 2.2 Badge de Fecha */}
               <div className="date-badge" title={new Date().toLocaleDateString('es-VE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}>
