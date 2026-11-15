@@ -24,7 +24,8 @@ export const SYSTEM_METADATA = {
     "Preventa Móvil y Flujo Comercial con Reserva ATP de 72 Horas: fórmula D = max(0, Stock Físico - Comprometido 72h - En Carrito), expiración automática de reservas vencidas, carrito optimizado de envío directo a Flujo Comercial, directorio 'Mis Clientes' con alertas ≤3 días por vencer y bloqueo estricto con stock 0 en Almacén 01 / Almacén 02.",
     "Alta y Aprobación de Clientes con Validación SENIAT Módulo 11 y Prefijo J/V/E/G/P: flujo controlado PENDIENTE ➔ APROBADO/RECHAZADO en Preventa Móvil (SOLICITUD_CLIENTE), Ventas POS, Directorio y Flujo Comercial.",
     "Batería Homologada de Reportes Oficiales en PDF sin solapamientos ni desbordes: paginación 1/N estandarizada en Inventario, Compras (REQ-OC-REC), Devoluciones, Traslados, Ajustes, OP, Libro de Ventas y Contabilidad.",
-    "Respaldo Automático y Despliegue Blindado: script de backup completo (npm run backup -> supabase/backups/), despliegue automatizado verificado hacia signummotorven.com y sincronización bidireccional Supabase PostgreSQL ↔ Profit Plus GRUMOTOR."
+    "Respaldo Automático y Despliegue Blindado: script de backup completo (npm run backup -> supabase/backups/), despliegue automatizado verificado hacia signummotorven.com y sincronización bidireccional Supabase PostgreSQL ↔ Profit Plus GRUMOTOR.",
+    "Independencia Total de Precios y Costos entre Almacenes (01 y 02) + Flujo Estandarizado de Devoluciones (Notas de Crédito con reingreso de stock) y Control de Mermas/Roturas (Kardex con Comprobante PDF firmado)."
   ]
 };
 
@@ -338,19 +339,23 @@ export const MODULES_DOCUMENTATION = [
     category: "Logística & Almacén",
     badge: "Crítico",
     roleRequired: "Master, TI, Gerencia, Admin, Almacén, Compras, Ventas",
-    summary: "Control maestro de existencias de lubricantes en cajas y litros totales segregados entre Almacén 01 (Principal / Facturas Fiscales) y Almacén 02 (Central / Notas de Entrega), con valorización bimoneda, Kardex cronológico, matriz de reorden ROP y hojas de toma física.",
+    summary: "Control maestro de existencias de lubricantes en cajas y litros totales segregados entre Almacén 01 (Principal / Facturas Fiscales) y Almacén 02 (Central / Notas de Entrega), con precios y costos 100% independientes por almacén, valorización bimoneda, Kardex cronológico, registro de mermas, traslados, matriz de reorden ROP y hojas de toma física.",
     components: [
       {
         name: "Segregación Física Almacén 01 vs. Almacén 02",
         description: "Muestra y filtra existencias independientes por almacén (Almacén 01 Fiscal y Almacén 02 Notas de Entrega) más el consolidado global en litros y cajas."
       },
       {
+        name: "Independencia Total de Precios y Costos por Almacén",
+        description: "Permite fijar Costo ($ USD), Precio Detal ($ USD) y Precio Mayor ($ USD) independientes en Almacén 01 (Facturación Fiscal) y Almacén 02 (Notas de Entrega / Despacho). Al editar en un almacén, los precios del otro almacén quedan 100% protegidos e intactos."
+      },
+      {
         name: "KPIs de Bodega & Valorización",
         description: "Volumen total en litros disponibles, valorización del stock al costo y al precio de venta en USD y Bs. BCV, y conteo por semáforo ROP."
       },
       {
-        name: "Tabla Técnica con Semáforo ROP",
-        description: "Listado con fotografía Oilstone ®, código SKU, viscosidad, litros por caja, stock Alm. 01, stock Alm. 02, costo, precio detal/mayor y margen %."
+        name: "Tabla Técnica con Semáforo ROP y Márgenes por Almacén",
+        description: "Listado con fotografía Oilstone ®, código SKU, viscosidad, litros por caja, stock Alm. 01, stock Alm. 02, costo, precio detal/mayor y margen % calculado según el almacén filtrado."
       },
       {
         name: "Filtros por Familia y Estado de Stock",
@@ -364,12 +369,29 @@ export const MODULES_DOCUMENTATION = [
         purpose: "Calcula Punto de Reorden (ROP) y Días de Inventario Restante (DOI) para sugerir compras exactas en cajas antes del agotamiento."
       },
       {
-        name: "Kardex Físico y Mermas (InventoryKardexModal)",
+        name: "Kardex Físico, Mermas & Traslados (InventoryKardexModal)",
         buttonTrigger: "Botón 'Kardex & Mermas'",
-        purpose: "Historial detallado de entradas por compra, salidas por factura/nota de entrega y ajustes."
+        purpose: "Historial cronológico de compras, ventas y ajustes. Permite registrar mermas o pérdidas físicas ('Salida / Merma (S)') y traslados entre almacenes con emisión de Comprobante PDF oficial firmado."
+      },
+      {
+        name: "Toma Física & Conteo Ciego (PhysicalTakeModal)",
+        buttonTrigger: "Botón 'Toma Física & Conteo Ciego'",
+        purpose: "Auditoría física de inventario en bodega que confronta el conteo real contra el sistema, detecta mermas o sobrantes y aplica ajustes masivos automáticos."
       }
     ],
     buttons: [
+      {
+        name: "Kardex & Mermas",
+        color: "Dorado / Ámbar Motorven",
+        icon: "BarChart2",
+        action: "Abre el Kardex cronológico y el formulario para registrar ajustes de entrada, mermas/roturas o traslados entre almacenes."
+      },
+      {
+        name: "Toma Física & Conteo Ciego",
+        color: "Cyan / Azul",
+        icon: "ClipboardList",
+        action: "Inicia la conciliación de conteo físico, detecta descuadres/mermas y aplica ajustes masivos con un solo clic."
+      },
       {
         name: "Imprimir Inventario PDF (General / Alm. 01 / Alm. 02)",
         color: "Rojo SIGNUM",
@@ -397,6 +419,7 @@ export const MODULES_DOCUMENTATION = [
     ],
     bestPractices: [
       "Revisar por separado Almacén 01 y Almacén 02 antes de ejecutar traslados o compras de reposición.",
+      "Para registrar roturas, derrames o mermas, use 'Kardex & Mermas' ➔ '+ Nuevo Movimiento' ➔ 'Salida / Merma (S)' justificando el motivo para generar el comprobante PDF firmado.",
       "Realizar Toma Física mensual por almacén y conciliar cualquier diferencia en el Kardex antes del cierre contable."
     ]
   },
@@ -1369,6 +1392,18 @@ export const FREQUENTLY_ASKED_QUESTIONS = [
   {
     question: "¿Cómo alternar entre el Modo Claro y el Modo Oscuro?",
     answer: "En la barra superior derecha junto a los indicadores de tasa, haga clic en el botón de Sol/Luna. Toda la aplicación, tablas y modales cambian de tema al instante manteniendo alto contraste WCAG."
+  },
+  {
+    question: "¿Cómo registrar una Devolución de cliente o Nota de Crédito en el sistema?",
+    answer: "Para procesar una devolución de cliente: (1) Ingrese al módulo 'Ventas & POS Mostrador' y en la barra superior de tipos de documento seleccione 'NOTA_CREDITO'. (2) En la casilla obligatoria 'Factura Afectada (SENIAT)', ingrese el correlativo de la Factura Fiscal o Nota de Entrega original. (3) Seleccione el Cliente y cargue al carrito los lubricantes y cantidades que el cliente está retornando. (4) Al confirmar con 'Procesar Nota de Crédito', el sistema reingresa automáticamente el stock al almacén de origen (Alm. 01 si la venta fue fiscal, o Alm. 02 si fue Nota de Entrega); si la venta original fue a crédito, rebaja la deuda del cliente en CxC, y si fue de contado, asienta automáticamente un movimiento de Egreso en Caja por concepto de devolución."
+  },
+  {
+    question: "¿Cómo registrar una Pérdida por Merma, rotura, derrame o daño en Almacén?",
+    answer: "Para asentar mermas o pérdidas físicas sin afectar ventas ni clientes: (1) Ingrese a 'Inventario de Lubricantes' y pulse el botón naranja '📊 Kardex & Mermas'. (2) En el modal, haga clic en '+ Nuevo Movimiento' y asegúrese de estar en la pestaña 'Ajustes de Inventario'. (3) En 'Tipo de Movimiento', elija 'Salida / Merma (S)'. (4) Seleccione el almacén exacto ('01: Alm. Principal' o '02: Alm. Central'), elija el lubricante e indique la cantidad de cajas mermadas. (5) En 'Motivo', justifique la pérdida (ej.: 'Envase perforado en estibado', 'Fuga por tapa defectuosa', 'Muestra técnica'). (6) Al presionar 'Guardar Ajuste', el stock se descuenta inmediatamente del almacén seleccionado, se asienta la pérdida en el Kardex y se genera automáticamente el 'Comprobante de Ajuste / Merma de Inventario' en PDF para firma y archivo físico."
+  },
+  {
+    question: "¿Cómo funciona la Independencia de Precios y Costos entre el Almacén 01 y el Almacén 02?",
+    answer: "El catálogo cuenta con listas de precios y costos 100% segregadas por almacén: (1) En 'Inventario de Lubricantes', al filtrar por '01: Almacén Principal' y pulsar Editar, el modal se abre en modo Alm. 01 (Facturas Fiscales SENIAT) permitiendo fijar Costo, Precio Detal y Precio Mayor de ese almacén sin tocar ni sobreescribir los de Alm. 02. (2) Al filtrar por '02: Almacén Central' y editar, se gestionan los precios exclusivos de Alm. 02 (Notas de Entrega / Despacho) manteniendo protegidos los de Alm. 01. (3) En Ventas POS, al emitir Factura o Cotización se aplican automáticamente los precios de Alm. 01, y al emitir Nota de Entrega se aplican los precios de Alm. 02."
   }
 ];
 
@@ -1495,6 +1530,28 @@ export const WORKFLOWS_STEP_BY_STEP = [
       "Antes de modificar datos masivos o publicar cambios, ejecute 'npm run backup' para crear un respaldo íntegro de supabase/local_database.json dentro de supabase/backups/.",
       "Ejecute la suite completa de pruebas ('npm test') y verifique 0 errores en compilación.",
       "Ejecute 'npm run deploy' para normalizar datos, compilar dist/, validar CNAME/backend_url.json/.nojekyll/404.html, generar un segundo respaldo automático y desplegar al repositorio principal motorven (signummotorven.com)."
+    ]
+  },
+  {
+    title: "14. Flujo de Devolución de Cliente con Nota de Crédito (Reingreso de Stock & Ajuste CxC/Caja)",
+    steps: [
+      "Ingrese al módulo 'Ventas & POS Mostrador' y en la barra superior de tipos de documento elija 'NOTA_CREDITO'.",
+      "En el campo obligatorio 'Factura Afectada (SENIAT)', ingrese el número correlativo de la Factura Fiscal o Nota de Entrega original sobre la cual se realiza la devolución.",
+      "Seleccione el Cliente afectado y agregue al carrito de compras únicamente los lubricantes y cantidades que el cliente está devolviendo.",
+      "Presione 'Procesar Nota de Crédito': el sistema reingresa las unidades al almacén original (Alm. 01 si fue Factura, Alm. 02 si fue Nota de Entrega) y ajusta saldos (rebaja la deuda en CxC si fue crédito, o emite egreso en Caja si fue contado).",
+      "Imprima la Nota de Crédito fiscal en PDF con su número de control y membrete oficial."
+    ]
+  },
+  {
+    title: "15. Flujo de Registro de Mermas, Derrames o Daños en Almacén (Kardex & Comprobante PDF)",
+    steps: [
+      "Ingrese a 'Inventario de Lubricantes' y haga clic en el botón naranja '📊 Kardex & Mermas'.",
+      "En la esquina superior derecha del modal, presione '+ Nuevo Movimiento' y seleccione la pestaña 'Ajustes de Inventario'.",
+      "En 'Tipo de Movimiento', seleccione 'Salida / Merma (S)'.",
+      "Indique el almacén donde ocurrió la pérdida física ('01: Alm. Principal' o '02: Alm. Central').",
+      "Seleccione el producto lubricante, ingrese la cantidad exacta de unidades mermadas y detalle en 'Motivo' la causa física (ej. 'Envase perforado', 'Derrame por tapa defectuosa', 'Muestra técnica').",
+      "Presione 'Guardar Ajuste': el sistema descuenta el stock de inmediato en ese almacén, asienta el costo de la pérdida en el Kardex y genera el 'Comprobante de Ajuste / Merma de Inventario' en PDF con espacios para firmas de Almacén y Gerencia.",
+      "Para auditorías de estantes, use '📋 Toma Física & Conteo Ciego' para conciliar existencias y aplicar mermas masivas detectadas con 'Aplicar Ajustes de Toma Física'."
     ]
   }
 ];
