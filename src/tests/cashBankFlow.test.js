@@ -23,6 +23,11 @@ import {
   doesMovementBelongToAccount,
   summarizeAccountMovements,
   filterMovementsByPeriod,
+  classifyMovementDocOrigin,
+  filterMovementsByDocOrigin,
+  computeCashDeskFiscalBreakdown,
+  computeCashDesksFiscalTotals,
+  saveCajaFiscalSplitOverride,
   computeMovementEditAccountAdjustments,
   dedupeCashMovements,
   upsertCashMovementInList,
@@ -422,6 +427,67 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
 
   clearSyncQueue();
   console.log('✓ 8. Blindaje anti-resurrección (tombstone DELETE) y anti-duplicación de movimientos verificado');
+}
+
+// 9. Filtro por tipo documental (Fiscal vs Nota de Entrega) en movimientos de Caja/Banco
+{
+  const movs = [
+    { id: 'f1', concepto: 'Cobro Venta 000018 - Cliente Fiscal', montoUsd: 163.4 },
+    { id: 'f2', concepto: 'Mov. #004130 • Cobro Factura Fiscal #000019 @ Tasa 914.02 [BCV]', montoUsd: 100 },
+    { id: 'ne1', concepto: 'Cobro Venta NE-002225 - Cliente NE', montoUsd: 82 },
+    { id: 'ne2', concepto: 'Mov. #004107 • Cobro Nota de Entrega #2125 @ Tasa 1007.92', montoUsd: 150 },
+    { id: 'g1', concepto: 'Pago servicio internet oficina', montoUsd: 30 }
+  ];
+  assert.equal(classifyMovementDocOrigin(movs[0]), 'FISCAL');
+  assert.equal(classifyMovementDocOrigin(movs[1]), 'FISCAL');
+  assert.equal(classifyMovementDocOrigin(movs[2]), 'NOTA_ENTREGA');
+  assert.equal(classifyMovementDocOrigin(movs[3]), 'NOTA_ENTREGA');
+  assert.equal(classifyMovementDocOrigin(movs[4]), 'OTRO');
+
+  assert.equal(filterMovementsByDocOrigin(movs, 'ALL').length, 5);
+  assert.deepEqual(filterMovementsByDocOrigin(movs, 'FISCAL').map(m => m.id), ['f1', 'f2']);
+  assert.deepEqual(filterMovementsByDocOrigin(movs, 'NOTA_ENTREGA').map(m => m.id), ['ne1', 'ne2']);
+  assert.deepEqual(filterMovementsByDocOrigin(movs, 'NO_FISCAL').map(m => m.id), ['ne1', 'ne2', 'g1']);
+  console.log('✓ 9. Clasificación y filtrado por Fiscal vs Nota de Entrega verificado');
+}
+
+// 10. División de Cajas en Fiscal + No Fiscal = Sumatoria Consolidada
+{
+  globalThis.localStorage.clear();
+  const desks = [
+    { id: 'caja-01', coCaja: 'CAJA-01', descripcion: 'Efectivo Valencia', moneda: 'USD', saldoUsd: 1035.4, saldoBs: 946376.31 },
+    { id: 'caja-04', coCaja: 'CAJA-04', descripcion: 'Caja Zelle', moneda: 'USD', saldoUsd: 500, saldoBs: 457010 }
+  ];
+  const movs = [
+    { id: 'mf1', tipo: 'INGRESO', cajaId: 'caja-01', cuentaId: 'caja-01', concepto: 'Cobro Venta 000018 - Cliente Fiscal', montoUsd: 163.4, montoBs: 149350.87 },
+    { id: 'mnf1', tipo: 'INGRESO', cajaId: 'caja-01', cuentaId: 'caja-01', concepto: 'Cobro Venta NE-002226 - Cliente NE', montoUsd: 872, montoBs: 797025.44 },
+    { id: 'mf2', tipo: 'INGRESO', cajaId: 'caja-04', cuentaId: 'caja-04', concepto: '[FISCAL] Aporte fiscal Zelle', montoUsd: 150, montoBs: 137103 }
+  ];
+  const totals = computeCashDesksFiscalTotals(desks, movs, [], { tasaDolar: 914.02 });
+  const c1 = totals.byDeskKey.get('CAJA-01');
+  const c4 = totals.byDeskKey.get('CAJA-04');
+
+  assert.equal(c1.fiscalUsd, 163.4);
+  assert.equal(c1.noFiscalUsd, 872);
+  assert.equal(c1.totalUsd, 1035.4);
+  assert.equal(c4.fiscalUsd, 150);
+  assert.equal(c4.noFiscalUsd, 350);
+  assert.equal(totals.fiscalUsd, 313.4);
+  assert.equal(totals.noFiscalUsd, 1222);
+  assert.equal(totals.totalUsd, 1535.4);
+
+  // Ajuste manual de reparto Fiscal/No Fiscal y movimiento posterior
+  const ov = saveCajaFiscalSplitOverride('CAJA-04', {
+    baseFiscalUsd: 200,
+    baseFiscalBs: 182804,
+    movFiscalBaselineUsd: 150,
+    movFiscalBaselineBs: 137103
+  });
+  const c4Edited = computeCashDeskFiscalBreakdown(desks[1], movs, desks, [], { tasaDolar: 914.02 }, ov);
+  assert.equal(c4Edited.fiscalUsd, 200);
+  assert.equal(c4Edited.noFiscalUsd, 300);
+  assert.equal(c4Edited.totalUsd, 500);
+  console.log('✓ 10. División de Cajas en Sub-caja Fiscal + Sub-caja No Fiscal = Sumatoria Consolidada verificada');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

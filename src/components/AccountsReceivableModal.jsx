@@ -20,7 +20,9 @@ import {
     CXC_DELETED_DOCS_KEY,
     getScopedCxcDeleteKeys,
     isCxcEntryDeleted,
-    sanitizeCxcDeletedDocsStorage
+    sanitizeCxcDeletedDocsStorage,
+    fetchEuroRateDetails,
+    fetchUsdtRateDetails
 } from '../services/supabaseService';
 import {
     isCxcInvoiceCancelled,
@@ -33,7 +35,6 @@ import {
 import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
 import {
     normalizeRateType,
-    getAllowedRateTypesForDoc,
     resolveDefaultRateValue,
     resolveRateMeta,
     resolveRecordRateType,
@@ -268,10 +269,28 @@ export function AccountsReceivableModal({
     // ========================================================================
     // PARTE A: Estado del Formulario "Para Registrar Cobros"
     // ========================================================================
-    const { tasaBcv: resolvedBcvCfg, tasaKeystone: resolvedKeystoneCfg, tasaEuro: resolvedEuroCfg } = resolveExchangeRates(config);
+    const { tasaBcv: resolvedBcvCfg, tasaKeystone: resolvedKeystoneCfg, tasaEuro: resolvedEuroCfg, tasaUsdt: resolvedUsdtCfg } = resolveExchangeRates(config);
+    const [liveEuroRate, setLiveEuroRate] = useState(() => (resolvedEuroCfg > 1 ? resolvedEuroCfg : 0));
+    const [liveUsdtRate, setLiveUsdtRate] = useState(() => (resolvedUsdtCfg > 1 ? resolvedUsdtCfg : 0));
     const tasaBcv = resolvedBcvCfg > 0 ? resolvedBcvCfg : 451.51;
     const tasaKeystone = resolvedKeystoneCfg > 0 ? resolvedKeystoneCfg : round2(tasaBcv * 1.03);
-    const tasaEuro = resolvedEuroCfg > 0 ? resolvedEuroCfg : tasaBcv;
+    const tasaEuro = liveEuroRate > 1 ? liveEuroRate : (resolvedEuroCfg > 1 ? resolvedEuroCfg : tasaBcv);
+    const tasaUsdt = liveUsdtRate > 1 ? liveUsdtRate : (resolvedUsdtCfg > 1 ? resolvedUsdtCfg : tasaKeystone);
+
+    useEffect(() => {
+        if (isOpen === false) return;
+        let active = true;
+        Promise.allSettled([fetchEuroRateDetails(), fetchUsdtRateDetails()]).then(([euroRes, usdtRes]) => {
+            if (!active) return;
+            if (euroRes.status === 'fulfilled' && Number(euroRes.value?.rate) > 1) {
+                setLiveEuroRate(round2(Number(euroRes.value.rate)));
+            }
+            if (usdtRes.status === 'fulfilled' && Number(usdtRes.value?.rate) > 1) {
+                setLiveUsdtRate(round2(Number(usdtRes.value.rate)));
+            }
+        });
+        return () => { active = false; };
+    }, [isOpen]);
     const [cobroDocKey, setCobroDocKey] = useState('');
     const [cobroDocSearch, setCobroDocSearch] = useState('');
     const [cobroTipoTasa, setCobroTipoTasa] = useState('BCV');
@@ -281,6 +300,7 @@ export function AccountsReceivableModal({
     const [cobroMontoUsd, setCobroMontoUsd] = useState('');
     const [cobroMontoBs, setCobroMontoBs] = useState('');
     const [cobroReferencia, setCobroReferencia] = useState('');
+    const [cobroCobradorId, setCobroCobradorId] = useState('');
     const [cobroFeedback, setCobroFeedback] = useState(null);
     const [isSavingCobro, setIsSavingCobro] = useState(false);
 
@@ -301,10 +321,12 @@ export function AccountsReceivableModal({
             setCobroTasa(round2(tasaKeystone).toFixed(2));
         } else if (cobroTipoTasa === 'EURO' && tasaEuro > 0) {
             setCobroTasa(round2(tasaEuro).toFixed(2));
+        } else if (cobroTipoTasa === 'USDT_BS' && tasaUsdt > 0) {
+            setCobroTasa(round2(tasaUsdt).toFixed(2));
         } else if (isDirectCurrencyRateType(cobroTipoTasa)) {
             setCobroTasa('1.00');
         }
-    }, [cobroTipoTasa, tasaBcv, tasaKeystone, tasaEuro]);
+    }, [cobroTipoTasa, tasaBcv, tasaKeystone, tasaEuro, tasaUsdt]);
 
     // Catálogo unificado de Caja y Bancos para la Parte A
     const catalogCuentas = useMemo(() => {
@@ -355,10 +377,17 @@ export function AccountsReceivableModal({
         return list;
     }, [cashDesks, bankAccounts]);
 
-    // Seleccionar primera cuenta por defecto si no hay ninguna seleccionada
+    // Seleccionar primera cuenta por defecto si no hay ninguna seleccionada y sincronizar su moneda
     useEffect(() => {
         if (!cobroCuentaKey && catalogCuentas.length > 0) {
-            setCobroCuentaKey(catalogCuentas[0].key);
+            const firstAcc = catalogCuentas[0];
+            setCobroCuentaKey(firstAcc.key);
+            const directFromFirst = inferDirectCurrencyFromAccountOrMethod(firstAcc, { includeBinanceFromAccount: true });
+            if (directFromFirst) {
+                setCobroTipoTasa(directFromFirst);
+                setCobroTasa('1.00');
+                setCobroMontoBs('0.00');
+            }
         }
     }, [catalogCuentas, cobroCuentaKey]);
 
@@ -1087,17 +1116,45 @@ export function AccountsReceivableModal({
     const isSelectedCobroFiscal = selectedCobroDoc
         ? isFiscalDocumentForRatePolicy(selectedCobroDoc.tipoDoc)
         : activeDocType !== 'NOTA_ENTREGA';
-    const allowedCobroRateTypes = useMemo(
-        () => getAllowedRateTypesForDoc(selectedCobroDoc?.tipoDoc || activeDocType, { includeEuro: true }),
-        [selectedCobroDoc?.tipoDoc, activeDocType]
+
+    const selectedCobroAccount = useMemo(
+        () => catalogCuentas.find(c => c.key === cobroCuentaKey) || null,
+        [catalogCuentas, cobroCuentaKey]
     );
+    const isSelectedAccountDirectCurrency = Boolean(
+        selectedCobroAccount && inferDirectCurrencyFromAccountOrMethod(selectedCobroAccount, { includeBinanceFromAccount: true })
+    );
+    const canSelectBolivaresRate = Boolean(selectedCobroAccount && !isSelectedAccountDirectCurrency);
 
     useEffect(() => {
-        if (isSelectedCobroFiscal && cobroTipoTasa === 'EURO') {
+        if (isSelectedCobroFiscal && !isSelectedAccountDirectCurrency && cobroTipoTasa !== 'BCV' && cobroTipoTasa !== 'BCV_EDITABLE') {
+            setCobroTipoTasa('BCV');
+            setCobroTasa(round2(tasaBcv).toFixed(2));
+        } else if (!isSelectedCobroFiscal && selectedCobroAccount && !isSelectedAccountDirectCurrency && isDirectCurrencyRateType(cobroTipoTasa)) {
             setCobroTipoTasa('BCV');
             setCobroTasa(round2(tasaBcv).toFixed(2));
         }
-    }, [isSelectedCobroFiscal, cobroTipoTasa, tasaBcv]);
+    }, [isSelectedCobroFiscal, selectedCobroAccount, isSelectedAccountDirectCurrency, cobroTipoTasa, tasaBcv]);
+
+    const cobradorOptions = useMemo(() => {
+        const list = Array.from(sellerCatalog.entries()).map(([id, name]) => ({
+            id,
+            name: name || id
+        }));
+        if (!sellerCatalog.has('OF')) {
+            list.push({ id: 'OF', name: 'Oficina' });
+        }
+        return list.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    }, [sellerCatalog]);
+
+    useEffect(() => {
+        if (!selectedCobroDoc) {
+            setCobroCobradorId('');
+            return;
+        }
+        const defaultId = String(selectedCobroDoc.vendedorId || 'OF').trim().toUpperCase() || 'OF';
+        setCobroCobradorId(defaultId);
+    }, [selectedCobroDoc?.factNum, selectedCobroDoc?.tipoDoc]);
 
     const handleCobroTipoTasaChange = (nextTypeRaw) => {
         const nextType = normalizeRateType(nextTypeRaw, {
@@ -1109,7 +1166,10 @@ export function AccountsReceivableModal({
             tasaBcv,
             tasaKeystone,
             tasaEuro,
-            customRate: Number(cobroTasa) > 10 ? Number(cobroTasa) : tasaBcv
+            tasaUsdt,
+            customRate: nextType === 'BCV_EDITABLE'
+                ? (cobroTipoTasa === 'BCV_EDITABLE' && Number(cobroTasa) > 10 ? Number(cobroTasa) : tasaBcv)
+                : (Number(cobroTasa) > 10 ? Number(cobroTasa) : tasaBcv)
         });
         setCobroTasa(round2(nextRate).toFixed(2));
         const usd = Number(cobroMontoUsd);
@@ -1124,9 +1184,16 @@ export function AccountsReceivableModal({
         setCobroDocKey(factNum);
         const doc = docsForActiveType.find(d => String(d.factNum) === String(factNum));
         if (doc) {
-            const nextType = normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: cobroTipoTasa || 'BCV' });
+            const selectedAcc = catalogCuentas.find(c => c.key === cobroCuentaKey);
+            const directFromAcc = inferDirectCurrencyFromAccountOrMethod(selectedAcc, { includeBinanceFromAccount: true });
+            const nextType = directFromAcc
+                || (isFiscalDocumentForRatePolicy(doc.tipoDoc)
+                    ? 'BCV'
+                    : normalizeRateType(doc.tipoTasa, { tipoDoc: doc.tipoDoc, fallback: cobroTipoTasa || 'BCV' }));
             setCobroTipoTasa(nextType);
-            const rate = resolveDefaultRateValue(nextType, { tasaBcv, tasaKeystone, tasaEuro, customRate: doc.tasaPago || doc.tasa });
+            const rate = isDirectCurrencyRateType(nextType)
+                ? 1
+                : resolveDefaultRateValue(nextType, { tasaBcv, tasaKeystone, tasaEuro, tasaUsdt, customRate: doc.tasaPago || doc.tasa });
             setCobroTasa(round2(rate).toFixed(2));
             const rest = round2(doc.restanteUsd);
             setCobroMontoUsd(String(rest.toFixed(2)));
@@ -1235,11 +1302,13 @@ export function AccountsReceivableModal({
         const scopedCobroKey = getCxcScopedDocKey(selectedCobroDoc, selectedCobroDoc.tipoDoc);
         const prevOverrideSnapshot = localDocOverrides[scopedCobroKey];
         const prevRecentlyPaidHadKey = recentlyPaidKeys.has(scopedCobroKey);
-        const cobradorId = selectedCobroDoc.vendedorId || 'OF';
+        const cobradorId = String(cobroCobradorId || selectedCobroDoc.vendedorId || 'OF').trim() || 'OF';
         const cobradorNombre =
-            selectedCobroDoc.vendedorNombre ||
-            sellerCatalog.get(String(cobradorId).trim().toUpperCase()) ||
-            cobradorId;
+            sellerCatalog.get(cobradorId.toUpperCase()) ||
+            (cobradorId.toUpperCase() === String(selectedCobroDoc.vendedorId || '').trim().toUpperCase()
+                ? selectedCobroDoc.vendedorNombre
+                : '') ||
+            (cobradorId.toUpperCase() === 'OF' ? 'Oficina' : cobradorId);
 
         setIsSavingCobro(true);
         try {
@@ -1267,7 +1336,9 @@ export function AccountsReceivableModal({
                 cuentaNombre: cuentaObj.nombre,
                 accountType: cuentaObj.accountType,
                 moneda: isDirectUsdCobro ? 'US$' : cuentaObj.moneda,
-                referencia: cobroReferencia.trim()
+                referencia: cobroReferencia.trim(),
+                cobradorId,
+                cobradorNombre
             };
 
             const collectionPayload = {
@@ -2859,24 +2930,49 @@ export function AccountsReceivableModal({
                             </select>
                         </div>
 
-                        {/* Campo 1 Requerido: CLASIFICACIÓN DE TASA + TASA */}
+                        {/* Campo 1 Requerido: CLASIFICACIÓN DE TASA / MONEDA (Editable en cuentas en Bs; vista simple en cajas en divisas) */}
                         <div style={{ minWidth: '210px' }}>
                             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#10b981', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                                Clasificación de Tasa * {isSelectedCobroFiscal && <span style={{ fontSize: '0.68rem', color: '#38bdf8' }}>(BCV / Keystone / Pers. / Divisas)</span>}
+                                {canSelectBolivaresRate ? 'Clasificación de Tasa (Bs) *' : 'Clasificación / Moneda'}
                             </label>
-                            <select
-                                value={cobroTipoTasa}
-                                onChange={(e) => handleCobroTipoTasaChange(e.target.value)}
-                                className="select-modern"
-                                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: RATE_TYPE_META[cobroTipoTasa]?.color || '#10b981' }}
-                            >
-                                {allowedCobroRateTypes.map((rt) => (
-                                    <option key={rt} value={rt}>
-                                        {RATE_TYPE_META[rt]?.label || rt}
-                                        {rt === 'BCV' ? ` (Bs. ${tasaBcv.toFixed(2)})` : rt === 'KEYSTONE' ? ` (Bs. ${tasaKeystone.toFixed(2)})` : rt === 'EURO' ? ` (Bs. ${tasaEuro.toFixed(2)})` : ''}
-                                    </option>
-                                ))}
-                            </select>
+                            {canSelectBolivaresRate ? (
+                                <select
+                                    value={cobroTipoTasa}
+                                    onChange={(e) => handleCobroTipoTasaChange(e.target.value)}
+                                    className="select-modern"
+                                    style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.84rem', fontWeight: 700, color: RATE_TYPE_META[cobroTipoTasa]?.color || '#10b981' }}
+                                >
+                                    <option value="BCV">{isSelectedCobroFiscal ? 'Tasa BCV' : 'BCV'} (Bs. {tasaBcv.toFixed(2)})</option>
+                                    <option value="BCV_EDITABLE">Tasa BCV Editable</option>
+                                    {!isSelectedCobroFiscal && (
+                                        <>
+                                            <option value="EURO">Euro (Bs. {tasaEuro.toFixed(2)})</option>
+                                            <option value="KEYSTONE">Tasa Keystone (Bs. {tasaKeystone.toFixed(2)})</option>
+                                            <option value="USDT_BS">Tasa USDT (Bs. {tasaUsdt.toFixed(2)})</option>
+                                            <option value="EDITABLE">Tasa Personalizada</option>
+                                        </>
+                                    )}
+                                </select>
+                            ) : (
+                                <div
+                                    className="input-modern"
+                                    title="Se asigna automáticamente según la Caja o Banco seleccionado (no editable)"
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.65rem 0.85rem',
+                                        fontSize: '0.84rem',
+                                        fontWeight: 700,
+                                        color: RATE_TYPE_META[cobroTipoTasa]?.color || '#10b981',
+                                        background: RATE_TYPE_META[cobroTipoTasa]?.bg || 'rgba(16, 185, 129, 0.08)',
+                                        borderColor: RATE_TYPE_META[cobroTipoTasa]?.border || 'rgba(16, 185, 129, 0.28)',
+                                        cursor: 'default',
+                                        userSelect: 'none'
+                                    }}
+                                >
+                                    {RATE_TYPE_META[cobroTipoTasa]?.label || cobroTipoTasa}
+                                    {cobroTipoTasa === 'BCV' ? ` (Bs. ${tasaBcv.toFixed(2)})` : cobroTipoTasa === 'KEYSTONE' ? ` (Bs. ${tasaKeystone.toFixed(2)})` : cobroTipoTasa === 'EURO' ? ` (Bs. ${tasaEuro.toFixed(2)})` : cobroTipoTasa === 'USDT_BS' ? ` (Bs. ${tasaUsdt.toFixed(2)})` : ''}
+                                </div>
+                            )}
                         </div>
 
                         <div>
@@ -2893,7 +2989,7 @@ export function AccountsReceivableModal({
                                     step="0.01"
                                     min="0.01"
                                     required
-                                    readOnly={cobroTipoTasa !== 'EDITABLE'}
+                                    readOnly={cobroTipoTasa !== 'EDITABLE' && cobroTipoTasa !== 'BCV_EDITABLE'}
                                     value={cobroTasa}
                                     onChange={(e) => handleTasaChange(e.target.value)}
                                     placeholder="Ej. 451.51"
@@ -2905,8 +3001,8 @@ export function AccountsReceivableModal({
                                         fontWeight: 700,
                                         fontFamily: 'var(--font-code)',
                                         color: '#10b981',
-                                        opacity: cobroTipoTasa !== 'EDITABLE' ? 0.88 : 1,
-                                        cursor: cobroTipoTasa !== 'EDITABLE' ? 'not-allowed' : 'text'
+                                        opacity: (cobroTipoTasa !== 'EDITABLE' && cobroTipoTasa !== 'BCV_EDITABLE') ? 0.88 : 1,
+                                        cursor: (cobroTipoTasa !== 'EDITABLE' && cobroTipoTasa !== 'BCV_EDITABLE') ? 'not-allowed' : 'text'
                                     }}
                                 />
                             )}
@@ -2942,7 +3038,7 @@ export function AccountsReceivableModal({
                                     const directFromAcc = inferDirectCurrencyFromAccountOrMethod(acc, { includeBinanceFromAccount: true });
                                     if (directFromAcc) {
                                         handleCobroTipoTasaChange(directFromAcc);
-                                    } else if (acc && isDirectCurrencyRateType(cobroTipoTasa)) {
+                                    } else if (acc && (isDirectCurrencyRateType(cobroTipoTasa) || (isSelectedCobroFiscal && cobroTipoTasa !== 'BCV' && cobroTipoTasa !== 'BCV_EDITABLE'))) {
                                         handleCobroTipoTasaChange('BCV');
                                     }
                                 }}
@@ -3024,30 +3120,42 @@ export function AccountsReceivableModal({
                             />
                         </div>
 
-                        {/* Cobrador asignado según venta */}
+                        {/* Cobrador asignado al cobro (editable; por defecto vendedor de la factura) */}
                         <div>
                             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                                Cobrador (Venta)
+                                Cobrador del Cobro *
                             </label>
-                            <input
-                                type="text"
-                                readOnly
-                                value={
-                                    selectedCobroDoc
-                                        ? (selectedCobroDoc.vendedorNombre || sellerCatalog.get(String(selectedCobroDoc.vendedorId || '').trim().toUpperCase()) || selectedCobroDoc.vendedorId || 'Oficina')
-                                        : '—'
-                                }
-                                className="input-modern"
+                            <select
+                                value={cobroCobradorId || (selectedCobroDoc ? String(selectedCobroDoc.vendedorId || 'OF').trim().toUpperCase() : '')}
+                                onChange={(e) => setCobroCobradorId(e.target.value)}
+                                disabled={!selectedCobroDoc}
+                                className="select-modern"
                                 style={{
                                     width: '100%',
                                     padding: '0.65rem 0.85rem',
                                     fontSize: '0.85rem',
                                     fontWeight: 700,
-                                    color: '#38bdf8',
-                                    cursor: 'default'
+                                    color: '#38bdf8'
                                 }}
-                                title="Cobrador asignado según el vendedor que realizó la venta"
-                            />
+                                title="Selecciona el cobrador que recibió o gestionó este cobro (puede diferir del vendedor de la factura)"
+                            >
+                                {!selectedCobroDoc ? (
+                                    <option value="">—</option>
+                                ) : (
+                                    <>
+                                        {cobroCobradorId && !cobradorOptions.some(o => o.id === cobroCobradorId) && (
+                                            <option value={cobroCobradorId}>
+                                                {selectedCobroDoc.vendedorNombre || cobroCobradorId} ({cobroCobradorId})
+                                            </option>
+                                        )}
+                                        {cobradorOptions.map((opt) => (
+                                            <option key={opt.id} value={opt.id}>
+                                                {opt.name}{opt.name !== opt.id ? ` (${opt.id})` : ''}
+                                            </option>
+                                        ))}
+                                    </>
+                                )}
+                            </select>
                         </div>
 
                         {/* Botón Guardar Cobro */}

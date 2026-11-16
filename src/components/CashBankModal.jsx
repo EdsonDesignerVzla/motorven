@@ -19,7 +19,6 @@ import {
   X,
   Search,
   Filter,
-  CheckCircle2,
   AlertTriangle,
   Building2,
   DollarSign,
@@ -46,7 +45,13 @@ import {
   doesMovementBelongToAccount,
   summarizeAccountMovements,
   toLocalDateKey,
-  filterMovementsByPeriod
+  filterMovementsByPeriod,
+  classifyMovementDocOrigin,
+  filterMovementsByDocOrigin,
+  loadCajaFiscalSplitOverrides,
+  saveCajaFiscalSplitOverride,
+  computeCashDeskFiscalBreakdown,
+  computeCashDesksFiscalTotals
 } from '../utils/treasuryAccountUtils';
 import { useNotification } from '../context/NotificationContext';
 
@@ -114,9 +119,14 @@ export default function CashBankModal({
 
   const [cajaMovFilterId, setCajaMovFilterId] = useState('ALL');
   const [cajaMovTypeFilter, setCajaMovTypeFilter] = useState('ALL');
+  const [cajaMovDocFilter, setCajaMovDocFilter] = useState('ALL');
+  const [cajaScopeFilter, setCajaScopeFilter] = useState('ALL'); // 'ALL' | 'FISCAL' | 'NO_FISCAL'
+  const [collapsedCajas, setCollapsedCajas] = useState(() => new Set());
+  const [fiscalSplitOverrides, setFiscalSplitOverrides] = useState(() => loadCajaFiscalSplitOverrides());
   const [cajaPeriodFilter, setCajaPeriodFilter] = useState(createDefaultPeriodFilter);
   const [bankMovFilterId, setBankMovFilterId] = useState('ALL');
   const [bankMovTypeFilter, setBankMovTypeFilter] = useState('ALL');
+  const [bankMovDocFilter, setBankMovDocFilter] = useState('ALL');
   const [bankPeriodFilter, setBankPeriodFilter] = useState(createDefaultPeriodFilter);
   const [movPeriodFilter, setMovPeriodFilter] = useState(createDefaultPeriodFilter);
   const [editingMovId, setEditingMovId] = useState(null);
@@ -146,6 +156,7 @@ export default function CashBankModal({
   const [movMontoUsd, setMovMontoUsd] = useState('');
   const [movMontoBs, setMovMontoBs] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
+  const [movFiscalScope, setMovFiscalScope] = useState('NO_FISCAL'); // 'FISCAL' | 'NO_FISCAL'
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const expenseAccountOptions = useMemo(
@@ -167,7 +178,11 @@ export default function CashBankModal({
     responsable: 'Administración',
     activa: true,
     saldoUsd: '0',
-    saldoBs: '0'
+    saldoBs: '0',
+    saldoFiscalUsd: '0',
+    saldoNoFiscalUsd: '0',
+    saldoFiscalBs: '0',
+    saldoNoFiscalBs: '0'
   });
 
   // Estado para crear / editar / guardar cuentas bancarias
@@ -212,6 +227,10 @@ export default function CashBankModal({
   const cashSummary = useMemo(
     () => computeCashDesksSummary(cashDesks, { tasaDolar: tasaBcv, tasaKeystone }),
     [cashDesks, tasaBcv, tasaKeystone]
+  );
+  const cashFiscalTotals = useMemo(
+    () => computeCashDesksFiscalTotals(cashDesks, cashMovements, bankAccounts, { tasaDolar: tasaBcv, tasaKeystone }, fiscalSplitOverrides),
+    [cashDesks, cashMovements, bankAccounts, tasaBcv, tasaKeystone, fiscalSplitOverrides]
   );
   const totalCajasUsd = cashSummary.totalUsd;
   const totalCajasBs = cashSummary.totalBs;
@@ -907,6 +926,8 @@ export default function CashBankModal({
     onSelectAccountKey,
     typeFilter = 'ALL',
     onChangeTypeFilter,
+    docFilter = 'ALL',
+    onChangeDocFilter,
     periodFilter,
     onChangePeriodFilter,
     sectionRef
@@ -922,9 +943,20 @@ export default function CashBankModal({
     const scopedByAccount = (cashMovements || []).filter((m) =>
       doesMovementBelongToAccount(m, scopeKind, selectedRecord, cashDesks, bankAccounts)
     );
-    const scopedAllTypes = sortMovementsArray(
+    const scopedByPeriod = sortMovementsArray(
       filterMovementsByPeriod(scopedByAccount, periodFilter)
     );
+    const docCounts = scopedByPeriod.reduce(
+      (acc, m) => {
+        const origin = classifyMovementDocOrigin(m);
+        acc.all += 1;
+        if (origin === 'FISCAL') acc.fiscal += 1;
+        else acc.noFiscal += 1;
+        return acc;
+      },
+      { all: 0, fiscal: 0, noFiscal: 0 }
+    );
+    const scopedAllTypes = filterMovementsByDocOrigin(scopedByPeriod, docFilter);
     const summary = summarizeAccountMovements(scopedAllTypes);
     const displayedRows = typeFilter === 'ALL'
       ? scopedAllTypes
@@ -1025,6 +1057,37 @@ export default function CashBankModal({
                 );
               })}
             </div>
+
+            {typeof onChangeDocFilter === 'function' && (
+              <div style={{ display: 'inline-flex', background: 'var(--bg-surface)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)', gap: '3px' }}>
+                {[
+                  { id: 'ALL', label: `Docs: Todos (${docCounts.all})`, color: '#94a3b8' },
+                  { id: 'FISCAL', label: `Fiscal (${docCounts.fiscal})`, color: '#a855f7' },
+                  { id: 'NO_FISCAL', label: `No Fiscal / N/E (${docCounts.noFiscal})`, color: '#f59e0b' }
+                ].map((d) => {
+                  const isActive = docFilter === d.id;
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => onChangeDocFilter(d.id)}
+                      style={{
+                        padding: '0.35rem 0.65rem',
+                        borderRadius: '6px',
+                        border: isActive ? `1px solid ${d.color}` : '1px solid transparent',
+                        background: isActive ? 'rgba(15, 23, 42, 0.7)' : 'transparent',
+                        color: isActive ? d.color : 'var(--text-muted)',
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1329,6 +1392,11 @@ export default function CashBankModal({
       const targetLabel = sourceRecord ? (sourceRecord.descripcion || sourceRecord.bancoNombre || sourceRecord.id) : 'Caja General';
       const targetId = sourceRecord ? (sourceRecord.id || sourceRecord.coCaja || sourceRecord.codCta) : '';
       const selectedProfitAcc = expenseAccountOptions.profitAccounts.find((a) => a.code === movCuentaGasto);
+      const rawConceptTrimmed = movConcept.trim();
+      const hasDocTag = /\[(?:NO[\s_-]*)?FISCAL\]|FACTURA|\bNE[-\s#]*\d+|\bFAC[-\s#]*\d+/i.test(rawConceptTrimmed);
+      const taggedConcepto = movAccountKind === 'CAJA' && !hasDocTag
+        ? `[${movFiscalScope === 'FISCAL' ? 'FISCAL' : 'NO FISCAL'}] ${rawConceptTrimmed}`
+        : rawConceptTrimmed;
       const newMov = {
         id: `MOV-${Date.now()}`,
         fecha: nowIso,
@@ -1336,7 +1404,9 @@ export default function CashBankModal({
         categoria: movType === 'INGRESO' ? 'DEPOSITO_MANUAL' : (movCategoria || 'GASTO_OPERATIVO'),
         cuentaGasto: selectedProfitAcc?.code || null,
         cuentaGastoDesc: selectedProfitAcc?.descrip || '',
-        concepto: movConcept.trim(),
+        concepto: taggedConcepto,
+        fiscalScope: movAccountKind === 'CAJA' ? movFiscalScope : undefined,
+        referenciaTipo: movAccountKind === 'CAJA' ? movFiscalScope : undefined,
         montoUsd: effectiveUsd,
         monto_usd: effectiveUsd,
         montoBs: effectiveBs,
@@ -1390,7 +1460,11 @@ export default function CashBankModal({
       responsable: 'Administración',
       activa: true,
       saldoUsd: '0',
-      saldoBs: '0'
+      saldoBs: '0',
+      saldoFiscalUsd: '0',
+      saldoNoFiscalUsd: '0',
+      saldoFiscalBs: '0',
+      saldoNoFiscalBs: '0'
     });
     setShowCajaForm(true);
     setShowNewMovForm(false);
@@ -1399,6 +1473,14 @@ export default function CashBankModal({
   // Abrir formulario para editar una caja existente
   const handleOpenEditCaja = (desk) => {
     if (!desk) return;
+    const bd = computeCashDeskFiscalBreakdown(
+      desk,
+      cashMovements,
+      cashDesks,
+      bankAccounts,
+      { tasaDolar: tasaBcv, tasaKeystone },
+      fiscalSplitOverrides
+    );
     setEditingCajaId(desk.id);
     setCajaForm({
       coCaja: desk.coCaja || desk.co_caja || 'CAJA-01',
@@ -1406,8 +1488,12 @@ export default function CashBankModal({
       moneda: desk.moneda || 'USD',
       responsable: desk.responsable || 'Administración',
       activa: desk.activa !== false,
-      saldoUsd: String(Number(desk.saldoUsd ?? desk.saldo_usd ?? 0)),
-      saldoBs: String(Number(desk.saldoBs ?? desk.saldo_bs ?? 0))
+      saldoUsd: String(bd.totalUsd),
+      saldoBs: String(bd.totalBs),
+      saldoFiscalUsd: String(bd.fiscalUsd),
+      saldoNoFiscalUsd: String(bd.noFiscalUsd),
+      saldoFiscalBs: String(bd.fiscalBs),
+      saldoNoFiscalBs: String(bd.noFiscalBs)
     });
     setShowCajaForm(true);
     setShowNewMovForm(false);
@@ -1431,12 +1517,34 @@ export default function CashBankModal({
       }
     }
 
-    const parsedUsd = Math.max(0, parseFloat(cajaForm.saldoUsd) || 0);
-    const parsedBs = Math.max(0, parseFloat(cajaForm.saldoBs) || 0);
+    const fUsd = Math.max(0, parseFloat(cajaForm.saldoFiscalUsd) || 0);
+    const nfUsd = Math.max(0, parseFloat(cajaForm.saldoNoFiscalUsd) || 0);
+    const fBs = Math.max(0, parseFloat(cajaForm.saldoFiscalBs) || 0);
+    const nfBs = Math.max(0, parseFloat(cajaForm.saldoNoFiscalBs) || 0);
+    const parsedUsd = round2(fUsd + nfUsd);
+    const parsedBs = round2(fBs + nfBs);
 
     try {
       setIsSubmitting(true);
       const id = editingCajaId || cleanCode.toLowerCase();
+      const targetDesk = cashDesks.find(d => matchesCashDesk(d, id) || matchesCashDesk(d, cleanCode)) || { id, coCaja: cleanCode };
+      const bd = computeCashDeskFiscalBreakdown(
+        targetDesk,
+        cashMovements,
+        cashDesks,
+        bankAccounts,
+        { tasaDolar: tasaBcv, tasaKeystone },
+        fiscalSplitOverrides
+      );
+      const nextOverrides = saveCajaFiscalSplitOverride(cleanCode, {
+        baseFiscalUsd: round2(fUsd),
+        baseFiscalBs: round2(fBs),
+        movFiscalBaselineUsd: bd.fiscalMovNetUsd,
+        movFiscalBaselineBs: bd.fiscalMovNetBs,
+        updatedAt: new Date().toISOString()
+      });
+      setFiscalSplitOverrides(nextOverrides);
+
       const payload = {
         id,
         coCaja: cleanCode,
@@ -1757,15 +1865,39 @@ export default function CashBankModal({
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
               <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                Efectivo en Cajas
+                {cajaScopeFilter === 'FISCAL'
+                  ? 'Efectivo en Cajas (Solo Fiscal)'
+                  : cajaScopeFilter === 'NO_FISCAL'
+                    ? 'Efectivo en Cajas (Solo No Fiscal)'
+                    : 'Efectivo en Cajas (Fiscal + No Fiscal)'}
               </span>
               <Wallet size={16} style={{ color: '#10b981' }} />
             </div>
             <div style={{ fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-              {formatUsd(totalCajasUsd)}
+              {formatUsd(
+                cajaScopeFilter === 'FISCAL'
+                  ? cashFiscalTotals.fiscalUsd
+                  : cajaScopeFilter === 'NO_FISCAL'
+                    ? cashFiscalTotals.noFiscalUsd
+                    : totalCajasUsd
+              )}
             </div>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-              {formatBs(totalCajasBs)}
+              {formatBs(
+                cajaScopeFilter === 'FISCAL'
+                  ? cashFiscalTotals.fiscalBs
+                  : cajaScopeFilter === 'NO_FISCAL'
+                    ? cashFiscalTotals.noFiscalBs
+                    : totalCajasBs
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.45rem', fontSize: '0.73rem', fontFamily: 'var(--font-code)' }}>
+              <span style={{ padding: '0.15rem 0.45rem', borderRadius: '6px', background: 'rgba(168, 85, 247, 0.14)', color: '#c084fc', fontWeight: 700 }}>
+                Fiscal: {formatUsd(cashFiscalTotals.fiscalUsd)}
+              </span>
+              <span style={{ padding: '0.15rem 0.45rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.14)', color: '#f59e0b', fontWeight: 700 }}>
+                No Fiscal: {formatUsd(cashFiscalTotals.noFiscalUsd)}
+              </span>
             </div>
           </div>
 
@@ -2068,8 +2200,8 @@ export default function CashBankModal({
                       </div>
 
                       <div>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                          Saldo Registrado (USD $)
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#c084fc', marginBottom: '0.35rem' }}>
+                          Saldo Fiscal ({cajaForm.moneda === 'BS' ? 'Bs.' : 'USD $'})
                         </label>
                         <input
                           type="number"
@@ -2077,26 +2209,42 @@ export default function CashBankModal({
                           min="0"
                           className="input-modern"
                           placeholder="0.00"
-                          value={cajaForm.saldoUsd}
+                          value={cajaForm.moneda === 'BS' ? cajaForm.saldoFiscalBs : cajaForm.saldoFiscalUsd}
                           onChange={(e) => {
-                            const valUsd = e.target.value;
-                            const numUsd = parseFloat(valUsd);
-                            const calcBs = (valUsd === '' || valUsd === '-' || isNaN(numUsd))
-                              ? ''
-                              : (tasaBcv > 0 ? (numUsd * tasaBcv).toFixed(2) : '0.00');
-                            setCajaForm(prev => ({
-                              ...prev,
-                              saldoUsd: valUsd,
-                              saldoBs: calcBs
-                            }));
+                            const raw = e.target.value;
+                            const num = parseFloat(raw) || 0;
+                            setCajaForm(prev => {
+                              if (prev.moneda === 'BS') {
+                                const nfBs = parseFloat(prev.saldoNoFiscalBs) || 0;
+                                const fUsd = tasaBcv > 0 ? round2(num / tasaBcv) : 0;
+                                const nfUsd = parseFloat(prev.saldoNoFiscalUsd) || 0;
+                                return {
+                                  ...prev,
+                                  saldoFiscalBs: raw,
+                                  saldoFiscalUsd: String(fUsd),
+                                  saldoBs: String(round2(num + nfBs)),
+                                  saldoUsd: String(round2(fUsd + nfUsd))
+                                };
+                              }
+                              const nfUsd = parseFloat(prev.saldoNoFiscalUsd) || 0;
+                              const fBs = tasaBcv > 0 ? round2(num * tasaBcv) : 0;
+                              const nfBs = parseFloat(prev.saldoNoFiscalBs) || 0;
+                              return {
+                                ...prev,
+                                saldoFiscalUsd: raw,
+                                saldoFiscalBs: String(fBs),
+                                saldoUsd: String(round2(num + nfUsd)),
+                                saldoBs: String(round2(fBs + nfBs))
+                              };
+                            });
                           }}
-                          style={{ width: '100%' }}
+                          style={{ width: '100%', fontFamily: 'var(--font-code)' }}
                         />
                       </div>
 
                       <div>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                          Saldo Registrado (Bs.)
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#f59e0b', marginBottom: '0.35rem' }}>
+                          Saldo No Fiscal ({cajaForm.moneda === 'BS' ? 'Bs.' : 'USD $'})
                         </label>
                         <input
                           type="number"
@@ -2104,21 +2252,48 @@ export default function CashBankModal({
                           min="0"
                           className="input-modern"
                           placeholder="0.00"
-                          value={cajaForm.saldoBs}
+                          value={cajaForm.moneda === 'BS' ? cajaForm.saldoNoFiscalBs : cajaForm.saldoNoFiscalUsd}
                           onChange={(e) => {
-                            const valBs = e.target.value;
-                            const numBs = parseFloat(valBs);
-                            const calcUsd = (valBs === '' || valBs === '-' || isNaN(numBs))
-                              ? ''
-                              : (tasaBcv > 0 ? (numBs / tasaBcv).toFixed(2) : '0.00');
-                            setCajaForm(prev => ({
-                              ...prev,
-                              saldoBs: valBs,
-                              saldoUsd: calcUsd
-                            }));
+                            const raw = e.target.value;
+                            const num = parseFloat(raw) || 0;
+                            setCajaForm(prev => {
+                              if (prev.moneda === 'BS') {
+                                const fBs = parseFloat(prev.saldoFiscalBs) || 0;
+                                const nfUsd = tasaBcv > 0 ? round2(num / tasaBcv) : 0;
+                                const fUsd = parseFloat(prev.saldoFiscalUsd) || 0;
+                                return {
+                                  ...prev,
+                                  saldoNoFiscalBs: raw,
+                                  saldoNoFiscalUsd: String(nfUsd),
+                                  saldoBs: String(round2(fBs + num)),
+                                  saldoUsd: String(round2(fUsd + nfUsd))
+                                };
+                              }
+                              const fUsd = parseFloat(prev.saldoFiscalUsd) || 0;
+                              const nfBs = tasaBcv > 0 ? round2(num * tasaBcv) : 0;
+                              const fBs = parseFloat(prev.saldoFiscalBs) || 0;
+                              return {
+                                ...prev,
+                                saldoNoFiscalUsd: raw,
+                                saldoNoFiscalBs: String(nfBs),
+                                saldoUsd: String(round2(fUsd + num)),
+                                saldoBs: String(round2(fBs + nfBs))
+                              };
+                            });
                           }}
-                          style={{ width: '100%' }}
+                          style={{ width: '100%', fontFamily: 'var(--font-code)' }}
                         />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#10b981', marginBottom: '0.35rem' }}>
+                          Total Consolidado (Fiscal + No Fiscal)
+                        </label>
+                        <div className="input-modern" style={{ width: '100%', fontFamily: 'var(--font-code)', fontWeight: 800, color: '#10b981' }}>
+                          {cajaForm.moneda === 'BS'
+                            ? `${formatBs(cajaForm.saldoBs)} (${formatUsd(cajaForm.saldoUsd)})`
+                            : `${formatUsd(cajaForm.saldoUsd)} (${formatBs(cajaForm.saldoBs)})`}
+                        </div>
                       </div>
                     </div>
 
@@ -2240,6 +2415,23 @@ export default function CashBankModal({
                           </select>
                         )}
                       </div>
+
+                      {movAccountKind === 'CAJA' && (
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                            Sub-caja / Naturaleza
+                          </label>
+                          <select
+                            className="filter-select"
+                            value={movFiscalScope}
+                            onChange={(e) => setMovFiscalScope(e.target.value)}
+                            style={{ width: '100%', fontWeight: 700 }}
+                          >
+                            <option value="NO_FISCAL">No Fiscal (Notas de Entrega / Interno)</option>
+                            <option value="FISCAL">Fiscal (Facturas / SENIAT)</option>
+                          </select>
+                        </div>
+                      )}
 
                       {movType === 'TRANSFERENCIA' && (
                         <>
@@ -2447,7 +2639,75 @@ export default function CashBankModal({
                 </div>
               )}
 
-              {/* TABLA OFICIAL DE CAJAS OPERATIVAS DEL SISTEMA */}
+              {/* BARRA DE FILTRO FISCAL / NO FISCAL DE CAJAS */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.75rem',
+                marginBottom: '0.85rem',
+                padding: '0.7rem 1rem',
+                borderRadius: '10px',
+                background: 'var(--bg-card-glass)',
+                border: '1px solid var(--border-glass)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                    División de Cajas:
+                  </span>
+                  <div style={{ display: 'inline-flex', background: 'var(--bg-surface)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)', gap: '4px', flexWrap: 'wrap' }}>
+                    {[
+                      { id: 'ALL', label: `Consolidado F + NF (${cashDesks.length})`, color: '#10b981' },
+                      { id: 'FISCAL', label: `Solo Fiscal (${formatUsd(cashFiscalTotals.fiscalUsd)})`, color: '#a855f7' },
+                      { id: 'NO_FISCAL', label: `Solo No Fiscal (${formatUsd(cashFiscalTotals.noFiscalUsd)})`, color: '#f59e0b' }
+                    ].map((opt) => {
+                      const isActive = cajaScopeFilter === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setCajaScopeFilter(opt.id);
+                            setCajaMovDocFilter(opt.id === 'ALL' ? 'ALL' : opt.id);
+                          }}
+                          style={{
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '6px',
+                            border: isActive ? `1px solid ${opt.color}` : '1px solid transparent',
+                            background: isActive ? 'rgba(15, 23, 42, 0.75)' : 'transparent',
+                            color: isActive ? opt.color : 'var(--text-muted)',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {cajaScopeFilter === 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (collapsedCajas.size >= cashDesks.length) {
+                        setCollapsedCajas(new Set());
+                      } else {
+                        setCollapsedCajas(new Set(cashDesks.map((d, i) => String(d.coCaja || d.co_caja || d.id || `CAJA-0${i + 1}`).toUpperCase())));
+                      }
+                    }}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.76rem' }}
+                  >
+                    {collapsedCajas.size >= cashDesks.length ? 'Expandir Sub-cajas' : 'Contraer Sub-cajas'}
+                  </button>
+                )}
+              </div>
+
+              {/* TABLA OFICIAL DE CAJAS OPERATIVAS DEL SISTEMA (PADRE = FISCAL + NO FISCAL) */}
               <div style={{
                 overflowX: 'auto',
                 borderRadius: '12px',
@@ -2455,305 +2715,487 @@ export default function CashBankModal({
                 marginBottom: '1.5rem',
                 background: 'var(--bg-card-glass)'
               }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.87rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
                   <thead>
                     <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Código</th>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Nombre de la Caja</th>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Responsable</th>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Estado</th>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo Registrado</th>
-                      <th style={{ padding: '0.8rem 1rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Código</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Nombre de la Caja / División</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Naturaleza</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Responsable</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Estado</th>
+                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'FISCAL') && (
+                        <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#c084fc', textAlign: 'right' }}>Saldo Fiscal</th>
+                      )}
+                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'NO_FISCAL') && (
+                        <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#f59e0b', textAlign: 'right' }}>Saldo No Fiscal</th>
+                      )}
+                      {cajaScopeFilter === 'ALL' && (
+                        <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#10b981', textAlign: 'right' }}>Total Consolidado</th>
+                      )}
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
                     {cashDesks.map((desk, idx) => {
-                      const code = desk.coCaja || desk.co_caja || `CAJA-0${idx + 1}`;
+                      const code = String(desk.coCaja || desk.co_caja || `CAJA-0${idx + 1}`).toUpperCase();
                       const isActiva = desk.activa !== false;
                       const monedaDisplay = desk.moneda === 'BS' ? 'Bs.' : (desk.moneda === 'USD' ? '$ (USD)' : desk.moneda);
-                      const saldoUsd = Number(desk.saldoUsd ?? desk.saldo_usd ?? 0);
-                      const saldoBs = Number(desk.saldoBs ?? desk.saldo_bs ?? 0);
+                      const bd = cashFiscalTotals.byDeskKey.get(code) || computeCashDeskFiscalBreakdown(
+                        desk,
+                        cashMovements,
+                        cashDesks,
+                        bankAccounts,
+                        { tasaDolar: tasaBcv, tasaKeystone },
+                        fiscalSplitOverrides
+                      );
+                      const isBsDesk = String(desk.moneda || '').toUpperCase() === 'BS';
+                      const fmtPrimary = (usd, bs) => (isBsDesk ? formatBs(bs) : formatUsd(usd));
+                      const fmtSecondary = (usd, bs) => (isBsDesk ? formatUsd(usd) : formatBs(bs));
+                      const isExpanded = !collapsedCajas.has(code);
+
+                      const jumpToSubMovs = (docScope) => {
+                        const key = String(desk.id || desk.coCaja || '').trim();
+                        setCajaMovFilterId(key || 'ALL');
+                        setCajaMovDocFilter(docScope);
+                        setTimeout(() => cajaMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+                      };
+
+                      const openNewSubMov = (docScope) => {
+                        setMovAccountKind('CAJA');
+                        setSelectedDeskId(desk.id || desk.coCaja);
+                        setMovFiscalScope(docScope === 'FISCAL' ? 'FISCAL' : 'NO_FISCAL');
+                        setShowNewMovForm(true);
+                        setShowCajaForm(false);
+                      };
+
+                      if (cajaScopeFilter === 'FISCAL' || cajaScopeFilter === 'NO_FISCAL') {
+                        const isF = cajaScopeFilter === 'FISCAL';
+                        const subCode = isF ? `${code}-F` : `${code}-NF`;
+                        const subUsd = isF ? bd.fiscalUsd : bd.noFiscalUsd;
+                        const subBs = isF ? bd.fiscalBs : bd.noFiscalBs;
+                        const movCount = isF ? bd.fiscalMovCount : bd.noFiscalMovCount;
+                        return (
+                          <tr
+                            key={subCode}
+                            style={{
+                              borderBottom: '1px solid var(--border-glass)',
+                              background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'
+                            }}
+                          >
+                            <td style={{ padding: '0.75rem 0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: isF ? '#c084fc' : '#f59e0b' }}>
+                              {subCode}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {desk.descripcion} — <span style={{ color: isF ? '#c084fc' : '#f59e0b' }}>{isF ? 'Fiscal' : 'No Fiscal'}</span>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                                {movCount} movimiento(s) · Caja padre: {code}
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center' }}>
+                              <span style={{
+                                padding: '0.2rem 0.55rem',
+                                borderRadius: '20px',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                background: isF ? 'rgba(168, 85, 247, 0.14)' : 'rgba(245, 158, 11, 0.14)',
+                                color: isF ? '#c084fc' : '#f59e0b',
+                                border: `1px solid ${isF ? 'rgba(168, 85, 247, 0.35)' : 'rgba(245, 158, 11, 0.35)'}`
+                              }}>
+                                {isF ? 'Sub-caja Fiscal' : 'Sub-caja No Fiscal'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', fontWeight: 700 }}>
+                              <span style={{
+                                padding: '0.2rem 0.55rem',
+                                borderRadius: '6px',
+                                fontSize: '0.76rem',
+                                background: desk.moneda === 'BS' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(2, 132, 199, 0.14)',
+                                color: desk.moneda === 'BS' ? '#d97706' : 'var(--brand-blue)'
+                              }}>
+                                {monedaDisplay}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                              {desk.responsable || 'Administración'}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                padding: '0.2rem 0.6rem',
+                                borderRadius: '20px',
+                                background: isActiva ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.15)',
+                                color: isActiva ? '#059669' : 'var(--text-muted)',
+                                fontSize: '0.75rem',
+                                fontWeight: 700
+                              }}>
+                                ● {isActiva ? 'Activa' : 'Inactiva'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                              <div style={{ fontWeight: 700, color: isF ? '#c084fc' : '#f59e0b' }}>
+                                {fmtPrimary(subUsd, subBs)}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                {fmtSecondary(subUsd, subBs)}
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                              <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => jumpToSubMovs(isF ? 'FISCAL' : 'NO_FISCAL')}
+                                  className="btn"
+                                  style={{
+                                    padding: '0.3rem 0.55rem',
+                                    fontSize: '0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(56, 189, 248, 0.14)',
+                                    color: '#38bdf8',
+                                    border: '1px solid rgba(56, 189, 248, 0.35)'
+                                  }}
+                                  title={`Ver movimientos ${isF ? 'Fiscales' : 'No Fiscales'} de ${code}`}
+                                >
+                                  <List size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openNewSubMov(isF ? 'FISCAL' : 'NO_FISCAL')}
+                                  className="btn btn-secondary"
+                                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', borderRadius: '6px' }}
+                                  title={`Registrar movimiento ${isF ? 'Fiscal' : 'No Fiscal'} en ${code}`}
+                                >
+                                  <PlusCircle size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditCaja(desk)}
+                                  className="btn"
+                                  style={{
+                                    padding: '0.3rem 0.55rem',
+                                    fontSize: '0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(217, 119, 6, 0.15)',
+                                    color: '#d97706',
+                                    border: '1px solid rgba(217, 119, 6, 0.3)'
+                                  }}
+                                  title="Editar distribución Fiscal / No Fiscal de la caja"
+                                >
+                                  <Edit2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
 
                       return (
-                        <tr
-                          key={desk.id || code}
-                          style={{
-                            borderBottom: '1px solid var(--border-glass)',
-                            background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'
-                          }}
-                        >
-                          <td style={{ padding: '0.75rem 1rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
-                            {code}
-                          </td>
-                          <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                            {desk.descripcion}
-                          </td>
-                          <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>
-                            <span style={{
-                              padding: '0.2rem 0.55rem',
-                              borderRadius: '6px',
-                              fontSize: '0.76rem',
-                              background: desk.moneda === 'BS' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(2, 132, 199, 0.14)',
-                              color: desk.moneda === 'BS' ? '#d97706' : 'var(--brand-blue)'
-                            }}>
-                              {monedaDisplay}
-                            </span>
-                          </td>
-                          <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                            {desk.responsable || 'Administración'}
-                          </td>
-                          <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
-                            <span style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.3rem',
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: '20px',
-                              background: isActiva ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.15)',
-                              color: isActiva ? '#059669' : 'var(--text-muted)',
-                              fontSize: '0.75rem',
-                              fontWeight: 700
-                            }}>
-                              ● {isActiva ? 'Activa' : 'Inactiva'}
-                            </span>
-                          </td>
-                          <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
-                            <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                              {desk.moneda === 'BS' ? formatBs(saldoBs) : formatUsd(saldoUsd)}
-                            </div>
-                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
-                              {desk.moneda === 'BS' ? formatUsd(saldoUsd) : formatBs(saldoBs)}
-                            </div>
-                          </td>
-                          <td style={{ padding: '0.75rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const key = String(desk.id || desk.coCaja || '').trim();
-                                  setCajaMovFilterId(key || 'ALL');
-                                  setTimeout(() => cajaMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
-                                }}
-                                className="btn"
-                                style={{
-                                  padding: '0.3rem 0.55rem',
-                                  fontSize: '0.75rem',
-                                  borderRadius: '6px',
-                                  background: 'rgba(56, 189, 248, 0.14)',
-                                  color: '#38bdf8',
-                                  border: '1px solid rgba(56, 189, 248, 0.35)',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}
-                                title="Ver ListView de entradas y salidas de esta caja"
-                              >
-                                <List size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setMovAccountKind('CAJA');
-                                  setSelectedDeskId(desk.id || desk.coCaja);
-                                  setShowNewMovForm(true);
-                                  setShowCajaForm(false);
-                                }}
-                                className="btn btn-secondary"
-                                style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', borderRadius: '6px' }}
-                                title="Registrar ingreso o egreso en esta caja"
-                              >
-                                <PlusCircle size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditCaja(desk)}
-                                className="btn"
-                                style={{
-                                  padding: '0.3rem 0.55rem',
-                                  fontSize: '0.75rem',
-                                  borderRadius: '6px',
-                                  background: 'rgba(217, 119, 6, 0.15)',
-                                  color: '#d97706',
-                                  border: '1px solid rgba(217, 119, 6, 0.3)'
-                                }}
-                                title="Editar datos o saldo de la caja"
-                              >
-                                <Edit2 size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteCaja(desk)}
-                                className="btn"
-                                style={{
-                                  padding: '0.3rem 0.55rem',
-                                  fontSize: '0.75rem',
-                                  borderRadius: '6px',
-                                  background: 'rgba(239, 68, 68, 0.12)',
-                                  color: '#ef4444',
-                                  border: '1px solid rgba(239, 68, 68, 0.25)'
-                                }}
-                                title="Eliminar caja"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                        <React.Fragment key={desk.id || code}>
+                          <tr
+                            style={{
+                              borderBottom: '1px solid var(--border-glass)',
+                              background: 'var(--bg-card-glass)',
+                              fontWeight: 600
+                            }}
+                          >
+                            <td
+                              onClick={() => {
+                                setCollapsedCajas((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(code)) next.delete(code);
+                                  else next.add(code);
+                                  return next;
+                                });
+                              }}
+                              style={{ padding: '0.75rem 0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--brand-blue)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              title="Clic para expandir o contraer Fiscal / No Fiscal"
+                            >
+                              <span style={{ display: 'inline-block', width: '14px', color: 'var(--text-muted)' }}>
+                                {isExpanded ? '▾' : '▸'}
+                              </span>
+                              {code}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {desk.descripcion}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center' }}>
+                              <span style={{
+                                padding: '0.2rem 0.55rem',
+                                borderRadius: '20px',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                background: 'rgba(16, 185, 129, 0.12)',
+                                color: '#10b981',
+                                border: '1px solid rgba(16, 185, 129, 0.32)'
+                              }}>
+                                Consolidada (F + NF)
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', fontWeight: 700 }}>
+                              <span style={{
+                                padding: '0.2rem 0.55rem',
+                                borderRadius: '6px',
+                                fontSize: '0.76rem',
+                                background: desk.moneda === 'BS' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(2, 132, 199, 0.14)',
+                                color: desk.moneda === 'BS' ? '#d97706' : 'var(--brand-blue)'
+                              }}>
+                                {monedaDisplay}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                              {desk.responsable || 'Administración'}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                padding: '0.2rem 0.6rem',
+                                borderRadius: '20px',
+                                background: isActiva ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.15)',
+                                color: isActiva ? '#059669' : 'var(--text-muted)',
+                                fontSize: '0.75rem',
+                                fontWeight: 700
+                              }}>
+                                ● {isActiva ? 'Activa' : 'Inactiva'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#c084fc', fontWeight: 700 }}>
+                              {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b', fontWeight: 700 }}>
+                              {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                              <div style={{ fontWeight: 800, color: '#10b981' }}>
+                                {fmtPrimary(bd.totalUsd, bd.totalBs)}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                {fmtSecondary(bd.totalUsd, bd.totalBs)}
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                              <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => jumpToSubMovs('ALL')}
+                                  className="btn"
+                                  style={{
+                                    padding: '0.3rem 0.55rem',
+                                    fontSize: '0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(56, 189, 248, 0.14)',
+                                    color: '#38bdf8',
+                                    border: '1px solid rgba(56, 189, 248, 0.35)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}
+                                  title="Ver todos los movimientos de esta caja"
+                                >
+                                  <List size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openNewSubMov('NO_FISCAL')}
+                                  className="btn btn-secondary"
+                                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', borderRadius: '6px' }}
+                                  title="Registrar ingreso o egreso en esta caja"
+                                >
+                                  <PlusCircle size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditCaja(desk)}
+                                  className="btn"
+                                  style={{
+                                    padding: '0.3rem 0.55rem',
+                                    fontSize: '0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(217, 119, 6, 0.15)',
+                                    color: '#d97706',
+                                    border: '1px solid rgba(217, 119, 6, 0.3)'
+                                  }}
+                                  title="Editar datos o reparto Fiscal / No Fiscal"
+                                >
+                                  <Edit2 size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCaja(desk)}
+                                  className="btn"
+                                  style={{
+                                    padding: '0.3rem 0.55rem',
+                                    fontSize: '0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(239, 68, 68, 0.12)',
+                                    color: '#ef4444',
+                                    border: '1px solid rgba(239, 68, 68, 0.25)'
+                                  }}
+                                  title="Eliminar caja"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {isExpanded && (
+                            <>
+                              {/* Sub-fila Fiscal */}
+                              <tr style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-surface)', fontSize: '0.8rem' }}>
+                                <td style={{ padding: '0.5rem 0.9rem 0.5rem 1.85rem', fontFamily: 'var(--font-code)', color: '#c084fc', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                  └─ {code}-F
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-secondary)' }}>
+                                  {desk.descripcion} — <strong style={{ color: '#c084fc' }}>Fiscal</strong>
+                                  <span style={{ marginLeft: '0.45rem', fontSize: '0.71rem', color: 'var(--text-muted)' }}>
+                                    ({bd.fiscalMovCount} mov.)
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center' }}>
+                                  <span style={{
+                                    padding: '0.14rem 0.5rem',
+                                    borderRadius: '20px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    background: 'rgba(168, 85, 247, 0.12)',
+                                    color: '#c084fc',
+                                    border: '1px solid rgba(168, 85, 247, 0.3)'
+                                  }}>
+                                    Sub-caja Fiscal
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{monedaDisplay}</td>
+                                <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-muted)', fontSize: '0.76rem' }}>{desk.responsable || 'Administración'}</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#c084fc' }}>
+                                  {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-secondary)' }}>
+                                  {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'center', gap: '0.35rem' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => jumpToSubMovs('FISCAL')}
+                                      className="btn"
+                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(168, 85, 247, 0.14)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.3)' }}
+                                      title={`Ver movimientos Fiscales de ${code}`}
+                                    >
+                                      <List size={12} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openNewSubMov('FISCAL')}
+                                      className="btn"
+                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(168, 85, 247, 0.14)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.3)' }}
+                                      title={`Registrar movimiento Fiscal en ${code}`}
+                                    >
+                                      <PlusCircle size={12} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+
+                              {/* Sub-fila No Fiscal */}
+                              <tr style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-surface)', fontSize: '0.8rem' }}>
+                                <td style={{ padding: '0.5rem 0.9rem 0.5rem 1.85rem', fontFamily: 'var(--font-code)', color: '#f59e0b', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                  └─ {code}-NF
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-secondary)' }}>
+                                  {desk.descripcion} — <strong style={{ color: '#f59e0b' }}>No Fiscal</strong>
+                                  <span style={{ marginLeft: '0.45rem', fontSize: '0.71rem', color: 'var(--text-muted)' }}>
+                                    ({bd.noFiscalMovCount} mov.)
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center' }}>
+                                  <span style={{
+                                    padding: '0.14rem 0.5rem',
+                                    borderRadius: '20px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    background: 'rgba(245, 158, 11, 0.12)',
+                                    color: '#f59e0b',
+                                    border: '1px solid rgba(245, 158, 11, 0.3)'
+                                  }}>
+                                    Sub-caja No Fiscal
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{monedaDisplay}</td>
+                                <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-muted)', fontSize: '0.76rem' }}>{desk.responsable || 'Administración'}</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#f59e0b' }}>
+                                  {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-secondary)' }}>
+                                  {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'center', gap: '0.35rem' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => jumpToSubMovs('NO_FISCAL')}
+                                      className="btn"
+                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.14)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
+                                      title={`Ver movimientos No Fiscales de ${code}`}
+                                    >
+                                      <List size={12} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openNewSubMov('NO_FISCAL')}
+                                      className="btn"
+                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.14)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
+                                      title={`Registrar movimiento No Fiscal en ${code}`}
+                                    >
+                                      <PlusCircle size={12} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            </>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
+                  <tfoot>
+                    <tr style={{ background: 'var(--bg-table-header)', borderTop: '2px solid var(--border-glass)', fontWeight: 800 }}>
+                      <td colSpan={6} style={{ padding: '0.8rem 0.9rem', color: 'var(--text-primary)', textTransform: 'uppercase', fontSize: '0.78rem' }}>
+                        {cajaScopeFilter === 'FISCAL'
+                          ? 'Total Cajas Fiscales'
+                          : cajaScopeFilter === 'NO_FISCAL'
+                            ? 'Total Cajas No Fiscales'
+                            : 'Sumatoria Total Cajas (Fiscal + No Fiscal)'}
+                      </td>
+                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'FISCAL') && (
+                        <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#c084fc' }}>
+                          <div>{formatUsd(cashFiscalTotals.fiscalUsd)}</div>
+                          <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(cashFiscalTotals.fiscalBs)}</div>
+                        </td>
+                      )}
+                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'NO_FISCAL') && (
+                        <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b' }}>
+                          <div>{formatUsd(cashFiscalTotals.noFiscalUsd)}</div>
+                          <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(cashFiscalTotals.noFiscalBs)}</div>
+                        </td>
+                      )}
+                      {cajaScopeFilter === 'ALL' && (
+                        <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>
+                          <div>{formatUsd(cashFiscalTotals.totalUsd)}</div>
+                          <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(cashFiscalTotals.totalBs)}</div>
+                        </td>
+                      )}
+                      <td />
+                    </tr>
+                  </tfoot>
                 </table>
-              </div>
-
-              {/* GRILLA DE TARJETAS DE CAJAS */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: '1.25rem' }}>
-                {cashDesks.map(desk => {
-                  const isActiva = desk.activa !== false;
-                  return (
-                    <div
-                      key={desk.id}
-                      style={{
-                        background: 'var(--bg-card-glass)',
-                        border: '1px solid var(--border-glass)',
-                        borderRadius: '14px',
-                        padding: '1.25rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        boxShadow: 'var(--shadow-card)'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                          <div>
-                            <span style={{
-                              display: 'inline-block',
-                              padding: '0.2rem 0.5rem',
-                              borderRadius: '6px',
-                              background: 'rgba(0,43,122,0.1)',
-                              color: 'var(--brand-blue)',
-                              fontSize: '0.75rem',
-                              fontWeight: 700,
-                              marginBottom: '0.35rem',
-                              fontFamily: 'var(--font-code)'
-                            }}>
-                              {desk.coCaja || desk.co_caja}
-                            </span>
-                            <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                              {desk.descripcion}
-                            </h3>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.3rem',
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: '20px',
-                              background: isActiva ? 'rgba(16, 185, 129, 0.1)' : 'rgba(148, 163, 184, 0.15)',
-                              color: isActiva ? '#059669' : 'var(--text-muted)',
-                              fontSize: '0.75rem',
-                              fontWeight: 600
-                            }}>
-                              <CheckCircle2 size={12} /> {isActiva ? 'Activa' : 'Inactiva'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const key = String(desk.id || desk.coCaja || '').trim();
-                                setCajaMovFilterId(key || 'ALL');
-                                setTimeout(() => cajaMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
-                              }}
-                              style={{
-                                background: 'rgba(56, 189, 248, 0.14)',
-                                border: '1px solid rgba(56, 189, 248, 0.3)',
-                                color: '#38bdf8',
-                                borderRadius: '6px',
-                                padding: '0.25rem 0.4rem',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center'
-                              }}
-                              title="Ver movimientos (Entradas y Salidas) de esta caja"
-                            >
-                              <List size={12} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditCaja(desk)}
-                              style={{
-                                background: 'rgba(217, 119, 6, 0.12)',
-                                border: '1px solid rgba(217, 119, 6, 0.25)',
-                                color: '#d97706',
-                                borderRadius: '6px',
-                                padding: '0.25rem 0.4rem',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center'
-                              }}
-                              title="Editar Caja"
-                            >
-                              <Edit2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{
-                          background: 'var(--bg-surface)',
-                          padding: '1rem',
-                          borderRadius: '10px',
-                          marginBottom: '1rem'
-                        }}>
-                          {desk.moneda === 'BS' ? (
-                            <>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible Bs.:</span>
-                                <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                                  {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente USD:</span>
-                                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                  {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }}>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Disponible USD:</span>
-                                <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                                  {formatUsd(Number(desk.saldoUsd || desk.saldo_usd || 0))}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Saldo Equivalente Bs:</span>
-                                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                  {formatBs(Number(desk.saldoBs || desk.saldo_bs || 0))}
-                                </span>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      <div style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        borderTop: '1px solid var(--border-glass)',
-                        paddingTop: '0.75rem',
-                        fontSize: '0.78rem',
-                        color: 'var(--text-muted)'
-                      }}>
-                        <span>Responsable: <strong>{desk.responsable || 'Administración'}</strong></span>
-                        <span>Moneda: <strong>{desk.moneda || 'USD'}</strong></span>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
 
               {renderScopedMovementsListView({
@@ -2763,6 +3205,8 @@ export default function CashBankModal({
                 onSelectAccountKey: setCajaMovFilterId,
                 typeFilter: cajaMovTypeFilter,
                 onChangeTypeFilter: setCajaMovTypeFilter,
+                docFilter: cajaMovDocFilter,
+                onChangeDocFilter: setCajaMovDocFilter,
                 periodFilter: cajaPeriodFilter,
                 onChangePeriodFilter: setCajaPeriodFilter,
                 sectionRef: cajaMovSectionRef
@@ -3438,6 +3882,8 @@ export default function CashBankModal({
                 onSelectAccountKey: setBankMovFilterId,
                 typeFilter: bankMovTypeFilter,
                 onChangeTypeFilter: setBankMovTypeFilter,
+                docFilter: bankMovDocFilter,
+                onChangeDocFilter: setBankMovDocFilter,
                 periodFilter: bankPeriodFilter,
                 onChangePeriodFilter: setBankPeriodFilter,
                 sectionRef: bankMovSectionRef

@@ -134,7 +134,11 @@ export const resolveExchangeRates = (config = {}) => {
   const tasaBcv = Number.isFinite(rawBcv) && rawBcv > 1 ? rawBcv : DEFAULT_BCV_RATE;
   const rawKey = Number(config?.tasaKeystone ?? config?.tasa_keystone ?? 0);
   const tasaKeystone = Number.isFinite(rawKey) && rawKey > 1 ? rawKey : (config?.tasaKeystone === undefined && config?.tasa_keystone === undefined ? Math.max(tasaBcv, DEFAULT_KEYSTONE_RATE) : tasaBcv);
-  return { tasaBcv, tasaKeystone };
+  const rawEuro = Number(config?.tasaEuro ?? config?.tasa_euro ?? 0);
+  const tasaEuro = Number.isFinite(rawEuro) && rawEuro > 1 ? rawEuro : tasaBcv;
+  const rawUsdt = Number(config?.tasaUsdt ?? config?.tasa_usdt ?? 0);
+  const tasaUsdt = Number.isFinite(rawUsdt) && rawUsdt > 1 ? rawUsdt : tasaKeystone;
+  return { tasaBcv, tasaKeystone, tasaEuro, tasaUsdt };
 };
 
 export const computeBankAccountValuation = (bank = {}, config = {}) => {
@@ -552,6 +556,239 @@ export const filterMovementsByPeriod = (
   }
 
   return list;
+};
+
+/**
+ * Clasifica el tipo de documento origen asociado a un movimiento de Caja/Banco:
+ * 'FISCAL' (Factura / NC / ND / [FISCAL]), 'NOTA_ENTREGA' (N/E / [NO FISCAL]) u 'OTRO' (gasto o movimiento manual).
+ */
+export const classifyMovementDocOrigin = (mov) => {
+  if (!mov || typeof mov !== 'object') return 'OTRO';
+  const explicit = String(
+    mov.fiscalScope || mov.subcaja || mov.tipoDoc || mov.tipo_doc || mov.referenciaTipo || mov.referencia_tipo || mov.docType || ''
+  ).toUpperCase().trim();
+  if (explicit === 'NOTA_ENTREGA' || explicit === 'NE' || explicit === 'N/E' || explicit === 'NDE' || explicit === 'NO_FISCAL') {
+    return 'NOTA_ENTREGA';
+  }
+  if (explicit === 'FACTURA' || explicit === 'FACT' || explicit === 'FAC' || explicit === 'FISCAL' || explicit === 'NOTA_CREDITO' || explicit === 'NOTA_DEBITO') {
+    return 'FISCAL';
+  }
+
+  const refId = String(mov.referenciaId || mov.referencia_id || mov.origenDocId || mov.origen_doc_id || '').toUpperCase().trim();
+  if (/^(NE-|NDE-)/.test(refId)) return 'NOTA_ENTREGA';
+  if (/^(FAC-|FACT-|NC-|ND-)/.test(refId)) return 'FISCAL';
+
+  const text = String(mov.concepto || mov.descripcion || '').toUpperCase();
+  if (/\[NO[\s_-]*FISCAL\]|NOTA\s+DE\s+ENTREGA|NOTA_ENTREGA|\bN\/E\b|\bNE[-\s#]*\d+|\bCOBRO\s+VENTA\s+NE-/.test(text)) {
+    return 'NOTA_ENTREGA';
+  }
+  if (/\[FISCAL\]|FACTURA\s+FISCAL|\bFACTURA\b|\bFAC[-\s#]*\d+|\bCOBRO\s+VENTA\s+(?!NE-)(?:FAC-)?\d{4,}|\bNC[-\s#]*\d+|\bND[-\s#]*\d+/.test(text)) {
+    return 'FISCAL';
+  }
+  return 'OTRO';
+};
+
+/**
+ * Filtra movimientos de Caja/Banco por origen documental ('ALL' | 'FISCAL' | 'NOTA_ENTREGA' | 'NO_FISCAL').
+ */
+export const filterMovementsByDocOrigin = (movements = [], docOrigin = 'ALL') => {
+  const list = Array.isArray(movements) ? movements : [];
+  const mode = String(docOrigin || 'ALL').toUpperCase().trim();
+  if (mode === 'FISCAL' || mode === 'NOTA_ENTREGA') {
+    return list.filter((m) => classifyMovementDocOrigin(m) === mode);
+  }
+  if (mode === 'NO_FISCAL') {
+    return list.filter((m) => classifyMovementDocOrigin(m) !== 'FISCAL');
+  }
+  return list;
+};
+
+export const CAJA_FISCAL_SPLIT_STORAGE_KEY = 'signum_caja_fiscal_split_v1';
+
+const normalizeDeskSplitKey = (deskOrKey) => {
+  if (!deskOrKey) return '';
+  const raw = typeof deskOrKey === 'object'
+    ? (deskOrKey.coCaja || deskOrKey.co_caja || deskOrKey.id || '')
+    : deskOrKey;
+  return String(raw || '').trim().toUpperCase();
+};
+
+export const loadCajaFiscalSplitOverrides = () => {
+  try {
+    if (typeof globalThis === 'undefined' || !globalThis.localStorage) return {};
+    const raw = globalThis.localStorage.getItem(CAJA_FISCAL_SPLIT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+};
+
+export const saveCajaFiscalSplitOverride = (deskOrKey, override) => {
+  const key = normalizeDeskSplitKey(deskOrKey);
+  if (!key) return loadCajaFiscalSplitOverrides();
+  const current = loadCajaFiscalSplitOverrides();
+  const next = { ...current, [key]: override };
+  try {
+    if (typeof globalThis !== 'undefined' && globalThis.localStorage) {
+      globalThis.localStorage.setItem(CAJA_FISCAL_SPLIT_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch (_) {}
+  return next;
+};
+
+/**
+ * Calcula el desglose Fiscal y No Fiscal de una caja operativa garantizando exactamente:
+ *   Saldo Total Consolidado = Fiscal + No Fiscal
+ */
+export const computeCashDeskFiscalBreakdown = (
+  desk,
+  cashMovements = [],
+  allDesks = [],
+  bankAccounts = [],
+  config = {},
+  splitOverrides = null
+) => {
+  if (!desk) {
+    return {
+      totalUsd: 0,
+      totalBs: 0,
+      fiscalUsd: 0,
+      fiscalBs: 0,
+      noFiscalUsd: 0,
+      noFiscalBs: 0,
+      fiscalMovNetUsd: 0,
+      fiscalMovNetBs: 0,
+      fiscalMovCount: 0,
+      noFiscalMovCount: 0
+    };
+  }
+
+  const { tasaBcv } = resolveExchangeRates(config);
+  const moneda = String(desk?.moneda || 'USD').toUpperCase();
+  const rawUsd = Number(desk?.saldoUsd ?? desk?.saldo_usd ?? 0) || 0;
+  const rawBs = Number(desk?.saldoBs ?? desk?.saldo_bs ?? 0) || 0;
+  const isBsDesk = moneda === 'BS';
+  const totalUsd = isBsDesk
+    ? (rawBs !== 0 && tasaBcv > 0 ? round2(rawBs / tasaBcv) : round2(rawUsd))
+    : round2(rawUsd);
+  const totalBs = rawBs !== 0 ? round2(rawBs) : round2(totalUsd * tasaBcv);
+
+  const deskMovs = (Array.isArray(cashMovements) ? cashMovements : []).filter((m) =>
+    doesMovementBelongToAccount(m, 'CAJA', desk, allDesks, bankAccounts)
+  );
+
+  let fiscalMovNetUsd = 0;
+  let fiscalMovNetBs = 0;
+  let fiscalMovCount = 0;
+  let noFiscalMovCount = 0;
+
+  deskMovs.forEach((m) => {
+    const sign = String(m?.tipo || '').toUpperCase() === 'EGRESO' ? -1 : 1;
+    const mUsd = round2(Math.abs(Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0));
+    const mBs = round2(Math.abs(Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0));
+    const origin = classifyMovementDocOrigin(m);
+    if (origin === 'FISCAL') {
+      fiscalMovCount += 1;
+      fiscalMovNetUsd = round2(fiscalMovNetUsd + sign * mUsd);
+      fiscalMovNetBs = round2(fiscalMovNetBs + sign * (mBs > 0 ? mBs : (tasaBcv > 0 ? round2(mUsd * tasaBcv) : 0)));
+    } else {
+      noFiscalMovCount += 1;
+    }
+  });
+
+  const ovMap = splitOverrides && typeof splitOverrides === 'object' ? splitOverrides : {};
+  const splitKey = normalizeDeskSplitKey(desk);
+  const altKey = normalizeDeskSplitKey(desk?.id);
+  const ov = ovMap[splitKey] || ovMap[altKey] || null;
+
+  const hasExplicitField = desk.saldoFiscalUsd !== undefined || desk.saldo_fiscal_usd !== undefined;
+  let rawFiscalUsd;
+  let rawFiscalBs;
+
+  if (ov && typeof ov === 'object') {
+    const deltaMovUsd = round2(fiscalMovNetUsd - Number(ov.movFiscalBaselineUsd || 0));
+    const deltaMovBs = round2(fiscalMovNetBs - Number(ov.movFiscalBaselineBs || 0));
+    rawFiscalUsd = round2(Number(ov.baseFiscalUsd || 0) + deltaMovUsd);
+    rawFiscalBs = round2(Number(ov.baseFiscalBs || 0) + deltaMovBs);
+  } else if (hasExplicitField) {
+    rawFiscalUsd = Number(desk.saldoFiscalUsd ?? desk.saldo_fiscal_usd ?? 0) || 0;
+    rawFiscalBs = Number(desk.saldoFiscalBs ?? desk.saldo_fiscal_bs ?? (tasaBcv > 0 ? round2(rawFiscalUsd * tasaBcv) : 0)) || 0;
+  } else {
+    rawFiscalUsd = fiscalMovNetUsd;
+    rawFiscalBs = fiscalMovNetBs;
+  }
+
+  const clampZeroToTotal = (val, maxTotal) => {
+    if (maxTotal <= 0) return 0;
+    return round2(Math.max(0, Math.min(maxTotal, val)));
+  };
+
+  const fiscalUsd = clampZeroToTotal(rawFiscalUsd, totalUsd);
+  const noFiscalUsd = round2(totalUsd - fiscalUsd);
+  const fiscalBs = isBsDesk
+    ? clampZeroToTotal(rawFiscalBs, totalBs)
+    : (totalUsd > 0 ? round2(totalBs * (fiscalUsd / totalUsd)) : 0);
+  const noFiscalBs = round2(totalBs - fiscalBs);
+
+  return {
+    totalUsd,
+    totalBs,
+    fiscalUsd,
+    fiscalBs,
+    noFiscalUsd,
+    noFiscalBs,
+    fiscalMovNetUsd,
+    fiscalMovNetBs,
+    fiscalMovCount,
+    noFiscalMovCount
+  };
+};
+
+/**
+ * Resume todas las cajas registradoras con su desglose exacto Fiscal + No Fiscal = Total Consolidado.
+ */
+export const computeCashDesksFiscalTotals = (
+  cashDesks = [],
+  cashMovements = [],
+  bankAccounts = [],
+  config = {},
+  splitOverrides = null
+) => {
+  const desks = Array.isArray(cashDesks) ? cashDesks : [];
+  let totalUsd = 0;
+  let totalBs = 0;
+  let fiscalUsd = 0;
+  let fiscalBs = 0;
+  let noFiscalUsd = 0;
+  let noFiscalBs = 0;
+  const byDeskKey = new Map();
+
+  desks.forEach((d, idx) => {
+    const bd = computeCashDeskFiscalBreakdown(d, cashMovements, desks, bankAccounts, config, splitOverrides);
+    totalUsd = round2(totalUsd + bd.totalUsd);
+    totalBs = round2(totalBs + bd.totalBs);
+    fiscalUsd = round2(fiscalUsd + bd.fiscalUsd);
+    fiscalBs = round2(fiscalBs + bd.fiscalBs);
+    noFiscalUsd = round2(noFiscalUsd + bd.noFiscalUsd);
+    noFiscalBs = round2(noFiscalBs + bd.noFiscalBs);
+
+    const codeKey = normalizeDeskSplitKey(d) || `DESK-${idx}`;
+    const idKey = normalizeDeskSplitKey(d?.id);
+    byDeskKey.set(codeKey, bd);
+    if (idKey) byDeskKey.set(idKey, bd);
+  });
+
+  return {
+    totalUsd,
+    totalBs,
+    fiscalUsd,
+    fiscalBs,
+    noFiscalUsd,
+    noFiscalBs,
+    byDeskKey
+  };
 };
 
 /**

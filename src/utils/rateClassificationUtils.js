@@ -23,6 +23,15 @@ export const RATE_TYPE_META = {
     bg: 'rgba(16, 185, 129, 0.14)',
     border: 'rgba(16, 185, 129, 0.35)'
   },
+  BCV_EDITABLE: {
+    id: 'BCV_EDITABLE',
+    label: 'Tasa BCV Editable',
+    shortLabel: 'BCV EDIT.',
+    badgeText: 'BCV EDIT.',
+    color: '#059669',
+    bg: 'rgba(16, 185, 129, 0.14)',
+    border: 'rgba(16, 185, 129, 0.45)'
+  },
   EURO: {
     id: 'EURO',
     label: 'Tasa Euro',
@@ -40,6 +49,15 @@ export const RATE_TYPE_META = {
     color: '#818cf8',
     bg: 'rgba(129, 140, 248, 0.15)',
     border: 'rgba(129, 140, 248, 0.40)'
+  },
+  USDT_BS: {
+    id: 'USDT_BS',
+    label: 'Tasa USDT',
+    shortLabel: 'TASA USDT',
+    badgeText: 'TASA USDT',
+    color: '#14b8a6',
+    bg: 'rgba(20, 184, 166, 0.14)',
+    border: 'rgba(20, 184, 166, 0.38)'
   },
   EDITABLE: {
     id: 'EDITABLE',
@@ -143,8 +161,12 @@ export function normalizeRateType(rawType, { isFiscal = false, tipoDoc = '', mon
   let resolved = null;
   if (up === 'BCV' || up === 'TASA_BCV' || up === 'TASA BCV' || up === 'OFICIAL') {
     resolved = 'BCV';
+  } else if (up === 'BCV_EDITABLE' || up === 'TASA_BCV_EDITABLE' || up === 'TASA BCV EDITABLE' || up === 'BCV EDITABLE') {
+    resolved = 'BCV_EDITABLE';
   } else if (up === 'KEYSTONE' || up === 'KEY' || up === 'TASA_KEYSTONE' || up === 'TASA KEYSTONE' || up === 'PARALELA') {
     resolved = 'KEYSTONE';
+  } else if (up === 'USDT_BS' || up === 'TASA_USDT' || up === 'TASA USDT') {
+    resolved = 'USDT_BS';
   } else if (up === 'EDITABLE' || up === 'PERSONALIZADA' || up === 'PERSONALIZADO' || up === 'MANUAL' || up === 'CUSTOM' || up === 'TASA_PERSONALIZADA') {
     resolved = 'EDITABLE';
   } else if (up === 'EURO' || up === 'EUR' || up === 'TASA_EURO' || up === 'TASA EURO') {
@@ -158,7 +180,7 @@ export function normalizeRateType(rawType, { isFiscal = false, tipoDoc = '', mon
     resolved = directFromMoneda || fallback || 'BCV';
   }
 
-  if (effectiveFiscal && resolved === 'EURO') {
+  if (effectiveFiscal && (resolved === 'EURO' || resolved === 'USDT_BS')) {
     return 'BCV';
   }
   return resolved;
@@ -259,14 +281,17 @@ export function resolveRateMeta(rawType, fallback = 'BCV') {
   return RATE_TYPE_META[key] || RATE_TYPE_META.BCV;
 }
 
-export function resolveDefaultRateValue(tipoTasa, { tasaBcv = 1, tasaKeystone = 0, tasaEuro = 0, customRate = 0 } = {}) {
+export function resolveDefaultRateValue(tipoTasa, { tasaBcv = 1, tasaKeystone = 0, tasaEuro = 0, tasaUsdt = 0, customRate = 0 } = {}) {
   const normalized = normalizeRateType(tipoTasa, { fallback: 'BCV' });
   const safeBcv = Number(tasaBcv) > 0 ? round2(tasaBcv) : 1;
   const safeKeystone = Number(tasaKeystone) > 0 ? round2(tasaKeystone) : safeBcv;
   const safeEuro = Number(tasaEuro) > 0 ? round2(tasaEuro) : safeBcv;
+  const safeUsdt = Number(tasaUsdt) > 0 ? round2(tasaUsdt) : safeKeystone;
   if (normalized === 'BCV') return safeBcv;
+  if (normalized === 'BCV_EDITABLE') return Number(customRate) > 0 ? round2(customRate) : safeBcv;
   if (normalized === 'KEYSTONE') return safeKeystone;
   if (normalized === 'EURO') return safeEuro;
+  if (normalized === 'USDT_BS') return safeUsdt;
   if (normalized === 'EDITABLE') return Number(customRate) > 0 ? round2(customRate) : safeKeystone;
   if (DIRECT_CURRENCY_RATE_TYPES.includes(normalized)) return 1;
   return safeBcv;
@@ -298,7 +323,8 @@ export function resolveEffectiveRateNumber(record, fallbackTasa = 0) {
 
 export function summarizeByRateClassification(records = [], fallbackTasa = 1) {
   const buckets = {};
-  EXTENDED_RATE_TYPES.forEach((k) => {
+  const allRateKeys = ['BCV', 'BCV_EDITABLE', 'EURO', 'KEYSTONE', 'USDT_BS', 'EDITABLE', ...DIRECT_CURRENCY_RATE_TYPES];
+  allRateKeys.forEach((k) => {
     buckets[k] = {
       tipoTasa: k,
       label: RATE_TYPE_META[k].label,
@@ -329,7 +355,7 @@ export function summarizeByRateClassification(records = [], fallbackTasa = 1) {
     grandBs = round2(grandBs + bs);
   });
 
-  const rows = EXTENDED_RATE_TYPES
+  const rows = allRateKeys
     .map((k) => buckets[k])
     .filter((b) => b.count > 0);
 

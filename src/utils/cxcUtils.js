@@ -762,7 +762,7 @@ const makeDirectCxcBucket = (key, ordenIdx) => {
   };
 };
 
-export const CXC_RATE_ORDER = ['BCV', 'EURO', 'KEYSTONE', 'PERSONALIZADA', ...DIRECT_CURRENCY_RATE_TYPES];
+export const CXC_RATE_ORDER = ['BCV', 'BCV_EDITABLE', 'EURO', 'KEYSTONE', 'USDT_BS', 'PERSONALIZADA', ...DIRECT_CURRENCY_RATE_TYPES];
 
 export const CXC_RATE_BUCKETS = {
   BCV: {
@@ -773,6 +773,15 @@ export const CXC_RATE_BUCKETS = {
     color: '#10b981',
     badgeBg: 'rgba(16, 185, 129, 0.14)',
     border: 'rgba(16, 185, 129, 0.35)'
+  },
+  BCV_EDITABLE: {
+    id: 'BCV_EDITABLE',
+    label: 'Tasa BCV Editable',
+    shortLabel: 'BCV EDIT.',
+    printTitle: 'RENGLÓN 1B: COBROS A TASA BCV EDITABLE (DESPUÉS DE 4:00 PM)',
+    color: '#059669',
+    badgeBg: 'rgba(16, 185, 129, 0.14)',
+    border: 'rgba(16, 185, 129, 0.45)'
   },
   EURO: {
     id: 'EURO',
@@ -791,6 +800,15 @@ export const CXC_RATE_BUCKETS = {
     color: '#f59e0b',
     badgeBg: 'rgba(245, 158, 11, 0.14)',
     border: 'rgba(245, 158, 11, 0.35)'
+  },
+  USDT_BS: {
+    id: 'USDT_BS',
+    label: 'Tasa USDT',
+    shortLabel: 'TASA USDT',
+    printTitle: 'RENGLÓN 4: COBROS A TASA USDT (BS)',
+    color: '#14b8a6',
+    badgeBg: 'rgba(20, 184, 166, 0.14)',
+    border: 'rgba(20, 184, 166, 0.38)'
   },
   PERSONALIZADA: {
     id: 'PERSONALIZADA',
@@ -860,7 +878,7 @@ export function classifyCollectionRateType(mov, rates = {}) {
   const rawBs = Number(mov?.montoBs ?? mov?.monto_bs ?? 0);
 
   if (explicit) {
-    if (isFiscalCollectionMovement(mov) && explicit === 'EURO') return 'BCV';
+    if (isFiscalCollectionMovement(mov) && (explicit === 'EURO' || explicit === 'USDT_BS')) return 'BCV';
     return explicit;
   }
 
@@ -873,6 +891,7 @@ export function classifyCollectionRateType(mov, rates = {}) {
   if (directCandidate) return directCandidate;
   if (isFiscalCollectionMovement(mov)) return 'BCV';
 
+  if (/\[USDT_BS\]|\bTASA\s+USDT\b/.test(obs)) return 'USDT_BS';
   if (/\[KEYSTONE\]|\bTASA\s+KEYSTONE\b|\bKEYSTONE\b/.test(obs)) return 'KEYSTONE';
   if (/\[EURO\]|\bTASA\s+EURO\b|\bEURO\b/.test(obs)) return 'EURO';
   if (/\[PERSONALIZADA\]|\bTASA\s+PERSONALIZADA\b|\bPERSONALIZADA\b/.test(obs)) return 'PERSONALIZADA';

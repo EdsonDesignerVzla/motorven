@@ -16,6 +16,11 @@ import {
 } from '../utils/cxcUtils.js';
 import { generateCreditDebitNotePDF } from '../services/pdfReportService.js';
 import {
+  normalizeRateType,
+  isDirectCurrencyRateType,
+  resolveDefaultRateValue
+} from '../utils/rateClassificationUtils.js';
+import {
   getScopedCxcDeleteKeys,
   markCxcDocDeleted,
   isCxcEntryDeleted,
@@ -667,6 +672,37 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.ok(francisca && francisca.saldoUsd === 82, 'NE-002226 pendiente debe reflejarse en CxC');
 
   console.log('  ✓ 10. Aislamiento serie histórica vs 2026-11+ (000018 y NE-002226) en CxC verificado.');
+}
+
+// 11. Tasa USDT en Bolívares (USDT_BS) en Nota de Entrega vs divisa directa Binance (USDT)
+{
+  assert.equal(normalizeRateType('USDT_BS', { tipoDoc: 'NOTA_ENTREGA' }), 'USDT_BS');
+  assert.equal(normalizeRateType('USDT_BS', { tipoDoc: 'FACTURA' }), 'BCV');
+  assert.equal(normalizeRateType('BCV_EDITABLE', { tipoDoc: 'FACTURA' }), 'BCV_EDITABLE');
+  assert.equal(normalizeRateType('BCV_EDITABLE', { tipoDoc: 'NOTA_ENTREGA' }), 'BCV_EDITABLE');
+  assert.equal(isDirectCurrencyRateType('BCV_EDITABLE'), false);
+  assert.equal(resolveDefaultRateValue('BCV_EDITABLE', { tasaBcv: 914.02, customRate: 928.50 }), 928.5);
+  assert.equal(
+    classifyCollectionRateType(
+      { tipoDoc: 'FACTURA', factNum: '000671', tipoTasa: 'BCV_EDITABLE', tasa: 928.50, montoUsd: 87, montoBs: 80779.5 },
+      { tasaBcv: 914.02, tasaEuro: 1010.56, tasaKeystone: 1010.56 }
+    ),
+    'BCV_EDITABLE'
+  );
+  assert.equal(isDirectCurrencyRateType('USDT_BS'), false);
+  assert.equal(isDirectCurrencyRateType('USDT'), true);
+  assert.equal(
+    resolveDefaultRateValue('USDT_BS', { tasaBcv: 914.02, tasaKeystone: 1010.56, tasaEuro: 1010.56, tasaUsdt: 1065.80 }),
+    1065.8
+  );
+  assert.equal(
+    classifyCollectionRateType(
+      { tipoDoc: 'NOTA_ENTREGA', factNum: 'NE-000133', tipoTasa: 'USDT_BS', tasa: 1065.80, montoUsd: 65, montoBs: 69277 },
+      { tasaBcv: 914.02, tasaEuro: 1010.56, tasaKeystone: 1010.56 }
+    ),
+    'USDT_BS'
+  );
+  console.log('  ✓ 11. Tasa USDT en Bolívares (USDT_BS) para Nota de Entrega verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');
