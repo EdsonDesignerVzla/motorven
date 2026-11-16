@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { addCashMovement, deleteCashMovement, getCashMovements } from '../services/storageService.js';
-import { addSupabaseCashMovement, deleteSupabaseCashMovement, getSupabaseCashMovements } from '../services/supabaseService.js';
+import { addSupabaseCashMovement, updateSupabaseCashMovement, deleteSupabaseCashMovement, getSupabaseCashMovements } from '../services/supabaseService.js';
 import { getSyncQueue, clearSyncQueue } from '../services/offlineSyncService.js';
 import {
   resolveExchangeRates,
@@ -12,7 +12,11 @@ import {
   resolveTreasuryTargetForPaymentMethod,
   resolveTreasuryAccountForMovement,
   computeMovementReversalDelta,
-  applyTreasuryBalanceDelta
+  applyTreasuryBalanceDelta,
+  doesMovementBelongToAccount,
+  summarizeAccountMovements,
+  filterMovementsByPeriod,
+  computeMovementEditAccountAdjustments
 } from '../utils/treasuryAccountUtils.js';
 import { generateCashflowPDF, generateBankAccountsPDF } from '../services/pdfReportService.js';
 
@@ -214,6 +218,134 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   deleteCashMovement('MOV-DEL-1');
   clearSyncQueue();
   console.log('✓ 5. Eliminación de movimientos revierte saldo exacto en caja/banco y limpia almacenamiento/cola');
+}
+
+// 6. ListView segmentado por tabla (Cajas Registradoras vs Cuentas Bancarias) y resumen Entradas / Salidas
+{
+  const desks = [
+    { id: 'CAJA-01', coCaja: 'CAJA-01', descripcion: 'Caja Efectivo $ (Valencia)', moneda: 'USD', saldoUsd: 872, saldoBs: 754642, activa: true },
+    { id: 'CAJA-04', coCaja: 'CAJA-04', descripcion: 'Caja Zelle', moneda: 'USD', saldoUsd: 3321.26, saldoBs: 0, activa: true }
+  ];
+  const banks = [
+    { id: 'CTA-01', codCta: '01', bancoNombre: 'BANCO MERCANTIL', numCta: '01050027311027479197', moneda: 'BS', saldoBs: 900000, saldoUsd: 989 },
+    { id: 'CTA-02', codCta: '02', bancoNombre: 'BANCARIBE', numCta: '01140199671990039883', moneda: 'BS', saldoBs: 500000, saldoUsd: 500 }
+  ];
+  const mixedMovs = [
+    { id: 'M1', tipo: 'INGRESO', montoUsd: 100, montoBs: 0, cajaId: 'CAJA-01', cuentaNombre: 'Caja Efectivo $ (Valencia)' },
+    { id: 'M2', tipo: 'EGRESO', montoUsd: 40, montoBs: 36000, cajaId: 'CAJA-01', cuentaNombre: 'Caja Efectivo $ (Valencia)' },
+    { id: 'M3', tipo: 'INGRESO', montoUsd: 250, montoBs: 0, cuentaId: 'CAJA-04', cuentaNombre: 'Caja Zelle' },
+    { id: 'M4', tipo: 'EGRESO', montoUsd: 609.31, montoBs: 615000.96, cuentaNombre: '- 01140199671990039883' }
+  ];
+
+  const allCajasMovs = mixedMovs.filter(m => doesMovementBelongToAccount(m, 'CAJA', null, desks, banks));
+  assert.equal(allCajasMovs.length, 3);
+  const onlyCaja01 = mixedMovs.filter(m => doesMovementBelongToAccount(m, 'CAJA', desks[0], desks, banks));
+  assert.equal(onlyCaja01.length, 2);
+  const sumCaja01 = summarizeAccountMovements(onlyCaja01);
+  assert.equal(sumCaja01.entradasCount, 1);
+  assert.equal(sumCaja01.salidasCount, 1);
+  assert.equal(sumCaja01.entradasUsd, 100);
+  assert.equal(sumCaja01.salidasUsd, 40);
+  assert.equal(sumCaja01.netoUsd, 60);
+
+  const allBanksMovs = mixedMovs.filter(m => doesMovementBelongToAccount(m, 'BANCO', null, desks, banks));
+  assert.equal(allBanksMovs.length, 1);
+  assert.equal(allBanksMovs[0].id, 'M4');
+  console.log('✓ 6. ListView de movimientos filtra exactamente por Caja/Banco y resume Entradas/Salidas');
+}
+
+// 7. Filtros por Día / Semana / Mes / Período y edición de movimientos con recálculo de saldos
+{
+  const movsByDate = [
+    { id: 'D1', fecha: '2026-11-16T10:30:00.000Z', tipo: 'INGRESO', montoUsd: 50, montoBs: 0 },
+    { id: 'D2', fecha: '2026-11-18T14:00:00.000Z', tipo: 'EGRESO', montoUsd: 20, montoBs: 0 }, // misma semana Lun 16 - Dom 22
+    { id: 'D3', fecha: '2026-11-28T09:00:00.000Z', tipo: 'INGRESO', montoUsd: 90, montoBs: 0 }, // mismo mes nov
+    { id: 'D4', fecha: '2026-10-15T12:00:00.000Z', tipo: 'INGRESO', montoUsd: 30, montoBs: 0 }
+  ];
+
+  assert.deepEqual(
+    filterMovementsByPeriod(movsByDate, { periodMode: 'ALL' }).map(m => m.id),
+    ['D1', 'D2', 'D3', 'D4']
+  );
+  assert.deepEqual(
+    filterMovementsByPeriod(movsByDate, { periodMode: 'DIA', refDate: '2026-11-16' }).map(m => m.id),
+    ['D1']
+  );
+  assert.deepEqual(
+    filterMovementsByPeriod(movsByDate, { periodMode: 'SEMANA', refDate: '2026-11-18' }).map(m => m.id),
+    ['D1', 'D2']
+  );
+  assert.deepEqual(
+    filterMovementsByPeriod(movsByDate, { periodMode: 'MES', refMonth: '2026-11' }).map(m => m.id),
+    ['D1', 'D2', 'D3']
+  );
+  assert.deepEqual(
+    filterMovementsByPeriod(movsByDate, { periodMode: 'PERIODO', fromDate: '2026-11-17', toDate: '2026-11-30' }).map(m => m.id),
+    ['D2', 'D3']
+  );
+
+  // Recálculo neto de saldo al editar movimiento (misma cuenta vs cambio de tipo vs cambio de cuenta)
+  const desks = [
+    { id: 'CAJA-01', coCaja: 'CAJA-01', descripcion: 'Caja Valencia', saldoUsd: 500, saldoBs: 0 },
+    { id: 'CAJA-04', coCaja: 'CAJA-04', descripcion: 'Caja Zelle', saldoUsd: 1000, saldoBs: 0 }
+  ];
+  const banks = [
+    { id: 'CTA-01', codCta: '01', bancoNombre: 'BANCO MERCANTIL', saldoBs: 10000, saldoUsd: 10 }
+  ];
+
+  // Caso A: Mismo CAJA-01 cambia EGRESO 40 -> EGRESO 100 => delta adicional -60 USD
+  const adjSame = computeMovementEditAccountAdjustments(
+    { id: 'M-EDIT-1', tipo: 'EGRESO', montoUsd: 40, montoBs: 0, cajaId: 'CAJA-01' },
+    { id: 'M-EDIT-1', tipo: 'EGRESO', montoUsd: 100, montoBs: 0, cajaId: 'CAJA-01' },
+    desks,
+    banks
+  );
+  assert.equal(adjSame.length, 1);
+  assert.equal(adjSame[0].account.kind, 'CAJA');
+  assert.equal(adjSame[0].deltaUsd, -60);
+
+  // Caso B: Mismo CAJA-01 flip INGRESO 80 -> EGRESO 20 => revierte -80 y aplica -20 => -100 USD
+  const adjFlip = computeMovementEditAccountAdjustments(
+    { id: 'M-EDIT-2', tipo: 'INGRESO', montoUsd: 80, montoBs: 0, cajaId: 'CAJA-01' },
+    { id: 'M-EDIT-2', tipo: 'EGRESO', montoUsd: 20, montoBs: 0, cajaId: 'CAJA-01' },
+    desks,
+    banks
+  );
+  assert.equal(adjFlip.length, 1);
+  assert.equal(adjFlip[0].deltaUsd, -100);
+
+  // Caso C: Cambio de cuenta CAJA-01 INGRESO 120 -> CTA-01 INGRESO 120 (+10800 Bs)
+  const adjMove = computeMovementEditAccountAdjustments(
+    { id: 'M-EDIT-3', tipo: 'INGRESO', montoUsd: 120, montoBs: 0, cajaId: 'CAJA-01' },
+    { id: 'M-EDIT-3', tipo: 'INGRESO', montoUsd: 120, montoBs: 10800, cuentaId: 'CTA-01', cajaId: '', cuentaNombre: 'BANCO MERCANTIL' },
+    desks,
+    banks
+  );
+  assert.equal(adjMove.length, 2);
+  assert.equal(adjMove[0].account.kind, 'CAJA');
+  assert.equal(adjMove[0].deltaUsd, -120);
+  assert.equal(adjMove[1].account.kind, 'BANCO');
+  assert.equal(adjMove[1].deltaUsd, 120);
+  assert.equal(adjMove[1].deltaBs, 10800);
+
+  // Persistencia local + sync queue en updateSupabaseCashMovement
+  globalThis.localStorage.clear();
+  clearSyncQueue();
+  addCashMovement({ id: 'MOV-UPD-1', tipo: 'EGRESO', concepto: 'Original', montoUsd: 25, montoBs: 0, cajaId: 'CAJA-01' });
+  const updated = await updateSupabaseCashMovement({
+    id: 'MOV-UPD-1',
+    tipo: 'EGRESO',
+    concepto: 'Editado OK',
+    montoUsd: 35,
+    montoBs: 0,
+    cajaId: 'CAJA-01'
+  });
+  assert.equal(updated.concepto, 'Editado OK');
+  assert.equal(updated.montoUsd, 35);
+  assert.equal(getCashMovements().find(m => m.id === 'MOV-UPD-1')?.concepto, 'Editado OK');
+  deleteCashMovement('MOV-UPD-1');
+  clearSyncQueue();
+  console.log('✓ 7. Filtros Día/Semana/Mes/Período y edición/actualización con Doble Seguridad y recálculo de saldos verificados');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Wallet,
   Landmark,
@@ -26,6 +26,7 @@ import {
   Calculator,
   Calendar,
   Layers,
+  List,
   ArrowRightLeft
 } from 'lucide-react';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
@@ -41,7 +42,11 @@ import {
   computeCashDesksSummary,
   validateSufficientTreasuryBalance,
   resolveTreasuryAccountForMovement,
-  computeMovementReversalDelta
+  computeMovementReversalDelta,
+  doesMovementBelongToAccount,
+  summarizeAccountMovements,
+  toLocalDateKey,
+  filterMovementsByPeriod
 } from '../utils/treasuryAccountUtils';
 import { useNotification } from '../context/NotificationContext';
 
@@ -81,6 +86,7 @@ export default function CashBankModal({
   cashMovements = [],
   profitIncomeExpenseAccounts = [],
   onAddMovement,
+  onUpdateMovement,
   onDeleteMovement,
   onUpdateCashDesk,
   onDeleteCashDesk,
@@ -96,6 +102,35 @@ export default function CashBankModal({
   const [movSearch, setMovSearch] = useState('');
   const [movSort, setMovSort] = useState({ field: 'fecha', direction: 'desc' });
   const [deletingMovId, setDeletingMovId] = useState(null);
+  const todayDateKey = toLocalDateKey(new Date()) || new Date().toISOString().slice(0, 10);
+  const currentMonthKey = todayDateKey.slice(0, 7);
+  const createDefaultPeriodFilter = () => ({
+    periodMode: 'ALL',
+    refDate: todayDateKey,
+    refMonth: currentMonthKey,
+    fromDate: `${currentMonthKey}-01`,
+    toDate: todayDateKey
+  });
+
+  const [cajaMovFilterId, setCajaMovFilterId] = useState('ALL');
+  const [cajaMovTypeFilter, setCajaMovTypeFilter] = useState('ALL');
+  const [cajaPeriodFilter, setCajaPeriodFilter] = useState(createDefaultPeriodFilter);
+  const [bankMovFilterId, setBankMovFilterId] = useState('ALL');
+  const [bankMovTypeFilter, setBankMovTypeFilter] = useState('ALL');
+  const [bankPeriodFilter, setBankPeriodFilter] = useState(createDefaultPeriodFilter);
+  const [movPeriodFilter, setMovPeriodFilter] = useState(createDefaultPeriodFilter);
+  const [editingMovId, setEditingMovId] = useState(null);
+  const [inlineMovDraft, setInlineMovDraft] = useState(null);
+  const [savingMovId, setSavingMovId] = useState(null);
+  const [movDeleteSecurityModal, setMovDeleteSecurityModal] = useState({
+    isOpen: false,
+    step: 1,
+    movement: null,
+    confirmChecked: false,
+    confirmText: ''
+  });
+  const cajaMovSectionRef = useRef(null);
+  const bankMovSectionRef = useRef(null);
 
   // Estado para nuevo movimiento de caja / banco / transferencia
   const [showNewMovForm, setShowNewMovForm] = useState(false);
@@ -208,20 +243,8 @@ export default function CashBankModal({
     return list;
   }, [bankAccounts, bankSearch]);
 
-  // Filtrado y ordenamiento de movimientos
-  const filteredMovements = useMemo(() => {
-    let list = Array.isArray(cashMovements) ? [...cashMovements] : [];
-    if (movSearch.trim()) {
-      const q = movSearch.toLowerCase();
-      list = list.filter(m =>
-        (m.concepto || '').toLowerCase().includes(q) ||
-        (m.usuario || '').toLowerCase().includes(q) ||
-        (m.tipo || '').toLowerCase().includes(q) ||
-        (m.metodoPago || m.metodo || '').toLowerCase().includes(q) ||
-        (m.cuentaNombre || m.cajaOBanco || '').toLowerCase().includes(q)
-      );
-    }
-
+  const sortMovementsArray = (rows = []) => {
+    const list = Array.isArray(rows) ? [...rows] : [];
     const dir = movSort.direction === 'asc' ? 1 : -1;
     const field = movSort.field || 'fecha';
     const getSortValue = (m) => {
@@ -244,7 +267,6 @@ export default function CashBankModal({
           return 0;
       }
     };
-
     list.sort((a, b) => {
       const va = getSortValue(a);
       const vb = getSortValue(b);
@@ -256,9 +278,27 @@ export default function CashBankModal({
       }
       return cmp * dir;
     });
-
     return list;
-  }, [cashMovements, movSearch, movSort]);
+  };
+
+  // Filtrado por período, búsqueda y ordenamiento de movimientos generales
+  const filteredMovements = useMemo(() => {
+    let list = filterMovementsByPeriod(
+      Array.isArray(cashMovements) ? cashMovements : [],
+      movPeriodFilter
+    );
+    if (movSearch.trim()) {
+      const q = movSearch.toLowerCase();
+      list = list.filter(m =>
+        (m.concepto || '').toLowerCase().includes(q) ||
+        (m.usuario || '').toLowerCase().includes(q) ||
+        (m.tipo || '').toLowerCase().includes(q) ||
+        (m.metodoPago || m.metodo || '').toLowerCase().includes(q) ||
+        (m.cuentaNombre || m.cajaOBanco || '').toLowerCase().includes(q)
+      );
+    }
+    return sortMovementsArray(list);
+  }, [cashMovements, movSearch, movSort, movPeriodFilter]);
 
   const handleMovSort = (field) => {
     setMovSort((prev) => {
@@ -301,30 +341,723 @@ export default function CashBankModal({
     );
   };
 
-  const handleDeleteMovementClick = async (m) => {
-    if (!m || !onDeleteMovement) return;
-    const targetAcc = resolveTreasuryAccountForMovement(m, cashDesks, bankAccounts);
-    const { sign, deltaUsd, deltaBs } = computeMovementReversalDelta(m);
-    const usdTxt = formatUsd(Math.abs(deltaUsd));
-    const bsTxt = Math.abs(deltaBs) > 0 ? ` / ${formatBs(Math.abs(deltaBs))}` : '';
-    const effectDesc = targetAcc
-      ? `${sign > 0 ? 'Se reintegrarán' : 'Se descontarán'} ${usdTxt}${bsTxt} en "${targetAcc.label}".`
-      : 'No se encontró una caja o banco asociado para ajustar saldo automáticamente.';
+  const movementAccountOptions = useMemo(() => {
+    const opts = [];
+    (cashDesks || []).forEach((d, idx) => {
+      const key = String(d?.id || d?.coCaja || idx).trim();
+      const label = `${d?.coCaja || d?.co_caja || key} — ${d?.descripcion || d?.desCaja || 'Caja'}`;
+      opts.push({ value: `CAJA:${key}`, kind: 'CAJA', record: d, label });
+    });
+    (bankAccounts || []).forEach((b, idx) => {
+      const key = String(b?.id || b?.codCta || idx).trim();
+      const label = `${b?.codCta || b?.cod_cta || key} — ${b?.bancoNombre || b?.banco_nombre || 'Banco'}`;
+      opts.push({ value: `BANCO:${key}`, kind: 'BANCO', record: b, label });
+    });
+    return opts;
+  }, [cashDesks, bankAccounts]);
 
-    const ok = window.confirm(
-      `¿Eliminar movimiento "${m.concepto || m.id}" (${m.tipo || 'MOV'} por ${usdTxt})?\n\n${effectDesc}`
-    );
-    if (!ok) return;
-
+  const handleOpenEditMovementRow = (m) => {
+    if (!m) return;
     const rowKey = m.id || `${m.fecha}-${m.concepto}`;
+    const targetAcc = resolveTreasuryAccountForMovement(m, cashDesks, bankAccounts);
+    let accountKey = '';
+    if (targetAcc?.kind === 'CAJA' && targetAcc.record) {
+      accountKey = `CAJA:${String(targetAcc.record.id || targetAcc.record.coCaja || '').trim()}`;
+    } else if (targetAcc?.kind === 'BANCO' && targetAcc.record) {
+      accountKey = `BANCO:${String(targetAcc.record.id || targetAcc.record.codCta || '').trim()}`;
+    }
+
+    setEditingMovId(rowKey);
+    setInlineMovDraft({
+      fechaIso: toLocalDateKey(m.fecha || m.createdAt || new Date()) || todayDateKey,
+      tipo: String(m.tipo || 'EGRESO').toUpperCase() === 'INGRESO' ? 'INGRESO' : 'EGRESO',
+      concepto: m.concepto || '',
+      accountKey,
+      metodoPago: m.metodoPago || m.metodo_pago || m.metodo || '',
+      montoUsd: String(Number(m.montoUsd ?? m.monto_usd ?? 0)),
+      montoBs: String(Number(m.montoBs ?? m.monto_bs ?? 0))
+    });
+  };
+
+  const handleCancelEditMovementRow = () => {
+    setEditingMovId(null);
+    setInlineMovDraft(null);
+  };
+
+  const handleSaveMovementRow = async (m) => {
+    if (!m || !onUpdateMovement) return;
+    const rowKey = m.id || `${m.fecha}-${m.concepto}`;
+    if (editingMovId !== rowKey || !inlineMovDraft) {
+      handleOpenEditMovementRow(m);
+      notify?.info('Modo edición activado. Modifica los campos de la fila y presiona Guardar.');
+      return;
+    }
+
+    const cleanConcepto = String(inlineMovDraft.concepto || '').trim();
+    if (!cleanConcepto) {
+      notify?.warning('El concepto del movimiento no puede quedar vacío.');
+      return;
+    }
+
+    const parsedUsd = round2(Number(inlineMovDraft.montoUsd || 0));
+    const parsedBs = round2(Number(inlineMovDraft.montoBs || 0));
+    if (parsedUsd <= 0 && parsedBs <= 0) {
+      notify?.warning('Indica un monto válido mayor a cero en USD o Bs.');
+      return;
+    }
+
+    const originalDateKey = toLocalDateKey(m.fecha || m.createdAt);
+    const nextFecha = inlineMovDraft.fechaIso
+      ? (inlineMovDraft.fechaIso === originalDateKey && m.fecha
+          ? m.fecha
+          : `${inlineMovDraft.fechaIso}T12:00:00.000Z`)
+      : m.fecha;
+
+    const selectedOpt = movementAccountOptions.find((opt) => opt.value === inlineMovDraft.accountKey) || null;
+    let nextCuentaId = m.cuentaId ?? m.cuenta_id ?? '';
+    let nextCajaId = m.cajaId ?? m.caja_id ?? '';
+    let nextCuentaNombre = m.cuentaNombre ?? m.cuenta_nombre ?? m.cajaOBanco ?? m.caja_o_banco ?? '';
+
+    if (selectedOpt?.record) {
+      if (selectedOpt.kind === 'CAJA') {
+        nextCajaId = selectedOpt.record.id || selectedOpt.record.coCaja || '';
+        nextCuentaId = nextCajaId;
+        nextCuentaNombre = selectedOpt.record.descripcion || selectedOpt.record.coCaja || selectedOpt.label;
+      } else {
+        nextCuentaId = selectedOpt.record.id || selectedOpt.record.codCta || '';
+        nextCajaId = '';
+        nextCuentaNombre = selectedOpt.record.bancoNombre || selectedOpt.record.banco_nombre || selectedOpt.record.codCta || selectedOpt.label;
+      }
+    }
+
+    const nextMetodo = String(inlineMovDraft.metodoPago || m.metodoPago || m.metodo || '').trim() || 'EFECTIVO';
+    const nextMov = {
+      ...m,
+      fecha: nextFecha,
+      tipo: inlineMovDraft.tipo === 'INGRESO' ? 'INGRESO' : 'EGRESO',
+      concepto: cleanConcepto,
+      cuentaId: nextCuentaId,
+      cajaId: nextCajaId,
+      cuentaNombre: nextCuentaNombre,
+      cajaOBanco: nextCuentaNombre,
+      metodo: nextMetodo,
+      metodoPago: nextMetodo,
+      montoUsd: parsedUsd,
+      montoBs: parsedBs
+    };
+
+    try {
+      setSavingMovId(rowKey);
+      await onUpdateMovement(m, nextMov);
+      setEditingMovId(null);
+      setInlineMovDraft(null);
+      notify?.success('Movimiento actualizado y saldo recalculado correctamente.');
+    } catch (err) {
+      console.error('Error al guardar movimiento:', err);
+      notify?.error(err?.message || 'No se pudo actualizar el movimiento.');
+    } finally {
+      setSavingMovId(null);
+    }
+  };
+
+  const handleRequestDeleteMovement = (m) => {
+    if (!m || !onDeleteMovement) return;
+    setMovDeleteSecurityModal({
+      isOpen: true,
+      step: 1,
+      movement: m,
+      confirmChecked: false,
+      confirmText: ''
+    });
+  };
+
+  const handleConfirmFinalDeleteMovement = async () => {
+    const targetMov = movDeleteSecurityModal.movement;
+    if (!targetMov || !onDeleteMovement) return;
+
+    const typed = String(movDeleteSecurityModal.confirmText || '').trim().toUpperCase();
+    if (!movDeleteSecurityModal.confirmChecked || typed !== 'ELIMINAR') {
+      notify?.warning('Completa la casilla y escribe exactamente ELIMINAR para continuar.');
+      return;
+    }
+
+    const rowKey = targetMov.id || `${targetMov.fecha}-${targetMov.concepto}`;
     try {
       setDeletingMovId(rowKey);
-      await onDeleteMovement(m);
+      await onDeleteMovement(targetMov);
+      if (editingMovId === rowKey) {
+        setEditingMovId(null);
+        setInlineMovDraft(null);
+      }
+      setMovDeleteSecurityModal({
+        isOpen: false,
+        step: 1,
+        movement: null,
+        confirmChecked: false,
+        confirmText: ''
+      });
+      notify?.success('Movimiento eliminado y saldo revertido con Doble Seguridad.');
     } catch (err) {
       console.error('Error al eliminar movimiento:', err);
+      notify?.error(err?.message || 'No se pudo eliminar el movimiento.');
     } finally {
       setDeletingMovId(null);
     }
+  };
+
+  const renderPeriodFilterControls = (periodFilter, onChangePeriodFilter) => {
+    const activeMode = periodFilter?.periodMode || 'ALL';
+    const updateFilter = (patch) => {
+      if (!onChangePeriodFilter) return;
+      onChangePeriodFilter((prev) => ({ ...prev, ...patch }));
+    };
+
+    const modeOptions = [
+      { id: 'ALL', label: 'Todos' },
+      { id: 'DIA', label: 'Día' },
+      { id: 'SEMANA', label: 'Semana' },
+      { id: 'MES', label: 'Mes' },
+      { id: 'PERIODO', label: 'Período' }
+    ];
+
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', fontWeight: 700, color: '#94a3b8' }}>
+          <Calendar size={14} color="#38bdf8" />
+          <span>Período:</span>
+        </div>
+        <div style={{ display: 'inline-flex', background: 'var(--bg-surface)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)', gap: '3px', flexWrap: 'wrap' }}>
+          {modeOptions.map((opt) => {
+            const isActive = activeMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => updateFilter({ periodMode: opt.id })}
+                style={{
+                  padding: '0.32rem 0.65rem',
+                  borderRadius: '6px',
+                  border: isActive ? '1px solid #38bdf8' : '1px solid transparent',
+                  background: isActive ? 'rgba(56, 189, 248, 0.14)' : 'transparent',
+                  color: isActive ? '#38bdf8' : 'var(--text-muted)',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {(activeMode === 'DIA' || activeMode === 'SEMANA') && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <input
+              type="date"
+              value={periodFilter?.refDate || todayDateKey}
+              onChange={(e) => updateFilter({ refDate: e.target.value })}
+              className="input-modern"
+              style={{ padding: '0.3rem 0.55rem', fontSize: '0.78rem', width: 'auto' }}
+              title={activeMode === 'SEMANA' ? 'Selecciona cualquier día de la semana (Lun–Dom)' : 'Selecciona el día exacto'}
+            />
+            {activeMode === 'SEMANA' && (
+              <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 600 }}>Lun–Dom</span>
+            )}
+          </div>
+        )}
+
+        {activeMode === 'MES' && (
+          <input
+            type="month"
+            value={periodFilter?.refMonth || currentMonthKey}
+            onChange={(e) => updateFilter({ refMonth: e.target.value })}
+            className="input-modern"
+            style={{ padding: '0.3rem 0.55rem', fontSize: '0.78rem', width: 'auto' }}
+            title="Selecciona el mes a consultar"
+          />
+        )}
+
+        {activeMode === 'PERIODO' && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <input
+              type="date"
+              value={periodFilter?.fromDate || `${currentMonthKey}-01`}
+              onChange={(e) => updateFilter({ fromDate: e.target.value })}
+              className="input-modern"
+              style={{ padding: '0.3rem 0.55rem', fontSize: '0.78rem', width: 'auto' }}
+              title="Fecha inicial"
+            />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>a</span>
+            <input
+              type="date"
+              value={periodFilter?.toDate || todayDateKey}
+              onChange={(e) => updateFilter({ toDate: e.target.value })}
+              className="input-modern"
+              style={{ padding: '0.3rem 0.55rem', fontSize: '0.78rem', width: 'auto' }}
+              title="Fecha final"
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderMovementsTable = (rows = [], emptyMsg = 'No se han registrado movimientos aún.') => {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return (
+        <div style={{ textAlign: 'center', padding: '2.25rem 1rem', color: 'var(--text-muted)' }}>
+          <ArrowRightLeft size={32} style={{ margin: '0 auto 0.6rem', opacity: 0.4 }} />
+          <p style={{ margin: 0, fontSize: '0.9rem' }}>{emptyMsg}</p>
+        </div>
+      );
+    }
+    return (
+      <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+          <thead>
+            <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
+              {renderMovSortableTh('Fecha', 'fecha', 'left')}
+              {renderMovSortableTh('Tipo', 'tipo', 'left')}
+              {renderMovSortableTh('Concepto', 'concepto', 'left')}
+              {renderMovSortableTh('Cuenta / Método', 'cuenta', 'left')}
+              {renderMovSortableTh('Usuario', 'usuario', 'left')}
+              {renderMovSortableTh('Monto USD', 'montoUsd', 'right')}
+              {renderMovSortableTh('Monto Bs', 'montoBs', 'right')}
+              <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center', whiteSpace: 'nowrap' }}>Vale PDF / Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((m, idx) => {
+              const isIngreso = m.tipo === 'INGRESO';
+              const movUsd = Number(m.montoUsd ?? m.monto_usd ?? 0);
+              const movBs = Number(m.montoBs ?? m.monto_bs ?? 0);
+              const accountLabel = m.cuentaNombre || m.cuenta_nombre || m.cajaOBanco || m.caja_o_banco || m.metodoPago || m.metodo || 'Efectivo';
+              const methodLabel = m.metodoPago || m.metodo_pago || m.metodo || '';
+              const rowKey = m.id || `${m.fecha}-${m.concepto}`;
+              const isDeleting = deletingMovId === rowKey;
+              const isSaving = savingMovId === rowKey;
+              const isEditingRow = editingMovId === rowKey && !!inlineMovDraft;
+              return (
+                <tr
+                  key={m.id || idx}
+                  style={{
+                    borderBottom: '1px solid var(--border-glass)',
+                    background: isEditingRow
+                      ? 'rgba(245, 158, 11, 0.08)'
+                      : (idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)')
+                  }}
+                >
+                  <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                    {isEditingRow ? (
+                      <input
+                        type="date"
+                        value={inlineMovDraft.fechaIso || ''}
+                        onChange={(e) => setInlineMovDraft(prev => ({ ...prev, fechaIso: e.target.value }))}
+                        className="input-modern"
+                        style={{ padding: '0.3rem 0.45rem', fontSize: '0.78rem', width: '132px' }}
+                      />
+                    ) : (
+                      m.fecha ? new Date(m.fecha).toLocaleString() : 'N/A'
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem' }}>
+                    {isEditingRow ? (
+                      <select
+                        value={inlineMovDraft.tipo}
+                        onChange={(e) => setInlineMovDraft(prev => ({ ...prev, tipo: e.target.value }))}
+                        className="select-modern"
+                        style={{ padding: '0.3rem 0.45rem', fontSize: '0.78rem', minWidth: '105px' }}
+                      >
+                        <option value="INGRESO">INGRESO</option>
+                        <option value="EGRESO">EGRESO</option>
+                      </select>
+                    ) : (
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '4px',
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        background: isIngreso ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                        color: isIngreso ? '#059669' : '#dc2626'
+                      }}>
+                        {isIngreso ? <ArrowDownRight size={14} /> : <ArrowUpRight size={14} />}
+                        {m.tipo}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', fontWeight: 500, color: 'var(--text-primary)', minWidth: isEditingRow ? '200px' : 'auto' }}>
+                    {isEditingRow ? (
+                      <input
+                        type="text"
+                        value={inlineMovDraft.concepto}
+                        onChange={(e) => setInlineMovDraft(prev => ({ ...prev, concepto: e.target.value }))}
+                        className="input-modern"
+                        style={{ padding: '0.35rem 0.55rem', fontSize: '0.8rem', width: '100%' }}
+                        placeholder="Concepto del movimiento"
+                      />
+                    ) : (
+                      m.concepto
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)', fontSize: '0.8rem', minWidth: isEditingRow ? '190px' : 'auto' }}>
+                    {isEditingRow ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <select
+                          value={inlineMovDraft.accountKey}
+                          onChange={(e) => setInlineMovDraft(prev => ({ ...prev, accountKey: e.target.value }))}
+                          className="select-modern"
+                          style={{ padding: '0.3rem 0.45rem', fontSize: '0.76rem', width: '100%' }}
+                        >
+                          <option value="">-- Mantener cuenta --</option>
+                          {movementAccountOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={inlineMovDraft.metodoPago}
+                          onChange={(e) => setInlineMovDraft(prev => ({ ...prev, metodoPago: e.target.value }))}
+                          className="input-modern"
+                          style={{ padding: '0.25rem 0.45rem', fontSize: '0.72rem', width: '100%' }}
+                          placeholder="Método / Ref"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ fontWeight: 600 }}>{accountLabel}</div>
+                        {methodLabel && methodLabel !== accountLabel && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{methodLabel}</div>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)' }}>
+                    {m.usuario || 'Sistema'}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 700, color: isIngreso ? '#059669' : '#dc2626' }}>
+                    {isEditingRow ? (
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={inlineMovDraft.montoUsd}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const numUsd = Number(val || 0);
+                          setInlineMovDraft(prev => ({
+                            ...prev,
+                            montoUsd: val,
+                            montoBs: !Number.isNaN(numUsd) && tasaBcv > 0
+                              ? String(round2(numUsd * tasaBcv))
+                              : prev.montoBs
+                          }));
+                        }}
+                        className="input-modern"
+                        style={{ padding: '0.3rem 0.45rem', fontSize: '0.8rem', width: '95px', textAlign: 'right', fontFamily: 'var(--font-code)' }}
+                      />
+                    ) : (
+                      formatUsd(movUsd)
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {isEditingRow ? (
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={inlineMovDraft.montoBs}
+                        onChange={(e) => setInlineMovDraft(prev => ({ ...prev, montoBs: e.target.value }))}
+                        className="input-modern"
+                        style={{ padding: '0.3rem 0.45rem', fontSize: '0.8rem', width: '110px', textAlign: 'right', fontFamily: 'var(--font-code)' }}
+                      />
+                    ) : (
+                      formatBs(movBs)
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ padding: '4px 7px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        onClick={() => generateExpenseVoucherPDF({ movement: m, config, currentUser })}
+                        title="Generar Comprobante / Vale de Caja en PDF"
+                      >
+                        <Printer size={12} /> Vale PDF
+                      </button>
+
+                      {onUpdateMovement && (
+                        <>
+                          {!isEditingRow ? (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={() => handleOpenEditMovementRow(m)}
+                              title="Editar campos de este movimiento"
+                              style={{
+                                padding: '4px 7px',
+                                borderRadius: '6px',
+                                border: '1px solid rgba(245, 158, 11, 0.45)',
+                                background: 'rgba(245, 158, 11, 0.14)',
+                                color: '#fbbf24',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Edit2 size={12} /> Editar
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={handleCancelEditMovementRow}
+                              title="Cancelar edición"
+                              style={{
+                                padding: '4px 6px',
+                                borderRadius: '6px',
+                                border: '1px solid var(--border-glass)',
+                                background: 'rgba(148, 163, 184, 0.12)',
+                                color: '#cbd5e1',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={isSaving}
+                            onClick={() => handleSaveMovementRow(m)}
+                            title={isEditingRow ? 'Guardar cambios y recalcular saldos' : 'Activar edición para guardar cambios'}
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: '6px',
+                              border: isEditingRow ? 'none' : '1px solid rgba(16, 185, 129, 0.4)',
+                              background: isEditingRow
+                                ? 'linear-gradient(135deg, #10b981, #059669)'
+                                : 'rgba(16, 185, 129, 0.12)',
+                              color: isEditingRow ? '#ffffff' : '#34d399',
+                              fontSize: '0.72rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              cursor: isSaving ? 'wait' : 'pointer',
+                              opacity: isSaving ? 0.6 : 1
+                            }}
+                          >
+                            <Save size={12} /> {isSaving ? '...' : 'Guardar'}
+                          </button>
+                        </>
+                      )}
+
+                      {onDeleteMovement && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={isDeleting}
+                          onClick={() => handleRequestDeleteMovement(m)}
+                          title="Eliminar movimiento con Doble Seguridad y revertir su saldo"
+                          style={{
+                            padding: '4px 7px',
+                            borderRadius: '6px',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            background: 'rgba(239, 68, 68, 0.12)',
+                            color: '#ef4444',
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            cursor: isDeleting ? 'wait' : 'pointer',
+                            opacity: isDeleting ? 0.55 : 1
+                          }}
+                        >
+                          <Trash2 size={12} /> Eliminar
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderScopedMovementsListView = ({
+    scopeKind,
+    accountsList = [],
+    selectedAccountKey = 'ALL',
+    onSelectAccountKey,
+    typeFilter = 'ALL',
+    onChangeTypeFilter,
+    periodFilter,
+    onChangePeriodFilter,
+    sectionRef
+  }) => {
+    const isCajaScope = scopeKind === 'CAJA';
+    const selectedRecord = selectedAccountKey === 'ALL'
+      ? null
+      : accountsList.find((acc) => {
+          const accKey = String(acc?.id || acc?.coCaja || acc?.codCta || '').trim();
+          return accKey === selectedAccountKey;
+        }) || null;
+
+    const scopedByAccount = (cashMovements || []).filter((m) =>
+      doesMovementBelongToAccount(m, scopeKind, selectedRecord, cashDesks, bankAccounts)
+    );
+    const scopedAllTypes = sortMovementsArray(
+      filterMovementsByPeriod(scopedByAccount, periodFilter)
+    );
+    const summary = summarizeAccountMovements(scopedAllTypes);
+    const displayedRows = typeFilter === 'ALL'
+      ? scopedAllTypes
+      : scopedAllTypes.filter((m) => String(m?.tipo || '').toUpperCase() === typeFilter);
+
+    const activeAccountTitle = selectedRecord
+      ? (isCajaScope
+          ? `${selectedRecord.coCaja || selectedRecord.co_caja || ''} — ${selectedRecord.descripcion || ''}`
+          : `${selectedRecord.codCta || selectedRecord.cod_cta || ''} — ${selectedRecord.bancoNombre || selectedRecord.banco_nombre || ''}`)
+      : (isCajaScope ? 'Todas las Cajas Registradoras' : 'Todas las Cuentas Bancarias');
+
+    return (
+      <div
+        ref={sectionRef}
+        style={{
+          marginTop: '1.65rem',
+          padding: '1.25rem',
+          background: 'var(--bg-card-glass)',
+          border: '1px solid var(--border-glass)',
+          borderRadius: '14px',
+          boxShadow: 'var(--shadow-card)'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <div style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              background: 'rgba(56, 189, 248, 0.14)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              color: '#38bdf8',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <List size={16} />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                ListView de Movimientos (Entradas y Salidas) — {activeAccountTitle}
+              </h3>
+              <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                Mostrando {displayedRows.length} movimiento(s) {selectedRecord ? 'de la cuenta seleccionada' : (isCajaScope ? 'del catálogo de Cajas' : 'del catálogo Bancario')}
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <select
+              value={selectedAccountKey}
+              onChange={(e) => onSelectAccountKey(e.target.value)}
+              className="select-modern"
+              style={{ padding: '0.45rem 0.75rem', fontSize: '0.8rem', minWidth: '220px' }}
+              title="Filtrar movimientos por cuenta específica"
+            >
+              <option value="ALL">
+                {isCajaScope ? `Todas las Cajas (${accountsList.length})` : `Todos los Bancos (${accountsList.length})`}
+              </option>
+              {accountsList.map((acc, idx) => {
+                const key = String(acc?.id || acc?.coCaja || acc?.codCta || idx).trim();
+                const label = isCajaScope
+                  ? `${acc.coCaja || acc.co_caja || key} — ${acc.descripcion || ''}`
+                  : `${acc.codCta || acc.cod_cta || key} — ${acc.bancoNombre || acc.banco_nombre || ''}`;
+                return (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+
+            <div style={{ display: 'inline-flex', background: 'var(--bg-surface)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glass)', gap: '3px' }}>
+              {[
+                { id: 'ALL', label: `Todos (${summary.totalCount})`, color: '#38bdf8' },
+                { id: 'INGRESO', label: `Entradas (${summary.entradasCount})`, color: '#10b981' },
+                { id: 'EGRESO', label: `Salidas (${summary.salidasCount})`, color: '#ef4444' }
+              ].map((t) => {
+                const isActive = typeFilter === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => onChangeTypeFilter(t.id)}
+                    style={{
+                      padding: '0.35rem 0.65rem',
+                      borderRadius: '6px',
+                      border: isActive ? `1px solid ${t.color}` : '1px solid transparent',
+                      background: isActive ? 'rgba(15, 23, 42, 0.7)' : 'transparent',
+                      color: isActive ? t.color : 'var(--text-muted)',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '0.95rem', padding: '0.6rem 0.85rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.35)', border: '1px solid var(--border-glass)' }}>
+          {renderPeriodFilterControls(periodFilter, onChangePeriodFilter)}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+          <div style={{ padding: '0.65rem 0.9rem', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#10b981', textTransform: 'uppercase' }}>Total Entradas ({summary.entradasCount})</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#34d399', fontFamily: 'var(--font-code)' }}>+ {formatUsd(summary.entradasUsd)}</div>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>{formatBs(summary.entradasBs)}</div>
+          </div>
+          <div style={{ padding: '0.65rem 0.9rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase' }}>Total Salidas ({summary.salidasCount})</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#f87171', fontFamily: 'var(--font-code)' }}>- {formatUsd(summary.salidasUsd)}</div>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>{formatBs(summary.salidasBs)}</div>
+          </div>
+          <div style={{ padding: '0.65rem 0.9rem', borderRadius: '10px', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>Flujo Neto Período</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, color: summary.netoUsd >= 0 ? '#38bdf8' : '#f87171', fontFamily: 'var(--font-code)' }}>
+              {summary.netoUsd >= 0 ? '+' : ''}{formatUsd(summary.netoUsd)}
+            </div>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>{formatBs(summary.netoBs)}</div>
+          </div>
+        </div>
+
+        {renderMovementsTable(
+          displayedRows,
+          `No hay ${typeFilter === 'INGRESO' ? 'entradas' : (typeFilter === 'EGRESO' ? 'salidas' : 'movimientos')} registrados para ${activeAccountTitle}.`
+        )}
+      </div>
+    );
   };
 
   // Selección de caja física para arqueo (evita mezclar cajas digitales como Zelle/Binance)
@@ -1798,6 +2531,29 @@ export default function CashBankModal({
                               <button
                                 type="button"
                                 onClick={() => {
+                                  const key = String(desk.id || desk.coCaja || '').trim();
+                                  setCajaMovFilterId(key || 'ALL');
+                                  setTimeout(() => cajaMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+                                }}
+                                className="btn"
+                                style={{
+                                  padding: '0.3rem 0.55rem',
+                                  fontSize: '0.75rem',
+                                  borderRadius: '6px',
+                                  background: 'rgba(56, 189, 248, 0.14)',
+                                  color: '#38bdf8',
+                                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}
+                                title="Ver ListView de entradas y salidas de esta caja"
+                              >
+                                <List size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
                                   setMovAccountKind('CAJA');
                                   setSelectedDeskId(desk.id || desk.coCaja);
                                   setShowNewMovForm(true);
@@ -1904,6 +2660,27 @@ export default function CashBankModal({
                             </span>
                             <button
                               type="button"
+                              onClick={() => {
+                                const key = String(desk.id || desk.coCaja || '').trim();
+                                setCajaMovFilterId(key || 'ALL');
+                                setTimeout(() => cajaMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+                              }}
+                              style={{
+                                background: 'rgba(56, 189, 248, 0.14)',
+                                border: '1px solid rgba(56, 189, 248, 0.3)',
+                                color: '#38bdf8',
+                                borderRadius: '6px',
+                                padding: '0.25rem 0.4rem',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center'
+                              }}
+                              title="Ver movimientos (Entradas y Salidas) de esta caja"
+                            >
+                              <List size={12} />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleOpenEditCaja(desk)}
                               style={{
                                 background: 'rgba(217, 119, 6, 0.12)',
@@ -1978,6 +2755,18 @@ export default function CashBankModal({
                   );
                 })}
               </div>
+
+              {renderScopedMovementsListView({
+                scopeKind: 'CAJA',
+                accountsList: cashDesks,
+                selectedAccountKey: cajaMovFilterId,
+                onSelectAccountKey: setCajaMovFilterId,
+                typeFilter: cajaMovTypeFilter,
+                onChangeTypeFilter: setCajaMovTypeFilter,
+                periodFilter: cajaPeriodFilter,
+                onChangePeriodFilter: setCajaPeriodFilter,
+                sectionRef: cajaMovSectionRef
+              })}
             </div>
           )}
 
@@ -2519,9 +3308,36 @@ export default function CashBankModal({
                             )}
                           </td>
 
-                          {/* COLUMNA DE ACCIONES: CREAR, EDITAR, GUARDAR, ELIMINAR */}
+                          {/* COLUMNA DE ACCIONES: MOVIMIENTOS, CREAR, EDITAR, GUARDAR, ELIMINAR */}
                           <td style={{ padding: '0.8rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.35rem' }}>
+                              {/* Acción: Ver Movimientos */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const key = String(rowId || code || '').trim();
+                                  setBankMovFilterId(key || 'ALL');
+                                  setTimeout(() => bankMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+                                }}
+                                className="btn"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.28rem',
+                                  padding: '0.32rem 0.55rem',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  borderRadius: '6px',
+                                  background: 'rgba(56, 189, 248, 0.14)',
+                                  color: '#38bdf8',
+                                  border: '1px solid rgba(56, 189, 248, 0.35)'
+                                }}
+                                title="Ver ListView de entradas y salidas de esta cuenta bancaria"
+                              >
+                                <List size={12} />
+                                <span>Movs</span>
+                              </button>
+
                               {/* Acción: Editar */}
                               <button
                                 type="button"
@@ -2614,6 +3430,18 @@ export default function CashBankModal({
                   </tbody>
                 </table>
               </div>
+
+              {renderScopedMovementsListView({
+                scopeKind: 'BANCO',
+                accountsList: bankAccounts,
+                selectedAccountKey: bankMovFilterId,
+                onSelectAccountKey: setBankMovFilterId,
+                typeFilter: bankMovTypeFilter,
+                onChangeTypeFilter: setBankMovTypeFilter,
+                periodFilter: bankPeriodFilter,
+                onChangePeriodFilter: setBankPeriodFilter,
+                sectionRef: bankMovSectionRef
+              })}
 
               {/* MODAL DE DOBLE SEGURIDAD PARA ELIMINAR CUENTA BANCARIA */}
               {bankDeleteSecurityModal.isOpen && bankDeleteSecurityModal.bank && (
@@ -3152,7 +3980,7 @@ export default function CashBankModal({
           {/* 4. PESTAÑA: MOVIMIENTOS RECIENTES */}
           {activeTab === 'movimientos' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', gap: '1rem', flexWrap: 'wrap' }}>
                 <div className="search-wrapper" style={{ flex: '1 1 300px' }}>
                   <Search size={16} className="search-icon" />
                   <input
@@ -3169,126 +3997,233 @@ export default function CashBankModal({
                 </div>
               </div>
 
-              {filteredMovements.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
-                  <ArrowRightLeft size={36} style={{ margin: '0 auto 0.75rem', opacity: 0.4 }} />
-                  <p style={{ margin: 0, fontSize: '0.95rem' }}>No se han registrado movimientos de caja aún.</p>
-                </div>
-              ) : (
-                <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
-                    <thead>
-                      <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
-                        {renderMovSortableTh('Fecha', 'fecha', 'left')}
-                        {renderMovSortableTh('Tipo', 'tipo', 'left')}
-                        {renderMovSortableTh('Concepto', 'concepto', 'left')}
-                        {renderMovSortableTh('Cuenta / Método', 'cuenta', 'left')}
-                        {renderMovSortableTh('Usuario', 'usuario', 'left')}
-                        {renderMovSortableTh('Monto USD', 'montoUsd', 'right')}
-                        {renderMovSortableTh('Monto Bs', 'montoBs', 'right')}
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center', whiteSpace: 'nowrap' }}>Vale PDF / Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredMovements.map((m, idx) => {
-                        const isIngreso = m.tipo === 'INGRESO';
-                        const movUsd = Number(m.montoUsd ?? m.monto_usd ?? 0);
-                        const movBs = Number(m.montoBs ?? m.monto_bs ?? 0);
-                        const accountLabel = m.cuentaNombre || m.cuenta_nombre || m.cajaOBanco || m.caja_o_banco || m.metodoPago || m.metodo || 'Efectivo';
-                        const methodLabel = m.metodoPago || m.metodo_pago || m.metodo || '';
-                        const rowKey = m.id || `${m.fecha}-${m.concepto}`;
-                        const isDeleting = deletingMovId === rowKey;
-                        return (
-                          <tr
-                            key={m.id || idx}
-                            style={{
-                              borderBottom: '1px solid var(--border-glass)',
-                              background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'
-                            }}
-                          >
-                            <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)' }}>
-                              {m.fecha ? new Date(m.fecha).toLocaleString() : 'N/A'}
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem' }}>
-                              <span style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                                padding: '0.2rem 0.5rem',
-                                borderRadius: '4px',
-                                fontSize: '0.75rem',
-                                fontWeight: 700,
-                                background: isIngreso ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                                color: isIngreso ? '#059669' : '#dc2626'
-                              }}>
-                                {isIngreso ? <ArrowDownRight size={14} /> : <ArrowUpRight size={14} />}
-                                {m.tipo}
-                              </span>
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                              {m.concepto}
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                              <div style={{ fontWeight: 600 }}>{accountLabel}</div>
-                              {methodLabel && methodLabel !== accountLabel && (
-                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{methodLabel}</div>
-                              )}
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)' }}>
-                              {m.usuario || 'Sistema'}
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 700, color: isIngreso ? '#059669' : '#dc2626' }}>
-                              {formatUsd(movUsd)}
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)' }}>
-                              {formatBs(movBs)}
-                            </td>
-                            <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                              <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-sm"
-                                  style={{ padding: '3px 8px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                  onClick={() => generateExpenseVoucherPDF({ movement: m, config, currentUser })}
-                                  title="Generar Comprobante / Vale de Caja en PDF"
-                                >
-                                  <Printer size={12} /> Vale PDF
-                                </button>
-                                {onDeleteMovement && (
-                                  <button
-                                    type="button"
-                                    className="btn btn-sm"
-                                    disabled={isDeleting}
-                                    onClick={() => handleDeleteMovementClick(m)}
-                                    title="Eliminar movimiento y revertir su saldo en caja o banco"
-                                    style={{
-                                      padding: '4px 7px',
-                                      borderRadius: '6px',
-                                      border: '1px solid rgba(239, 68, 68, 0.35)',
-                                      background: 'rgba(239, 68, 68, 0.12)',
-                                      color: '#ef4444',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      cursor: isDeleting ? 'wait' : 'pointer',
-                                      opacity: isDeleting ? 0.55 : 1
-                                    }}
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <div style={{ marginBottom: '1rem', padding: '0.65rem 0.9rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.35)', border: '1px solid var(--border-glass)' }}>
+                {renderPeriodFilterControls(movPeriodFilter, setMovPeriodFilter)}
+              </div>
+
+              {renderMovementsTable(filteredMovements, 'No se han registrado movimientos de caja aún.')}
             </div>
           )}
         </div>
+
+        {/* MODAL DE DOBLE SEGURIDAD PARA ELIMINAR MOVIMIENTO */}
+        {movDeleteSecurityModal.isOpen && movDeleteSecurityModal.movement && (() => {
+          const targetMov = movDeleteSecurityModal.movement;
+          const targetAcc = resolveTreasuryAccountForMovement(targetMov, cashDesks, bankAccounts);
+          const { sign, deltaUsd, deltaBs } = computeMovementReversalDelta(targetMov);
+          const isReadyStep2 =
+            movDeleteSecurityModal.confirmChecked &&
+            String(movDeleteSecurityModal.confirmText || '').trim().toUpperCase() === 'ELIMINAR';
+
+          return (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                backgroundColor: 'rgba(2, 6, 23, 0.8)',
+                backdropFilter: 'blur(6px)',
+                zIndex: 9999,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem'
+              }}
+            >
+              <div
+                style={{
+                  width: '100%',
+                  maxWidth: '510px',
+                  background: 'var(--bg-card-glass)',
+                  border: '1px solid rgba(239, 68, 68, 0.45)',
+                  borderRadius: '16px',
+                  overflow: 'hidden',
+                  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)'
+                }}
+              >
+                <div
+                  style={{
+                    padding: '1.1rem 1.4rem',
+                    background: movDeleteSecurityModal.step === 1
+                      ? 'rgba(245, 158, 11, 0.14)'
+                      : 'rgba(239, 68, 68, 0.16)',
+                    borderBottom: '1px solid rgba(239, 68, 68, 0.28)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
+                    <div
+                      style={{
+                        width: '38px',
+                        height: '38px',
+                        borderRadius: '10px',
+                        background: movDeleteSecurityModal.step === 1
+                          ? 'rgba(245, 158, 11, 0.2)'
+                          : 'rgba(239, 68, 68, 0.25)',
+                        color: movDeleteSecurityModal.step === 1 ? '#fbbf24' : '#f87171',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      {movDeleteSecurityModal.step === 1 ? <ShieldAlert size={20} /> : <Lock size={20} />}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: movDeleteSecurityModal.step === 1 ? '#fbbf24' : '#f87171' }}>
+                        Protocolo de Doble Seguridad • Paso {movDeleteSecurityModal.step} de 2
+                      </div>
+                      <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {movDeleteSecurityModal.step === 1
+                          ? 'Confirmar Eliminación de Movimiento'
+                          : 'Autorización Definitiva de Reversión'}
+                      </h4>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMovDeleteSecurityModal({ isOpen: false, step: 1, movement: null, confirmChecked: false, confirmText: '' })}
+                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+                    title="Cancelar"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div style={{ padding: '1.35rem 1.45rem' }}>
+                  <div
+                    style={{
+                      padding: '0.9rem 1rem',
+                      borderRadius: '10px',
+                      background: 'rgba(15, 23, 42, 0.65)',
+                      border: '1px solid var(--border-glass)',
+                      marginBottom: '1.1rem',
+                      fontSize: '0.84rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', gap: '0.5rem' }}>
+                      <span style={{ fontWeight: 700, color: targetMov.tipo === 'INGRESO' ? '#34d399' : '#f87171' }}>
+                        {targetMov.tipo || 'MOVIMIENTO'}
+                      </span>
+                      <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                        {targetMov.fecha ? new Date(targetMov.fecha).toLocaleString() : 'Sin fecha'}
+                      </span>
+                    </div>
+                    <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.45rem' }}>
+                      {targetMov.concepto || targetMov.id}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontFamily: 'var(--font-code)', fontSize: '0.82rem' }}>
+                      <span>{targetAcc ? targetAcc.label : (targetMov.cuentaNombre || targetMov.cajaOBanco || 'Sin cuenta')}</span>
+                      <strong>{formatUsd(Math.abs(deltaUsd))} {Math.abs(deltaBs) > 0 ? `/ ${formatBs(Math.abs(deltaBs))}` : ''}</strong>
+                    </div>
+                  </div>
+
+                  {movDeleteSecurityModal.step === 1 ? (
+                    <>
+                      <p style={{ margin: '0 0 1.2rem 0', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        {targetAcc ? (
+                          <>
+                            Al eliminar este movimiento,{' '}
+                            <strong style={{ color: sign > 0 ? '#34d399' : '#f87171' }}>
+                              {sign > 0 ? 'se reintegrarán' : 'se descontarán'} {formatUsd(Math.abs(deltaUsd))}
+                            </strong>{' '}
+                            en <strong>{targetAcc.label}</strong>. Esta acción afectará los saldos de tesorería.
+                          </>
+                        ) : (
+                          'No se identificó una cuenta asociada automáticamente; se eliminará el registro del historial.'
+                        )}
+                      </p>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.7rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setMovDeleteSecurityModal({ isOpen: false, step: 1, movement: null, confirmChecked: false, confirmText: '' })}
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => setMovDeleteSecurityModal(prev => ({ ...prev, step: 2 }))}
+                          style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', border: 'none' }}
+                        >
+                          Continuar al Paso 2 →
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '0.6rem',
+                          marginBottom: '1rem',
+                          cursor: 'pointer',
+                          fontSize: '0.84rem',
+                          color: 'var(--text-primary)'
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={movDeleteSecurityModal.confirmChecked}
+                          onChange={(e) => setMovDeleteSecurityModal(prev => ({ ...prev, confirmChecked: e.target.checked }))}
+                          style={{ marginTop: '3px', width: '16px', height: '16px', cursor: 'pointer' }}
+                        />
+                        <span>
+                          Confirmo bajo mi responsabilidad que deseo eliminar este movimiento y revertir su impacto en caja/banco de forma permanente.
+                        </span>
+                      </label>
+
+                      <div style={{ marginBottom: '1.2rem' }}>
+                        <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                          Para desbloquear el botón final, escribe la palabra <strong>ELIMINAR</strong>:
+                        </label>
+                        <input
+                          type="text"
+                          value={movDeleteSecurityModal.confirmText}
+                          onChange={(e) => setMovDeleteSecurityModal(prev => ({ ...prev, confirmText: e.target.value }))}
+                          placeholder="ELIMINAR"
+                          className="input-modern"
+                          style={{ width: '100%', fontFamily: 'var(--font-code)', fontWeight: 700, textTransform: 'uppercase' }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.7rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setMovDeleteSecurityModal(prev => ({ ...prev, step: 1, confirmChecked: false, confirmText: '' }))}
+                        >
+                          ← Volver
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!isReadyStep2 || !!deletingMovId}
+                          onClick={handleConfirmFinalDeleteMovement}
+                          className="btn"
+                          style={{
+                            background: isReadyStep2 ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'rgba(148, 163, 184, 0.2)',
+                            color: isReadyStep2 ? '#ffffff' : '#64748b',
+                            border: 'none',
+                            fontWeight: 700,
+                            cursor: isReadyStep2 ? 'pointer' : 'not-allowed',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}
+                        >
+                          <Trash2 size={15} />
+                          {deletingMovId ? 'Eliminando...' : 'Eliminar Definitivamente'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </section>
   );
 }

@@ -78,6 +78,7 @@ export default function MobileAppLayout({
   onRejectClient,
   onRegisterPurchase,
   onAddCashMovement,
+  onUpdateCashMovement,
   onDeleteCashMovement,
   onUpdateCashDesk,
   onDeleteCashDesk,
@@ -368,6 +369,7 @@ export default function MobileAppLayout({
               cashMovements={cashMovements}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={onAddCashMovement}
+              onUpdateMovement={onUpdateCashMovement}
               onDeleteMovement={onDeleteCashMovement}
               onUpdateCashDesk={onUpdateCashDesk}
               onDeleteCashDesk={onDeleteCashDesk}

@@ -429,3 +429,185 @@ export const computeMovementReversalDelta = (movement) => {
     deltaBs: round2(sign * rawBs)
   };
 };
+
+/**
+ * Determina si un movimiento pertenece a una cuenta operativa específica ('CAJA' | 'BANCO')
+ * o al conjunto completo de ese tipo cuando targetRecord es null.
+ */
+export const doesMovementBelongToAccount = (
+  movement,
+  targetKind = 'CAJA',
+  targetRecord = null,
+  cashDesks = [],
+  bankAccounts = []
+) => {
+  const resolved = resolveTreasuryAccountForMovement(movement, cashDesks, bankAccounts);
+  if (!resolved) return false;
+  if (targetKind && resolved.kind !== String(targetKind).toUpperCase()) return false;
+  if (!targetRecord) return true;
+  if (resolved.kind === 'CAJA') {
+    return matchesCashDesk(targetRecord, resolved.record);
+  }
+  return matchesBankAccount(targetRecord, resolved.record);
+};
+
+/**
+ * Resume Entradas (INGRESO), Salidas (EGRESO) y Neto para una lista de movimientos de caja/banco.
+ */
+export const summarizeAccountMovements = (movements = []) => {
+  const list = Array.isArray(movements) ? movements : [];
+  let entradasCount = 0;
+  let entradasUsd = 0;
+  let entradasBs = 0;
+  let salidasCount = 0;
+  let salidasUsd = 0;
+  let salidasBs = 0;
+
+  list.forEach((m) => {
+    if (!m) return;
+    const isIngreso = String(m.tipo || '').trim().toUpperCase() === 'INGRESO';
+    const usd = Number(m.montoUsd ?? m.monto_usd ?? 0) || 0;
+    const bs = Number(m.montoBs ?? m.monto_bs ?? 0) || 0;
+    if (isIngreso) {
+      entradasCount += 1;
+      entradasUsd += usd;
+      entradasBs += bs;
+    } else {
+      salidasCount += 1;
+      salidasUsd += usd;
+      salidasBs += bs;
+    }
+  });
+
+  return {
+    totalCount: entradasCount + salidasCount,
+    entradasCount,
+    entradasUsd: round2(entradasUsd),
+    entradasBs: round2(entradasBs),
+    salidasCount,
+    salidasUsd: round2(salidasUsd),
+    salidasBs: round2(salidasBs),
+    netoUsd: round2(entradasUsd - salidasUsd),
+    netoBs: round2(entradasBs - salidasBs)
+  };
+};
+
+/**
+ * Filtra movimientos por Día, Semana (Lun-Dom), Mes (YYYY-MM) o Período personalizado (desde..hasta).
+ */
+export const filterMovementsByPeriod = (
+  movements = [],
+  { periodMode = 'ALL', refDate = '', refMonth = '', fromDate = '', toDate = '' } = {},
+  referenceNow = new Date()
+) => {
+  const list = Array.isArray(movements) ? movements : [];
+  const mode = String(periodMode || 'ALL').toUpperCase().trim();
+  if (mode === 'ALL') return list;
+
+  const todayKey = toLocalDateKey(referenceNow);
+  const anchorKey = /^\d{4}-\d{2}-\d{2}$/.test(String(refDate || '').trim())
+    ? String(refDate).trim()
+    : todayKey;
+
+  if (mode === 'DIA') {
+    return list.filter((m) => toLocalDateKey(m?.fecha || m?.createdAt) === anchorKey);
+  }
+
+  if (mode === 'SEMANA') {
+    const anchorDate = new Date(`${anchorKey}T12:00:00`);
+    const dayOfWeek = anchorDate.getDay(); // 0=Dom..6=Sab
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(anchorDate);
+    monday.setDate(anchorDate.getDate() + diffToMonday);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const minKey = toLocalDateKey(monday);
+    const maxKey = toLocalDateKey(sunday);
+    return list.filter((m) => {
+      const k = toLocalDateKey(m?.fecha || m?.createdAt);
+      return Boolean(k && k >= minKey && k <= maxKey);
+    });
+  }
+
+  if (mode === 'MES') {
+    const monthKey = /^\d{4}-\d{2}$/.test(String(refMonth || '').trim())
+      ? String(refMonth).trim()
+      : todayKey.slice(0, 7);
+    return list.filter((m) => {
+      const k = toLocalDateKey(m?.fecha || m?.createdAt);
+      return Boolean(k && k.slice(0, 7) === monthKey);
+    });
+  }
+
+  if (mode === 'PERIODO') {
+    const startKey = /^\d{4}-\d{2}-\d{2}$/.test(String(fromDate || '').trim()) ? String(fromDate).trim() : '';
+    const endKey = /^\d{4}-\d{2}-\d{2}$/.test(String(toDate || '').trim()) ? String(toDate).trim() : '';
+    return list.filter((m) => {
+      const k = toLocalDateKey(m?.fecha || m?.createdAt);
+      if (!k) return false;
+      if (startKey && k < startKey) return false;
+      if (endKey && k > endKey) return false;
+      return true;
+    });
+  }
+
+  return list;
+};
+
+/**
+ * Calcula los ajustes netos de saldo en Caja/Banco al editar un movimiento existente.
+ * Devuelve un arreglo de { account, deltaUsd, deltaBs, clampZero } para revertir lo anterior y aplicar lo nuevo.
+ */
+export const computeMovementEditAccountAdjustments = (oldMov, nextMov, cashDesks = [], bankAccounts = []) => {
+  if (!oldMov || !nextMov) return [];
+
+  const signedEffect = (m) => {
+    const sign = String(m?.tipo || '').trim().toUpperCase() === 'EGRESO' ? -1 : 1;
+    const usd = round2(Math.abs(Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0));
+    const bs = round2(Math.abs(Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0));
+    return {
+      usd: round2(sign * usd),
+      bs: round2(sign * bs)
+    };
+  };
+
+  const oldAcc = resolveTreasuryAccountForMovement(oldMov, cashDesks, bankAccounts);
+  const newAcc = resolveTreasuryAccountForMovement(nextMov, cashDesks, bankAccounts);
+  const oldEff = signedEffect(oldMov);
+  const newEff = signedEffect(nextMov);
+
+  const adjustments = [];
+  if (oldAcc && newAcc && oldAcc.accountRef === newAcc.accountRef) {
+    const deltaUsd = round2(newEff.usd - oldEff.usd);
+    const deltaBs = round2(newEff.bs - oldEff.bs);
+    if (Math.abs(deltaUsd) > 0 || Math.abs(deltaBs) > 0) {
+      adjustments.push({
+        account: oldAcc,
+        deltaUsd,
+        deltaBs,
+        clampZero: deltaUsd < 0 || deltaBs < 0
+      });
+    }
+    return adjustments;
+  }
+
+  if (oldAcc && (Math.abs(oldEff.usd) > 0 || Math.abs(oldEff.bs) > 0)) {
+    adjustments.push({
+      account: oldAcc,
+      deltaUsd: round2(-oldEff.usd),
+      deltaBs: round2(-oldEff.bs),
+      clampZero: -oldEff.usd < 0 || -oldEff.bs < 0
+    });
+  }
+
+  if (newAcc && (Math.abs(newEff.usd) > 0 || Math.abs(newEff.bs) > 0)) {
+    adjustments.push({
+      account: newAcc,
+      deltaUsd: newEff.usd,
+      deltaBs: newEff.bs,
+      clampZero: newEff.usd < 0 || newEff.bs < 0
+    });
+  }
+
+  return adjustments;
+};

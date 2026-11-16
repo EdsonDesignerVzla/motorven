@@ -7,6 +7,7 @@ import {
   resolveTreasuryTargetForPaymentMethod,
   resolveTreasuryAccountForMovement,
   computeMovementReversalDelta,
+  computeMovementEditAccountAdjustments,
   resolveExchangeRates
 } from './utils/treasuryAccountUtils';
 import { normalizeRateType } from './utils/rateClassificationUtils';
@@ -99,6 +100,7 @@ import {
   recordFiscalAdjustmentSaleInSupabase,
   getSupabaseCashMovements,
   addSupabaseCashMovement,
+  updateSupabaseCashMovement,
   deleteSupabaseCashMovement,
   getSupabasePurchases,
   saveSupabasePurchase,
@@ -2768,6 +2770,59 @@ function MainApp() {
     }
   };
 
+  // Editar Movimiento de Caja y ajustar diferencial neto en caja/banco
+  const handleUpdateCashMovement = async (prevMov, nextMovData) => {
+    try {
+      const targetMov = nextMovData && typeof nextMovData === 'object' ? nextMovData : prevMov;
+      if (!targetMov || !targetMov.id) {
+        notify.warning('No se identificó el movimiento a actualizar');
+        return null;
+      }
+
+      const desksList = Array.isArray(profitCashDesksRef.current) && profitCashDesksRef.current.length > 0
+        ? profitCashDesksRef.current
+        : profitCashDesks;
+      const banksList = Array.isArray(profitBankAccountsRef.current) && profitBankAccountsRef.current.length > 0
+        ? profitBankAccountsRef.current
+        : profitBankAccounts;
+
+      const adjustments = prevMov
+        ? computeMovementEditAccountAdjustments(prevMov, targetMov, desksList, banksList)
+        : [];
+
+      for (const adj of adjustments) {
+        await applyTreasuryAccountDelta({
+          account: {
+            kind: adj.account.kind,
+            id: adj.account.id,
+            coCaja: adj.account.code,
+            codCta: adj.account.code
+          },
+          deltaUsd: adj.deltaUsd,
+          deltaBs: adj.deltaBs,
+          clampZero: adj.clampZero
+        });
+      }
+
+      const savedMov = await updateSupabaseCashMovement(targetMov);
+      setCashMovementsState((prev) => {
+        const list = Array.isArray(prev) ? [...prev] : [];
+        const idx = list.findIndex((m) => String(m?.id || '').trim() === String(savedMov.id).trim());
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...savedMov };
+          return list;
+        }
+        return [savedMov, ...list];
+      });
+      notify.success('Movimiento actualizado y conciliado en tesorería correctamente');
+      return savedMov;
+    } catch (err) {
+      console.error('Error actualizando movimiento de caja:', err);
+      notify.error('Error al actualizar movimiento: ' + (err?.message || 'Error desconocido'));
+      throw err;
+    }
+  };
+
   // Eliminar Movimiento de Caja y revertir su efecto en la caja/banco correspondiente
   const handleDeleteCashMovement = async (movOrId) => {
     try {
@@ -3885,6 +3940,7 @@ function MainApp() {
         onRejectClient={handleRejectClient}
         onRegisterPurchase={handleRegisterPurchase}
         onAddCashMovement={handleAddCashMovement}
+        onUpdateCashMovement={handleUpdateCashMovement}
         onDeleteCashMovement={handleDeleteCashMovement}
         onUpdateCashDesk={handleUpdateCashDesk}
         onDeleteCashDesk={handleDeleteCashDesk}
@@ -4201,6 +4257,7 @@ function MainApp() {
               cashMovements={cashMovements}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={handleAddCashMovement}
+              onUpdateMovement={handleUpdateCashMovement}
               onDeleteMovement={handleDeleteCashMovement}
               onUpdateCashDesk={handleUpdateCashDesk}
               onDeleteCashDesk={handleDeleteCashDesk}

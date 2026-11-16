@@ -89,6 +89,7 @@ import {
   updateStoragePurchase,
   getCashMovements as getStorageCashMovements,
   addCashMovement as addStorageCashMovement,
+  updateCashMovement as updateStorageCashMovement,
   deleteCashMovement as deleteStorageCashMovement,
   getFiscalClosures as getStorageFiscalClosures,
   saveFiscalClosure as saveStorageFiscalClosure,
@@ -3827,6 +3828,68 @@ export const addSupabaseCashMovement = async (mov) => {
       item: localMov
     });
     return localMov;
+  }
+};
+
+export const updateSupabaseCashMovement = async (mov) => {
+  if (!mov || typeof mov !== 'object' || Array.isArray(mov) || !mov.id) {
+    throw new Error('Movimiento de caja inválido para actualizar.');
+  }
+  const concepto = String(mov.concepto || mov.descripcion || '').trim();
+  const tipo = String(mov.tipo || 'INGRESO').trim().toUpperCase();
+  const montoUsd = round2(mov.montoUsd ?? mov.monto_usd ?? 0);
+  const montoBs = round2(mov.montoBs ?? mov.monto_bs ?? 0);
+  if (!concepto) {
+    throw new Error('El movimiento de caja requiere un concepto válido.');
+  }
+  if (!['INGRESO', 'EGRESO'].includes(tipo)) {
+    throw new Error(`Tipo de movimiento inválido: ${tipo}`);
+  }
+  if (montoUsd <= 0 && montoBs <= 0) {
+    throw new Error('El monto del movimiento debe ser mayor a 0 en USD o Bolívares.');
+  }
+
+  const cleanInput = {
+    ...mov,
+    tipo,
+    concepto,
+    descripcion: mov.descripcion || concepto,
+    montoUsd,
+    monto_usd: montoUsd,
+    montoBs,
+    monto_bs: montoBs
+  };
+
+  const localUpdated = updateStorageCashMovement(cleanInput) || cleanInput;
+  const emitUpdate = (record) => broadcastReconcileChange({
+    tableId: 'cash_movements',
+    action: 'UPDATE',
+    key: record.id,
+    item: record
+  });
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('cash_movement', 'UPDATE', localUpdated);
+    emitUpdate(localUpdated);
+    return localUpdated;
+  }
+
+  try {
+    const payload = mapCashMovementToDb(localUpdated);
+    const { data, error } = await withTimeout(
+      supabase.from('cash_movements').upsert([payload]).select().single(),
+      4000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const mapped = mapCashMovementFromDb(data);
+    emitUpdate(mapped);
+    return mapped;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabaseCashMovement');
+    enqueueSyncAction('cash_movement', 'UPDATE', localUpdated);
+    emitUpdate(localUpdated);
+    return localUpdated;
   }
 };
 

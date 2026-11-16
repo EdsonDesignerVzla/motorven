@@ -918,6 +918,24 @@ export const deleteCashMovement = (movOrId) => {
   return filtered;
 };
 
+export const updateCashMovement = (movPatch) => {
+  if (!movPatch || typeof movPatch !== 'object' || !movPatch.id) return null;
+  const movements = getCashMovements() || [];
+  const targetId = String(movPatch.id).trim();
+  let updatedRecord = null;
+  const nextList = movements.map((m) => {
+    if (!m || String(m.id || '').trim() !== targetId) return m;
+    updatedRecord = { ...m, ...movPatch, id: m.id };
+    return updatedRecord;
+  });
+  if (!updatedRecord) {
+    updatedRecord = { ...movPatch };
+    nextList.unshift(updatedRecord);
+  }
+  localStorage.setItem(KEYS.CASH_MOVEMENTS, JSON.stringify(nextList));
+  return updatedRecord;
+};
+
 export const getFiscalClosures = () => {
   initStorage();
   return JSON.parse(localStorage.getItem(KEYS.FISCAL_CLOSURES)) || [];
