@@ -20,7 +20,8 @@ const projectRoot = path.resolve(__dirname, '..');
 
 const OFFICIAL_DOMAIN = 'signummotorven.com';
 const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
-const PROD_REPO_URL = 'https://EdsonDesignerVzla@github.com/EdsonDesignerVzla/motorven.git';
+const PROD_REPO_URL = 'https://github.com/EdsonDesignerVzla/motorven.git';
+const NON_INTERACTIVE_GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
 
 function fetchJsonText(urlStr, timeoutMs = 2500) {
   return new Promise((resolve) => {
@@ -206,7 +207,7 @@ async function main() {
   console.log(`🚀 Preparando despliegue hacia ${PROD_REPO_URL} ...`);
 
   try {
-    execSync(`git clone --depth 1 "${PROD_REPO_URL}" "${tmpDeployDir}"`, { stdio: 'inherit' });
+    execSync(`git clone --depth 1 "${PROD_REPO_URL}" "${tmpDeployDir}"`, { stdio: 'inherit', env: NON_INTERACTIVE_GIT_ENV });
 
     // Limpiar directorio clonado excepto .git
     for (const entry of fs.readdirSync(tmpDeployDir)) {
@@ -231,7 +232,7 @@ async function main() {
         'git commit -m "deploy(prod): sincronizacion en tiempo real blindada con servidor central SVR-MOTORVEN"',
         { cwd: tmpDeployDir, stdio: 'inherit' }
       );
-      execSync('git push origin main', { cwd: tmpDeployDir, stdio: 'inherit' });
+      execSync('git push origin main', { cwd: tmpDeployDir, stdio: 'inherit', env: NON_INTERACTIVE_GIT_ENV });
       console.log('🎉 Despliegue completado exitosamente en https://github.com/EdsonDesignerVzla/motorven (https://signummotorven.com)');
     }
   } finally {
