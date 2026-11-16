@@ -23,6 +23,47 @@ export function isCxcInvoiceCancelled(inv) {
 }
 
 /**
+ * Determina si un documento CxC está anulado, cobrado o liquidado y no debe sumarse a la cartera abierta.
+ */
+export function isCxcInvoiceSettled(inv) {
+  if (!inv || typeof inv !== 'object') return false;
+  if (isCxcInvoiceCancelled(inv)) return true;
+  if (inv.pagado === true) return true;
+  const st = String(inv.status || inv.estado || '').toUpperCase().trim();
+  return st === 'COBRADA' || st === 'COBRADO' || st === 'PAGADA' || st === 'PAGADO';
+}
+
+/**
+ * Normaliza cualquier fecha (ISO, DD/MM/YYYY o Date) a clave local 'YYYY-MM-DD'.
+ */
+export function toCxcDateKey(dateVal) {
+  if (!dateVal) return '';
+  if (dateVal instanceof Date) {
+    if (isNaN(dateVal.getTime())) return '';
+    return `${dateVal.getFullYear()}-${String(dateVal.getMonth() + 1).padStart(2, '0')}-${String(dateVal.getDate()).padStart(2, '0')}`;
+  }
+  const str = String(dateVal).trim();
+  const iso = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
+  const lat = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (lat) return `${lat[3]}-${lat[2].padStart(2, '0')}-${lat[1].padStart(2, '0')}`;
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? '' : toCxcDateKey(d);
+}
+
+/**
+ * Determina si un registro de venta POS corresponde a una venta a crédito o pendiente por cobrar.
+ */
+export function isCreditSaleRecord(s) {
+  if (!s) return false;
+  if (s.aCredito) return true;
+  const term = String(s.condicionPago || s.condicion_pago || '').trim().toUpperCase();
+  if (term === 'CREDITO') return true;
+  if (term && term !== 'CONTADO' && /^\d+/.test(term)) return true;
+  return Number(s.diasCredito || 0) > 0;
+}
+
+/**
  * Infiere el tipo de documento CxC ('NOTA_ENTREGA' o 'FACTURA') sin colisión cruzada.
  */
 export function inferCxcDocType(raw) {
@@ -163,62 +204,88 @@ export function doesCollectionMatchInvoice(collection, invoice) {
  * Consolida la cartera activa por cobrar agrupada por cliente combinando
  * profitInvoices + sales a crédito no duplicadas + perfiles de clients.
  */
+export const normalizeClientRifKey = (val) => {
+  const clean = String(val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!clean || /^[VEJPG]?0+$/.test(clean)) return '';
+  return clean;
+};
+
+export const normalizeClientCodeKey = (val) => String(val || '').trim().toUpperCase();
+
+export const normalizeClientNameKey = (val) => String(val || '').trim().replace(/\s+/g, ' ').toUpperCase();
+
+/**
+ * Consolida el estado de cuenta CxC por cliente en tiempo real combinando
+ * profitInvoices + sales a crédito no duplicadas + perfiles de clients.
+ */
 export function consolidateClientReceivables({
   clients = [],
   profitInvoices = [],
   sales = [],
   tasaBcv = 827.73,
-  includePendingDocs = false
+  includePendingDocs = false,
+  includeLocalClientDebt = true
 } = {}) {
   const safeRate = Number(tasaBcv) > 0 ? Number(tasaBcv) : 827.73;
   const map = new Map();
   const hoy = new Date();
 
   const findClientProfile = (rif, coCli, nombre) => {
-    const cleanRif = String(rif || '').trim().toUpperCase();
-    const cleanCo = String(coCli || '').trim();
-    const cleanName = String(nombre || '').trim().toLowerCase();
+    const cleanRif = normalizeClientRifKey(rif);
+    const cleanCo = normalizeClientCodeKey(coCli);
+    const cleanName = normalizeClientNameKey(nombre);
     return (clients || []).find(c =>
-      (cleanRif && String(c.rif || '').trim().toUpperCase() === cleanRif) ||
-      (cleanCo && (String(c.id || '').trim() === cleanCo || String(c.codigo || '').trim() === cleanCo)) ||
-      (cleanName && String(c.nombre || c.razonSocial || '').trim().toLowerCase() === cleanName)
+      (cleanRif && normalizeClientRifKey(c.rif) === cleanRif) ||
+      (cleanCo && (normalizeClientCodeKey(c.id) === cleanCo || normalizeClientCodeKey(c.codigo ?? c.co_cli) === cleanCo)) ||
+      (cleanName && normalizeClientNameKey(c.nombre || c.razonSocial) === cleanName)
     ) || {};
   };
 
-  // 1. Clientes con saldoDeudorUsd local explícito (si existiera)
-  (clients || []).forEach(c => {
-    if (!c) return;
-    const coCli = String(c.id || c.codigo || c.co_cli || '').trim();
-    const rif = String(c.rif || '').trim().toUpperCase();
-    const saldoLocal = Number(c.saldoDeudorUsd ?? c.saldo_deudor_usd ?? c.saldoUsd ?? c.saldo_usd ?? 0);
-    if (saldoLocal > 0.01) {
-      const key = rif || coCli;
-      if (!key) return;
-      map.set(key, {
-        id: c.id || coCli || key,
-        coCli,
-        nombre: c.nombre || c.razonSocial || 'Cliente General',
-        cliente: c.nombre || c.razonSocial || 'Cliente General',
-        rif: c.rif || 'J-00000000-0',
-        telefono: c.telefono || c.telefonos || c.phone || '',
-        ciudad: c.ciudad || '',
-        asesor: c.vendedorAsignado || 'OF',
-        vendedorNombre: c.vendedorNombre || c.vendedor || '',
-        diasCredito: Number(c.diasCredito || c.dias_credito || c.plazo || 15),
-        saldoUsd: round2(saldoLocal),
-        facturasCount: 0,
-        maxDiasMora: 0,
-        diasMora: 0,
-        tramo: 'VIGENTE',
-        fac: { count: 0, restante: 0 },
-        ne: { count: 0, restante: 0 },
-        totalMonto: round2(saldoLocal),
-        totalAbonos: 0,
-        totalRestante: round2(saldoLocal),
-        ...(includePendingDocs ? { pendingDocs: [] } : {})
-      });
-    }
-  });
+  const resolveGroupKey = (profile, rif, coCli, nombre) => {
+    const normRif = normalizeClientRifKey(profile?.rif || rif);
+    if (normRif) return normRif;
+    const normCo = normalizeClientCodeKey(profile?.id || profile?.codigo || profile?.co_cli || coCli);
+    if (normCo) return normCo;
+    const normName = normalizeClientNameKey(profile?.nombre || profile?.razonSocial || nombre);
+    return normName ? `NAME:${normName}` : '';
+  };
+
+  // 1. Clientes con saldoDeudorUsd local explícito (solo si aún no vienen sincronizados de CxC)
+  if (includeLocalClientDebt) {
+    (clients || []).forEach(c => {
+      if (!c || c._saldoSyncedFromCxc) return;
+      const coCli = String(c.id || c.codigo || c.co_cli || '').trim();
+      const rif = String(c.rif || '').trim().toUpperCase();
+      const saldoLocal = Number(c.saldoDeudorUsd ?? c.saldo_deudor_usd ?? c.saldoUsd ?? c.saldo_usd ?? 0);
+      if (saldoLocal > 0.01) {
+        const key = resolveGroupKey(c, rif, coCli, c.nombre || c.razonSocial);
+        if (!key) return;
+        map.set(key, {
+          id: c.id || coCli || key,
+          coCli,
+          nombre: c.nombre || c.razonSocial || 'Cliente General',
+          cliente: c.nombre || c.razonSocial || 'Cliente General',
+          rif: c.rif || 'J-00000000-0',
+          telefono: c.telefono || c.telefonos || c.phone || '',
+          ciudad: c.ciudad || '',
+          asesor: c.vendedorAsignado || 'OF',
+          vendedorNombre: c.vendedorNombre || c.vendedor || '',
+          diasCredito: Number(c.diasCredito || c.dias_credito || c.plazo || 15),
+          saldoUsd: round2(saldoLocal),
+          facturasCount: 0,
+          maxDiasMora: 0,
+          diasMora: 0,
+          tramo: 'VIGENTE',
+          fac: { count: 0, restante: 0 },
+          ne: { count: 0, restante: 0 },
+          totalMonto: round2(saldoLocal),
+          totalAbonos: 0,
+          totalRestante: round2(saldoLocal),
+          ...(includePendingDocs ? { pendingDocs: [] } : {})
+        });
+      }
+    });
+  }
 
   const seenDocKeys = new Set();
 
@@ -227,7 +294,8 @@ export function consolidateClientReceivables({
     const rif = String(rawDoc.clienteRif || rawDoc.cliente_rif || rawDoc.rif || '').trim().toUpperCase();
     const coCli = String(rawDoc.clienteId || rawDoc.cliente_id || rawDoc.coCli || rawDoc.co_cli || rawDoc.clienteCod || '').trim();
     const nombreDoc = String(rawDoc.clienteNombre || rawDoc.cliente_nombre || rawDoc.cli_des || rawDoc.cliente || '').trim();
-    const key = rif || coCli || (nombreDoc ? `NAME:${nombreDoc.toUpperCase()}` : '');
+    const clientProfile = findClientProfile(rif, coCli, nombreDoc);
+    const key = resolveGroupKey(clientProfile, rif, coCli, nombreDoc);
     if (!key) return;
 
     const fEmis = fechaEmisRaw ? new Date(fechaEmisRaw) : hoy;
@@ -252,14 +320,13 @@ export function consolidateClientReceivables({
       : null;
 
     if (!map.has(key)) {
-      const clientProfile = findClientProfile(rif, coCli, nombreDoc);
       const resolvedNombre = nombreDoc || clientProfile.nombre || clientProfile.razonSocial || 'Cliente General';
       map.set(key, {
         id: clientProfile.id || coCli || key,
         coCli: coCli || clientProfile.codigo || '',
         nombre: resolvedNombre,
         cliente: resolvedNombre,
-        rif: rif || clientProfile.rif || 'J-00000000-0',
+        rif: clientProfile.rif || rif || 'J-00000000-0',
         telefono: clientProfile.telefono || clientProfile.telefonos || clientProfile.phone || rawDoc.clienteTelefono || '',
         ciudad: clientProfile.ciudad || '',
         asesor: rawDoc.vendedorId || rawDoc.co_ven || clientProfile.vendedorAsignado || 'OF',
@@ -307,9 +374,9 @@ export function consolidateClientReceivables({
     }
   };
 
-  // 2. Documentos de profit_invoices (deduplicados y sin anulados)
+  // 2. Documentos de profit_invoices (deduplicados y sin anulados ni cobrados)
   dedupeCanonicalDocs(profitInvoices || []).forEach(inv => {
-    if (!inv || isCxcInvoiceCancelled(inv)) return;
+    if (!inv || isCxcInvoiceSettled(inv)) return;
     const eraKey = getEraScopedCanonicalDocKey(inv) || getCanonicalDocKey(inv);
     if (eraKey) seenDocKeys.add(eraKey);
     const invTasa = Number(inv.tasa || inv.tasaDolar || safeRate) || safeRate;
@@ -338,7 +405,7 @@ export function consolidateClientReceivables({
 
   // 3. Ventas a crédito de POS (sales) sin duplicar con profit_invoices
   dedupeCanonicalDocs(sales || []).forEach(sale => {
-    if (!sale || isCxcInvoiceCancelled(sale)) return;
+    if (!sale || isCxcInvoiceSettled(sale)) return;
     const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
     if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
     const eraKey = getEraScopedCanonicalDocKey(sale) || getCanonicalDocKey(sale);
@@ -346,12 +413,8 @@ export function consolidateClientReceivables({
     if (eraKey) seenDocKeys.add(eraKey);
 
     const statusUpper = String(sale.estado || sale.status || '').toUpperCase().trim();
-    if (sale.pagado === true || statusUpper === 'PAGADO' || statusUpper === 'PAGADA' || statusUpper === 'COBRADA') return;
 
-    const isCredit =
-      sale.condicionPago === 'CREDITO' ||
-      sale.aCredito ||
-      Number(sale.diasCredito || 0) > 0;
+    const isCredit = isCreditSaleRecord(sale);
     const explicitSaldo = Number(sale.saldoPendiente ?? sale.saldoUsd ?? sale.saldo_usd ?? 0);
     const hasPendingReceivable = statusUpper === 'PENDIENTE' || explicitSaldo > 0.01;
     if (!isCredit && !hasPendingReceivable) return;
@@ -397,6 +460,273 @@ export function consolidateClientReceivables({
     })
     .filter(cli => cli.saldoUsd > 0.01)
     .sort((a, b) => b.saldoUsd - a.saldoUsd);
+}
+
+/**
+ * Reconcilia el directorio completo de clientes contra la cartera CxC real
+ * (profitInvoices + sales a crédito no duplicadas), eliminando saldos obsoletos en clients.
+ */
+export function reconcileClientsWithRealCxc({
+  clients = [],
+  profitInvoices = [],
+  sales = [],
+  tasaBcv = 1,
+  todayKey
+} = {}) {
+  const list = Array.isArray(clients) ? clients : [];
+  const today = todayKey || toCxcDateKey(new Date());
+  const safeRate = Number(tasaBcv) > 0 ? Number(tasaBcv) : 0;
+  const hasReceivableSources =
+    (Array.isArray(profitInvoices) && profitInvoices.length > 0) ||
+    (Array.isArray(sales) && sales.length > 0);
+
+  if (!hasReceivableSources) {
+    const fallbackClients = list.map((c) => {
+      const saldoLocal = round2(Math.max(0, Number(c?.saldoDeudorUsd ?? c?.saldo_deudor_usd ?? 0)));
+      return {
+        ...c,
+        _saldoSyncedFromCxc: false,
+        saldoDeudorUsd: saldoLocal,
+        saldo_deudor_usd: saldoLocal,
+        saldoAlDiaUsd: saldoLocal,
+        saldoVencidoUsd: 0,
+        openDocsCount: 0,
+        openFacturasCount: 0,
+        openNotasEntregaCount: 0,
+        maxDiasMora: 0,
+        openDocs: []
+      };
+    });
+    const conDeudaCount = fallbackClients.filter(c => c.saldoDeudorUsd > 0.01).length;
+    const totalDeudaUsd = round2(fallbackClients.reduce((acc, c) => acc + c.saldoDeudorUsd, 0));
+    return {
+      clients: fallbackClients,
+      unmatchedDocs: [],
+      totals: {
+        totalDeudaUsd,
+        matchedDeudaUsd: totalDeudaUsd,
+        unmatchedDeudaUsd: 0,
+        unmatchedDocsCount: 0,
+        conDeudaCount,
+        alDiaUsd: totalDeudaUsd,
+        vencidaUsd: 0,
+        hasReceivableSources: false
+      }
+    };
+  }
+
+  const byId = new Map();
+  const byCode = new Map();
+  const byRif = new Map();
+  const byName = new Map();
+  const accList = list.map((c, idx) => {
+    const idKey = normalizeClientCodeKey(c?.id);
+    const codeKey = normalizeClientCodeKey(c?.codigo ?? c?.co_cli);
+    const rifKey = normalizeClientRifKey(c?.rif);
+    const nameKey = normalizeClientNameKey(c?.nombre ?? c?.razonSocial);
+    if (idKey && !byId.has(idKey)) byId.set(idKey, idx);
+    if (codeKey && !byCode.has(codeKey)) byCode.set(codeKey, idx);
+    if (rifKey && !byRif.has(rifKey)) byRif.set(rifKey, idx);
+    if (nameKey && !byName.has(nameKey)) byName.set(nameKey, idx);
+    return {
+      saldoDeudorUsd: 0,
+      saldoAlDiaUsd: 0,
+      saldoVencidoUsd: 0,
+      openDocsCount: 0,
+      openFacturasCount: 0,
+      openNotasEntregaCount: 0,
+      maxDiasMora: 0,
+      openDocs: [],
+      lastDocDate: '',
+      lastDocNum: '',
+      lastDocAmount: 0
+    };
+  });
+
+  const resolveClientIdx = (doc) => {
+    const coCli = normalizeClientCodeKey(doc?.clienteId ?? doc?.cliente_id ?? doc?.coCli ?? doc?.co_cli ?? doc?.clienteCod);
+    if (coCli) {
+      if (byId.has(coCli)) return byId.get(coCli);
+      if (byCode.has(coCli)) return byCode.get(coCli);
+    }
+    const rif = normalizeClientRifKey(doc?.clienteRif ?? doc?.cliente_rif ?? doc?.rif);
+    if (rif && byRif.has(rif)) return byRif.get(rif);
+    const nombre = normalizeClientNameKey(doc?.clienteNombre ?? doc?.cliente_nombre ?? doc?.cli_des ?? doc?.cliente);
+    if (nombre && byName.has(nombre)) return byName.get(nombre);
+    return -1;
+  };
+
+  const trackLastDoc = (idx, doc, factNum, montoUsd) => {
+    if (idx < 0) return;
+    const acc = accList[idx];
+    const emDate = toCxcDateKey(doc?.fechaEmision || doc?.fec_emis || doc?.fecEmis || doc?.fecha || '');
+    if (emDate && (!acc.lastDocDate || emDate >= acc.lastDocDate)) {
+      acc.lastDocDate = emDate;
+      acc.lastDocNum = factNum || acc.lastDocNum;
+      acc.lastDocAmount = Number(montoUsd || 0) || acc.lastDocAmount;
+    }
+  };
+
+  const seenDocKeys = new Set();
+  const unmatchedDocs = [];
+  let unmatchedDeudaUsd = 0;
+
+  const pushOpenDoc = (idx, rawDoc, { factNum, tipoDoc, fechaEmision, fechaVencimiento, montoUsd, saldo }) => {
+    const fVencKey = toCxcDateKey(fechaVencimiento) || String(fechaVencimiento || '').trim();
+    const isOverdue = Boolean(fVencKey && today && fVencKey < today);
+    let diasMora = 0;
+    if (isOverdue && today) {
+      const diff = Math.floor((new Date(`${today}T12:00:00`) - new Date(`${fVencKey}T12:00:00`)) / 86400000);
+      diasMora = Math.max(1, Number.isFinite(diff) ? diff : 1);
+    }
+    const summary = {
+      id: rawDoc?.id || factNum,
+      factNum,
+      tipoDoc,
+      fechaEmision: toCxcDateKey(fechaEmision) || String(fechaEmision || ''),
+      fechaVencimiento: fVencKey,
+      saldoUsd: round2(saldo),
+      montoUsd: round2(montoUsd),
+      isOverdue,
+      diasMora
+    };
+    if (idx >= 0) {
+      const acc = accList[idx];
+      acc.saldoDeudorUsd += saldo;
+      if (isOverdue) acc.saldoVencidoUsd += saldo;
+      else acc.saldoAlDiaUsd += saldo;
+      acc.openDocsCount += 1;
+      if (tipoDoc === 'NOTA_ENTREGA') acc.openNotasEntregaCount += 1;
+      else acc.openFacturasCount += 1;
+      if (diasMora > acc.maxDiasMora) acc.maxDiasMora = diasMora;
+      acc.openDocs.push(summary);
+    } else {
+      unmatchedDeudaUsd += saldo;
+      unmatchedDocs.push({
+        ...summary,
+        clienteId: rawDoc?.clienteId ?? rawDoc?.cliente_id ?? rawDoc?.co_cli ?? '',
+        clienteRif: rawDoc?.clienteRif ?? rawDoc?.cliente_rif ?? rawDoc?.rif ?? '',
+        clienteNombre: rawDoc?.clienteNombre ?? rawDoc?.cliente_nombre ?? rawDoc?.cli_des ?? ''
+      });
+    }
+  };
+
+  // 1. Documentos desde profitInvoices (fuente principal Profit / CxC)
+  dedupeCanonicalDocs(profitInvoices || []).forEach((inv) => {
+    if (!inv || isCxcInvoiceCancelled(inv)) return;
+    const eraKey = getEraScopedCanonicalDocKey(inv) || getCanonicalDocKey(inv);
+    if (eraKey) seenDocKeys.add(eraKey);
+    const idx = resolveClientIdx(inv);
+    const factNum = String(inv.factNum || inv.fact_num || inv.numeroDoc || inv.id || '').trim();
+    const montoUsd = Number(inv.totNetoUsd ?? inv.tot_neto_usd ?? inv.totalNetoUsd ?? inv.totBrutoUsd ?? 0) || 0;
+    trackLastDoc(idx, inv, factNum, montoUsd);
+
+    if (isCxcInvoiceSettled(inv)) return;
+    const rawSaldo = Number(inv.saldoUsd ?? inv.saldo_usd ?? 0);
+    const rate = safeRate > 0 ? safeRate : (Number(inv.tasa || inv.tasaDolar || 0) || 0);
+    const rawBs = Number(inv.saldoBs ?? inv.saldo_bs ?? inv.saldo ?? 0);
+    const saldo = rawSaldo > 0.01 ? rawSaldo : (rawBs > 0 && rate > 0 ? rawBs / rate : 0);
+    if (saldo <= 0.01) return;
+
+    pushOpenDoc(idx, inv, {
+      factNum,
+      tipoDoc: inferCxcDocType(inv),
+      fechaEmision: inv.fechaEmision || inv.fec_emis || inv.fecEmis || inv.fecha || '',
+      fechaVencimiento: inv.fechaVencimiento || inv.fec_venc || inv.fecVenc || '',
+      montoUsd: montoUsd || saldo,
+      saldo
+    });
+  });
+
+  // 2. Ventas POS a crédito o con saldo pendiente no duplicadas en profitInvoices
+  dedupeCanonicalDocs(sales || []).forEach((sale) => {
+    if (!sale || isCxcInvoiceCancelled(sale)) return;
+    const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
+    if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
+    const eraKey = getEraScopedCanonicalDocKey(sale) || getCanonicalDocKey(sale);
+    if (eraKey && seenDocKeys.has(eraKey)) return;
+    if (eraKey) seenDocKeys.add(eraKey);
+
+    const idx = resolveClientIdx(sale);
+    const factNum = String(sale.numeroDoc || sale.numero_doc || sale.factNum || sale.id || '').trim();
+    const montoUsd = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0) || 0;
+    trackLastDoc(idx, sale, factNum, montoUsd);
+
+    if (isCxcInvoiceSettled(sale)) return;
+    const statusUpper = String(sale.estado || sale.status || '').toUpperCase().trim();
+    const explicitSaldo = Number(sale.saldoPendiente ?? sale.saldoUsd ?? sale.saldo_usd ?? 0);
+    if (!isCreditSaleRecord(sale) && statusUpper !== 'PENDIENTE' && explicitSaldo <= 0.01) return;
+
+    const saldo = Number(
+      sale.saldoPendiente ??
+      sale.saldoUsd ??
+      sale.saldo_usd ??
+      (sale.totalUsd && !sale.pagado ? sale.totalUsd : 0)
+    );
+    if (saldo <= 0.01) return;
+
+    pushOpenDoc(idx, sale, {
+      factNum,
+      tipoDoc: inferCxcDocType(sale),
+      fechaEmision: sale.fechaEmision || sale.fecha || '',
+      fechaVencimiento: sale.fechaVencimiento || sale.fechaVenc || '',
+      montoUsd: montoUsd || saldo,
+      saldo
+    });
+  });
+
+  let matchedDeudaUsd = 0;
+  let conDeudaCount = 0;
+  let alDiaUsd = 0;
+  let vencidaUsd = 0;
+
+  const reconciledClients = list.map((c, idx) => {
+    const acc = accList[idx];
+    const saldoDeudorUsd = round2(acc.saldoDeudorUsd);
+    const saldoAlDiaUsd = round2(acc.saldoAlDiaUsd);
+    const saldoVencidoUsd = round2(acc.saldoVencidoUsd);
+    if (saldoDeudorUsd > 0.01) {
+      conDeudaCount += 1;
+      matchedDeudaUsd += saldoDeudorUsd;
+    }
+    alDiaUsd += saldoAlDiaUsd;
+    vencidaUsd += saldoVencidoUsd;
+
+    const sortedOpenDocs = [...acc.openDocs].sort((a, b) => (b.diasMora - a.diasMora) || (b.saldoUsd - a.saldoUsd));
+
+    return {
+      ...c,
+      _saldoSyncedFromCxc: true,
+      _saldoDbRawUsd: round2(Number(c?.saldoDeudorUsd ?? c?.saldo_deudor_usd ?? 0)),
+      saldoDeudorUsd,
+      saldo_deudor_usd: saldoDeudorUsd,
+      saldoAlDiaUsd,
+      saldoVencidoUsd,
+      openDocsCount: acc.openDocsCount,
+      openFacturasCount: acc.openFacturasCount,
+      openNotasEntregaCount: acc.openNotasEntregaCount,
+      maxDiasMora: acc.maxDiasMora,
+      openDocs: sortedOpenDocs,
+      ultimaFactura: c?.ultimaFactura || acc.lastDocNum || '',
+      fechaUltimaVenta: c?.fechaUltimaVenta || acc.lastDocDate || '',
+      montoUltimaVenta: Number(c?.montoUltimaVenta || 0) > 0 ? Number(c.montoUltimaVenta) : round2(acc.lastDocAmount)
+    };
+  });
+
+  return {
+    clients: reconciledClients,
+    unmatchedDocs,
+    totals: {
+      totalDeudaUsd: round2(matchedDeudaUsd + unmatchedDeudaUsd),
+      matchedDeudaUsd: round2(matchedDeudaUsd),
+      unmatchedDeudaUsd: round2(unmatchedDeudaUsd),
+      unmatchedDocsCount: unmatchedDocs.length,
+      conDeudaCount,
+      alDiaUsd: round2(alDiaUsd),
+      vencidaUsd: round2(vencidaUsd),
+      hasReceivableSources: true
+    }
+  };
 }
 
 const makeDirectCxcBucket = (key, ordenIdx) => {

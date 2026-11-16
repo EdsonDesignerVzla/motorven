@@ -38,19 +38,22 @@ console.log('  ✓ 2. Deduplicación POS <-> Profit Invoices (FAC/NE) sin doble 
 const ordersSummary = summarizePendingOrders([
   { id: 'PED-FF-1', tipoDoc: 'FACTURA', status: 'APROBADO', totalLitros: 120, totalUsd: 800 },
   { id: 'PED-NE-2', tipoDoc: 'NOTA_ENTREGA', status: 'PENDIENTE', totalLitros: 60, totalNetoUsd: 350 },
+  { id: 'PED-EST-3', tipoDoc: 'FACTURA', estatus: 'PENDIENTE', totalLitros: 20, totalUsd: 100 },
   { id: 'SOL-99', tipoDoc: 'SOLICITUD_CLIENTE', status: 'APROBADO', totalLitros: 0, totalUsd: 5000 },
   { id: 'PED-3', tipoDoc: 'FACTURA', status: 'RETENIDO_CREDITO', totalLitros: 40, totalUsd: 250 },
   { id: 'PED-4', tipoDoc: 'FACTURA', status: 'FACTURADO', totalLitros: 200, totalUsd: 1200 }
 ]);
-assert.equal(ordersSummary.basePendiente, 180);
-assert.equal(ordersSummary.pendingOrdersUsd, 1150);
+assert.equal(ordersSummary.basePendiente, 200);
+assert.equal(ordersSummary.pendingOrdersUsd, 1250);
 console.log('  ✓ 3. Filtrado de SOLICITUD_CLIENTE y totales reales de preventa pendiente verificados.');
 
 // 4. Cartera CxC al día vs vencida (incluye 15_DIAS, DD/MM/YYYY y dedup)
 const aging = summarizeReceivablesAging({
   profitInvoices: [
     { id: 'F1', numeroDoc: 'FAC-10', tipoDoc: 'FACTURA', saldoUsd: 200, fechaVencimiento: '20/11/2026' },
-    { id: 'F2', numeroDoc: 'FAC-11', tipoDoc: 'FACTURA', saldoUsd: 150, fechaVencimiento: '01/11/2026' }
+    { id: 'F2', numeroDoc: 'FAC-11', tipoDoc: 'FACTURA', saldoUsd: 150, fechaVencimiento: '01/11/2026' },
+    // Factura ya cobrada que conserva saldoBs residual viejo en DB (no debe sumarse a la cartera)
+    { id: 'F3', numeroDoc: 'FAC-99', tipoDoc: 'FACTURA', status: 'COBRADA', saldoUsd: 0, saldoBs: 180000, fechaVencimiento: '01/09/2026' }
   ],
   sales: [
     { id: 'S1', numeroDoc: 'FAC-10', tipoDoc: 'FACTURA', condicionPago: '15_DIAS', saldoPendiente: 200, fechaVencimiento: '2026-11-20' }, // duplicada
@@ -62,7 +65,7 @@ const aging = summarizeReceivablesAging({
 assert.equal(aging.cxcDia, 200);
 assert.equal(aging.cxcVen, 250);
 assert.equal(aging.cxcTot, 450);
-console.log('  ✓ 4. Resumen de cartera CxC (plazos N_DIAS, fechas DD/MM/YYYY y deduplicación) verificado.');
+console.log('  ✓ 4. Resumen de cartera CxC (plazos N_DIAS, exclusión COBRADA con saldoBs residual y deduplicación) verificado.');
 
 // 5. Anti-colisión de vendedores con códigos cortos (OF, CM)
 const oficinaSeller = { coVen: 'OF', venDes: 'Oficina Principal' };

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, formatNumberUs, round2 } from '../services/formatService';
 import { generateAccountsReceivablePDF, generateWhatsAppCollectionPDF } from '../services/pdfReportService';
+import { isCxcInvoiceSettled } from '../utils/cxcUtils';
 
 export default function DebtCollectionIntelligenceModal({
   isOpen,
@@ -106,8 +107,9 @@ export default function DebtCollectionIntelligenceModal({
     const hoy = new Date();
     const clientsMap = {};
 
-    // A. Inicializar con clientes que posean saldo deudor registrado
+    // A. Inicializar con clientes que posean saldo deudor local (si no vienen ya sincronizados desde CxC)
     (clients || []).forEach(c => {
+      if (!c || c._saldoSyncedFromCxc) return;
       const coCli = (c.id || c.codigo || c.co_cli || '').toString().trim();
       const rif = (c.rif || '').toString().trim().toUpperCase();
       const saldoLocal = Number(c.saldoDeudorUsd) || 0;
@@ -134,7 +136,7 @@ export default function DebtCollectionIntelligenceModal({
 
     // B. Integrar facturas activas con saldo pendiente
     const activeInvoices = targetInvoices.filter(inv => {
-      if (!inv || inv?.anulado || inv?.status === 'ANULADA') return false;
+      if (!inv || isCxcInvoiceSettled(inv)) return false;
       const isCreditSale = (inv?.condicionPago && inv.condicionPago !== 'CONTADO') ||
                            (inv?.condicion_pago && inv.condicion_pago !== 'CONTADO') ||
                            inv?.metodoPago === 'CREDITO' || inv?.metodo_pago === 'CREDITO' ||

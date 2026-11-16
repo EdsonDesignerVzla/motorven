@@ -76,6 +76,38 @@ import {
   summarizePendingOrders,
   summarizeReceivablesAging
 } from '../services/dashboardMetricsService';
+import {
+  isCxcInvoiceCancelled,
+  isCxcInvoiceSettled,
+  normalizeClientRifKey,
+  normalizeClientCodeKey,
+  normalizeClientNameKey
+} from '../utils/cxcUtils';
+
+function isExcludedSaleDocType(doc) {
+  const tipo = String(doc?.tipoDoc || doc?.tipo_doc || '').trim().toUpperCase();
+  return tipo === 'NOTA_CREDITO' || tipo === 'COTIZACION';
+}
+
+function resolveDocumentLitros(doc, productsBySku, fallbackItems = null) {
+  const headerLitros = Number(doc?.totalLitros ?? doc?.total_litros ?? 0) || 0;
+  if (headerLitros > 0) return headerLitros;
+  const rawItems = (Array.isArray(doc?.items) && doc.items.length > 0)
+    ? doc.items
+    : (Array.isArray(fallbackItems) ? fallbackItems : []);
+  return rawItems.reduce((acc, item) => {
+    const explicit = Number(item?.litrosTotales ?? item?.litros_totales ?? item?.litros ?? 0) || 0;
+    if (explicit > 0) return acc + explicit;
+    const sku = String(item?.articuloId || item?.codigo || item?.id || '').trim();
+    const prod = productsBySku?.get(sku);
+    const ltsUnit = Number(
+      item?.litrosUnitarios ??
+      item?.litrosPorUnidad ??
+      (prod ? resolveProductLitersPerUnit(prod) : 0)
+    ) || 0;
+    return acc + ((Number(item?.cantidad || 0) || 0) * ltsUnit);
+  }, 0);
+}
 
 function formatAdvisorName(name) {
   if (!name) return 'Asesor';
@@ -147,6 +179,7 @@ export default function DashboardView({
   profitSupplierPayments = [],
   profitPurchases = [],
   profitSellers = [],
+  profitZones = [],
   config = {},
   currentUser,
   onNavigate,
@@ -255,12 +288,22 @@ export default function DashboardView({
     return DEFAULT_PROFIT_SELLERS;
   }, [profitSellers]);
 
+  // Índice SKU -> Producto para cálculo consistente de litros por documento e ítems
+  const productsBySku = useMemo(() => {
+    const map = new Map();
+    (products || []).forEach(p => {
+      const sku = String(p.codigo || p.id || '').trim();
+      if (sku) map.set(sku, p);
+    });
+    return map;
+  }, [products]);
+
   // Filtrar facturas según el rango del ejercicio fiscal y el mes seleccionado
   const filteredProfitInvoices = useMemo(() => {
     if (!Array.isArray(profitInvoices)) return [];
     const deduped = dedupeCanonicalDocs(profitInvoices);
     const valid = deduped.filter(f => {
-      if (f.anulada) return false;
+      if (isCxcInvoiceCancelled(f) || isExcludedSaleDocType(f)) return false;
       const dateStr = f?.fechaEmision || f?.fecEmis || f?.fec_emis || f?.fecha || '';
       const d = toDateKey(dateStr) || String(dateStr).substring(0, 10);
       if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
@@ -277,7 +320,7 @@ export default function DashboardView({
 
   // Ventas locales POS deduplicadas contra profitInvoices para evitar doble conteo
   const unduplicatedSales = useMemo(
-    () => getUnduplicatedSales(sales, profitInvoices),
+    () => getUnduplicatedSales(sales, profitInvoices).filter(s => !isCxcInvoiceCancelled(s) && !isExcludedSaleDocType(s)),
     [sales, profitInvoices]
   );
 
@@ -286,17 +329,17 @@ export default function DashboardView({
     return unduplicatedSales.filter(s => {
       const dateStr = s.fecha || s.fechaEmision || s.fecha_emision || '';
       return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
-    }).reduce((acc, s) => {
-      const litrosVenta = s.items ? s.items.reduce((itemAcc, item) => itemAcc + (item.litros || (item.cantidad * (item.litrosPorUnidad || 0))), 0) : 0;
-      return acc + litrosVenta;
-    }, 0);
-  }, [unduplicatedSales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
+    }).reduce((acc, s) => acc + resolveDocumentLitros(s, productsBySku), 0);
+  }, [unduplicatedSales, productsBySku, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
-  // Litros Facturados reales en el período seleccionado (desde Supabase profit_invoices)
+  // Litros Facturados reales en el período seleccionado (desde Supabase profit_invoices + fallback ítems)
   const litrosFacturadosPeriodo = useMemo(() => {
-    const fromInvoices = filteredProfitInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros ?? f?.total_litros) || 0), 0);
+    const fromInvoices = filteredProfitInvoices.reduce(
+      (acc, f) => acc + resolveDocumentLitros(f, productsBySku),
+      0
+    );
     return parseFloat((fromInvoices + litrosRealesVendidos).toFixed(2));
-  }, [filteredProfitInvoices, litrosRealesVendidos]);
+  }, [filteredProfitInvoices, productsBySku, litrosRealesVendidos]);
 
   const totalLitros = litrosFacturadosPeriodo;
 
@@ -329,7 +372,7 @@ export default function DashboardView({
 
       // Facturas Supabase asignadas (coincidencia exacta anti-colisión)
       const sInvoices = (filteredProfitInvoices || []).filter(f => matchesSeller(seller, f));
-      const sInvoicesLitros = sInvoices.reduce((acc, f) => acc + (Number(f?.totalLitros ?? f?.total_litros) || 0), 0);
+      const sInvoicesLitros = sInvoices.reduce((acc, f) => acc + resolveDocumentLitros(f, productsBySku), 0);
 
       // Ventas locales POS no duplicadas asignadas al vendedor dentro del período fiscal activo
       const sSales = unduplicatedSales.filter(s => {
@@ -337,9 +380,7 @@ export default function DashboardView({
         if (!isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth)) return false;
         return matchesSeller(seller, s);
       });
-      const sSalesLitros = sSales.reduce((acc, s) => {
-        return acc + (s.items ? s.items.reduce((itemAcc, item) => itemAcc + (item.litros || (item.cantidad * (item.litrosPorUnidad || 0))), 0) : 0);
-      }, 0);
+      const sSalesLitros = sSales.reduce((acc, s) => acc + resolveDocumentLitros(s, productsBySku), 0);
 
       const sLitros = sInvoicesLitros + sSalesLitros;
       const sMetaBase = Number(seller?.metaLitrosMes ?? seller?.meta_litros_mes) || 3000;
@@ -366,7 +407,7 @@ export default function DashboardView({
         pctAporteEmpresa: parseFloat(pctAporteEmpresa.toFixed(2))
       };
     }).sort((a, b) => b.litrosFinales - a.litrosFinales || b.pctAporteEmpresa - a.pctAporteEmpresa);
-  }, [effectiveSellersList, filteredProfitInvoices, unduplicatedSales, metaLitros, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
+  }, [effectiveSellersList, filteredProfitInvoices, unduplicatedSales, productsBySku, metaLitros, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Histórico de Metas y Cumplimiento real de todos los meses del ejercicio activo (sin duplicar POS/Profit)
   const monthlyHistoryData = useMemo(() => {
@@ -390,22 +431,19 @@ export default function DashboardView({
 
     return months.map(m => {
       const invLiters = dedupedInvoices.filter(f => {
-        if (!f || f.anulada) return false;
+        if (!f || isCxcInvoiceCancelled(f) || isExcludedSaleDocType(f)) return false;
         const d = f.fechaEmision || f.fecEmis || f.fec_emis || f.fecha || '';
         const dk = toDateKey(d);
         if (dk && (dk < fechaInicioEfectiva || dk > fechaFinEfectiva)) return false;
         return extractMonthNumber(d) === m.num;
-      }).reduce((acc, f) => acc + (Number(f.totalLitros ?? f.total_litros) || 0), 0);
+      }).reduce((acc, f) => acc + resolveDocumentLitros(f, productsBySku), 0);
 
       const salesLiters = unduplicatedSales.filter(s => {
         const d = s.fecha || s.fechaEmision || s.fecha_emision || '';
         const dk = toDateKey(d);
         if (dk && (dk < fechaInicioEfectiva || dk > fechaFinEfectiva)) return false;
         return extractMonthNumber(d) === m.num;
-      }).reduce((acc, s) => {
-        const litrosVenta = s.items ? s.items.reduce((itemAcc, item) => itemAcc + (item.litros || (item.cantidad * (item.litrosPorUnidad || 0))), 0) : 0;
-        return acc + litrosVenta;
-      }, 0);
+      }).reduce((acc, s) => acc + resolveDocumentLitros(s, productsBySku), 0);
 
       const facturado = parseFloat((invLiters + salesLiters).toFixed(1));
       const pct = metaBaseMes > 0 ? Math.round((facturado / metaBaseMes) * 100) : 0;
@@ -417,7 +455,7 @@ export default function DashboardView({
         pct
       };
     });
-  }, [effectiveSellersList, profitInvoices, unduplicatedSales, fechaInicioEfectiva, fechaFinEfectiva]);
+  }, [effectiveSellersList, profitInvoices, unduplicatedSales, productsBySku, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Cumplimiento de la meta calculado por la sumatoria de los porcentajes de cumplimiento de cada asesor
   const cumplimientoPct = useMemo(() => {
@@ -497,7 +535,7 @@ export default function DashboardView({
     }
 
     const active = profitCollections.filter(c => {
-      if (!c || c.anulado) return false;
+      if (!c || isCxcInvoiceCancelled(c)) return false;
       const dateStr = c.fecha || c.fechaEmision || c.fecEmis || c.fecCob || c.createdAt || '';
       return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
     });
@@ -578,7 +616,7 @@ export default function DashboardView({
   // Objetivos Estratégicos (Abonos Proveedores acumulados/período y Saldo Pendiente CxP) desde Supabase
   const objetivosData = useMemo(() => {
     const activePayments = Array.isArray(profitSupplierPayments)
-      ? profitSupplierPayments.filter(p => p && !p.anulado)
+      ? profitSupplierPayments.filter(p => p && !isCxcInvoiceCancelled(p))
       : [];
 
     const totalAbonos = activePayments.reduce(
@@ -592,7 +630,7 @@ export default function DashboardView({
 
     const totalSaldoPendiente = Array.isArray(profitAccountsPayable)
       ? profitAccountsPayable
-          .filter(d => d && !d.anulado)
+          .filter(d => d && !isCxcInvoiceSettled(d))
           .reduce((sum, d) => sum + resolveAmountUsd(d, ['saldoUsd', 'saldo_usd'], ['saldoBs', 'saldo_bs'], tasaBcv), 0)
       : 0;
 
@@ -622,12 +660,9 @@ export default function DashboardView({
       return acc + (Number(f.totNetoUsd ?? f.tot_neto_usd ?? f.totalNetoUsd ?? 0) || 0);
     }, 0);
     const salesTotal = (unduplicatedSales || []).filter(s => {
-      if (!s || s.anulada) return false;
-      const d = (s.fecha || '').substring(0, 10);
-      if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
-      if (selectedMonth === 'ALL') return true;
-      return extractMonthNumber(s.fecha) === selectedMonth;
-    }).reduce((acc, s) => acc + (Number(s.totalUsd) || 0), 0);
+      const dateStr = s.fecha || s.fechaEmision || s.fecha_emision || '';
+      return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
+    }).reduce((acc, s) => acc + (Number(s.totalUsd ?? s.total_usd ?? 0) || 0), 0);
     return parseFloat((invTotal + salesTotal).toFixed(2));
   }, [filteredProfitInvoices, unduplicatedSales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva]);
 
@@ -876,25 +911,52 @@ export default function DashboardView({
 
   // Métricas de Clientes, Ticket Promedio y Top 5 Clientes en el período
   const { ticketPromedioUsd, cantDocumentos, clientesActivosCount, topClientesData } = useMemo(() => {
-    const filteredSales = (sales || []).filter(s => {
-      if (!s || s.anulada) return false;
-      const d = (s.fecha || '').substring(0, 10);
-      if (d && (d < fechaInicioEfectiva || d > fechaFinEfectiva)) return false;
-      if (selectedMonth === 'ALL') return true;
-      return extractMonthNumber(s.fecha) === selectedMonth;
+    const filteredSales = (unduplicatedSales || []).filter(s => {
+      const dateStr = s.fecha || s.fechaEmision || s.fecha_emision || '';
+      return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
     });
 
     const cantDocs = (filteredProfitInvoices || []).length + filteredSales.length;
     const ticket = cantDocs > 0 ? parseFloat((totalFacturadoUsd / cantDocs).toFixed(2)) : 0;
 
+    const clientByRif = new Map();
+    const clientByCode = new Map();
+    const clientByName = new Map();
+    (clients || []).forEach(c => {
+      if (!c) return;
+      const rKey = normalizeClientRifKey(c.rif);
+      if (rKey && !clientByRif.has(rKey)) clientByRif.set(rKey, c);
+      const idKey = normalizeClientCodeKey(c.id);
+      if (idKey && !clientByCode.has(idKey)) clientByCode.set(idKey, c);
+      const coKey = normalizeClientCodeKey(c.codigo ?? c.co_cli);
+      if (coKey && !clientByCode.has(coKey)) clientByCode.set(coKey, c);
+      const nKey = normalizeClientNameKey(c.nombre || c.razonSocial);
+      if (nKey && !clientByName.has(nKey)) clientByName.set(nKey, c);
+    });
+
     const clientMap = new Map();
     const accumulateClient = (cid, cname, crif, montoUsd) => {
-      if (!cid && !cname) return;
-      const key = String(cid || cname).trim();
+      const rawRifKey = normalizeClientRifKey(crif);
+      const rawCodeKey = normalizeClientCodeKey(cid);
+      const rawNameKey = normalizeClientNameKey(cname);
+      const profile =
+        (rawRifKey && clientByRif.get(rawRifKey)) ||
+        (rawCodeKey && clientByCode.get(rawCodeKey)) ||
+        (rawNameKey && clientByName.get(rawNameKey)) ||
+        null;
+
+      const resolvedRifKey = normalizeClientRifKey(profile?.rif || crif);
+      const resolvedCodeKey = normalizeClientCodeKey(profile?.codigo || profile?.co_cli || profile?.id || cid);
+      const resolvedNameKey = normalizeClientNameKey(profile?.nombre || profile?.razonSocial || cname);
+      const key = resolvedRifKey
+        ? `RIF:${resolvedRifKey}`
+        : (resolvedCodeKey ? `CODE:${resolvedCodeKey}` : (resolvedNameKey ? `NAME:${resolvedNameKey}` : ''));
+      if (!key) return;
+
       const current = clientMap.get(key) || {
-        id: cid || key,
-        nombre: cname || key,
-        rif: crif || '',
+        id: profile?.id || profile?.codigo || cid || key,
+        nombre: profile?.nombre || profile?.razonSocial || cname || key,
+        rif: profile?.rif || crif || '',
         totalUsd: 0,
         facturasCount: 0
       };
@@ -935,7 +997,7 @@ export default function DashboardView({
       clientesActivosCount: activeCount,
       topClientesData: sortedTop
     };
-  }, [filteredProfitInvoices, sales, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva, totalFacturadoUsd]);
+  }, [filteredProfitInvoices, unduplicatedSales, clients, selectedMonth, fechaInicioEfectiva, fechaFinEfectiva, totalFacturadoUsd]);
 
   // Desglose Fiscal vs. Notas de Entrega (N.E.) y Notas de Crédito en el período activo
   const docTypeBreakdown = useMemo(() => {
@@ -957,7 +1019,7 @@ export default function DashboardView({
 
     let ncUsd = 0, ncCount = 0;
     dedupeCanonicalDocs(profitInvoices || []).forEach(inv => {
-      if (!inv || inv.anulada) return;
+      if (!inv || isCxcInvoiceCancelled(inv)) return;
       const tipo = String(inv.tipoDoc || inv.tipo_doc || '').toUpperCase();
       if (tipo !== 'NOTA_CREDITO') return;
       const dateStr = inv.fechaEmision || inv.fecEmis || inv.fec_emis || inv.fecha || '';
@@ -1018,7 +1080,7 @@ export default function DashboardView({
 
     let cobCurr = 0, cobPrev = 0;
     (profitCollections || []).forEach(c => {
-      if (!c || c.anulada) return;
+      if (!c || isCxcInvoiceCancelled(c)) return;
       const dKey = toDateKey(c.fecha || c.fec_cob || c.fec_emis || c.createdAt);
       if (!dKey) return;
       const { usdVal } = resolveCollectionNormalized(c, tasaBcv);
@@ -1072,7 +1134,7 @@ export default function DashboardView({
     const openDocsList = [];
 
     (profitAccountsPayable || []).forEach(d => {
-      if (!d || d.anulado) return;
+      if (!d || isCxcInvoiceSettled(d)) return;
       const saldoUsd = resolveAmountUsd(d, ['saldoUsd', 'saldo_usd'], ['saldoBs', 'saldo_bs'], tasaBcv);
       if (saldoUsd <= 0.01) return;
 
@@ -1190,7 +1252,7 @@ export default function DashboardView({
     );
 
     (profitPurchases || []).forEach(p => {
-      if (!p || p.anulada) return;
+      if (!p || isCxcInvoiceCancelled(p)) return;
       const dKey = toDateKey(p.fechaEmision || p.fec_emis || p.fecha);
       if (!dKey || !dKey.startsWith(`${anioActivo}-`)) return;
       const mId = dKey.substring(5, 7);
@@ -1201,7 +1263,7 @@ export default function DashboardView({
     });
 
     (profitSupplierPayments || []).forEach(p => {
-      if (!p || p.anulado) return;
+      if (!p || isCxcInvoiceCancelled(p)) return;
       const dKey = toDateKey(p.fechaPago || p.fec_pago || p.fecha || p.createdAt);
       if (!dKey || !dKey.startsWith(`${anioActivo}-`)) return;
       const mId = dKey.substring(5, 7);
@@ -1329,50 +1391,61 @@ export default function DashboardView({
     const currentYearNum = nowDate.getFullYear();
     const currentMonthNum = nowDate.getMonth() + 1;
 
-    const productsBySku = new Map();
-    (products || []).forEach(p => {
-      const sku = String(p.codigo || p.id || '').trim();
-      if (sku) productsBySku.set(sku, p);
-    });
-
     const resolveItemLitros = (it, sku) => {
-      const explicit = Number(it.litrosTotales ?? it.litros_totales ?? 0);
+      const explicit = Number(it.litrosTotales ?? it.litros_totales ?? it.litros ?? 0);
       if (explicit > 0) return explicit;
       const prod = productsBySku.get(sku);
       const qty = Number(it.cantidad || 0);
-      return prod ? qty * resolveProductLitersPerUnit(prod) : qty;
+      const ltsUnit = Number(it.litrosUnitarios ?? it.litrosPorUnidad ?? (prod ? resolveProductLitersPerUnit(prod) : 1)) || 0;
+      return qty * ltsUnit;
     };
 
-    // Mapear ventas por SKU desde profitInvoices (respetando período de filtrado)
+    const accumulateDocItemsToMap = (doc, targetMap) => {
+      let docLitros = 0;
+      const docRate = Number(doc?.tasa ?? doc?.tasaDolar ?? doc?.tasa_dolar ?? 0);
+      const effectiveRate = docRate > 1 ? docRate : tasaBcv;
+      (doc?.items || []).forEach(it => {
+        const sku = String(it.articuloId || it.codigo || it.id || '').trim();
+        if (!sku) return;
+        const lts = resolveItemLitros(it, sku);
+        docLitros += lts;
+        const usdDirect = Number(it.totalUsd ?? it.subtotalUsd ?? 0);
+        const usdVal = usdDirect > 0
+          ? usdDirect
+          : (effectiveRate > 1 ? (Number(it.totalNeto || 0) / effectiveRate) : (Number(it.precioUsd || 0) * Number(it.cantidad || 0)));
+        const prev = targetMap.get(sku) || { litros: 0, count: 0, usd: 0 };
+        prev.litros += lts;
+        prev.count += 1;
+        prev.usd += usdVal;
+        targetMap.set(sku, prev);
+      });
+      return docLitros;
+    };
+
+    const filteredPeriodSales = (unduplicatedSales || []).filter(s => {
+      const dateStr = s.fecha || s.fechaEmision || s.fecha_emision || '';
+      return isWithinFiscalPeriod(dateStr, fechaInicioEfectiva, fechaFinEfectiva, selectedMonth);
+    });
+
+    // Mapear ventas por SKU desde profitInvoices + POS no duplicadas (respetando estrictamente el período filtrado)
     const salesMap = new Map();
     let totalLtsVendidosReal = 0;
 
-    const sourceInvoices = filteredProfitInvoices.length > 0 ? filteredProfitInvoices : profitInvoices;
-    (sourceInvoices || []).forEach(inv => {
-      if (inv.anulada) return;
-      (inv.items || []).forEach(it => {
-        const sku = String(it.articuloId || it.codigo || '').trim();
-        if (!sku) return;
-        const lts = resolveItemLitros(it, sku);
-        totalLtsVendidosReal += lts;
-        const prev = salesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
-        prev.litros += lts;
-        prev.count += 1;
-        prev.usd += Number(it.totalNeto || 0) / tasaBcv;
-        salesMap.set(sku, prev);
-      });
+    [...(filteredProfitInvoices || []), ...filteredPeriodSales].forEach(doc => {
+      if (!doc || isCxcInvoiceCancelled(doc) || isExcludedSaleDocType(doc)) return;
+      totalLtsVendidosReal += accumulateDocItemsToMap(doc, salesMap);
     });
 
-    // Mapear fechas de compra/recepción de lote por SKU
+    // Mapear fechas de compra/recepción de lote por SKU usando clave YYYY-MM-DD (sin desfase UTC)
     const purchaseDatesBySku = new Map();
     (profitPurchases || []).forEach(pu => {
-      if (pu.anulada) return;
-      const f = pu.fechaEmision || pu.fec_emis;
-      if (!f) return;
+      if (!pu || isCxcInvoiceCancelled(pu)) return;
+      const dk = toDateKey(pu.fechaEmision || pu.fec_emis || pu.fecha);
+      if (!dk) return;
       (pu.items || []).forEach(it => {
         const sku = String(it.articuloId || it.codigo || '').trim();
-        if (sku && (!purchaseDatesBySku.has(sku) || new Date(f) > new Date(purchaseDatesBySku.get(sku)))) {
-          purchaseDatesBySku.set(sku, f);
+        if (sku && (!purchaseDatesBySku.has(sku) || dk > purchaseDatesBySku.get(sku))) {
+          purchaseDatesBySku.set(sku, dk);
         }
       });
     });
@@ -1390,14 +1463,11 @@ export default function DashboardView({
       // Determinar año y mes de lote (desde compras reales o rotación histórica)
       let yearLote = String(currentYearNum);
       let monthLote = '01';
-      const fCompra = purchaseDatesBySku.get(sku);
+      const dkCompra = purchaseDatesBySku.get(sku);
 
-      if (fCompra) {
-        const d = new Date(fCompra);
-        if (!isNaN(d.getTime())) {
-          yearLote = String(d.getFullYear());
-          monthLote = String(d.getMonth() + 1).padStart(2, '0');
-        }
+      if (dkCompra && dkCompra.length >= 7) {
+        yearLote = dkCompra.substring(0, 4);
+        monthLote = dkCompra.substring(5, 7);
       } else {
         if (s.litros === 0 && cant > 0) {
           yearLote = String(currentYearNum - 2);
@@ -1439,34 +1509,22 @@ export default function DashboardView({
       };
     });
 
-    // Mapear ventas específicas para la Comparativa de Lubricantes (filtrado dinámico por Año y Mes)
+    // Mapear ventas específicas para la Comparativa de Lubricantes (deduplicado y filtrado por Año/Mes local)
     const comparativaSalesMap = new Map();
     let comparativaTotalLts = 0;
 
-    (profitInvoices || []).forEach(inv => {
-      if (inv.anulada) return;
-      const f = inv.fechaEmision || inv.fec_emis || '';
-      if (!f) return;
-      const d = new Date(f);
-      if (isNaN(d.getTime())) return;
-      const y = String(d.getFullYear());
-      const m = String(d.getMonth() + 1).padStart(2, '0');
+    [...(dedupeCanonicalDocs(profitInvoices || []) || []), ...(unduplicatedSales || [])].forEach(doc => {
+      if (!doc || isCxcInvoiceCancelled(doc) || isExcludedSaleDocType(doc)) return;
+      const dk = toDateKey(doc.fechaEmision || doc.fec_emis || doc.fecha);
+      if (!dk || dk.length < 7) return;
+      const y = dk.substring(0, 4);
+      const m = dk.substring(5, 7);
 
       const matchY = comparativaYearFilter === 'ALL' || y === comparativaYearFilter;
       const matchM = comparativaMonthFilter === 'ALL' || m === comparativaMonthFilter;
       if (!matchY || !matchM) return;
 
-      (inv.items || []).forEach(it => {
-        const sku = String(it.articuloId || it.codigo || '').trim();
-        if (!sku) return;
-        const lts = resolveItemLitros(it, sku);
-        comparativaTotalLts += lts;
-        const prev = comparativaSalesMap.get(sku) || { litros: 0, count: 0, usd: 0 };
-        prev.litros += lts;
-        prev.count += 1;
-        prev.usd += Number(it.totalNeto || 0) / tasaBcv;
-        comparativaSalesMap.set(sku, prev);
-      });
+      comparativaTotalLts += accumulateDocItemsToMap(doc, comparativaSalesMap);
     });
 
     // Todos los Más Vendidos según el filtro de período seleccionado (Año/Mes)
@@ -1686,7 +1744,7 @@ export default function DashboardView({
       pctFifo: totalStockLitros > 0 ? parseFloat(((ltsFifo / totalStockLitros) * 100).toFixed(1)) : 0,
       pctRiesgo: totalStockLitros > 0 ? parseFloat(((ltsRiesgo / totalStockLitros) * 100).toFixed(1)) : 0
     };
-  }, [products, filteredProfitInvoices, profitInvoices, profitPurchases, tasaBcv, caducidadYearFilter, caducidadMonthFilter, comparativaYearFilter, comparativaMonthFilter, selectedMonth, anioActivo, fechaInicioEfectiva, fechaFinEfectiva]);
+  }, [products, productsBySku, filteredProfitInvoices, profitInvoices, unduplicatedSales, profitPurchases, tasaBcv, caducidadYearFilter, caducidadMonthFilter, comparativaYearFilter, comparativaMonthFilter, selectedMonth, anioActivo, fechaInicioEfectiva, fechaFinEfectiva]);
 
   // Mix de Medios de Pago en Cobranzas (en equivalente USD para consistencia en gráfico)
   const mixMediosPagoData = useMemo(() => {
@@ -4457,8 +4515,12 @@ export default function DashboardView({
         isOpen={showClientsModal}
         onClose={() => setShowClientsModal(false)}
         clients={clients}
+        profitInvoices={profitInvoices}
+        sales={sales}
         tasaBcv={tasaBcv}
         currentUser={currentUser}
+        profitSellers={profitSellers}
+        profitZones={profitZones}
         onSaveClient={onSaveClient}
         onDeleteClient={onDeleteClient}
         onApproveClient={onApproveClient}
@@ -4481,6 +4543,7 @@ export default function DashboardView({
         onClose={() => setShowCreditScoreModal(false)}
         clients={clients}
         profitInvoices={profitInvoices}
+        sales={sales}
         profitCollections={profitCollections}
         config={config}
         tasaBcv={tasaBcv}

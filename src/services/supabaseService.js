@@ -6410,7 +6410,14 @@ export const getSupabaseProfitInvoices = async () => {
       abonosUsd: f.abonos_usd !== undefined ? Number(f.abonos_usd) : (f.abonosUsd !== undefined ? Number(f.abonosUsd) : undefined),
       abonosBs: f.abonos_bs !== undefined ? Number(f.abonos_bs) : (f.abonosBs !== undefined ? Number(f.abonosBs) : undefined),
       saldoUsd: Number(f.saldo_usd ?? f.saldoUsd ?? 0),
-      saldoBs: Number(f.saldo_bs ?? f.saldoBs ?? f.saldo ?? 0),
+      saldoBs: (() => {
+        const sUsd = Number(f.saldo_usd ?? f.saldoUsd ?? 0);
+        const st = String(f.status || f.estado || '').toUpperCase().trim();
+        if (f.anulada || f.anulado || sUsd <= 0.01 && (st === 'COBRADA' || st === 'COBRADO' || st === 'PAGADA' || st === 'PAGADO' || f.saldo_usd !== undefined)) {
+          return Number(f.saldo_bs ?? 0);
+        }
+        return Number(f.saldo_bs ?? f.saldoBs ?? f.saldo ?? 0);
+      })(),
       tasa: Number(f.tasa ?? f.tasa_dolar ?? f.tasaDolar ?? 0),
       tipoTasa: normalizeRateType(f.tipo_tasa ?? f.tipoTasa, {
         tipoDoc: resolvedTipoDoc,

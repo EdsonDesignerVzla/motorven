@@ -8523,6 +8523,8 @@ export default function OrdersSalesModal({
           isOpen={showClientsDirectoryModal}
           onClose={() => setShowClientsDirectoryModal(false)}
           clients={clients}
+          profitInvoices={profitInvoices}
+          sales={sales}
           tasaBcv={tasaBcv}
           currentUser={currentUser}
           profitSellers={profitSellers}

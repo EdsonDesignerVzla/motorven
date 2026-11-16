@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   inferTreasuryAccountKind,
   matchesCashDesk,
@@ -201,7 +201,8 @@ import { subscribeToRealtimeChanges } from './services/profitService';
 import { doesPayableMatchDocument, doProvidersMatch } from './utils/cxpUtils';
 import {
   inferCxcDocType,
-  normalizeCollectionWriteAmounts
+  normalizeCollectionWriteAmounts,
+  reconcileClientsWithRealCxc
 } from './utils/cxcUtils';
 import { subscribeToRealtimeSync, broadcastReconcileChange, getRealtimeClientId } from './services/realtimeSyncBridge';
 import {
@@ -427,6 +428,18 @@ function MainApp() {
   const [globalSearch, setGlobalSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Directorio oficial de clientes sincronizado en tiempo real con CxC abierta (profitInvoices + sales)
+  const syncedClients = useMemo(
+    () =>
+      reconcileClientsWithRealCxc({
+        clients,
+        profitInvoices,
+        sales,
+        tasaBcv: resolveExchangeRates(config).tasaBcv
+      }).clients,
+    [clients, profitInvoices, sales, config?.tasaDolar]
+  );
 
   const handleOpenOrdersSalesModal = (tab = 'nuevo', order = null) => {
     setOrdersSalesModalTab(tab);
@@ -1414,7 +1427,7 @@ function MainApp() {
       try {
         const { tasaBcv: tasa } = resolveExchangeRates(config);
         const expiringClients = [];
-        for (const cl of clients) {
+        for (const cl of syncedClients) {
           if (!cl || cl.inactivo) continue;
           const summary = evaluateClientCreditPortfolioSummary({
             client: cl,
@@ -1468,7 +1481,7 @@ function MainApp() {
     }, 3500);
 
     return () => clearTimeout(timer);
-  }, [currentUser, clients, profitInvoices, sales, config?.tasaDolar, notify]);
+  }, [currentUser, syncedClients, profitInvoices, sales, config?.tasaDolar, notify]);
 
   // Sincronizar currentUser de forma atómica con usersList y localStorage
   const handleUpdateCurrentUser = (updatedUser) => {
@@ -3705,7 +3718,7 @@ function MainApp() {
     return (
       <MobileAppLayout
         products={products}
-        clients={clients}
+        clients={syncedClients}
         suppliers={suppliers}
         purchases={purchases}
         cashMovements={cashMovements}
@@ -3822,9 +3835,9 @@ function MainApp() {
           onSyncProfit={handleSyncProfit}
           onOpenOrdersSalesModal={handleOpenOrdersSalesModal}
           productsCount={products?.length || 29}
-          clientsCount={clients?.length || 631}
+          clientsCount={syncedClients?.length || 631}
           products={products}
-          clients={clients}
+          clients={syncedClients}
           sales={sales}
           orders={orders}
           suppliers={suppliers}
@@ -3836,7 +3849,7 @@ function MainApp() {
             <DashboardView
               products={products}
               sales={sales}
-              clients={clients}
+              clients={syncedClients}
               orders={orders}
               profitInvoices={profitInvoices}
               profitCollections={profitCollections}
@@ -3863,7 +3876,7 @@ function MainApp() {
             <ModuleErrorBoundary moduleName="Preventa Móvil (Vendedor)">
               <SellerOrderPOSView
                 products={products}
-                clients={clients}
+                clients={syncedClients}
                 orders={orders}
                 profitInvoices={profitInvoices}
                 profitCollections={profitCollections}
@@ -3884,7 +3897,7 @@ function MainApp() {
           {activeTab === 'pedidos' && canAccessModule(currentUser?.rol, 'pedidos', currentUser) && (
             <OrdersSalesModal
               orders={orders}
-              clients={clients}
+              clients={syncedClients}
               products={products}
               config={config}
               profitZones={profitZones}
@@ -3940,7 +3953,7 @@ function MainApp() {
           {activeTab === 'ventas' && canAccessModule(currentUser?.rol, 'ventas', currentUser) && (
             <SalesPOSView
               products={products}
-              clients={clients}
+              clients={syncedClients}
               orders={orders}
               sales={sales}
               profitSellers={profitSellers}
@@ -3972,7 +3985,7 @@ function MainApp() {
                 profitInvoices={profitInvoices}
                 profitCollections={profitCollections}
                 profitBankAccounts={profitBankAccounts}
-                clients={clients}
+                clients={syncedClients}
                 orders={orders}
                 config={config}
                 onSyncProfit={handleSyncProfit}
@@ -4008,7 +4021,7 @@ function MainApp() {
               expenses={expenses}
               payroll={payroll}
               employees={employees}
-              clients={clients}
+              clients={syncedClients}
               config={config}
               onSyncProfit={handleSyncProfit}
               onSaveExpense={handleSaveExpense}
@@ -4076,7 +4089,7 @@ function MainApp() {
               invoices={sales}
               profitInvoices={profitInvoices}
               products={products}
-              clients={clients}
+              clients={syncedClients}
               sellers={profitSellers}
               profitSellers={profitSellers}
               profitZones={profitZones}
@@ -4174,7 +4187,7 @@ function MainApp() {
               config={config}
               currentUser={currentUser}
               products={products}
-              clients={clients}
+              clients={syncedClients}
               onNavigate={setActiveTab}
             />
           )}
@@ -4188,7 +4201,7 @@ function MainApp() {
               onSaveConfig={handleSaveConfig}
               currentUser={currentUser}
               products={products}
-              clients={clients}
+              clients={syncedClients}
             />
           )}
 
@@ -4252,7 +4265,7 @@ function MainApp() {
           isOpen={showDebtCollectionModal}
           onClose={() => setShowDebtCollectionModal(false)}
           profitInvoices={profitInvoices}
-          clients={clients}
+          clients={syncedClients}
           profitSellers={profitSellers}
           profitBankAccounts={profitBankAccounts}
           config={config}

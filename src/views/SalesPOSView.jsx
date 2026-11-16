@@ -3145,6 +3145,8 @@ export default function SalesPOSView({
         isOpen={showClientsDirectoryModal}
         onClose={() => setShowClientsDirectoryModal(false)}
         clients={clients}
+        profitInvoices={profitInvoices}
+        sales={sales}
         tasaBcv={Number(safeConfig.tasaDolar) || 827.73}
         currentUser={currentUser}
         profitSellers={profitSellers}

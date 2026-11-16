@@ -8,6 +8,49 @@ export function isDocumentAnnulled(doc) {
   return status === 'ANULADA' || status === 'ANULADO' || status === 'VOID';
 }
 
+/**
+ * Normaliza códigos correlativos de Ajuste / Traslado sin duplicar prefijos (AJU- / TRA- / TRAS-).
+ */
+export function formatKardexDocCode(rawNum, prefix = 'AJU') {
+  const s = String(rawNum ?? '').trim();
+  if (!s) return `${prefix}-000000`;
+  const upper = s.toUpperCase();
+  if (upper.startsWith('AJU-') || upper.startsWith('TRA-') || upper.startsWith('TRAS-')) {
+    return upper;
+  }
+  if (/^\d+$/.test(s)) {
+    return `${prefix}-${s.padStart(6, '0')}`;
+  }
+  return `${prefix}-${upper}`;
+}
+
+/**
+ * Resuelve costo unitario real en USD y Bs. para renglones de ajustes y traslados,
+ * corrigiendo registros de Profit donde `cost_unit_om` vino grabado en Bolívares (`cost_unit_om === cost_unit`).
+ */
+export function resolveKardexLineCosts({ line = {}, productsBySku = null, tasaDolar = 827.73 } = {}) {
+  const safeRate = Number(tasaDolar) > 1 ? Number(tasaDolar) : 827.73;
+  const sku = String(line?.co_art || line?.codigo || line?.articuloId || '').trim();
+  const prod = productsBySku instanceof Map ? productsBySku.get(sku) : null;
+  const catalogCostUsd = Number(prod?.costoUsd ?? prod?.costo ?? prod?.costo_unitario ?? 0) || 0;
+
+  const rawOm = Number(line?.cost_unit_om ?? line?.costUnitOm ?? line?.costoUsd ?? 0) || 0;
+  const rawBs = Number(line?.cost_unit ?? line?.costUnit ?? line?.costoBs ?? 0) || 0;
+  const omEqualsBs = rawOm > 0 && rawBs > 0 && Math.abs(rawOm - rawBs) < 0.01;
+
+  let costUsd = 0;
+  if (rawOm > 0 && !omEqualsBs) {
+    costUsd = rawOm;
+  } else if (catalogCostUsd > 0) {
+    costUsd = catalogCostUsd;
+  } else if (rawBs > 0) {
+    costUsd = rawBs / safeRate;
+  }
+
+  const costBs = rawBs > 0 ? rawBs : costUsd * safeRate;
+  return { costUsd, costBs };
+}
+
 export function buildConsolidatedKardex({
   products = [],
   adjustments = [],

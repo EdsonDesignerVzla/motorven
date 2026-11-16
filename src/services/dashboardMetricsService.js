@@ -1,4 +1,5 @@
 import { getCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
+import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord } from '../utils/cxcUtils.js';
 
 /**
  * Extrae el mes ('01'..'12') desde fechas ISO o formato DD/MM/YYYY / DD-MM-YYYY.
@@ -80,7 +81,7 @@ export function summarizePendingOrders(orders = []) {
       if (!o) return false;
       const tDoc = String(o.tipoDoc || o.tipo_doc || '').trim().toUpperCase();
       if (tDoc === 'SOLICITUD_CLIENTE') return false;
-      const st = String(o.status || o.estado || '').trim().toUpperCase();
+      const st = String(o.estatus || o.status || o.estado || '').trim().toUpperCase();
       return st === 'PENDIENTE' || st === 'APROBADO';
     })
     .reduce(
@@ -91,15 +92,6 @@ export function summarizePendingOrders(orders = []) {
       { basePendiente: 0, pendingOrdersUsd: 0 }
     );
 }
-
-const isCreditSaleRecord = (s) => {
-  if (!s) return false;
-  if (s.aCredito) return true;
-  const term = String(s.condicionPago || s.condicion_pago || '').trim().toUpperCase();
-  if (term === 'CREDITO') return true;
-  if (term && term !== 'CONTADO' && /^\d+/.test(term)) return true;
-  return Number(s.diasCredito || 0) > 0;
-};
 
 /**
  * Resume cartera CxC al día vs vencida usando clave canónica, fecha local VE y plazos de crédito completos.
@@ -112,9 +104,10 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
 
   if (Array.isArray(profitInvoices)) {
     dedupeCanonicalDocs(profitInvoices).forEach((f) => {
-      if (!f || f.anulada) return;
+      if (!f || isCxcInvoiceCancelled(f)) return;
       const ck = getCanonicalDocKey(f);
       if (ck) seenCxcKeys.add(ck);
+      if (isCxcInvoiceSettled(f)) return;
       let saldo = Number(f.saldoUsd ?? f.saldo_usd ?? 0);
       if (saldo <= 0.01 && (f.saldoBs ?? f.saldo_bs) && tasaBcv > 0) {
         saldo = Number(f.saldoBs ?? f.saldo_bs) / tasaBcv;
@@ -132,11 +125,16 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
 
   if (Array.isArray(sales)) {
     dedupeCanonicalDocs(sales).forEach((s) => {
-      if (!s || s.anulada) return;
+      if (!s || isCxcInvoiceCancelled(s)) return;
+      const rawTipo = String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim();
+      if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
       const ck = getCanonicalDocKey(s);
       if (ck && seenCxcKeys.has(ck)) return;
-      if (!isCreditSaleRecord(s)) return;
-      const saldo = Number(s.saldoPendiente ?? s.saldoUsd ?? (s.totalUsd && !s.pagado ? s.totalUsd : 0));
+      if (isCxcInvoiceSettled(s)) return;
+      const statusUpper = String(s.estado || s.status || '').toUpperCase().trim();
+      const explicitSaldo = Number(s.saldoPendiente ?? s.saldoUsd ?? s.saldo_usd ?? 0);
+      if (!isCreditSaleRecord(s) && statusUpper !== 'PENDIENTE' && explicitSaldo <= 0.01) return;
+      const saldo = Number(s.saldoPendiente ?? s.saldoUsd ?? s.saldo_usd ?? (s.totalUsd && !s.pagado ? s.totalUsd : 0));
       if (saldo <= 0.01) return;
       const fVencRaw = s.fechaVencimiento || s.fechaVenc || '';
       const fVenc = toDateKey(fVencRaw) || fVencRaw;
@@ -150,7 +148,7 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
 
   const cxcDia = parseFloat(alDia.toFixed(2));
   const cxcVen = parseFloat(vencida.toFixed(2));
-  const cxcTot = cxcDia + cxcVen;
+  const cxcTot = parseFloat((cxcDia + cxcVen).toFixed(2));
   return {
     cxcDia,
     cxcVen,

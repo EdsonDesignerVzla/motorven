@@ -2686,6 +2686,9 @@ export default function CashflowView({
         isOpen={showClientsModal}
         onClose={() => setShowClientsModal(false)}
         clients={clients}
+        profitInvoices={profitInvoices}
+        sales={sales}
+        profitSellers={profitSellers}
         tasaBcv={tasaBcv}
         currentUser={currentUser}
         onSaveClient={onSaveClient}

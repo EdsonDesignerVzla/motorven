@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import {
   isCxcInvoiceCancelled,
+  isCxcInvoiceSettled,
   inferCxcDocType,
   getCxcScopedDocKey,
   normalizeCollectionWriteAmounts,
   consolidateClientReceivables,
+  reconcileClientsWithRealCxc,
   doesCollectionMatchInvoice,
   classifyCollectionRateType,
   groupMovementsByRateType,
@@ -392,6 +394,101 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.equal(byCaja.totals.totalUsd, 620);
   assert.equal(byCaja.totals.totalBs, 161406.30);
   console.log('  ✓ 7. Monedas directas en 0 (Tasa/Bs) y resumen por Caja / Banco verificados.');
+}
+
+// 8. Reconciliación real de directorio de clientes contra CxC abierta (anti saldoDeudorUsd obsoleto y COBRADA con saldoBs)
+{
+  const staleClients = [
+    { id: 'CLI-1', codigo: 'CLI-1', nombre: 'Repuestos Alpha', rif: 'J-30001111-1', saldoDeudorUsd: 0 },
+    { id: 'CLI-2', codigo: 'CLI-2', nombre: 'Lubricantes Beta', rif: 'J-40002222-2', saldoDeudorUsd: 2860 },
+    { id: 'CLI-3', codigo: 'CLI-3', nombre: 'Auto Centro Gamma', rif: 'V-19001122-3', saldoDeudorUsd: 10 }
+  ];
+  const invoices = [
+    {
+      id: 'F-100',
+      factNum: '000100',
+      tipoDoc: 'FACTURA',
+      clienteId: 'CLI-1',
+      clienteRif: 'J300011111', // sin guiones para validar normalización RIF
+      fechaEmision: '2026-11-01',
+      fechaVencimiento: '2026-11-10', // vencida respecto a 2026-11-15
+      totNetoUsd: 271,
+      saldoUsd: 271,
+      status: 'PENDIENTE'
+    },
+    {
+      id: 'F-101',
+      factNum: '000101',
+      tipoDoc: 'FACTURA',
+      clienteId: 'CLI-2',
+      clienteRif: 'J-40002222-2',
+      fechaEmision: '2026-11-12',
+      fechaVencimiento: '2026-11-27', // al día
+      totNetoUsd: 243,
+      saldoUsd: 243,
+      status: 'PENDIENTE'
+    },
+    {
+      id: 'F-102',
+      factNum: '000102',
+      tipoDoc: 'FACTURA',
+      clienteId: 'CLI-3',
+      clienteRif: 'V-19001122-3',
+      fechaEmision: '2026-09-10',
+      fechaVencimiento: '2026-09-25',
+      totNetoUsd: 350,
+      saldoUsd: 0,
+      saldoBs: 319067, // residual viejo en BS aunque ya cobrada
+      status: 'COBRADA'
+    }
+  ];
+  const salesList = [
+    // Duplicada de F-100
+    { id: 'S-DUP', numeroDoc: '000100', tipoDoc: 'FACTURA', clienteRif: 'J-30001111-1', condicionPago: 'CREDITO', totalUsd: 271, saldoUsd: 271, fechaEmision: '2026-11-01', fechaVencimiento: '2026-11-10' },
+    // NE abierta en POS con abono parcial previo
+    { id: 'fac-133', numeroDoc: 'NE-000133', tipoDoc: 'NOTA_ENTREGA', clienteId: 'CLI-1', condicionPago: 'CREDITO', totalUsd: 771, saldoUsd: 65, fechaEmision: '2026-11-14', fechaVencimiento: '2026-11-29' }
+  ];
+
+  assert.equal(isCxcInvoiceSettled(invoices[2]), true);
+
+  const res = reconcileClientsWithRealCxc({
+    clients: staleClients,
+    profitInvoices: invoices,
+    sales: salesList,
+    tasaBcv: 911.62,
+    todayKey: '2026-11-15'
+  });
+
+  const c1 = res.clients.find(c => c.id === 'CLI-1');
+  const c2 = res.clients.find(c => c.id === 'CLI-2');
+  const c3 = res.clients.find(c => c.id === 'CLI-3');
+
+  assert.equal(c1.saldoDeudorUsd, 336, 'CLI-1 debe mostrar 271 FAC + 65 NE sin duplicar ni leer 0 obsoleto');
+  assert.equal(c1.saldoVencidoUsd, 271);
+  assert.equal(c1.saldoAlDiaUsd, 65);
+  assert.equal(c1.openDocsCount, 2);
+
+  assert.equal(c2.saldoDeudorUsd, 243, 'CLI-2 debe corregir 2860 obsoleto a 243 real');
+  assert.equal(c2.saldoVencidoUsd, 0);
+  assert.equal(c2.saldoAlDiaUsd, 243);
+
+  assert.equal(c3.saldoDeudorUsd, 0, 'CLI-3 debe quedar solvente en 0 (ni 10 obsoleto ni F-102 COBRADA con saldoBs)');
+  assert.equal(res.totals.conDeudaCount, 2);
+  assert.equal(res.totals.totalDeudaUsd, 579);
+  assert.equal(res.totals.alDiaUsd, 308);
+  assert.equal(res.totals.vencidaUsd, 271);
+  assert.equal(res.totals.unmatchedDocsCount, 0);
+
+  // Verificar que consolidateClientReceivables no duplica clientes ya marcados con _saldoSyncedFromCxc
+  const consolidated = consolidateClientReceivables({
+    clients: res.clients,
+    profitInvoices: invoices,
+    sales: salesList,
+    tasaBcv: 911.62
+  });
+  const con1 = consolidated.find(r => r.id === 'CLI-1');
+  assert.equal(con1.saldoUsd, 336, 'consolidateClientReceivables no debe sumar saldoDeudorUsd local cuando ya viene sincronizado');
+  console.log('  ✓ 8. Reconciliación real de Clientes vs CxC (RIF sin guiones, anti COBRADA saldoBs y cero doble-conteo) verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');

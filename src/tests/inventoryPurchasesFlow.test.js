@@ -8,9 +8,42 @@ import {
   saveSupabaseProfitWarehouseTransfer,
   saveSupabaseProfitInventoryAdjustment,
   saveSupabasePurchase,
-  saveSupabaseGoodsReceiptNote
+  saveSupabaseGoodsReceiptNote,
+  supabase
 } from '../services/supabaseService.js';
-import { buildConsolidatedKardex, isDocumentAnnulled } from '../utils/kardexUtils.js';
+import {
+  buildConsolidatedKardex,
+  isDocumentAnnulled,
+  resolveKardexLineCosts,
+  formatKardexDocCode
+} from '../utils/kardexUtils.js';
+
+// Aislar llamadas remotas durante pruebas unitarias para no contaminar Supabase en producción
+const origSupabaseFrom = supabase.from;
+const mockQueryChain = () => {
+  const res = Promise.resolve({ data: [], error: null });
+  const chain = {
+    select: () => chain,
+    insert: () => chain,
+    upsert: () => chain,
+    update: () => chain,
+    delete: () => chain,
+    eq: () => chain,
+    neq: () => chain,
+    in: () => chain,
+    like: () => chain,
+    order: () => chain,
+    limit: () => chain,
+    single: () => res,
+    maybeSingle: () => res,
+    then: res.then.bind(res),
+    catch: res.catch.bind(res)
+  };
+  return chain;
+};
+supabase.from = () => mockQueryChain();
+
+try {
 
 console.log('--- INICIANDO PRUEBAS DE INVENTARIO, ALMACENES 01/02, COMPRAS Y KARDEX ---');
 
@@ -250,4 +283,32 @@ assert.strictEqual(row.traslados, 4, 'Kardex debe excluir traslado anulado (como
 assert.strictEqual(row.stock01, 6, 'Kardex debe incluir stock01');
 assert.strictEqual(row.stock02, 24, 'Kardex debe incluir stock02');
 
+// 5. Normalización de costos en Bolívares vs USD en ajustes y códigos sin doble prefijo
+const testProdMap = new Map([
+  ['101510', { codigo: '101510', costoUsd: 139.62 }],
+  ['100102', { codigo: '100102', costoUsd: 52.91 }]
+]);
+const profitBsLine = resolveKardexLineCosts({
+  line: { co_art: '101510', cost_unit_om: 6535862.01, cost_unit: 6535862.01 },
+  productsBySku: testProdMap,
+  tasaDolar: 911.62
+});
+assert.strictEqual(profitBsLine.costUsd, 139.62, 'Si cost_unit_om === cost_unit (Bs.), debe resolver el costo real en USD');
+assert.strictEqual(profitBsLine.costBs, 6535862.01);
+
+const genuineUsdLine = resolveKardexLineCosts({
+  line: { co_art: '100102', cost_unit_om: 76.52, cost_unit: 34548.64 },
+  productsBySku: testProdMap,
+  tasaDolar: 911.62
+});
+assert.strictEqual(genuineUsdLine.costUsd, 76.52, 'Si cost_unit_om != cost_unit, cost_unit_om ya está en USD');
+
+assert.strictEqual(formatKardexDocCode(14, 'AJU'), 'AJU-000014');
+assert.strictEqual(formatKardexDocCode('AJU-991122', 'AJU'), 'AJU-991122');
+assert.strictEqual(formatKardexDocCode(4, 'TRA'), 'TRA-000004');
+assert.strictEqual(formatKardexDocCode('TRAS-881100', 'TRA'), 'TRAS-881100');
+
 console.log('✅ TODAS LAS PRUEBAS DE INVENTARIO, ALMACENES Y COMPRAS FINALIZADAS CON ÉXITO.');
+} finally {
+  supabase.from = origSupabaseFrom;
+}

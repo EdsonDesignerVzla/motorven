@@ -384,6 +384,11 @@ export function AccountsReceivableModal({
         return map;
     }, [sellers, profitSellers]);
 
+    const effectiveSales = useMemo(
+        () => (Array.isArray(invoices) && invoices.length > 0 ? invoices : (Array.isArray(sales) ? sales : [])),
+        [invoices, sales]
+    );
+
     // Procesar todas las facturas y notas de entrega (Profit Plus + Ventas POS + Documentos creados/editados)
     const allDocuments = useMemo(() => {
         if (isOpen === false) return [];
@@ -392,7 +397,6 @@ export function AccountsReceivableModal({
 
         const rawMap = new Map();
         const canonicalKeyToRawKey = new Map();
-        const effectiveSales = Array.isArray(invoices) && invoices.length > 0 ? invoices : (Array.isArray(sales) ? sales : []);
 
         // Leer documentos eliminados de forma persistente desde localStorage (con limpieza única de colisiones previas)
         const delSet = new Set(sanitizeCxcDeletedDocsStorage().map(k => String(k).trim()).filter(Boolean));
@@ -485,10 +489,14 @@ export function AccountsReceivableModal({
             const effectiveTotNeto = isNotaEntregaSale ? neNetoSinIva : round2(rawSaleTotal || (effectiveTotBruto + effectiveIva));
 
             const hasExplicitCobros = Array.isArray(sale.historialCobros) && sale.historialCobros.length > 0;
+            const explicitSaleSaldo = Number(sale.saldoPendiente ?? sale.saldoUsd ?? sale.saldo_usd);
+            const hasExplicitSaleSaldo = Number.isFinite(explicitSaleSaldo) && explicitSaleSaldo >= 0 && explicitSaleSaldo < (effectiveTotNeto - 0.01);
             const effectiveAbonos = hasExplicitCobros
                 ? Number(sale.abonosUsd ?? sale.montoPagadoUsd ?? 0)
-                : 0;
-            const effectiveSaldo = Math.max(0, round2(effectiveTotNeto - effectiveAbonos));
+                : (hasExplicitSaleSaldo ? Math.max(0, round2(effectiveTotNeto - explicitSaleSaldo)) : 0);
+            const effectiveSaldo = hasExplicitCobros
+                ? Math.max(0, round2(effectiveTotNeto - effectiveAbonos))
+                : (hasExplicitSaleSaldo ? round2(explicitSaleSaldo) : Math.max(0, round2(effectiveTotNeto - effectiveAbonos)));
 
             const resolvedSaleSeller = resolveSellerFromCatalog(
                 sale.vendedorId,
@@ -765,7 +773,7 @@ export function AccountsReceivableModal({
         });
 
         return processed;
-    }, [isOpen, profitInvoices, invoices, sales, clients, sellerCatalog, tasaBcv, localDocOverrides, recentlyPaidKeys]);
+    }, [isOpen, profitInvoices, effectiveSales, clients, sellerCatalog, tasaBcv, localDocOverrides, recentlyPaidKeys]);
 
     // Contadores para el selector superior (cartera activa por cobrar)
     const docTypeCounts = useMemo(() => {
@@ -4487,6 +4495,8 @@ export function AccountsReceivableModal({
                 isOpen={showClientsDirectoryModal}
                 onClose={() => setShowClientsDirectoryModal(false)}
                 clients={clients}
+                profitInvoices={profitInvoices}
+                sales={effectiveSales}
                 tasaBcv={Number(config?.tasaDolar) || 827.73}
                 currentUser={currentUser}
                 profitSellers={profitSellers.length > 0 ? profitSellers : REAL_PROFIT_SELLERS}

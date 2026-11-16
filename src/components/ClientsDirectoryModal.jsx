@@ -30,6 +30,7 @@ import {
   resolveClientContributorType,
   computeContributorTypeCounts
 } from '../services/fiscalService';
+import { reconcileClientsWithRealCxc } from '../utils/cxcUtils';
 import { useNotification } from '../context/NotificationContext';
 import ImagePreviewLightbox from './ImagePreviewLightbox';
 import ClientRegistrationModal from './ClientRegistrationModal';
@@ -39,6 +40,8 @@ export default function ClientsDirectoryModal({
   isOpen,
   onClose,
   clients = [],
+  profitInvoices = [],
+  sales = [],
   tasaBcv = 42.50,
   currentUser,
   profitSellers = [],
@@ -74,31 +77,37 @@ export default function ClientsDirectoryModal({
   const [clientToDelete, setClientToDelete] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
 
+  // Reconciliar saldos CxC reales por cliente desde profitInvoices + sales (cuando estén cargados)
+  const { clients: reconciledClients } = useMemo(
+    () => reconcileClientsWithRealCxc({ clients, profitInvoices, sales, tasaBcv }),
+    [clients, profitInvoices, sales, tasaBcv]
+  );
+
   // Extraer Zonas y Vendedores únicos
   const availableZones = useMemo(() => {
     const zones = new Set();
-    clients.forEach(c => {
+    reconciledClients.forEach(c => {
       if (c.zonaVenta && c.zonaVenta.trim()) zones.add(c.zonaVenta.trim());
     });
     return Array.from(zones).sort();
-  }, [clients]);
+  }, [reconciledClients]);
 
   const availableSellers = useMemo(() => {
     const sellers = new Set();
-    clients.forEach(c => {
+    reconciledClients.forEach(c => {
       if (c.vendedorAsignado && c.vendedorAsignado.trim()) sellers.add(c.vendedorAsignado.trim());
     });
     return Array.from(sellers).sort();
-  }, [clients]);
+  }, [reconciledClients]);
 
   const clientContributorCounts = useMemo(
-    () => computeContributorTypeCounts(clients),
-    [clients]
+    () => computeContributorTypeCounts(reconciledClients),
+    [reconciledClients]
   );
 
   // Clientes filtrados
   const filteredClients = useMemo(() => {
-    return clients.filter(c => {
+    return reconciledClients.filter(c => {
       // Búsqueda de texto
       if (searchTerm) {
         const s = searchTerm.toLowerCase();
@@ -131,8 +140,8 @@ export default function ClientsDirectoryModal({
 
       // Filtro Deuda
       const saldo = Number(c.saldoDeudorUsd || 0);
-      if (debtFilter === 'WITH_DEBT' && saldo <= 0) return false;
-      if (debtFilter === 'ZERO_DEBT' && saldo > 0) return false;
+      if (debtFilter === 'WITH_DEBT' && saldo <= 0.01) return false;
+      if (debtFilter === 'ZERO_DEBT' && saldo > 0.01) return false;
 
       // Filtro Zona
       if (zoneFilter !== 'ALL' && c.zonaVenta !== zoneFilter) return false;
@@ -142,24 +151,24 @@ export default function ClientsDirectoryModal({
 
       return true;
     });
-  }, [clients, searchTerm, contributorFilter, statusFilter, creditFilter, debtFilter, zoneFilter, sellerFilter]);
+  }, [reconciledClients, searchTerm, contributorFilter, statusFilter, creditFilter, debtFilter, zoneFilter, sellerFilter]);
 
   // Cliente seleccionado (por defecto el primero de la lista o el seleccionado)
   const selectedClient = useMemo(() => {
-    if (!clients || clients.length === 0) return null;
+    if (!reconciledClients || reconciledClients.length === 0) return null;
     if (selectedClientId) {
-      const found = clients.find(c => (c.id === selectedClientId || c.codigo === selectedClientId));
+      const found = reconciledClients.find(c => (c.id === selectedClientId || c.codigo === selectedClientId));
       if (found) return found;
     }
-    return filteredClients.length > 0 ? filteredClients[0] : clients[0];
-  }, [clients, selectedClientId, filteredClients]);
+    return filteredClients.length > 0 ? filteredClients[0] : reconciledClients[0];
+  }, [reconciledClients, selectedClientId, filteredClients]);
 
   // Métricas rápidas
-  const totalClientes = clients.length;
-  const activosCount = clients.filter(c => !c.inactivo).length;
-  const conDeudaCount = clients.filter(c => (Number(c.saldoDeudorUsd) || 0) > 0).length;
-  const totalDeudaUsd = clients.reduce((acc, c) => acc + (Number(c.saldoDeudorUsd) || 0), 0);
-  const totalLimiteCredito = clients.reduce((acc, c) => acc + (Number(c.limiteCreditoUsd) || 0), 0);
+  const totalClientes = reconciledClients.length;
+  const activosCount = reconciledClients.filter(c => !c.inactivo).length;
+  const conDeudaCount = reconciledClients.filter(c => (Number(c.saldoDeudorUsd) || 0) > 0.01).length;
+  const totalDeudaUsd = reconciledClients.reduce((acc, c) => acc + (Number(c.saldoDeudorUsd) || 0), 0);
+  const totalLimiteCredito = reconciledClients.reduce((acc, c) => acc + (Number(c.limiteCreditoUsd) || 0), 0);
 
   const formatUsd = (val) => `$ ${Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const formatBs = (val) => `Bs. ${Number(val || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -392,9 +401,9 @@ export default function ClientsDirectoryModal({
                     clienteNombre: c.nombre || c.razonSocial || 'Cliente Comercial',
                     vendedorId: c.vendedorAsignado || 'Directo',
                     fechaEmision: c.fechaRegistro || '2026-10-01',
-                    fechaVencimiento: c.fechaUltimaVenta || '2026-10-24',
+                    fechaVencimiento: c.openDocs?.[0]?.fechaVencimiento || c.fechaUltimaVenta || '2026-10-24',
                     saldoUsd: Number(c.saldoDeudorUsd || 0),
-                    isVencida: Number(c.saldoDeudorUsd || 0) > 0
+                    isVencida: Number(c.saldoVencidoUsd ?? c.saldoDeudorUsd ?? 0) > 0.01
                   })),
                   clients: filteredClients,
                   config: { tasaDolar: tasaBcv },
@@ -609,7 +618,8 @@ export default function ClientsDirectoryModal({
             ) : (
               filteredClients.map(c => {
                 const isSelected = selectedClient && (selectedClient.id === c.id || selectedClient.codigo === c.codigo);
-                const hasDebt = (Number(c.saldoDeudorUsd) || 0) > 0;
+                const hasDebt = (Number(c.saldoDeudorUsd) || 0) > 0.01;
+                const hasOverdue = (Number(c.saldoVencidoUsd) || 0) > 0.01;
                 const isInactive = Boolean(c.inactivo);
                 const isCreditBlocked = Boolean(c.sinCredito);
 
@@ -690,13 +700,17 @@ export default function ClientsDirectoryModal({
                             fontFamily: 'var(--font-tech)',
                             fontSize: '0.88rem',
                             fontWeight: 800,
-                            color: hasDebt ? 'var(--motorven-gold)' : 'var(--semaforo-verde)'
+                            color: hasOverdue ? 'var(--semaforo-rojo, #ef4444)' : hasDebt ? 'var(--motorven-gold)' : 'var(--semaforo-verde)'
                           }}
                         >
                           {formatUsd(c.saldoDeudorUsd)}
                         </div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                          {hasDebt ? 'Saldo Pendiente' : 'Solvente'}
+                        <div style={{ fontSize: '0.65rem', color: hasOverdue ? 'var(--semaforo-rojo, #ef4444)' : 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                          {hasDebt
+                            ? (c.openDocsCount > 0
+                                ? `${c.openDocsCount} doc${c.openDocsCount > 1 ? 's' : ''} • ${hasOverdue ? `Venc. ${c.maxDiasMora || 0}d` : 'Al Día'}`
+                                : 'Saldo Pendiente')
+                            : 'Solvente'}
                         </div>
                       </div>
                     </div>
@@ -773,24 +787,32 @@ export default function ClientsDirectoryModal({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
                     <div
                       style={{
-                        background: (Number(selectedClient.saldoDeudorUsd) || 0) > 0 ? 'var(--semaforo-amarillo-bg)' : 'var(--semaforo-verde-bg)',
-                        border: `1px solid ${(Number(selectedClient.saldoDeudorUsd) || 0) > 0 ? 'rgba(217, 119, 6, 0.4)' : 'rgba(16, 185, 129, 0.4)'}`,
+                        background: (Number(selectedClient.saldoDeudorUsd) || 0) > 0.01 ? 'var(--semaforo-amarillo-bg)' : 'var(--semaforo-verde-bg)',
+                        border: `1px solid ${(Number(selectedClient.saldoDeudorUsd) || 0) > 0.01 ? 'rgba(217, 119, 6, 0.4)' : 'rgba(16, 185, 129, 0.4)'}`,
                         padding: '0.85rem 1.25rem',
                         borderRadius: 'var(--radius-md)',
                         textAlign: 'right',
-                        minWidth: '180px',
+                        minWidth: '195px',
                         width: '100%'
                       }}
                     >
                       <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontWeight: 600 }}>
                         Saldo Deudor Actual
                       </div>
-                      <div style={{ fontSize: '1.35rem', fontWeight: 900, fontFamily: 'var(--font-tech)', color: (Number(selectedClient.saldoDeudorUsd) || 0) > 0 ? 'var(--motorven-gold)' : 'var(--semaforo-verde)' }}>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 900, fontFamily: 'var(--font-tech)', color: (Number(selectedClient.saldoDeudorUsd) || 0) > 0.01 ? 'var(--motorven-gold)' : 'var(--semaforo-verde)' }}>
                         {formatUsd(selectedClient.saldoDeudorUsd)}
                       </div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
                         {formatBs((Number(selectedClient.saldoDeudorUsd) || 0) * tasaBcv)}
                       </div>
+                      {(Number(selectedClient.openDocsCount) || 0) > 0 && (
+                        <div style={{ fontSize: '0.68rem', marginTop: '4px', fontFamily: 'var(--font-code)', display: 'flex', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                          <span style={{ color: 'var(--semaforo-verde)' }}>Al Día: {formatUsd(selectedClient.saldoAlDiaUsd)}</span>
+                          <span style={{ color: Number(selectedClient.saldoVencidoUsd) > 0.01 ? 'var(--semaforo-rojo, #ef4444)' : 'var(--text-muted)' }}>
+                            Venc.: {formatUsd(selectedClient.saldoVencidoUsd)}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Botonera de Enlace Funcional */}
@@ -1287,6 +1309,49 @@ export default function ClientsDirectoryModal({
                         <FileText size={14} /> Imprimir Solicitud & Pagaré
                       </button>
                     </div>
+
+                    {Array.isArray(selectedClient.openDocs) && selectedClient.openDocs.length > 0 && (
+                      <div className="clients-info-card" style={{ gridColumn: '1 / -1' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+                          <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--motorven-gold)', fontFamily: 'var(--font-code)', textTransform: 'uppercase' }}>
+                            Documentos CxC Pendientes ({selectedClient.openDocs.length})
+                          </span>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                            Al Día: {formatUsd(selectedClient.saldoAlDiaUsd)} · Vencida: {formatUsd(selectedClient.saldoVencidoUsd)}
+                          </span>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', fontFamily: 'var(--font-code)' }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid var(--border-glass)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                                <th style={{ padding: '4px 6px' }}>Documento</th>
+                                <th style={{ padding: '4px 6px' }}>Tipo</th>
+                                <th style={{ padding: '4px 6px' }}>Emisión</th>
+                                <th style={{ padding: '4px 6px' }}>Vence</th>
+                                <th style={{ padding: '4px 6px' }}>Estatus</th>
+                                <th style={{ padding: '4px 6px', textAlign: 'right' }}>Saldo USD</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedClient.openDocs.map((doc, idx) => (
+                                <tr key={`${doc.id || doc.factNum}-${idx}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                  <td style={{ padding: '5px 6px', fontWeight: 700, color: 'var(--text-primary)' }}>{doc.factNum}</td>
+                                  <td style={{ padding: '5px 6px', color: 'var(--text-muted)' }}>{doc.tipoDoc === 'NOTA_ENTREGA' ? 'N/E' : 'FAC'}</td>
+                                  <td style={{ padding: '5px 6px', color: 'var(--text-muted)' }}>{doc.fechaEmision || '—'}</td>
+                                  <td style={{ padding: '5px 6px', color: 'var(--text-muted)' }}>{doc.fechaVencimiento || '—'}</td>
+                                  <td style={{ padding: '5px 6px', color: doc.isOverdue ? 'var(--semaforo-rojo, #ef4444)' : 'var(--semaforo-verde)', fontWeight: 700 }}>
+                                    {doc.isOverdue ? `Vencida (${doc.diasMora}d)` : 'Al Día'}
+                                  </td>
+                                  <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: 'var(--motorven-gold)' }}>
+                                    {formatUsd(doc.saldoUsd)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

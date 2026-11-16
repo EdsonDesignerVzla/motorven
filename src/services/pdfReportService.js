@@ -36,6 +36,7 @@ import {
   summarizeByRateClassification
 } from '../utils/rateClassificationUtils.js';
 import { classifyCollectionRateType } from '../utils/cxcUtils.js';
+import { resolveKardexLineCosts } from '../utils/kardexUtils.js';
 import {
   buildLibroVentasRows,
   buildLibroComprasRows,
@@ -8473,11 +8474,17 @@ export function generateWarehouseTransferOrAdjustmentPDF({ record = {}, mode = '
     }
   );
 
+  const prodMap = new Map();
+  (Array.isArray(record?._products) ? record._products : []).forEach((p) => {
+    const sku = String(p?.codigo || p?.id || '').trim();
+    if (sku) prodMap.set(sku, p);
+  });
+
   let totalUnidades = 0;
   let totalCostoUsd = 0;
   const rows = renglones.map((r, idx) => {
     const qty = Number(r.total_art ?? r.cantidad ?? r.totalArt ?? 0);
-    const cost = Number(r.cost_unit_om ?? r.costoUsd ?? r.costUnit ?? 0);
+    const { costUsd: cost } = resolveKardexLineCosts({ line: r, productsBySku: prodMap, tasaDolar: tasa });
     const tipoStr = isTransfer ? 'TRASLADO' : (r.tipo_trans === 'E' || r.tipoTrans === 'E' ? 'ENTRADA (+)' : 'SALIDA / MERMA (-)');
     totalUnidades += qty;
     totalCostoUsd += qty * cost;

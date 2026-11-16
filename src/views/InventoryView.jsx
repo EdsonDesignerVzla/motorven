@@ -37,6 +37,7 @@ import SmartReorderMatrixModal from '../components/SmartReorderMatrixModal';
 import { uploadImageToStorage, STORAGE_FOLDERS } from '../services/imageStorageService';
 import { compressImageToBase64 } from '../services/imageCompression';
 import { generateInventoryPDF } from '../services/pdfReportService';
+import { isDocumentAnnulled } from '../utils/kardexUtils';
 
 function getPhysicalSysStock(p, warehouse) {
   const stocks = getProductWarehouseStocks(p);
@@ -872,7 +873,7 @@ export default function InventoryView({
             }}
             title="Ver Kardex Físico, Mermas, Ajustes y Traslados sincronizados desde Supabase"
           >
-            <BarChart2 size={16} /> Kardex & Mermas ({inventoryAdjustments.length + warehouseTransfers.length})
+            <BarChart2 size={16} /> Kardex & Mermas ({inventoryAdjustments.filter(a => !isDocumentAnnulled(a)).length + warehouseTransfers.filter(t => !isDocumentAnnulled(t)).length})
           </button>
 
           {/* BOTÓN EXPORTAR CSV */}

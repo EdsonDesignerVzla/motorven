@@ -27,12 +27,14 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
+import { reconcileClientsWithRealCxc, isCxcInvoiceCancelled } from '../utils/cxcUtils';
 
 export default function CreditScoreEngineModal({
   isOpen,
   onClose,
   clients = [],
   profitInvoices = [],
+  sales = [],
   profitCollections = [],
   config = {},
   currentUser = null,
@@ -54,54 +56,36 @@ export default function CreditScoreEngineModal({
   // 1. MOTOR DE CÁLCULO DE SCORE DE CRÉDITO Y EVALUACIÓN DE RIESGO
   // =========================================================================
   const scoredClients = useMemo(() => {
-    const now = new Date();
+    const { clients: reconciledClients } = reconcileClientsWithRealCxc({
+      clients,
+      profitInvoices,
+      sales,
+      tasaBcv
+    });
 
-    return clients.map(client => {
-      const rif = (client.rif || '').trim().toUpperCase();
+    const normRif = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const normCode = (v) => String(v || '').trim().toUpperCase();
+    const normName = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+    return reconciledClients.map(client => {
+      const rif = normRif(client.rif);
       const nombre = client.nombre || client.razonSocial || 'Cliente';
-      const coCli = (client.codigo || client.id || '').trim();
+      const nombreLower = normName(nombre);
+      const coCli = normCode(client.codigo || client.id);
 
-      // Facturas y pagos del cliente
-      const clientInvoices = profitInvoices.filter(f => 
-        (f.clienteRif && f.clienteRif.trim().toUpperCase() === rif) ||
-        (f.clienteNombre && f.clienteNombre.trim().toLowerCase() === nombre.toLowerCase())
-      );
+      const matchesDoc = (d) =>
+        (rif && normRif(d.clienteRif || d.cliente_rif || d.rif) === rif) ||
+        (coCli && [d.clienteId, d.cliente_id, d.coCli, d.co_cli].some(v => normCode(v) === coCli)) ||
+        (nombreLower && normName(d.clienteNombre || d.cliente_nombre || d.cli_des || d.cliente) === nombreLower);
 
-      const clientCollections = profitCollections.filter(c => 
-        (c.clienteRif && c.clienteRif.trim().toUpperCase() === rif) ||
-        (c.clienteNombre && c.clienteNombre.trim().toLowerCase() === nombre.toLowerCase())
-      );
+      const clientInvoices = (profitInvoices || []).filter(f => !isCxcInvoiceCancelled(f) && matchesDoc(f));
+      const clientCollections = (profitCollections || []).filter(c => matchesDoc(c));
 
-      // Calcular moras y saldos
-      const unpaidInvoices = clientInvoices.filter(f => (f.saldoUsd > 0.01 || f.saldoBs > 0.01) && !f.anulado);
-      
-      let maxDiasMora = 0;
-      let totalSaldoVencidoUsd = 0;
-      let totalSaldoVigenteUsd = 0;
-
-      unpaidInvoices.forEach(inv => {
-        const saldo = Number(inv.saldoUsd || (inv.saldoBs ? inv.saldoBs / tasaBcv : 0));
-        let dias = 0;
-        if (inv.fecVenc) {
-          const vDate = new Date(inv.fecVenc);
-          const diff = Math.floor((now - vDate) / (1000 * 60 * 60 * 24));
-          dias = Math.max(0, diff);
-        } else if (inv.fecEmis) {
-          const eDate = new Date(inv.fecEmis);
-          const plazo = Number(client.diasCredito || 15);
-          const diff = Math.floor((now - eDate) / (1000 * 60 * 60 * 24)) - plazo;
-          dias = Math.max(0, diff);
-        }
-
-        if (dias > maxDiasMora) maxDiasMora = dias;
-        if (dias > 0) {
-          totalSaldoVencidoUsd += saldo;
-        } else {
-          totalSaldoVigenteUsd += saldo;
-        }
-      });
-
-      const saldoDeudorTotalUsd = Number(client.saldoDeudorUsd || 0) || (totalSaldoVencidoUsd + totalSaldoVigenteUsd);
+      const unpaidInvoices = Array.isArray(client.openDocs) ? client.openDocs : [];
+      const maxDiasMora = Number(client.maxDiasMora || 0);
+      const totalSaldoVencidoUsd = Number(client.saldoVencidoUsd || 0);
+      const totalSaldoVigenteUsd = Number(client.saldoAlDiaUsd || 0);
+      const saldoDeudorTotalUsd = Number(client.saldoDeudorUsd || 0);
       const limiteCreditoUsd = Number(client.limiteCreditoUsd || 5000);
       const diasCreditoAcordados = Number(client.diasCredito || 15);
 
@@ -240,7 +224,7 @@ export default function CreditScoreEngineModal({
         limiteSugeridoUsd
       };
     }).sort((a, b) => b.creditScore - a.creditScore);
-  }, [clients, profitInvoices, profitCollections, tasaBcv]);
+  }, [clients, profitInvoices, sales, profitCollections, tasaBcv]);
 
   // Selección inicial
   const activeEvaluatedClient = selectedClient || scoredClients[0] || null;
