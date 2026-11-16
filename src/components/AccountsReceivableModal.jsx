@@ -138,16 +138,8 @@ const normalizeTextSimple = (str) =>
         .toLowerCase()
         .trim();
 
-const canonicalDocLookupKey = (rawKey, tipoDoc = 'FACTURA') => {
-    const clean = String(rawKey || '').trim().toUpperCase();
-    if (!clean) return '';
-    if (tipoDoc === 'NOTA_ENTREGA' || clean.startsWith('NE')) {
-        const numPart = clean.replace(/^NE-?/i, '').replace(/^0+(?=\d)/, '');
-        return `NE:${numPart}`;
-    }
-    const numPart = clean.replace(/^(FAC-|FACT-)/i, '').replace(/^0+(?=\d)/, '');
-    return `FAC:${numPart}`;
-};
+const canonicalDocLookupKey = (rawDocOrKey, tipoDoc = 'FACTURA') =>
+    getCxcScopedDocKey(rawDocOrKey, tipoDoc);
 
 const resolveSellerFromCatalog = (rawId, rawName, sellerCatalog) => {
     const idTrim = String(rawId || '').trim().toUpperCase();
@@ -411,7 +403,7 @@ export function AccountsReceivableModal({
             const key = String(inv.factNum || inv.id || '').trim();
             if (!key || isDocDeleted(inv) || isCxcInvoiceCancelled(inv)) return;
             const docType = inferCxcDocType(inv);
-            const cKey = canonicalDocLookupKey(key, docType);
+            const cKey = canonicalDocLookupKey(inv, docType);
             const scopedKey = getCxcScopedDocKey(inv, docType) || `${docType}:${key}`;
             const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
             const resolvedInvSeller = resolveSellerFromCatalog(
@@ -472,8 +464,9 @@ export function AccountsReceivableModal({
             const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
             if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
 
-            const cKey = canonicalDocLookupKey(key, saleDocType);
-            const scopedSaleKey = getCxcScopedDocKey({ ...sale, factNum: key, tipoDoc: saleDocType }, saleDocType) || `${saleDocType}:${key}`;
+            const saleForKey = { ...sale, factNum: key, tipoDoc: saleDocType };
+            const cKey = canonicalDocLookupKey(saleForKey, saleDocType);
+            const scopedSaleKey = getCxcScopedDocKey(saleForKey, saleDocType) || `${saleDocType}:${key}`;
             const existingRawKey = rawMap.has(scopedSaleKey) ? scopedSaleKey : (cKey ? canonicalKeyToRawKey.get(cKey) : null);
 
             const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
@@ -563,7 +556,7 @@ export function AccountsReceivableModal({
             if (override?._deleted) {
                 rawMap.delete(key);
                 const delTipo = override._tipoDoc ? inferCxcDocType({ tipoDoc: override._tipoDoc }) : inferCxcDocType(key);
-                const delCanon = canonicalDocLookupKey(key, delTipo);
+                const delCanon = canonicalDocLookupKey(override?._tipoDoc ? { ...override, factNum: key, tipoDoc: delTipo } : key, delTipo);
                 for (const [mapK, mapVal] of Array.from(rawMap.entries())) {
                     if (mapK === key) {
                         rawMap.delete(mapK);
@@ -571,7 +564,7 @@ export function AccountsReceivableModal({
                     }
                     const mapTipo = inferCxcDocType(mapVal);
                     if (mapTipo !== delTipo) continue;
-                    const mapCanon = canonicalDocLookupKey(mapVal?.factNum || mapK, mapTipo);
+                    const mapCanon = canonicalDocLookupKey(mapVal || mapK, mapTipo);
                     if ((delCanon && mapCanon === delCanon) || String(mapVal?.id || '') === String(key)) {
                         rawMap.delete(mapK);
                     }
@@ -579,7 +572,7 @@ export function AccountsReceivableModal({
                 return;
             }
             const ovTipo = inferCxcDocType(override);
-            const ovCanon = canonicalDocLookupKey(override?.factNum || key, ovTipo);
+            const ovCanon = canonicalDocLookupKey(override?.factNum ? override : key, ovTipo);
             const targetKey = rawMap.has(key)
                 ? key
                 : ((ovCanon && canonicalKeyToRawKey.get(ovCanon)) || getCxcScopedDocKey(override, ovTipo) || key);

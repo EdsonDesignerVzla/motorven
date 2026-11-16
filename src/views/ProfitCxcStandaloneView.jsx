@@ -41,7 +41,7 @@ import { subscribeToRealtimeChanges } from '../services/profitService';
 import { formatUsd, formatBs } from '../services/formatService';
 import { getNextInvoiceCorrelativo, getNextNotaEntregaCorrelativo } from '../services/fiscalService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
-import { isCxcInvoiceCancelled, inferCxcDocType } from '../utils/cxcUtils';
+import { isCxcInvoiceCancelled, inferCxcDocType, getCxcScopedDocKey } from '../utils/cxcUtils';
 import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber, isDirectCurrencyRateType, RATE_TYPE_META } from '../utils/rateClassificationUtils';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
@@ -137,16 +137,8 @@ const formatDateShort = (dateInput) => {
   return `${dd}/${mm}/${yyyy}`;
 };
 
-const canonicalDocLookupKey = (rawKey, tipoDoc = 'FACTURA') => {
-  const clean = String(rawKey || '').trim().toUpperCase();
-  if (!clean) return '';
-  if (tipoDoc === 'NOTA_ENTREGA' || clean.startsWith('NE')) {
-    const numPart = clean.replace(/^NE-?/i, '').replace(/^0+(?=\d)/, '');
-    return `NE:${numPart}`;
-  }
-  const numPart = clean.replace(/^(FAC-|FACT-)/i, '').replace(/^0+(?=\d)/, '');
-  return `FAC:${numPart}`;
-};
+const canonicalDocLookupKey = (rawDocOrKey, tipoDoc = 'FACTURA') =>
+  getCxcScopedDocKey(rawDocOrKey, tipoDoc);
 
 const resolveSellerFromCatalog = (rawId, rawName, sellerCatalog) => {
   const idTrim = String(rawId || '').trim().toUpperCase();
@@ -331,7 +323,7 @@ export default function ProfitCxcStandaloneView() {
       const key = String(inv.factNum || inv.id || '').trim();
       if (!key || isDocDeleted(inv)) return;
       const docType = inferDocType(inv);
-      const cKey = canonicalDocLookupKey(key, docType);
+      const cKey = canonicalDocLookupKey(inv, docType);
       const isPosFormat = /^0+\d+$/.test(key) || /^NE-0+\d+$/i.test(key);
       const resolvedInvSeller = resolveSellerFromCatalog(
         inv.vendedorId || inv.co_ven,
@@ -390,8 +382,8 @@ export default function ProfitCxcStandaloneView() {
       const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();
       if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
 
-      const cKey = canonicalDocLookupKey(key, saleDocType);
-      const existingRawKey = rawMap.has(key) ? key : cKey ? canonicalKeyToRawKey.get(cKey) : null;
+      const cKey = canonicalDocLookupKey({ ...sale, factNum: key, tipoDoc: saleDocType }, saleDocType);
+      const existingRawKey = rawMap.has(cKey) ? cKey : (rawMap.has(key) ? key : cKey ? canonicalKeyToRawKey.get(cKey) : null);
 
       const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
       const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);

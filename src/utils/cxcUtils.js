@@ -1,6 +1,7 @@
 import {
   getCanonicalDocKey,
   getEraScopedCanonicalDocKey,
+  isLegacyPreNovInvoice,
   dedupeCanonicalDocs
 } from '../services/fiscalService.js';
 import { round2 } from '../services/formatService.js';
@@ -95,10 +96,17 @@ export function inferCxcDocType(raw) {
 }
 
 /**
- * Genera una clave de override/búsqueda canónica que nunca mezcla FACTURA vs NOTA_ENTREGA.
+ * Genera una clave de override/búsqueda canónica consciente de serie (:LEGACY vs 2026-11+)
+ * que nunca mezcla FACTURA vs NOTA_ENTREGA ni series previas a noviembre 2026 con la serie nueva.
  */
 export function getCxcScopedDocKey(docOrNum, explicitTipoDoc = '') {
-  const canon = getCanonicalDocKey(docOrNum, explicitTipoDoc);
+  if (typeof docOrNum === 'string') {
+    const clean = docOrNum.trim().toUpperCase();
+    if (/^(FAC|NE|NC|ND):[^:]+(:LEGACY)?$/i.test(clean)) {
+      return clean;
+    }
+  }
+  const canon = getEraScopedCanonicalDocKey(docOrNum, explicitTipoDoc);
   if (canon) return canon;
   if (typeof docOrNum === 'object' && docOrNum !== null) {
     return String(docOrNum.id || docOrNum.factNum || docOrNum.numeroDoc || '').trim();
@@ -153,6 +161,17 @@ export function doesCollectionMatchInvoice(collection, invoice) {
   if (!collection || collection.anulado || !invoice) return false;
   const invTipo = inferCxcDocType(invoice);
   const invCanon = getCanonicalDocKey(invoice, invTipo);
+  const invEraCanon = getEraScopedCanonicalDocKey(invoice, invTipo);
+  const invDate = toCxcDateKey(invoice.fechaEmision || invoice.fecha_emision || invoice.fec_emis || invoice.fecha);
+  const colDate = toCxcDateKey(collection.fecha || collection.fec_cob || collection.createdAt || collection.created_at);
+  if (
+    invTipo === 'FACTURA' &&
+    colDate &&
+    colDate < '2026-11-01' &&
+    ((invEraCanon && !invEraCanon.endsWith(':LEGACY') && invDate >= '2026-11-01') || (!isLegacyPreNovInvoice(invoice) && invDate >= '2026-11-01'))
+  ) {
+    return false;
+  }
   const invNumDigits = normalizeRefDigits(invoice.factNum || invoice.factura || invoice.numeroDoc || invoice.id);
   if (!invNumDigits) return false;
 

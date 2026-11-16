@@ -595,4 +595,78 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   console.log('  ✓ 9. Emisión de Notas de Crédito/Débito en CxC (rebaja/cargo, N/E Sin IVA, SENIAT y PDF) verificada.');
 }
 
+// 10. Aislamiento de serie histórica (pre-nov 2026 :LEGACY) vs nueva serie 2026-11+ (000018..000021) en CxC
+{
+  const legacyFac18 = {
+    id: 'fac-18',
+    factNum: 18,
+    tipoDoc: 'FACTURA',
+    fechaEmision: '2026-02-11',
+    status: 'COBRADA',
+    totNetoUsd: 61.99,
+    saldoUsd: 0,
+    clienteId: 'J400000180',
+    clienteNombre: 'Cliente Histórico',
+    clienteRif: 'J-400000180'
+  };
+  const newFac18 = {
+    id: '000018',
+    numeroDoc: '000018',
+    tipoDoc: 'FACTURA',
+    fecha: '2026-11-16T15:23:53.957Z',
+    fechaEmision: '2026-11-16T15:23:53.957Z',
+    estado: 'PENDIENTE',
+    condicionPago: '15_DIAS',
+    diasCredito: 15,
+    totalUsd: 163.4,
+    saldoUsd: 163.4,
+    clienteId: 'J504938602',
+    clienteNombre: 'Repuestos y Servicios melian, C.A',
+    clienteRif: 'J-504938602'
+  };
+  const newNe2226 = {
+    id: 'NE-002226',
+    numeroDoc: 'NE-002226',
+    tipoDoc: 'NOTA_ENTREGA',
+    fecha: '2026-11-16T16:21:00.000Z',
+    fechaEmision: '2026-11-16T16:21:00.000Z',
+    estado: 'PENDIENTE',
+    condicionPago: '15_DIAS',
+    diasCredito: 15,
+    totalUsd: 82,
+    saldoUsd: 82,
+    clienteId: 'V145489748',
+    clienteNombre: 'Francisca Del Carmen Brito Aguilera',
+    clienteRif: 'V-145489748'
+  };
+
+  assert.equal(getCxcScopedDocKey(legacyFac18, 'FACTURA'), 'FAC:18:LEGACY');
+  assert.equal(getCxcScopedDocKey(newFac18, 'FACTURA'), 'FAC:18');
+  assert.equal(getCxcScopedDocKey('FAC:18:LEGACY', 'FACTURA'), 'FAC:18:LEGACY');
+  assert.notEqual(getCxcScopedDocKey(legacyFac18, 'FACTURA'), getCxcScopedDocKey(newFac18, 'FACTURA'));
+
+  const legacyCol = {
+    id: 'cob-2026-02',
+    fecha: '2026-02-20',
+    anulado: false,
+    documentosAfectados: [{ tipoDoc: 'FACT', numDoc: '18', montoCobradoUsd: 61.99 }]
+  };
+  assert.equal(doesCollectionMatchInvoice(legacyCol, legacyFac18), true);
+  assert.equal(doesCollectionMatchInvoice(legacyCol, newFac18), false);
+
+  const consolidated = consolidateClientReceivables({
+    clients: [],
+    profitInvoices: [legacyFac18],
+    sales: [newFac18, newNe2226],
+    tasaBcv: 914.02,
+    includePendingDocs: true
+  });
+  const melian = consolidated.find(c => c.rif === 'J-504938602');
+  const francisca = consolidated.find(c => c.rif === 'V-145489748');
+  assert.ok(melian && melian.saldoUsd === 163.4, '000018 de nov 2026 no debe ser ocultada por fac-18 COBRADA de feb 2026');
+  assert.ok(francisca && francisca.saldoUsd === 82, 'NE-002226 pendiente debe reflejarse en CxC');
+
+  console.log('  ✓ 10. Aislamiento serie histórica vs 2026-11+ (000018 y NE-002226) en CxC verificado.');
+}
+
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');
