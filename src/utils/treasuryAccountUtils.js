@@ -909,3 +909,152 @@ export const removeCashMovementFromList = (list = [], idOrItem) => {
     return true;
   });
 };
+
+export const PARTNER_PAYABLE_ACCOUNTS_STORAGE_KEY = 'signum_partner_payable_accounts_v1';
+
+export const DEFAULT_PARTNER_PAYABLE_ACCOUNTS = [
+  {
+    id: 'cta-socio-01',
+    codigo: 'SOC-01',
+    nombre: 'Cuenta por Pagar Socio',
+    titular: 'Socio Principal',
+    codigoContable: '2.02.01.001',
+    moneda: 'USD',
+    saldoUsd: 0,
+    saldoBs: 0,
+    activa: true,
+    observaciones: 'Pasivo por pagos directos de compromisos asumidos por socio/accionista'
+  }
+];
+
+export const normalizePartnerPayableAccount = (raw = {}, idx = 0) => {
+  const cleanCode = String(raw.codigo || raw.code || `SOC-${String(idx + 1).padStart(2, '0')}`).trim().toUpperCase();
+  const cleanId = String(raw.id || cleanCode.toLowerCase()).trim();
+  const cleanNombre = String(raw.nombre || raw.descripcion || 'Cuenta por Pagar Socio').trim();
+  return {
+    id: cleanId,
+    codigo: cleanCode,
+    nombre: cleanNombre,
+    titular: String(raw.titular || raw.socio || '').trim(),
+    codigoContable: String(raw.codigoContable || '2.02.01.001').trim(),
+    moneda: String(raw.moneda || 'USD').toUpperCase().trim() || 'USD',
+    saldoUsd: round2(Math.max(0, Number(raw.saldoUsd ?? raw.saldo_usd ?? 0) || 0)),
+    saldoBs: round2(Math.max(0, Number(raw.saldoBs ?? raw.saldo_bs ?? 0) || 0)),
+    activa: raw.activa !== false,
+    observaciones: String(raw.observaciones || '').trim(),
+    updatedAt: raw.updatedAt || new Date().toISOString()
+  };
+};
+
+export const loadPartnerPayableAccounts = () => {
+  try {
+    if (typeof globalThis !== 'undefined' && globalThis.localStorage) {
+      const raw = globalThis.localStorage.getItem(PARTNER_PAYABLE_ACCOUNTS_STORAGE_KEY);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.map((p, i) => normalizePartnerPayableAccount(p, i));
+        }
+      }
+    }
+  } catch (_) {}
+  return DEFAULT_PARTNER_PAYABLE_ACCOUNTS.map((p, i) => normalizePartnerPayableAccount(p, i));
+};
+
+export const savePartnerPayableAccountsList = (list = []) => {
+  const normalized = (Array.isArray(list) ? list : []).map((p, i) => normalizePartnerPayableAccount(p, i));
+  try {
+    if (typeof globalThis !== 'undefined' && globalThis.localStorage) {
+      globalThis.localStorage.setItem(PARTNER_PAYABLE_ACCOUNTS_STORAGE_KEY, JSON.stringify(normalized));
+    }
+  } catch (_) {}
+  return normalized;
+};
+
+export const upsertPartnerPayableAccountInList = (list = [], account) => {
+  const base = Array.isArray(list) ? [...list] : [];
+  if (!account || typeof account !== 'object') return savePartnerPayableAccountsList(base);
+  const normalized = normalizePartnerPayableAccount(account, base.length);
+  const idx = base.findIndex((p) => {
+    if (!p) return false;
+    return String(p.id || '').trim() === normalized.id
+      || String(p.codigo || '').trim().toUpperCase() === normalized.codigo;
+  });
+  if (idx >= 0) {
+    base[idx] = { ...base[idx], ...normalized, id: base[idx].id || normalized.id };
+  } else {
+    base.push(normalized);
+  }
+  return savePartnerPayableAccountsList(base);
+};
+
+export const removePartnerPayableAccountFromList = (list = [], idOrCode) => {
+  const target = String(typeof idOrCode === 'object' ? (idOrCode?.id || idOrCode?.codigo || '') : (idOrCode || '')).trim().toUpperCase();
+  if (!target) return savePartnerPayableAccountsList(list);
+  const next = (Array.isArray(list) ? list : []).filter((p) => {
+    if (!p) return false;
+    const pId = String(p.id || '').trim().toUpperCase();
+    const pCode = String(p.codigo || '').trim().toUpperCase();
+    return pId !== target && pCode !== target;
+  });
+  return savePartnerPayableAccountsList(next);
+};
+
+export const applyPartnerPayableBalanceDeltaInList = (list = [], { targetRef, deltaUsd = 0, deltaBs = 0 } = {}) => {
+  const base = Array.isArray(list) ? [...list] : [];
+  const rawTarget = typeof targetRef === 'object'
+    ? (targetRef?.rawId || targetRef?.id || targetRef?.codigo || '')
+    : (targetRef || '');
+  const rawUpper = String(rawTarget).trim().toUpperCase();
+  const strippedUpper = rawUpper.replace(/^SOCIO-/, '').trim();
+  if (!rawUpper) return base;
+
+  let matched = false;
+  const next = base.map((p) => {
+    if (!p) return p;
+    const pId = String(p.id || '').trim().toUpperCase();
+    const pCode = String(p.codigo || '').trim().toUpperCase();
+    if (
+      pId === rawUpper
+      || pCode === rawUpper
+      || (strippedUpper && (pId === strippedUpper || pCode === strippedUpper))
+    ) {
+      matched = true;
+      return normalizePartnerPayableAccount({
+        ...p,
+        saldoUsd: round2(Math.max(0, (Number(p.saldoUsd || 0) || 0) + (Number(deltaUsd) || 0))),
+        saldoBs: round2(Math.max(0, (Number(p.saldoBs || 0) || 0) + (Number(deltaBs) || 0))),
+        updatedAt: new Date().toISOString()
+      });
+    }
+    return p;
+  });
+
+  if (!matched) return base;
+  return savePartnerPayableAccountsList(next);
+};
+
+export const computePartnerPayableSummary = (list = [], config = {}) => {
+  const { tasaBcv } = resolveExchangeRates(config);
+  const items = Array.isArray(list) ? list : [];
+  let totalUsd = 0;
+  let totalBs = 0;
+  let activeCount = 0;
+  items.forEach((p) => {
+    if (!p) return;
+    if (p.activa !== false) activeCount += 1;
+    const rawUsd = Number(p.saldoUsd ?? 0) || 0;
+    const rawBs = Number(p.saldoBs ?? 0) || 0;
+    const isBs = String(p.moneda || '').toUpperCase() === 'BS';
+    const usd = isBs && rawBs > 0 && tasaBcv > 0 ? round2(rawBs / tasaBcv) : round2(rawUsd);
+    const bs = rawBs > 0 ? round2(rawBs) : round2(usd * tasaBcv);
+    totalUsd += usd;
+    totalBs += bs;
+  });
+  return {
+    totalUsd: round2(totalUsd),
+    totalBs: round2(totalBs),
+    activeCount,
+    totalCount: items.length
+  };
+};

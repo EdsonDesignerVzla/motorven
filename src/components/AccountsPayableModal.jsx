@@ -36,6 +36,7 @@ import {
   doesPayableMatchDocument,
   doesSupplierPaymentMatchPayable
 } from '../utils/cxpUtils';
+import { loadPartnerPayableAccounts } from '../utils/treasuryAccountUtils';
 import {
   normalizeRateType,
   getAllowedRateTypesForDoc,
@@ -328,6 +329,7 @@ export default function AccountsPayableModal({
   suppliers = [],
   bankAccounts = [],
   cashDesks = [],
+  partnerPayableAccounts = null,
   supplierPayments = [],
   config = {},
   currentUser = null,
@@ -452,6 +454,26 @@ export default function AccountsPayableModal({
         });
       });
     }
+    const partnerSource = Array.isArray(partnerPayableAccounts) ? partnerPayableAccounts : loadPartnerPayableAccounts();
+    partnerSource
+      .filter(p => p && p.activa !== false)
+      .forEach((p, idx) => {
+        const code = p.codigo || `SOCIO-${idx + 1}`;
+        const key = `SOCIO-${p.id || code}`;
+        list.push({
+          key,
+          id: p.id || code,
+          rawId: p.id || code,
+          codigo: code,
+          codigoContable: p.codigoContable || '2.02.01.001',
+          nombre: `${code} - ${p.nombre || 'Cuenta por Pagar Socio'}`,
+          label: `[${code} • 2.02.01.001] ${p.nombre || 'Cuenta por Pagar Socio'} (${p.titular || 'Socio'}) • Pasivo: ${formatUsd(p.saldoUsd || 0)}`,
+          accountType: 'PASIVO_SOCIO',
+          kind: 'PASIVO_SOCIO',
+          moneda: p.moneda || 'USD',
+          saldoUsd: Number(p.saldoUsd || 0)
+        });
+      });
     if (list.length === 0) {
       list.push(
         { key: 'CAJA-DEF-USD', id: 'CAJA-DEF-USD', rawId: 'CAJA-DEF-USD', nombre: 'Caja Operativa Principal USD', label: 'Caja Operativa Principal USD (Efectivo)', accountType: 'CAJA', kind: 'CAJA', moneda: 'USD', saldoUsd: 0 },
@@ -459,7 +481,7 @@ export default function AccountsPayableModal({
       );
     }
     return list;
-  }, [cashDesks, bankAccounts]);
+  }, [cashDesks, bankAccounts, partnerPayableAccounts]);
 
   // Preseleccionar primera cuenta si no hay ninguna (useEffect para evitar setState en render)
   useEffect(() => {
@@ -1816,7 +1838,17 @@ export default function AccountsPayableModal({
                     <option key={b.key} value={b.key}>{b.label}</option>
                   ))}
                 </optgroup>
+                <optgroup label="Cuentas por Pagar Pasivas (Socios · 2.02.01.001)">
+                  {catalogCuentas.filter(c => c.accountType === 'PASIVO_SOCIO').map(s => (
+                    <option key={s.key} value={s.key}>{s.label}</option>
+                  ))}
+                </optgroup>
               </select>
+              {catalogCuentas.find(c => c.key === pagoCuentaKey)?.accountType === 'PASIVO_SOCIO' && (
+                <div style={{ marginTop: '0.35rem', padding: '0.4rem 0.6rem', borderRadius: '6px', background: '#fffbeb', border: '1px solid #fde68a', fontSize: '0.73rem', color: '#92400e', fontWeight: 600 }}>
+                  Pasivo Socio (2.02.01.001): salda esta CxP con el proveedor y acumula el compromiso por pagar al socio, sin descontar efectivo de Cajas ni Bancos.
+                </div>
+              )}
             </div>
 
             {/* Monto Abono en USD */}

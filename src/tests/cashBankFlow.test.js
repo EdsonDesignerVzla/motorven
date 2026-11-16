@@ -31,7 +31,12 @@ import {
   computeMovementEditAccountAdjustments,
   dedupeCashMovements,
   upsertCashMovementInList,
-  removeCashMovementFromList
+  removeCashMovementFromList,
+  loadPartnerPayableAccounts,
+  upsertPartnerPayableAccountInList,
+  removePartnerPayableAccountFromList,
+  applyPartnerPayableBalanceDeltaInList,
+  computePartnerPayableSummary
 } from '../utils/treasuryAccountUtils.js';
 import { generateCashflowPDF, generateBankAccountsPDF } from '../services/pdfReportService.js';
 
@@ -547,6 +552,64 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   assert.equal(bd.totalUsd, 1041, 'La sumatoria Fiscal (87) + No Fiscal (954) debe guardar 1041 en CAJA-01 original');
   assert.equal(Number((bd.fiscalUsd + bd.noFiscalUsd).toFixed(2)), bd.totalUsd);
   console.log('✓ 11. Enrutamiento de cobros CxC (Factura -> Fiscal, N/E -> No Fiscal) y sumatoria en Caja original verificado');
+}
+
+// 12. Gestión CRUD y acumulación de pasivos en Cuentas por Pagar Socio (2.02.01.001)
+{
+  globalThis.localStorage.clear();
+  const initialList = loadPartnerPayableAccounts();
+  assert.ok(initialList.length >= 1, 'Debe cargar cuenta por pagar socio predeterminada');
+  assert.equal(initialList[0].codigoContable, '2.02.01.001');
+
+  // Crear segunda cuenta por pagar socio
+  let list = upsertPartnerPayableAccountInList(initialList, {
+    id: 'SOCIO-02',
+    codigo: 'SOCIO-02',
+    nombre: 'Cuenta por Pagar Socio B',
+    titular: 'Socio B',
+    moneda: 'USD',
+    saldoUsd: 100,
+    saldoBs: 0,
+    activa: true
+  });
+  assert.equal(list.length, 2);
+
+  // Editar cuenta SOCIO-02
+  list = upsertPartnerPayableAccountInList(list, {
+    id: 'SOCIO-02',
+    codigo: 'SOCIO-02',
+    nombre: 'Cuenta por Pagar Socio B Editada',
+    titular: 'Socio B',
+    moneda: 'USD',
+    saldoUsd: 150,
+    saldoBs: 0,
+    activa: true
+  });
+  assert.equal(list.find(a => a.id === 'SOCIO-02')?.nombre, 'Cuenta por Pagar Socio B Editada');
+  assert.equal(list.find(a => a.id === 'SOCIO-02')?.saldoUsd, 150);
+
+  // Pago CxP a proveedor usando cta-socio-01 (SOC-01) como origen -> incrementa pasivo (+250 USD)
+  list = applyPartnerPayableBalanceDeltaInList(list, {
+    targetRef: 'SOCIO-cta-socio-01',
+    deltaUsd: 250,
+    deltaBs: 228505
+  });
+  assert.equal(list.find(a => a.id === 'cta-socio-01')?.saldoUsd, 250);
+  // También soporta targetRef directo con prefijo SOCIO- en id/código
+  list = applyPartnerPayableBalanceDeltaInList(list, {
+    targetRef: 'SOCIO-02',
+    deltaUsd: 50,
+    deltaBs: 0
+  });
+  assert.equal(list.find(a => a.id === 'SOCIO-02')?.saldoUsd, 200);
+  const summary = computePartnerPayableSummary(list, { tasaDolar: 914.02 });
+  assert.equal(summary.totalUsd, 450);
+
+  // Eliminar SOCIO-02
+  list = removePartnerPayableAccountFromList(list, 'SOCIO-02');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, 'cta-socio-01');
+  console.log('✓ 12. CRUD y acumulación de pasivo en Cuentas por Pagar Socio (2.02.01.001) verificado');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

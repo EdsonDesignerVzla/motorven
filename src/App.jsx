@@ -11,7 +11,11 @@ import {
   dedupeCashMovements,
   upsertCashMovementInList,
   removeCashMovementFromList,
-  resolveExchangeRates
+  resolveExchangeRates,
+  loadPartnerPayableAccounts,
+  upsertPartnerPayableAccountInList,
+  removePartnerPayableAccountFromList,
+  applyPartnerPayableBalanceDeltaInList
 } from './utils/treasuryAccountUtils';
 import { normalizeRateType, isDirectCurrencyRateType } from './utils/rateClassificationUtils';
 import { resolveInvoiceLitros, resolveInvoiceCajas, matchesSeller } from './services/commissionService';
@@ -267,6 +271,9 @@ function MainApp() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     return localStorage.getItem('signum_sidebar_collapsed') === 'true';
+  });
+  const [partnerPayableAccounts, setPartnerPayableAccountsState] = useState(() => {
+    return loadPartnerPayableAccounts();
   });
   // Cargar modo inicial (por defecto claro, o el persistido por el usuario)
   const [theme, setTheme] = useState(() => {
@@ -3710,6 +3717,15 @@ function MainApp() {
     }
   };
 
+  // CRUD de Cuentas por Pagar Pasivas (Socios · 2.02.01.001)
+  const handleSavePartnerPayableAccount = (accountPayload) => {
+    setPartnerPayableAccountsState(prev => upsertPartnerPayableAccountInList(prev, accountPayload));
+  };
+
+  const handleDeletePartnerPayableAccount = (idOrCode) => {
+    setPartnerPayableAccountsState(prev => removePartnerPayableAccountFromList(prev, idOrCode));
+  };
+
   // Registrar Pago a Proveedor en Cuentas por Pagar (Parte A) con atomicidad y egreso en flujo de caja
   const handleRegisterCxpPayment = async ({ updatedDoc, paymentPayload, selectedAccount }) => {
     const prevDocSnapshot = (profitAccountsPayable || []).find(p => doesPayableMatchDocument(p, updatedDoc)) || null;
@@ -3730,28 +3746,46 @@ function MainApp() {
       }
     }
 
+    const isPartnerPayableSource = Boolean(
+      selectedAccount && (
+        selectedAccount.accountType === 'PASIVO_SOCIO'
+        || selectedAccount.kind === 'PASIVO_SOCIO'
+        || String(selectedAccount.key || selectedAccount.id || '').startsWith('SOCIO-')
+      )
+    );
+
     if (selectedAccount) {
       const montoUsd = Number(paymentPayload?.montoUsd || 0);
       const montoBs = Number(paymentPayload?.montoBs || 0);
-      try {
-        await applyTreasuryAccountDelta({
-          account: selectedAccount,
-          deltaUsd: -montoUsd,
-          deltaBs: -montoBs,
-          clampZero: true
-        });
-      } catch (acctErr) {
-        console.error('[handleRegisterCxpPayment] Error debitando caja/banco:', acctErr?.message || acctErr);
-        if (prevDocSnapshot) {
-          await handleSaveCxpDocument(prevDocSnapshot).catch(() => {});
+      if (isPartnerPayableSource) {
+        setPartnerPayableAccountsState(prev =>
+          applyPartnerPayableBalanceDeltaInList(prev, {
+            targetRef: selectedAccount.rawId || selectedAccount.id || selectedAccount.key,
+            deltaUsd: montoUsd,
+            deltaBs: montoBs
+          })
+        );
+      } else {
+        try {
+          await applyTreasuryAccountDelta({
+            account: selectedAccount,
+            deltaUsd: -montoUsd,
+            deltaBs: -montoBs,
+            clampZero: true
+          });
+        } catch (acctErr) {
+          console.error('[handleRegisterCxpPayment] Error debitando caja/banco:', acctErr?.message || acctErr);
+          if (prevDocSnapshot) {
+            await handleSaveCxpDocument(prevDocSnapshot).catch(() => {});
+          }
+          throw new Error('No se pudo debitar la cuenta bancaria/caja seleccionada: ' + (acctErr?.message || acctErr));
         }
-        throw new Error('No se pudo debitar la cuenta bancaria/caja seleccionada: ' + (acctErr?.message || acctErr));
       }
     }
 
-    // Registrar movimiento EGRESO en Caja Chica / Flujo de Caja
+    // Registrar movimiento EGRESO en Caja Chica / Flujo de Caja solo si salió de Caja o Banco (no aplica cuando lo asume un Pasivo Socio)
     const montoPagadoUsd = Number(paymentPayload?.montoUsd || 0);
-    if (montoPagadoUsd > 0) {
+    if (montoPagadoUsd > 0 && !isPartnerPayableSource) {
       try {
         const payRateType = normalizeRateType(paymentPayload?.tipoTasa, {
           tipoDoc: updatedDoc?.tipoDoc || updatedDoc?.tipo_doc,
@@ -4325,6 +4359,9 @@ function MainApp() {
               cashDesks={profitCashDesks}
               bankAccounts={profitBankAccounts}
               cashMovements={cashMovements}
+              partnerPayableAccounts={partnerPayableAccounts}
+              onSavePartnerPayableAccount={handleSavePartnerPayableAccount}
+              onDeletePartnerPayableAccount={handleDeletePartnerPayableAccount}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={handleAddCashMovement}
               onUpdateMovement={handleUpdateCashMovement}
@@ -4377,6 +4414,7 @@ function MainApp() {
               profitSuppliers={profitSuppliers}
               bankAccounts={profitBankAccounts}
               cashDesks={profitCashDesks}
+              partnerPayableAccounts={partnerPayableAccounts}
               supplierPayments={profitSupplierPayments}
               config={config}
               currentUser={currentUser}
