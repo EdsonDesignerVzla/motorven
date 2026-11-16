@@ -634,6 +634,22 @@ export const saveSale = (saleData, options = {}) => {
   return newSale;
 };
 
+export const saveFiscalAdjustmentSale = (saleObj) => {
+  if (!saleObj || typeof saleObj !== 'object') return null;
+  const sales = getSales();
+  const key = getCanonicalDocKey(saleObj);
+  const existingIdx = sales.findIndex(
+    (s) => s && ((saleObj.id && s.id === saleObj.id) || (key && getCanonicalDocKey(s) === key))
+  );
+  if (existingIdx >= 0) {
+    sales[existingIdx] = { ...sales[existingIdx], ...saleObj };
+  } else {
+    sales.unshift(saleObj);
+  }
+  localStorage.setItem(KEYS.SALES, JSON.stringify(sales));
+  return saleObj;
+};
+
 export const deleteStorageSale = (saleIdOrObj, options = {}) => {
   const { skipStockAdjustment = false } = options || {};
   if (!saleIdOrObj) return getSales();

@@ -27,7 +27,8 @@ import {
     inferCxcDocType,
     getCxcScopedDocKey,
     doesCollectionMatchInvoice,
-    classifyCollectionRateType
+    classifyCollectionRateType,
+    getNextCreditDebitNoteCorrelativo
 } from '../utils/cxcUtils';
 import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
 import {
@@ -214,6 +215,7 @@ export function AccountsReceivableModal({
     onSaveDocument,
     onRegisterCollection,
     onUpdateCollection,
+    onIssueCreditDebitNote,
     onOpenCollectionIntelligence,
     onSaveClient,
     onDeleteClient,
@@ -296,6 +298,8 @@ export function AccountsReceivableModal({
     const [editingDoc, setEditingDoc] = useState(null);
     const [isCreatingDoc, setIsCreatingDoc] = useState(false);
     const [isSavingDoc, setIsSavingDoc] = useState(false);
+    const [creditDebitModal, setCreditDebitModal] = useState(null);
+    const [isSavingCreditDebit, setIsSavingCreditDebit] = useState(false);
 
     // Sincronizar tasa por defecto según clasificación cuando cambia la configuración
     useEffect(() => {
@@ -1480,6 +1484,194 @@ export function AccountsReceivableModal({
     };
 
     // ========================================================================
+    // Handlers de Emisión de Nota de Crédito / Nota de Débito desde CxC
+    // ========================================================================
+    const handleOpenCreditDebitModal = (noteType = 'NOTA_CREDITO', docOverride = null) => {
+        const targetDoc = docOverride || selectedCobroDoc || payableDocsForActiveType[0] || null;
+        if (!targetDoc) {
+            notify.warning('Seleccione una Factura o Nota de Entrega en la Parte A o Parte B para emitir la nota.');
+            return;
+        }
+        const normalizedType = String(noteType || '').toUpperCase().includes('DEB') ? 'NOTA_DEBITO' : 'NOTA_CREDITO';
+        const isNE = inferCxcDocType(targetDoc) === 'NOTA_ENTREGA';
+        const suggestedNum = getNextCreditDebitNoteCorrelativo(normalizedType, effectiveSales, profitInvoices);
+        const rateNum = Number(cobroTasa) > 1 ? Number(cobroTasa) : tasaBcv;
+        const typedCobroUsd = round2(Number(cobroMontoUsd || 0));
+        const defaultTotal = normalizedType === 'NOTA_CREDITO'
+            ? (typedCobroUsd > 0 && typedCobroUsd <= round2(targetDoc.restanteUsd + 0.01) ? typedCobroUsd : round2(targetDoc.restanteUsd))
+            : (typedCobroUsd > 0 ? typedCobroUsd : 0);
+        const defaultAplicaIva = !isNE;
+        const defaultSub = defaultTotal > 0
+            ? (defaultAplicaIva ? round2(defaultTotal / 1.16) : defaultTotal)
+            : '';
+
+        setCreditDebitModal({
+            noteType: normalizedType,
+            doc: targetDoc,
+            noteNum: suggestedNum,
+            fechaEmision: cobroFecha || getTodayIso(),
+            tasa: round2(rateNum).toFixed(2),
+            aplicaIva: defaultAplicaIva,
+            subtotalUsd: defaultSub === '' ? '' : String(defaultSub),
+            totalUsd: defaultTotal > 0 ? String(defaultTotal) : '',
+            motivo: '',
+            autoPrintPdf: true
+        });
+    };
+
+    const handleCreditDebitFieldChange = (field, value) => {
+        setCreditDebitModal((prev) => {
+            if (!prev) return prev;
+            const next = { ...prev, [field]: value };
+            const isNE = inferCxcDocType(next.doc) === 'NOTA_ENTREGA';
+
+            if (field === 'noteType') {
+                next.noteNum = getNextCreditDebitNoteCorrelativo(value, effectiveSales, profitInvoices);
+                if (value === 'NOTA_CREDITO' && next.doc) {
+                    const rest = round2(next.doc.restanteUsd || 0);
+                    const total = rest > 0 ? rest : 0;
+                    const sub = (!isNE && next.aplicaIva) ? round2(total / 1.16) : total;
+                    next.totalUsd = total > 0 ? String(total) : '';
+                    next.subtotalUsd = total > 0 ? String(sub) : '';
+                }
+            }
+
+            if (field === 'aplicaIva') {
+                const effIva = !isNE && Boolean(value);
+                next.aplicaIva = effIva;
+                const sub = round2(Number(next.subtotalUsd || 0));
+                if (sub > 0) {
+                    next.totalUsd = String(effIva ? round2(sub * 1.16) : sub);
+                }
+            }
+
+            if (field === 'subtotalUsd') {
+                const sub = Number(value || 0);
+                if (!value || isNaN(sub) || sub <= 0) {
+                    next.totalUsd = '';
+                } else {
+                    const effIva = !isNE && Boolean(next.aplicaIva);
+                    next.totalUsd = String(effIva ? round2(sub * 1.16) : round2(sub));
+                }
+            }
+
+            if (field === 'totalUsd') {
+                const tot = Number(value || 0);
+                if (!value || isNaN(tot) || tot <= 0) {
+                    next.subtotalUsd = '';
+                } else {
+                    const effIva = !isNE && Boolean(next.aplicaIva);
+                    next.subtotalUsd = String(effIva ? round2(tot / 1.16) : round2(tot));
+                }
+            }
+
+            return next;
+        });
+    };
+
+    const handleSubmitCreditDebitNote = async (e) => {
+        e.preventDefault();
+        if (!creditDebitModal?.doc) return;
+        if (!onIssueCreditDebitNote) {
+            notify.error('No se encontró el manejador para emitir Notas de Crédito / Débito.');
+            return;
+        }
+        const doc = creditDebitModal.doc;
+        const subVal = round2(Number(creditDebitModal.subtotalUsd || 0));
+        const totVal = round2(Number(creditDebitModal.totalUsd || 0));
+        const tasaVal = Number(creditDebitModal.tasa) > 1 ? Number(creditDebitModal.tasa) : tasaBcv;
+        if (!(totVal > 0)) {
+            notify.warning('Ingrese un monto válido mayor a $0.00 para la nota.');
+            return;
+        }
+        if (creditDebitModal.noteType === 'NOTA_CREDITO' && totVal > round2((doc.restanteUsd || 0) + 0.01)) {
+            notify.warning(`La Nota de Crédito ($${formatNumberUs(totVal)}) no puede superar el Restante del documento ($${formatNumberUs(doc.restanteUsd)}).`);
+            return;
+        }
+
+        const matchedClient = (clients || []).find(
+            (c) => (doc.clienteId && String(c.id) === String(doc.clienteId)) ||
+                   (doc.rif && String(c.rif) === String(doc.rif))
+        );
+        const clienteDireccion = matchedClient?.direccion || doc.clienteDireccion || 'Venezuela';
+
+        setIsSavingCreditDebit(true);
+        try {
+            const res = await onIssueCreditDebitNote({
+                noteType: creditDebitModal.noteType,
+                affectedDoc: doc,
+                noteNum: creditDebitModal.noteNum,
+                fechaEmision: creditDebitModal.fechaEmision || getTodayIso(),
+                subtotalUsd: subVal > 0 ? subVal : totVal,
+                aplicaIva: Boolean(creditDebitModal.aplicaIva),
+                tasa: tasaVal,
+                motivo: creditDebitModal.motivo,
+                clienteDireccion
+            });
+
+            const savedAtIso = new Date().toISOString();
+            if (res?.updatedAffectedDoc) {
+                const scopedKey = getCxcScopedDocKey(res.updatedAffectedDoc, res.updatedAffectedDoc.tipoDoc);
+                setLocalDocOverrides((prev) => ({
+                    ...prev,
+                    [scopedKey]: {
+                        ...res.updatedAffectedDoc,
+                        fechaSincronizacion: savedAtIso,
+                        updated_at: savedAtIso,
+                        _localSavedAt: savedAtIso
+                    }
+                }));
+                setRecentlyPaidKeys((prev) => {
+                    const next = new Set(prev);
+                    if (Number(res.updatedAffectedDoc.saldoUsd || 0) > 0.01) next.add(scopedKey);
+                    else next.delete(scopedKey);
+                    return next;
+                });
+            }
+
+            if (res?.createdDebitDoc) {
+                const ndKey = getCxcScopedDocKey(res.createdDebitDoc, res.createdDebitDoc.tipoDoc);
+                setLocalDocOverrides((prev) => ({
+                    ...prev,
+                    [ndKey]: {
+                        ...res.createdDebitDoc,
+                        fechaSincronizacion: savedAtIso,
+                        updated_at: savedAtIso,
+                        _localSavedAt: savedAtIso
+                    }
+                }));
+            }
+
+            if (creditDebitModal.autoPrintPdf && res?.notePdfData) {
+                generateCreditDebitNotePDF({
+                    docData: res.notePdfData,
+                    config,
+                    currentUser
+                });
+            }
+
+            const isDebit = creditDebitModal.noteType === 'NOTA_DEBITO';
+            const msg = isDebit
+                ? `Nota de Débito #${res?.noteNum || creditDebitModal.noteNum} emitida sobre #${doc.factNum} por ${formatUsd(totVal)}.`
+                : `Nota de Crédito #${res?.noteNum || creditDebitModal.noteNum} aplicada a #${doc.factNum} por ${formatUsd(totVal)}.`;
+            setCobroFeedback({
+                type: 'success',
+                message: msg,
+                creditDebitPdfData: res?.notePdfData || null
+            });
+            notify.success(msg);
+            setCobroMontoUsd('');
+            setCobroMontoBs('');
+            setCreditDebitModal(null);
+        } catch (err) {
+            console.error('Error emitiendo nota CxC:', err);
+            notify.error(err?.message || 'Error al emitir la Nota de Crédito / Débito.');
+        } finally {
+            setIsSavingCreditDebit(false);
+        }
+    };
+
+    // ========================================================================
     // Handlers de Creación / Edición de Documentos
     // ========================================================================
     const handleOpenNewDocModal = () => {
@@ -2492,7 +2684,7 @@ export function AccountsReceivableModal({
                         paddingBottom: '0.85rem',
                         borderBottom: '1px solid var(--border-glass)'
                     }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                             <span style={{
                                 padding: '0.25rem 0.75rem',
                                 borderRadius: '8px',
@@ -2509,6 +2701,52 @@ export function AccountsReceivableModal({
                             <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
                                 Para Registrar Cobros ({isNotaEntregaTab ? 'Notas de Entrega — Sin Impuestos' : 'Facturas Fiscales'})
                             </h3>
+                            <button
+                                type="button"
+                                onClick={() => handleOpenCreditDebitModal('NOTA_CREDITO')}
+                                disabled={!selectedCobroDoc && payableDocsForActiveType.length === 0}
+                                className="btn btn-sm"
+                                style={{
+                                    padding: '0.3rem 0.7rem',
+                                    borderRadius: '8px',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    background: 'rgba(168, 85, 247, 0.16)',
+                                    color: '#c084fc',
+                                    border: '1px solid rgba(168, 85, 247, 0.45)',
+                                    cursor: 'pointer'
+                                }}
+                                title="Emitir Nota de Crédito (N/CR) para rebajar el saldo del documento seleccionado"
+                            >
+                                <TrendingDown size={13} />
+                                <span>+ Nota de Crédito</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleOpenCreditDebitModal('NOTA_DEBITO')}
+                                disabled={!selectedCobroDoc && payableDocsForActiveType.length === 0}
+                                className="btn btn-sm"
+                                style={{
+                                    padding: '0.3rem 0.7rem',
+                                    borderRadius: '8px',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    background: 'rgba(245, 158, 11, 0.16)',
+                                    color: '#fbbf24',
+                                    border: '1px solid rgba(245, 158, 11, 0.45)',
+                                    cursor: 'pointer'
+                                }}
+                                title="Emitir Nota de Débito (N/DB) para agregar cargo adicional sobre el documento seleccionado"
+                            >
+                                <Plus size={13} />
+                                <span>+ Nota de Débito</span>
+                            </button>
                         </div>
 
                         {selectedCobroDoc && (
@@ -2876,6 +3114,21 @@ export function AccountsReceivableModal({
                                         title="Descargar Recibo Oficial de Cobro en PDF"
                                     >
                                         <Printer size={12} color="#ffffff" /> Recibo PDF
+                                    </button>
+                                )}
+                                {cobroFeedback.creditDebitPdfData && (
+                                    <button
+                                        type="button"
+                                        onClick={() => generateCreditDebitNotePDF({
+                                            docData: cobroFeedback.creditDebitPdfData,
+                                            config,
+                                            currentUser
+                                        })}
+                                        className="btn btn-sm btn-print-report"
+                                        style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                        title="Descargar Nota de Crédito / Débito en PDF"
+                                    >
+                                        <Printer size={12} color="#ffffff" /> {cobroFeedback.creditDebitPdfData.tipoDoc === 'NOTA_DEBITO' ? 'Nota Débito PDF' : 'Nota Crédito PDF'}
                                     </button>
                                 )}
                                 <button
@@ -3562,26 +3815,51 @@ export function AccountsReceivableModal({
                                                             <History size={14} />
                                                         </button>
 
-                                                        {(inv.tipoDoc === 'NOTA_CREDITO' || inv.tipoDoc === 'NOTA_DEBITO') && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleOpenCreditDebitModal(inv.restanteUsd > 0.01 ? 'NOTA_CREDITO' : 'NOTA_DEBITO', inv)}
+                                                            className="btn"
+                                                            style={{
+                                                                padding: '0.35rem 0.55rem',
+                                                                borderRadius: '7px',
+                                                                background: 'rgba(168, 85, 247, 0.16)',
+                                                                color: '#c084fc',
+                                                                border: '1px solid rgba(168, 85, 247, 0.4)',
+                                                                fontSize: '0.72rem',
+                                                                fontWeight: 700,
+                                                                cursor: 'pointer'
+                                                            }}
+                                                            title={`Emitir Nota de Crédito o Nota de Débito sobre #${inv.factura}`}
+                                                        >
+                                                            NC/ND
+                                                        </button>
+
+                                                        {(inv.tipoDoc === 'NOTA_CREDITO' || inv.tipoDoc === 'NOTA_DEBITO' || inv.fiscalDocType === 'NOTA_DEBITO' || /^(NC-|ND-|NE-ND-)/i.test(String(inv.factNum || ''))) && (
                                                             <button
                                                                 type="button"
-                                                                onClick={() => generateCreditDebitNotePDF({
-                                                                    docData: {
-                                                                        tipoDoc: inv.tipoDoc,
-                                                                        numeroDoc: inv.factNum,
-                                                                        documentoAfectado: inv.documentoAfectado || inv.nroDocOrigen || 'N/A',
-                                                                        fecha: inv.fechaEmision || inv.fecEmis,
-                                                                        clienteNombre: inv.cliente,
-                                                                        clienteRif: inv.rif || 'N/A',
-                                                                        tasaDolar: tasaBcv,
-                                                                        subtotalUsd: inv.montoFacturaUsd,
-                                                                        ivaUsd: 0,
-                                                                        totalUsd: inv.montoFacturaUsd,
-                                                                        observaciones: inv.observaciones || inv.comentarios || 'Nota fiscal registrada en CxC',
-                                                                        items: inv.items || []
-                                                                    },
-                                                                    config
-                                                                })}
+                                                                onClick={() => {
+                                                                    const isNd = inv.tipoDoc === 'NOTA_DEBITO' || inv.fiscalDocType === 'NOTA_DEBITO' || /^(ND-|NE-ND-)/i.test(String(inv.factNum || ''));
+                                                                    generateCreditDebitNotePDF({
+                                                                        docData: {
+                                                                            tipoDoc: isNd ? 'NOTA_DEBITO' : 'NOTA_CREDITO',
+                                                                            numeroDoc: inv.factNum,
+                                                                            numeroControl: inv.numeroControl || 'N/A',
+                                                                            documentoAfectado: inv.documentoAfectado || inv.nroDocOrigen || 'N/A',
+                                                                            fecha: inv.fechaEmisionIso || inv.fechaEmision || inv.fecEmis,
+                                                                            clienteNombre: inv.cliente,
+                                                                            clienteRif: inv.rif || 'N/A',
+                                                                            tasaDolar: inv.tasa || tasaBcv,
+                                                                            subtotalUsd: inv.subtotalUsd ?? inv.montoFacturaUsd,
+                                                                            ivaUsd: inv.ivaUsd ?? 0,
+                                                                            totalUsd: inv.montoFacturaUsd,
+                                                                            motivo: inv.observaciones || inv.comentarios || 'Nota fiscal registrada en CxC',
+                                                                            observaciones: inv.observaciones || inv.comentarios || 'Nota fiscal registrada en CxC',
+                                                                            items: inv.items || []
+                                                                        },
+                                                                        config,
+                                                                        currentUser
+                                                                    });
+                                                                }}
                                                                 className="btn"
                                                                 style={{
                                                                     padding: '0.35rem 0.55rem',
@@ -3591,7 +3869,7 @@ export function AccountsReceivableModal({
                                                                     border: '1px solid rgba(168, 85, 247, 0.4)',
                                                                     cursor: 'pointer'
                                                                 }}
-                                                                title={`Imprimir PDF ${inv.tipoDoc === 'NOTA_CREDITO' ? 'Nota de Crédito' : 'Nota de Débito'} (Carta)`}
+                                                                title={`Imprimir PDF ${(inv.tipoDoc === 'NOTA_DEBITO' || inv.fiscalDocType === 'NOTA_DEBITO' || /^(ND-|NE-ND-)/i.test(String(inv.factNum || ''))) ? 'Nota de Débito' : 'Nota de Crédito'} (Carta)`}
                                                             >
                                                                 <Printer size={14} />
                                                             </button>
@@ -4106,6 +4384,296 @@ export function AccountsReceivableModal({
             )}
 
             {/* ============================================================
+                MODAL DE EMISIÓN DE NOTA DE CRÉDITO / NOTA DE DÉBITO (CxC)
+            ============================================================ */}
+            {creditDebitModal && creditDebitModal.doc && (() => {
+                const isDebit = creditDebitModal.noteType === 'NOTA_DEBITO';
+                const doc = creditDebitModal.doc;
+                const isNE = inferCxcDocType(doc) === 'NOTA_ENTREGA';
+                const rateVal = Number(creditDebitModal.tasa) > 1 ? Number(creditDebitModal.tasa) : tasaBcv;
+                const subVal = round2(Number(creditDebitModal.subtotalUsd || 0));
+                const effIva = !isNE && Boolean(creditDebitModal.aplicaIva);
+                const ivaVal = effIva ? round2(subVal * 0.16) : 0;
+                const totVal = round2(Number(creditDebitModal.totalUsd || (subVal + ivaVal)));
+                const bsVal = round2(totVal * rateVal);
+
+                return (
+                    <div
+                        className="modal-overlay"
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            background: 'rgba(2, 6, 23, 0.78)',
+                            backdropFilter: 'blur(6px)',
+                            zIndex: 1200,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '1rem'
+                        }}
+                        onClick={() => !isSavingCreditDebit && setCreditDebitModal(null)}
+                    >
+                        <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                                width: '100%',
+                                maxWidth: '640px',
+                                background: 'var(--bg-card-glass)',
+                                border: `1px solid ${isDebit ? 'rgba(245, 158, 11, 0.45)' : 'rgba(168, 85, 247, 0.45)'}`,
+                                borderRadius: '16px',
+                                boxShadow: '0 24px 60px rgba(0, 0, 0, 0.55)',
+                                overflow: 'hidden'
+                            }}
+                        >
+                            <div style={{
+                                padding: '1rem 1.35rem',
+                                background: isDebit
+                                    ? 'linear-gradient(135deg, rgba(217, 119, 6, 0.25), rgba(15, 23, 42, 0.9))'
+                                    : 'linear-gradient(135deg, rgba(147, 51, 234, 0.25), rgba(15, 23, 42, 0.9))',
+                                borderBottom: '1px solid var(--border-glass)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '0.75rem'
+                            }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                                        {isDebit ? 'Emitir Nota de Débito (N/DB)' : 'Emitir Nota de Crédito (N/CR)'}
+                                    </h3>
+                                    <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                        {isDebit
+                                            ? `Genera un cargo adicional por cobrar vinculado a #${doc.factNum}`
+                                            : `Aplica rebaja / descuento contable que disminuye el saldo de #${doc.factNum}`}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => !isSavingCreditDebit && setCreditDebitModal(null)}
+                                    style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <form onSubmit={handleSubmitCreditDebitNote} style={{ padding: '1.25rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                {/* Selector NC / ND */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleCreditDebitFieldChange('noteType', 'NOTA_CREDITO')}
+                                        style={{
+                                            padding: '0.55rem 0.75rem',
+                                            borderRadius: '10px',
+                                            border: !isDebit ? '1.5px solid #c084fc' : '1px solid var(--border-glass)',
+                                            background: !isDebit ? 'rgba(168, 85, 247, 0.2)' : 'var(--bg-surface)',
+                                            color: !isDebit ? '#e9d5ff' : 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            textAlign: 'left'
+                                        }}
+                                    >
+                                        <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>Nota de Crédito (N/CR)</div>
+                                        <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Rebaja saldo pendiente del documento</div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleCreditDebitFieldChange('noteType', 'NOTA_DEBITO')}
+                                        style={{
+                                            padding: '0.55rem 0.75rem',
+                                            borderRadius: '10px',
+                                            border: isDebit ? '1.5px solid #fbbf24' : '1px solid var(--border-glass)',
+                                            background: isDebit ? 'rgba(245, 158, 11, 0.2)' : 'var(--bg-surface)',
+                                            color: isDebit ? '#fef3c7' : 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            textAlign: 'left'
+                                        }}
+                                    >
+                                        <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>Nota de Débito (N/DB)</div>
+                                        <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Aumenta deuda / crea cargo adicional</div>
+                                    </button>
+                                </div>
+
+                                {/* Documento Afectado Info */}
+                                <div style={{
+                                    padding: '0.7rem 0.9rem',
+                                    borderRadius: '10px',
+                                    background: 'var(--bg-surface)',
+                                    border: '1px solid var(--border-glass)',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    flexWrap: 'wrap',
+                                    gap: '0.5rem',
+                                    fontSize: '0.78rem'
+                                }}>
+                                    <div>
+                                        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Documento Afectado ({isNE ? 'Nota de Entrega — Sin IVA' : 'Factura Fiscal'})</div>
+                                        <strong style={{ color: 'var(--text-primary)' }}>#{doc.factNum} • {doc.cliente}</strong>
+                                        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>RIF: {doc.rif} • Cobrador: {doc.vendedorNombre || doc.vendedorId}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Restante Actual</div>
+                                        <strong style={{ color: '#ef4444', fontFamily: 'var(--font-code)', fontSize: '0.95rem' }}>{formatUsd(doc.restanteUsd)}</strong>
+                                    </div>
+                                </div>
+
+                                {/* Correlativo, Fecha y Tasa */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: '0.75rem' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                                            N° Nota ({isDebit ? 'ND' : 'NC'}) *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={creditDebitModal.noteNum}
+                                            onChange={(e) => handleCreditDebitFieldChange('noteNum', e.target.value)}
+                                            className="input-modern"
+                                            style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                                            Fecha Emisión *
+                                        </label>
+                                        <input
+                                            type="date"
+                                            required
+                                            value={creditDebitModal.fechaEmision}
+                                            onChange={(e) => handleCreditDebitFieldChange('fechaEmision', e.target.value)}
+                                            className="input-modern"
+                                            style={{ width: '100%', padding: '0.55rem 0.75rem' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                                            Tasa (Bs/USD) *
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            required
+                                            value={creditDebitModal.tasa}
+                                            onChange={(e) => handleCreditDebitFieldChange('tasa', e.target.value)}
+                                            className="input-modern"
+                                            style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Base, IVA y Total */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', alignItems: 'end' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                                            Base Imponible ($) *
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            required
+                                            value={creditDebitModal.subtotalUsd}
+                                            onChange={(e) => handleCreditDebitFieldChange('subtotalUsd', e.target.value)}
+                                            placeholder="0.00"
+                                            className="input-modern"
+                                            style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.72rem', fontWeight: 700, color: isNE ? 'var(--text-muted)' : '#38bdf8', textTransform: 'uppercase', marginBottom: '0.45rem', cursor: isNE ? 'not-allowed' : 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                disabled={isNE}
+                                                checked={effIva}
+                                                onChange={(e) => handleCreditDebitFieldChange('aplicaIva', e.target.checked)}
+                                            />
+                                            <span>{isNE ? 'Exento (N/E Sin IVA)' : 'Aplica IVA 16%'}</span>
+                                        </label>
+                                        <div className="input-modern" style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>
+                                            IVA: {formatUsd(ivaVal)}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: isDebit ? '#fbbf24' : '#c084fc', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                                            Total Nota ($) *
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            required
+                                            value={creditDebitModal.totalUsd}
+                                            onChange={(e) => handleCreditDebitFieldChange('totalUsd', e.target.value)}
+                                            placeholder="0.00"
+                                            className="input-modern"
+                                            style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 800, color: isDebit ? '#fbbf24' : '#34d399' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div style={{ fontSize: '0.76rem', color: '#38bdf8', fontFamily: 'var(--font-code)', textAlign: 'right', marginTop: '-0.35rem' }}>
+                                    Equivalente Referencial: {formatBs(bsVal)}
+                                </div>
+
+                                {/* Motivo */}
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                                        Motivo / Concepto (SENIAT) *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        value={creditDebitModal.motivo}
+                                        onChange={(e) => handleCreditDebitFieldChange('motivo', e.target.value)}
+                                        placeholder={isDebit ? 'Ej. Cargo por flete / Ajuste diferencial / Intereses' : 'Ej. Descuento comercial / Devolución parcial / Rebaja autorizada'}
+                                        className="input-modern"
+                                        style={{ width: '100%', padding: '0.55rem 0.75rem' }}
+                                    />
+                                </div>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(creditDebitModal.autoPrintPdf)}
+                                        onChange={(e) => handleCreditDebitFieldChange('autoPrintPdf', e.target.checked)}
+                                    />
+                                    <span>Descargar automáticamente el comprobante oficial en PDF al emitir</span>
+                                </label>
+
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)' }}>
+                                    <button
+                                        type="button"
+                                        disabled={isSavingCreditDebit}
+                                        onClick={() => setCreditDebitModal(null)}
+                                        className="btn btn-secondary"
+                                        style={{ padding: '0.55rem 1.15rem' }}
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isSavingCreditDebit}
+                                        className="btn btn-primary"
+                                        style={{
+                                            padding: '0.55rem 1.3rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            background: isDebit
+                                                ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)'
+                                                : 'linear-gradient(135deg, #9333ea 0%, #6d28d9 100%)'
+                                        }}
+                                    >
+                                        <Check size={16} />
+                                        <span>{isSavingCreditDebit ? 'Emitiendo...' : (isDebit ? 'Emitir Nota de Débito' : 'Aplicar Nota de Crédito')}</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* ============================================================
                 MODAL CONSOLIDADO: FACTURAS FISCALES + NOTAS DE ENTREGA
             ============================================================ */}
             <CxcConsolidatedModal
@@ -4130,6 +4698,7 @@ export function AccountsReceivableModal({
                 documents={allDocuments}
                 collections={collections}
                 catalogCuentas={catalogCuentas}
+                sellers={profitSellers.length > 0 ? profitSellers : (sellers.length > 0 ? sellers : REAL_PROFIT_SELLERS)}
                 config={config}
                 tasaBcv={tasaBcv}
                 currentUser={currentUser}

@@ -27,6 +27,7 @@ import {
   commitCxcMovementReportCorrelativo
 } from '../services/fiscalService';
 import { saveSupabaseProfitCollection, fetchEuroRateDetails } from '../services/supabaseService';
+import { REAL_PROFIT_SELLERS } from '../data/supabaseRealData';
 import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
 import {
   CXC_RATE_ORDER,
@@ -40,7 +41,7 @@ import {
   isDirectCurrencyRateType,
   inferDirectCurrencyFromAccountOrMethod
 } from '../utils/rateClassificationUtils';
-import { generateCollectionReceiptPDF } from '../services/pdfReportService';
+import { generateCollectionReceiptPDF, generateCreditDebitNotePDF } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 const getTodayIso = () => {
@@ -236,8 +237,8 @@ const buildInvoiceMovementsList = ({
         clienteId: doc.clienteId || '',
         clienteNombre: doc.cliente || doc.clienteNombre || 'Cliente General',
         clienteRif: doc.rif || doc.clienteRif || '',
-        vendedorId: doc.vendedorId || 'OF',
-        vendedorNombre: doc.vendedorNombre || '',
+        vendedorId: String(h.cobradorId || h.vendedorId || h.vendedor_id || doc.vendedorId || 'OF').trim(),
+        vendedorNombre: String(h.cobradorNombre || h.vendedorNombre || doc.vendedorNombre || '').trim(),
         formaPago: resolvePaymentMethodLabel(h.formaPago, h.accountType),
         cuentaId: h.cuentaId || '',
         cuentaNombre,
@@ -338,8 +339,8 @@ const buildInvoiceMovementsList = ({
           clienteId: matchedDoc?.clienteId || c.clienteId || '',
           clienteNombre: matchedDoc?.cliente || c.clienteNombre || 'Cliente General',
           clienteRif: matchedDoc?.rif || c.clienteRif || '',
-          vendedorId: matchedDoc?.vendedorId || c.vendedorId || 'OF',
-          vendedorNombre: matchedDoc?.vendedorNombre || '',
+          vendedorId: String(c.cobradorId || c.vendedorId || c.vendedor_id || matchedDoc?.vendedorId || 'OF').trim(),
+          vendedorNombre: String(c.cobradorNombre || c.vendedorNombre || matchedDoc?.vendedorNombre || '').trim(),
           formaPago: formaLabel,
           cuentaId: c.cuentaId || fp0.codCta || fp0.codCaja || '',
           cuentaNombre,
@@ -376,8 +377,8 @@ const buildInvoiceMovementsList = ({
         clienteId: c.clienteId || '',
         clienteNombre: c.clienteNombre || 'Cliente General',
         clienteRif: c.clienteRif || '',
-        vendedorId: c.vendedorId || 'OF',
-        vendedorNombre: '',
+        vendedorId: String(c.cobradorId || c.vendedorId || c.vendedor_id || 'OF').trim(),
+        vendedorNombre: String(c.cobradorNombre || c.vendedorNombre || '').trim(),
         formaPago: formaLabel,
         cuentaId: c.cuentaId || fp0.codCta || fp0.codCaja || '',
         cuentaNombre,
@@ -411,6 +412,7 @@ export function CxcMovementsModal({
   documents = [],
   collections = [],
   catalogCuentas = [],
+  sellers = [],
   config = {},
   tasaBcv = 827.73,
   currentUser = null,
@@ -425,6 +427,45 @@ export function CxcMovementsModal({
     const hook = useNotification();
     if (hook) notify = hook;
   } catch (_) {}
+
+  // Catálogo unificado de cobradores / vendedores para el dropdown de edición
+  const { sellerCatalogOptions, sellerNameByCode } = useMemo(() => {
+    const byCode = new Map();
+    const pool = [
+      ...(Array.isArray(sellers) ? sellers : []),
+      ...(Array.isArray(config?.profitSellers) ? config.profitSellers : []),
+      ...(Array.isArray(REAL_PROFIT_SELLERS) ? REAL_PROFIT_SELLERS : [])
+    ];
+    pool.forEach((s) => {
+      if (!s) return;
+      const code = String(s.coVen || s.co_ven || s.id || '').trim().toUpperCase();
+      const name = String(s.venDes || s.ven_des || s.nombre || s.name || '').trim();
+      if (!code || !name) return;
+      if (!byCode.has(code)) {
+        byCode.set(code, { code, name });
+      }
+    });
+    if (!byCode.has('OF')) {
+      byCode.set('OF', { code: 'OF', name: 'Oficina Principal' });
+    }
+    (documents || []).forEach((d) => {
+      const code = String(d?.vendedorId || '').trim().toUpperCase();
+      const name = String(d?.vendedorNombre || '').trim();
+      if (code && name && !byCode.has(code)) {
+        byCode.set(code, { code, name });
+      }
+    });
+    (collections || []).forEach((c) => {
+      const code = String(c?.cobradorId || c?.vendedorId || '').trim().toUpperCase();
+      const name = String(c?.cobradorNombre || c?.vendedorNombre || '').trim();
+      if (code && name && !byCode.has(code)) {
+        byCode.set(code, { code, name });
+      }
+    });
+    const list = Array.from(byCode.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    const nameMap = new Map(list.map((item) => [item.code, item.name]));
+    return { sellerCatalogOptions: list, sellerNameByCode: nameMap };
+  }, [sellers, config?.profitSellers, documents, collections]);
 
   // Tasas operativas de referencia (BCV, Euro, Keystone)
   const effectiveTasaBcv = useMemo(
@@ -462,6 +503,8 @@ export function CxcMovementsModal({
   const [autoIncrementReportOnPrint, setAutoIncrementReportOnPrint] = useState(false);
   const [editingMovementCorr, setEditingMovementCorr] = useState(null);
   const [editMovCorrInput, setEditMovCorrInput] = useState('');
+  const [editMovFechaInput, setEditMovFechaInput] = useState('');
+  const [editMovCobradorId, setEditMovCobradorId] = useState('');
   const [isSavingEditMovCorr, setIsSavingEditMovCorr] = useState(false);
 
   // Formulario para insertar nuevo movimiento / abono directamente desde el modal
@@ -613,8 +656,17 @@ export function CxcMovementsModal({
       buildInvoiceMovementsList({ documents, collections, fallbackTasa: effectiveTasaBcv }).map((m) => {
         const tipoTasa = classifyCollectionRateType(m, rateRefMap);
         const isDirect = isDirectCurrencyRateType(tipoTasa);
+        const codeUpper = String(m.vendedorId || '').trim().toUpperCase();
+        const resolvedName =
+          (m.vendedorNombre && m.vendedorNombre.trim().toUpperCase() !== codeUpper ? m.vendedorNombre.trim() : '') ||
+          sellerNameByCode.get(codeUpper) ||
+          m.vendedorNombre ||
+          m.vendedorId ||
+          'Oficina';
         return {
           ...m,
+          vendedorId: codeUpper || 'OF',
+          vendedorNombre: resolvedName,
           tipoTasa,
           tipoTasaLabel: CXC_RATE_BUCKETS[tipoTasa]?.label || 'Tasa BCV',
           isDirectCurrency: isDirect,
@@ -623,7 +675,7 @@ export function CxcMovementsModal({
           montoBs: isDirect ? 0 : m.montoBs
         };
       }),
-    [documents, collections, effectiveTasaBcv, rateRefMap]
+    [documents, collections, effectiveTasaBcv, rateRefMap, sellerNameByCode]
   );
 
   // Días recientes disponibles con movimientos para selector rápido
@@ -662,7 +714,7 @@ export function CxcMovementsModal({
         return false;
       }
       if (q) {
-        const hay = `${m.correlativo} ${m.factNum} ${m.clienteNombre} ${m.clienteRif} ${m.referencia} ${m.cuentaNombre} ${m.formaPago} ${m.observaciones} ${m.tipoTasaLabel}`.toLowerCase();
+        const hay = `${m.correlativo} ${m.factNum} ${m.clienteNombre} ${m.clienteRif} ${m.vendedorNombre} ${m.vendedorId} ${m.referencia} ${m.cuentaNombre} ${m.formaPago} ${m.observaciones} ${m.tipoTasaLabel}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1088,11 +1140,20 @@ export function CxcMovementsModal({
     window.print();
   };
 
-  // Editar manualmente el correlativo de un movimiento puntual ya registrado
+  // Editar manualmente correlativo, fecha y cobrador de un movimiento puntual ya registrado
   const handleOpenEditMovementCorr = (mov) => {
     if (!mov) return;
     const rawDigits = String(mov.correlativo || '').replace(/[^0-9]/g, '');
     setEditMovCorrInput(rawDigits ? rawDigits.padStart(6, '0').slice(-6) : '000001');
+    setEditMovFechaInput(mov.fechaIso || toIsoDateOnly(mov.fechaRaw) || getTodayIso());
+
+    const rawCode = String(mov.vendedorId || '').trim().toUpperCase();
+    const rawName = String(mov.vendedorNombre || '').trim().toLowerCase();
+    const matchedOption =
+      sellerCatalogOptions.find((s) => s.code === rawCode) ||
+      sellerCatalogOptions.find((s) => rawName && s.name.toLowerCase() === rawName) ||
+      sellerCatalogOptions.find((s) => rawName && s.name.toLowerCase().includes(rawName));
+    setEditMovCobradorId(matchedOption?.code || rawCode || 'OF');
     setEditingMovementCorr(mov);
   };
 
@@ -1106,7 +1167,23 @@ export function CxcMovementsModal({
       return;
     }
 
+    const newFechaIso = String(editMovFechaInput || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newFechaIso)) {
+      notify.warning('Seleccione una fecha válida para el movimiento.');
+      return;
+    }
+
+    const selectedSellerOpt =
+      sellerCatalogOptions.find((s) => s.code === String(editMovCobradorId || '').trim().toUpperCase()) || null;
+    const newSellerCode = selectedSellerOpt?.code || String(editMovCobradorId || 'OF').trim().toUpperCase() || 'OF';
+    const newSellerName = selectedSellerOpt?.name || sellerNameByCode.get(newSellerCode) || newSellerCode;
+
     const newCorr = String(Math.min(999999, parsedNum)).padStart(6, '0');
+    const newFechaFull =
+      newFechaIso === editingMovementCorr.fechaIso && editingMovementCorr.fechaRaw
+        ? editingMovementCorr.fechaRaw
+        : `${newFechaIso}T12:00:00.000Z`;
+
     const oldCorrDigits = String(editingMovementCorr.correlativo || '').replace(/[^0-9]/g, '');
     const oldCorrNormalized = oldCorrDigits ? oldCorrDigits.padStart(6, '0') : '';
     const targetCanon = canonicalDocKey(editingMovementCorr.factNum, editingMovementCorr.tipoDoc);
@@ -1146,7 +1223,12 @@ export function CxcMovementsModal({
           return {
             ...h,
             correlativo: newCorr,
-            cobNum: newCorr
+            cobNum: newCorr,
+            fecha: newFechaFull,
+            vendedorId: newSellerCode,
+            vendedorNombre: newSellerName,
+            cobradorId: newSellerCode,
+            cobradorNombre: newSellerName
           };
         });
 
@@ -1217,6 +1299,13 @@ export function CxcMovementsModal({
             correlativo: newCorr,
             cobNum: newCorr,
             cob_num: newCorr,
+            fecha: newFechaFull,
+            fec_cob: newFechaFull,
+            vendedorId: newSellerCode,
+            vendedor_id: newSellerCode,
+            vendedorNombre: newSellerName,
+            cobradorId: newSellerCode,
+            cobradorNombre: newSellerName,
             _localEditedAt: editedAtIso
           };
           if (onUpdateCollection) {
@@ -1229,12 +1318,15 @@ export function CxcMovementsModal({
 
       await Promise.all([...updatedDocPromises, ...updatedColPromises]);
 
+      if (selectedDay && selectedDay !== 'ALL' && newFechaIso !== selectedDay) {
+        setSelectedDay(newFechaIso);
+      }
       setCorrelativoRefreshKey(k => k + 1);
-      notify.success(`Correlativo del movimiento actualizado a #${newCorr}.`);
+      notify.success(`Movimiento #${newCorr} actualizado (${formatDateShort(newFechaIso)} • Cobrador: ${newSellerName}).`);
       setEditingMovementCorr(null);
     } catch (err) {
-      console.error('Error editando correlativo de movimiento CxC:', err);
-      notify.error('No se pudo actualizar el correlativo: ' + (err.message || 'Error desconocido'));
+      console.error('Error editando movimiento CxC:', err);
+      notify.error('No se pudo actualizar el movimiento: ' + (err.message || 'Error desconocido'));
     } finally {
       setIsSavingEditMovCorr(false);
     }
@@ -2381,6 +2473,9 @@ export function CxcMovementsModal({
                                     <div style={{ fontSize: '0.7rem', color: '#94a3b8', fontFamily: 'var(--font-code)' }}>
                                       {mov.clienteRif || '—'}
                                     </div>
+                                    <div style={{ fontSize: '0.68rem', color: '#38bdf8', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      Cobrador: {mov.vendedorNombre || mov.vendedorId || 'Oficina'}
+                                    </div>
                                   </td>
                                   <td style={{ padding: '0.6rem 0.75rem', whiteSpace: 'nowrap' }}>
                                     <span style={{
@@ -2427,6 +2522,31 @@ export function CxcMovementsModal({
                                       <button
                                         type="button"
                                         onClick={() => {
+                                          const isCreditNoteMov =
+                                            String(mov.formaPago || '').toUpperCase() === 'NOTA_CREDITO' ||
+                                            String(mov.accountType || '').toUpperCase() === 'NOTA_CREDITO' ||
+                                            /^NC-/i.test(String(mov.correlativo || ''));
+                                          if (isCreditNoteMov) {
+                                            generateCreditDebitNotePDF({
+                                              docData: {
+                                                tipoDoc: 'NOTA_CREDITO',
+                                                numeroDoc: mov.correlativo,
+                                                documentoAfectado: mov.factNum,
+                                                fecha: mov.fechaRaw || mov.fechaIso,
+                                                clienteNombre: mov.clienteNombre,
+                                                clienteRif: mov.clienteRif,
+                                                tasaDolar: mov.tasa,
+                                                subtotalUsd: mov.montoUsd,
+                                                ivaUsd: 0,
+                                                totalUsd: mov.montoUsd,
+                                                motivo: mov.observaciones || `Nota de Crédito #${mov.correlativo} sobre #${mov.factNum}`,
+                                                observaciones: mov.observaciones
+                                              },
+                                              config,
+                                              currentUser
+                                            });
+                                            return;
+                                          }
                                           const saldoAnt = round2(Number(mov.restanteDocUsd || 0) + Number(mov.montoUsd || 0));
                                           const saldoRest = round2(Math.max(0, Number(mov.restanteDocUsd || 0)));
                                           generateCollectionReceiptPDF({
@@ -2489,7 +2609,7 @@ export function CxcMovementsModal({
                                           border: '1px solid rgba(245, 158, 11, 0.4)',
                                           cursor: 'pointer'
                                         }}
-                                        title={`Editar manualmente el N° Correlativo de este movimiento (#${mov.correlativo})`}
+                                        title={`Editar correlativo, fecha y cobrador de este movimiento (#${mov.correlativo})`}
                                       >
                                         <Edit2 size={13} />
                                       </button>
@@ -3039,7 +3159,7 @@ export function CxcMovementsModal({
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Edit2 size={17} color="#fbbf24" />
                 <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 800, color: '#ffffff' }}>
-                  Editar Correlativo de Movimiento
+                  Editar Movimiento de Cobro
                 </h3>
               </div>
               <button
@@ -3078,9 +3198,12 @@ export function CxcMovementsModal({
                     Actual: #{editingMovementCorr.correlativo}
                   </span>
                 </div>
+                <div style={{ fontSize: '0.73rem', color: '#38bdf8', fontWeight: 600 }}>
+                  Cobrador actual: {editingMovementCorr.vendedorNombre || editingMovementCorr.vendedorId || 'Oficina'}
+                </div>
                 {Number(editingMovementCorr.affectedDocsCount || 0) > 1 && (
                   <div style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px' }}>
-                    Nota: Este cobro aplica a {editingMovementCorr.affectedDocsCount} documentos y actualizará su N° de recibo compartido.
+                    Nota: Este cobro aplica a {editingMovementCorr.affectedDocsCount} documentos y actualizará su N° de recibo compartido, fecha y cobrador.
                   </div>
                 )}
               </div>
@@ -3115,6 +3238,58 @@ export function CxcMovementsModal({
                     textAlign: 'center'
                   }}
                 />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                    Fecha *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={editMovFechaInput}
+                    onChange={(e) => setEditMovFechaInput(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.58rem 0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-glass)',
+                      background: 'rgba(0,0,0,0.35)',
+                      color: '#ffffff',
+                      fontSize: '0.84rem',
+                      fontFamily: 'var(--font-code)'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                    Cobrador *
+                  </label>
+                  <select
+                    required
+                    value={editMovCobradorId}
+                    onChange={(e) => setEditMovCobradorId(e.target.value)}
+                    className="select-modern"
+                    style={{
+                      width: '100%',
+                      padding: '0.58rem 0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(56, 189, 248, 0.45)',
+                      background: 'rgba(15, 23, 42, 0.9)',
+                      color: '#ffffff',
+                      fontSize: '0.84rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    {sellerCatalogOptions.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.name} ({s.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {(() => {
@@ -3166,7 +3341,7 @@ export function CxcMovementsModal({
                   }}
                 >
                   <Check size={16} />
-                  <span>{isSavingEditMovCorr ? 'Guardando...' : 'Guardar Correlativo'}</span>
+                  <span>{isSavingEditMovCorr ? 'Guardando...' : 'Guardar Cambios'}</span>
                 </button>
               </div>
             </div>

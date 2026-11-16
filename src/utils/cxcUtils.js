@@ -994,3 +994,293 @@ export function summarizeDailyMovementsByCaja(movements = []) {
     }
   };
 }
+
+/**
+ * Obtiene el siguiente correlativo NC-XXXXXX o ND-XXXXXX sin colisiones entre ventas y facturas CxC.
+ */
+export function getNextCreditDebitNoteCorrelativo(noteType = 'NOTA_CREDITO', sales = [], profitInvoices = []) {
+  const isDebit = String(noteType || '').toUpperCase().includes('DEB') || String(noteType || '').toUpperCase() === 'ND' || String(noteType || '').toUpperCase() === 'N/DB';
+  const prefix = isDebit ? 'ND' : 'NC';
+  let maxNum = 0;
+
+  const inspectCode = (rawVal) => {
+    const clean = String(rawVal || '').toUpperCase().trim().replace(/^NE-/, '');
+    const m = clean.match(new RegExp(`^${prefix}-?0*(\\d+)$`));
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (!Number.isNaN(n) && n > maxNum) maxNum = n;
+    }
+  };
+
+  (Array.isArray(sales) ? sales : []).forEach((s) => {
+    if (!s) return;
+    inspectCode(s.numeroDoc || s.numero_doc);
+    inspectCode(s.id);
+  });
+
+  (Array.isArray(profitInvoices) ? profitInvoices : []).forEach((inv) => {
+    if (!inv) return;
+    inspectCode(inv.factNum || inv.fact_num || inv.numeroDoc);
+    inspectCode(inv.id);
+    if (Array.isArray(inv.historialCobros)) {
+      inv.historialCobros.forEach((h) => {
+        if (!h) return;
+        inspectCode(h.correlativo || h.cobNum || h.referencia);
+      });
+    }
+  });
+
+  return `${prefix}-${String(maxNum + 1).padStart(6, '0')}`;
+}
+
+/**
+ * Construye los objetos de persistencia, ajuste de saldo CxC, registro fiscal SENIAT y datos PDF
+ * para emitir una Nota de Crédito (N/CR) o Nota de Débito (N/DB) directamente sobre un documento CxC.
+ */
+export function buildCxcCreditDebitNoteResult({
+  noteType = 'NOTA_CREDITO',
+  affectedDoc,
+  noteNum,
+  fechaEmision,
+  subtotalUsd = 0,
+  aplicaIva = true,
+  tasa = 827.73,
+  motivo = '',
+  clienteDireccion = ''
+}) {
+  if (!affectedDoc || !affectedDoc.factNum) {
+    throw new Error('Debe seleccionar un documento CxC afectado válido.');
+  }
+  const normalizedNoteType = String(noteType || '').toUpperCase().includes('DEB') ? 'NOTA_DEBITO' : 'NOTA_CREDITO';
+  const isDebit = normalizedNoteType === 'NOTA_DEBITO';
+  const prefix = isDebit ? 'ND' : 'NC';
+
+  const rawNumInput = String(noteNum || '').trim().toUpperCase();
+  const cleanNoteNum = rawNumInput
+    ? (/^(NC|ND)-/i.test(rawNumInput) ? rawNumInput : `${prefix}-${rawNumInput.replace(/[^0-9A-Z]/gi, '').padStart(6, '0')}`)
+    : `${prefix}-000001`;
+
+  const affectedType = inferCxcDocType(affectedDoc);
+  const isNotaEntregaAffected = affectedType === 'NOTA_ENTREGA';
+  const effectiveAplicaIva = !isNotaEntregaAffected && Boolean(aplicaIva);
+
+  const cleanSub = round2(Math.max(0, Number(subtotalUsd || 0)));
+  const cleanIva = effectiveAplicaIva ? round2(cleanSub * 0.16) : 0;
+  const cleanTotal = round2(cleanSub + cleanIva);
+  if (!(cleanTotal > 0)) {
+    throw new Error('El monto total de la nota debe ser mayor a $0.00.');
+  }
+
+  const cleanTasa = Number(tasa || affectedDoc.tasa || 0) > 1 ? Number(tasa || affectedDoc.tasa) : 827.73;
+  const totalBs = round2(cleanTotal * cleanTasa);
+  const cleanFecha = String(fechaEmision || new Date().toISOString().split('T')[0]).trim();
+  const cleanMotivo = String(motivo || '').trim() || (
+    isDebit
+      ? `Cargo / Ajuste adicional sobre documento #${affectedDoc.factNum}`
+      : `Rebaja / Descuento comercial aplicado a documento #${affectedDoc.factNum}`
+  );
+
+  const currentFacturaUsd = round2(Number(affectedDoc.montoFacturaUsd ?? affectedDoc.totNetoUsd ?? 0));
+  const currentAbonosUsd = round2(Number(affectedDoc.abonosUsd ?? 0));
+  const currentRestanteUsd = round2(Math.max(0, Number(affectedDoc.restanteUsd ?? affectedDoc.saldoUsd ?? (currentFacturaUsd - currentAbonosUsd))));
+
+  if (!isDebit && cleanTotal > round2(currentRestanteUsd + 0.01)) {
+    throw new Error(`La Nota de Crédito ($${cleanTotal.toFixed(2)}) no puede superar el saldo pendiente del documento ($${currentRestanteUsd.toFixed(2)}).`);
+  }
+
+  const digitsPart = cleanNoteNum.replace(/\D/g, '').slice(-6).padStart(6, '0');
+  const numeroControl = isNotaEntregaAffected ? '' : `00-${digitsPart}`;
+  const vendedorId = affectedDoc.vendedorId || 'OF';
+  const vendedorNombre = affectedDoc.vendedorNombre || 'Oficina';
+  const clienteNombre = affectedDoc.cliente || affectedDoc.clienteNombre || 'Cliente General';
+  const clienteRif = affectedDoc.rif || affectedDoc.clienteRif || 'J-00000000-0';
+  const clienteId = affectedDoc.clienteId || clienteRif || 'CLI-GEN';
+
+  let updatedAffectedDoc = null;
+  let createdDebitDoc = null;
+  let clientDebtDeltaUsd = 0;
+
+  if (!isDebit) {
+    // Nota de Crédito: reduce el saldo por cobrar del documento afectado mediante registro en historialCobros
+    const ncEntry = {
+      id: `nc-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
+      correlativo: cleanNoteNum,
+      cobNum: cleanNoteNum,
+      tipo: 'NOTA_CREDITO',
+      tipoDoc: 'NOTA_CREDITO',
+      factNum: String(affectedDoc.factNum),
+      documentoAfectado: String(affectedDoc.factNum),
+      fecha: cleanFecha,
+      tasa: cleanTasa,
+      tasaPago: cleanTasa,
+      tipoTasa: 'BCV',
+      monedaPago: 'BS',
+      subtotalUsd: cleanSub,
+      ivaUsd: cleanIva,
+      montoUsd: cleanTotal,
+      montoBs: totalBs,
+      formaPago: 'NOTA_CREDITO',
+      cuentaId: 'NC-FISCAL',
+      cuentaNombre: `N/CR #${cleanNoteNum}`,
+      accountType: 'NOTA_CREDITO',
+      referencia: cleanNoteNum,
+      observaciones: `Nota de Crédito #${cleanNoteNum} • ${cleanMotivo}`
+    };
+
+    const appliedAmount = round2(Math.min(currentRestanteUsd, cleanTotal));
+    const newAbonosUsd = round2(Math.min(currentFacturaUsd, currentAbonosUsd + appliedAmount));
+    const newRestanteUsd = round2(Math.max(0, currentFacturaUsd - newAbonosUsd));
+
+    updatedAffectedDoc = {
+      ...affectedDoc,
+      factNum: String(affectedDoc.factNum),
+      tipoDoc: affectedType,
+      fechaEmision: affectedDoc.fechaEmisionIso || affectedDoc.fechaEmision || cleanFecha,
+      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
+      clienteId,
+      clienteNombre,
+      clienteRif,
+      vendedorId,
+      vendedorNombre,
+      diasCredito: Number(affectedDoc.diasCredito || 0),
+      diasVencidoCustom: affectedDoc.diasVencidoCustom ?? null,
+      totBrutoUsd: round2(affectedDoc.subtotalUsd ?? affectedDoc.totBrutoUsd ?? currentFacturaUsd),
+      ivaUsd: isNotaEntregaAffected ? 0 : round2(affectedDoc.ivaUsd ?? 0),
+      totNetoUsd: currentFacturaUsd,
+      abonosUsd: newAbonosUsd,
+      saldoUsd: newRestanteUsd,
+      tasa: Number(affectedDoc.tasa || cleanTasa),
+      historialCobros: [ncEntry, ...(Array.isArray(affectedDoc.historialCobros) ? affectedDoc.historialCobros : [])]
+    };
+    clientDebtDeltaUsd = -appliedAmount;
+  } else {
+    // Nota de Débito: genera un nuevo documento por cobrar vinculado al documento afectado
+    const ndDocNum = isNotaEntregaAffected && !cleanNoteNum.startsWith('NE-')
+      ? `NE-${cleanNoteNum}`
+      : cleanNoteNum;
+    createdDebitDoc = {
+      id: ndDocNum,
+      factNum: ndDocNum,
+      tipoDoc: isNotaEntregaAffected ? 'NOTA_ENTREGA' : 'FACTURA',
+      fiscalDocType: 'NOTA_DEBITO',
+      documentoAfectado: String(affectedDoc.factNum),
+      numeroControl,
+      vendedorId,
+      vendedorNombre,
+      clienteId,
+      clienteNombre,
+      clienteRif,
+      clienteDireccion,
+      fechaEmision: cleanFecha,
+      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
+      diasCredito: Number(affectedDoc.diasCredito || 0),
+      condicionPago: 'CREDITO',
+      isExento: !effectiveAplicaIva,
+      totBrutoUsd: cleanSub,
+      ivaUsd: cleanIva,
+      totNetoUsd: cleanTotal,
+      abonosUsd: 0,
+      saldoUsd: cleanTotal,
+      tasa: cleanTasa,
+      observaciones: `Nota de Débito #${cleanNoteNum} (Afecta #${affectedDoc.factNum}) • ${cleanMotivo}`,
+      historialCobros: [],
+      _customCreated: true
+    };
+    clientDebtDeltaUsd = cleanTotal;
+  }
+
+  // Registro fiscal en Libro de Ventas SENIAT solo si el documento afectado es Fiscal (Factura)
+  const fiscalSaleRecord = !isNotaEntregaAffected
+    ? {
+        id: `${normalizedNoteType}-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
+        numeroDoc: cleanNoteNum,
+        numeroControl,
+        tipoDoc: normalizedNoteType,
+        documentoAfectado: String(affectedDoc.factNum),
+        fecha: cleanFecha,
+        fechaEmision: cleanFecha,
+        fechaVencimiento: affectedDoc.fechaVencimientoIso || cleanFecha,
+        diasCredito: Number(affectedDoc.diasCredito || 0),
+        condicionPago: 'CREDITO',
+        metodoPago: isDebit ? 'CREDITO' : 'NOTA_CREDITO',
+        clienteId,
+        clienteNombre,
+        clienteRif,
+        clienteDireccion,
+        vendedor: vendedorNombre,
+        vendedorId,
+        tasaDolar: cleanTasa,
+        subtotalUsd: cleanSub,
+        baseGeneralUsd: effectiveAplicaIva ? cleanSub : 0,
+        ivaGeneralUsd: cleanIva,
+        baseExentaUsd: effectiveAplicaIva ? 0 : cleanSub,
+        ivaUsd: cleanIva,
+        impuestoUsd: cleanIva,
+        totalUsd: cleanTotal,
+        subtotalBs: round2(cleanSub * cleanTasa),
+        ivaBs: round2(cleanIva * cleanTasa),
+        totalBs,
+        saldoUsd: isDebit ? cleanTotal : 0,
+        saldoBs: isDebit ? totalBs : 0,
+        estado: isDebit ? 'PENDIENTE' : 'PAGADO',
+        motivo: cleanMotivo,
+        observaciones: cleanMotivo,
+        items: [
+          {
+            codigo: String(affectedDoc.factNum),
+            descripcion: cleanMotivo,
+            cantidad: 1,
+            precioUnitarioUsd: cleanSub,
+            precioUsd: cleanSub,
+            tipoAlicuota: effectiveAplicaIva ? '16%' : 'EXENTO',
+            alicuotaIva: effectiveAplicaIva ? 0.16 : 0,
+            exento: !effectiveAplicaIva,
+            subtotalUsd: cleanSub
+          }
+        ],
+        skipStockAdjustment: true
+      }
+    : null;
+
+  const notePdfData = {
+    tipoDoc: normalizedNoteType,
+    numeroDoc: cleanNoteNum,
+    numeroControl: numeroControl || 'N/A (Control Interno)',
+    documentoAfectado: String(affectedDoc.factNum),
+    fechaEmision: cleanFecha,
+    fecha: cleanFecha,
+    clienteNombre,
+    clienteRif,
+    clienteDireccion: clienteDireccion || 'Venezuela',
+    tasaDolar: cleanTasa,
+    tasa: cleanTasa,
+    subtotalUsd: cleanSub,
+    ivaUsd: cleanIva,
+    totalUsd: cleanTotal,
+    motivo: cleanMotivo,
+    descrip: cleanMotivo,
+    observaciones: cleanMotivo,
+    condicionPago: isNotaEntregaAffected ? 'AJUSTE N/E (SIN IVA)' : 'AJUSTE FISCAL CxC',
+    items: [
+      {
+        codigo: String(affectedDoc.factNum),
+        descripcion: cleanMotivo,
+        cantidad: 1,
+        precioUsd: cleanSub,
+        tipoAlicuota: effectiveAplicaIva ? '16%' : 'EXENTO',
+        subtotalUsd: cleanSub
+      }
+    ]
+  };
+
+  return {
+    noteType: normalizedNoteType,
+    noteNum: cleanNoteNum,
+    isNotaEntregaAffected,
+    updatedAffectedDoc,
+    createdDebitDoc,
+    fiscalSaleRecord,
+    clientDebtDeltaUsd,
+    notePdfData
+  };
+}

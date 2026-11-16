@@ -83,6 +83,7 @@ import {
   saveSupplier as saveStorageSupplier,
   getSales as getStorageSales,
   saveSale as saveStorageSale,
+  saveFiscalAdjustmentSale as saveStorageFiscalAdjustmentSale,
   getPurchases as getStoragePurchases,
   savePurchase as saveStoragePurchase,
   updateStoragePurchase,
@@ -5203,6 +5204,24 @@ export const pushSaleToSupabase = async (saleData) => {
   if (error) throw error;
   isSupabaseAvailable = true;
   return mapSaleFromDb(data);
+};
+
+export const recordFiscalAdjustmentSaleInSupabase = async (saleObj) => {
+  if (!saleObj) return null;
+  const localSaved = saveStorageFiscalAdjustmentSale(saleObj);
+  const recordToPersist = localSaved || saleObj;
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('sale', 'INSERT', recordToPersist);
+    return recordToPersist;
+  }
+  try {
+    const mapped = await pushSaleToSupabase(recordToPersist);
+    return mapped || recordToPersist;
+  } catch (err) {
+    markSupabaseOffline(err, 'recordFiscalAdjustmentSaleInSupabase');
+    enqueueSyncAction('sale', 'INSERT', recordToPersist);
+    return recordToPersist;
+  }
 };
 
 export const pushPurchaseToSupabase = async (purchaseData) => {

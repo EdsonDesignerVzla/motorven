@@ -96,6 +96,7 @@ import {
   getSupabaseSuppliers,
   getSupabaseSales,
   processSupabaseSale,
+  recordFiscalAdjustmentSaleInSupabase,
   getSupabaseCashMovements,
   addSupabaseCashMovement,
   deleteSupabaseCashMovement,
@@ -205,7 +206,8 @@ import { doesPayableMatchDocument, doProvidersMatch } from './utils/cxpUtils';
 import {
   inferCxcDocType,
   normalizeCollectionWriteAmounts,
-  reconcileClientsWithRealCxc
+  reconcileClientsWithRealCxc,
+  buildCxcCreditDebitNoteResult
 } from './utils/cxcUtils';
 import { subscribeToRealtimeSync, broadcastReconcileChange, getRealtimeClientId } from './services/realtimeSyncBridge';
 import {
@@ -3466,6 +3468,69 @@ function MainApp() {
     return savedDoc || savedCob;
   };
 
+  // Emitir Nota de Crédito (rebaja deuda) o Nota de Débito (aumenta deuda) desde CxC
+  const handleIssueCxcCreditDebitNote = async (params) => {
+    const result = buildCxcCreditDebitNoteResult(params);
+    const {
+      updatedAffectedDoc,
+      createdDebitDoc,
+      fiscalSaleRecord,
+      clientDebtDeltaUsd,
+      notePdfData
+    } = result;
+
+    if (updatedAffectedDoc) {
+      await handleSaveCxcDocument(updatedAffectedDoc);
+    }
+
+    if (createdDebitDoc) {
+      await handleSaveCxcDocument(createdDebitDoc);
+    }
+
+    if (fiscalSaleRecord) {
+      try {
+        const persistedSale = await recordFiscalAdjustmentSaleInSupabase(fiscalSaleRecord);
+        const saleItem = persistedSale || fiscalSaleRecord;
+        setSalesState(prev => [
+          saleItem,
+          ...(Array.isArray(prev) ? prev.filter(s => String(s?.id) !== String(saleItem.id)) : [])
+        ]);
+      } catch (saleErr) {
+        console.warn('[handleIssueCxcCreditDebitNote] Aviso registrando nota en Libro de Ventas:', saleErr?.message || saleErr);
+      }
+    }
+
+    const refDoc = params?.affectedDoc || updatedAffectedDoc || createdDebitDoc;
+    const clienteId = refDoc?.clienteId || '';
+    const clienteRif = refDoc?.rif || refDoc?.clienteRif || '';
+    if (Math.abs(clientDebtDeltaUsd) > 0 && (clienteId || clienteRif)) {
+      setClientsState(prev => {
+        const list = Array.isArray(prev) ? [...prev] : [];
+        return list.map(c => {
+          const matches = (clienteId && (String(c.id) === String(clienteId) || String(c.codigo) === String(clienteId))) ||
+                          (clienteRif && String(c.rif) === String(clienteRif));
+          if (matches) {
+            const currentDebt = Number(c.saldoDeudorUsd || 0);
+            const nuevoSaldoDeudor = Number(Math.max(0, currentDebt + clientDebtDeltaUsd).toFixed(2));
+            const updatedClient = {
+              ...c,
+              saldoDeudorUsd: nuevoSaldoDeudor,
+              saldo_deudor_usd: nuevoSaldoDeudor
+            };
+            saveSupabaseClient(updatedClient).catch(() => {});
+            return updatedClient;
+          }
+          return c;
+        });
+      });
+    }
+
+    return {
+      ...result,
+      notePdfData
+    };
+  };
+
   // Actualizar metadatos (ej. correlativo manual) de un cobro / movimiento CxC sin alterar saldos de caja ni deuda
   const handleUpdateCxcCollection = async (collectionData) => {
     if (!collectionData || !collectionData.id) return null;
@@ -4166,6 +4231,7 @@ function MainApp() {
               onSaveDocument={handleSaveCxcDocument}
               onRegisterCollection={handleRegisterCxcCollection}
               onUpdateCollection={handleUpdateCxcCollection}
+              onIssueCreditDebitNote={handleIssueCxcCreditDebitNote}
               onSaveClient={handleSaveClient}
               onDeleteClient={handleDeleteClient}
               onApproveClient={handleApproveClient}

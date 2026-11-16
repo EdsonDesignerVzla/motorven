@@ -10,8 +10,11 @@ import {
   doesCollectionMatchInvoice,
   classifyCollectionRateType,
   groupMovementsByRateType,
-  summarizeDailyMovementsByCaja
+  summarizeDailyMovementsByCaja,
+  getNextCreditDebitNoteCorrelativo,
+  buildCxcCreditDebitNoteResult
 } from '../utils/cxcUtils.js';
+import { generateCreditDebitNotePDF } from '../services/pdfReportService.js';
 import {
   getScopedCxcDeleteKeys,
   markCxcDocDeleted,
@@ -489,6 +492,107 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   const con1 = consolidated.find(r => r.id === 'CLI-1');
   assert.equal(con1.saldoUsd, 336, 'consolidateClientReceivables no debe sumar saldoDeudorUsd local cuando ya viene sincronizado');
   console.log('  ✓ 8. Reconciliación real de Clientes vs CxC (RIF sin guiones, anti COBRADA saldoBs y cero doble-conteo) verificada.');
+}
+
+// 9. Emisión de Notas de Crédito y Notas de Débito desde CxC (Factura Fiscal y Nota de Entrega Sin IVA)
+{
+  const nextNc = getNextCreditDebitNoteCorrelativo(
+    'NOTA_CREDITO',
+    [{ numeroDoc: 'NC-000004', tipoDoc: 'NOTA_CREDITO' }],
+    [{ factNum: '002032', historialCobros: [{ correlativo: 'NC-000007', tipo: 'NOTA_CREDITO' }] }]
+  );
+  assert.equal(nextNc, 'NC-000008');
+
+  const nextNd = getNextCreditDebitNoteCorrelativo('NOTA_DEBITO', [], [{ factNum: 'ND-000002' }]);
+  assert.equal(nextNd, 'ND-000003');
+
+  const fiscalInvoice = {
+    id: '002050',
+    factNum: '002050',
+    tipoDoc: 'FACTURA',
+    clienteId: 'CLI-1',
+    cliente: 'Inversiones Prueba, C.A.',
+    rif: 'J-12345678-9',
+    vendedorId: 'VV',
+    vendedorNombre: 'Victor Veloz',
+    fechaEmisionIso: '2026-11-10',
+    fechaVencimientoIso: '2026-11-25',
+    diasCredito: 15,
+    subtotalUsd: 200,
+    ivaUsd: 32,
+    montoFacturaUsd: 232,
+    abonosUsd: 0,
+    restanteUsd: 232,
+    tasa: 910,
+    historialCobros: []
+  };
+
+  // Debe rechazar NC que exceda el saldo pendiente
+  assert.throws(
+    () => buildCxcCreditDebitNoteResult({
+      noteType: 'NOTA_CREDITO',
+      affectedDoc: fiscalInvoice,
+      noteNum: 'NC-000008',
+      fechaEmision: '2026-11-16',
+      subtotalUsd: 250,
+      aplicaIva: true,
+      tasa: 914
+    }),
+    /no puede superar/i
+  );
+
+  // NC de $100 base + 16% IVA ($116 total) rebaja el saldo restante a $116 y genera registro SENIAT
+  const ncRes = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_CREDITO',
+    affectedDoc: fiscalInvoice,
+    noteNum: 'NC-000008',
+    fechaEmision: '2026-11-16',
+    subtotalUsd: 100,
+    aplicaIva: true,
+    tasa: 914,
+    motivo: 'Descuento comercial post-venta'
+  });
+  assert.equal(ncRes.updatedAffectedDoc.abonosUsd, 116);
+  assert.equal(ncRes.updatedAffectedDoc.saldoUsd, 116);
+  assert.equal(ncRes.updatedAffectedDoc.historialCobros[0].formaPago, 'NOTA_CREDITO');
+  assert.equal(ncRes.clientDebtDeltaUsd, -116);
+  assert.equal(ncRes.fiscalSaleRecord?.tipoDoc, 'NOTA_CREDITO');
+  assert.equal(ncRes.fiscalSaleRecord?.documentoAfectado, '002050');
+  const pdfNc = generateCreditDebitNotePDF({ docData: ncRes.notePdfData, config: { tasaDolar: 914 } });
+  assert.ok(pdfNc.getNumberOfPages() >= 1);
+
+  // Nota de Débito sobre Nota de Entrega debe permanecer 100% Sin IVA y sin Libro de Ventas fiscal
+  const neDoc = {
+    id: 'NE-000900',
+    factNum: 'NE-000900',
+    tipoDoc: 'NOTA_ENTREGA',
+    clienteId: 'CLI-2',
+    cliente: 'Lubricantes Lara',
+    rif: 'J-99999999-0',
+    montoFacturaUsd: 500,
+    abonosUsd: 0,
+    restanteUsd: 500,
+    tasa: 914
+  };
+  const ndNeRes = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: neDoc,
+    noteNum: 'ND-000003',
+    fechaEmision: '2026-11-16',
+    subtotalUsd: 40,
+    aplicaIva: true,
+    tasa: 914,
+    motivo: 'Flete adicional'
+  });
+  assert.equal(ndNeRes.createdDebitDoc?.tipoDoc, 'NOTA_ENTREGA');
+  assert.equal(ndNeRes.createdDebitDoc?.ivaUsd, 0);
+  assert.equal(ndNeRes.createdDebitDoc?.saldoUsd, 40);
+  assert.equal(ndNeRes.clientDebtDeltaUsd, 40);
+  assert.equal(ndNeRes.fiscalSaleRecord, null);
+  const pdfNd = generateCreditDebitNotePDF({ docData: ndNeRes.notePdfData, config: { tasaDolar: 914 } });
+  assert.ok(pdfNd.getNumberOfPages() >= 1);
+
+  console.log('  ✓ 9. Emisión de Notas de Crédito/Débito en CxC (rebaja/cargo, N/E Sin IVA, SENIAT y PDF) verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');
