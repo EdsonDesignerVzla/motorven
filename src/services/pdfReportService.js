@@ -10,7 +10,7 @@
  */
 
 import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import rawAutoTable from 'jspdf-autotable';
 import qrcode from 'qrcode-generator';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, round2 } from './formatService.js';
@@ -68,6 +68,108 @@ export const PAGE_LETTER = {
   innerPadding: 3,             // Holgura interior dentro del contenedor padre
   tableWidth: 179.9            // 185.9 - (3 * 2) mm
 };
+
+/**
+ * Escalador central para todas las tablas autoTable: mejora la legibilidad global
+ * según la densidad de columnas sin provocar desbordes horizontales ni cortes de palabra.
+ */
+function autoTable(doc, options = {}) {
+  const headRow = Array.isArray(options.head) && Array.isArray(options.head[0]) ? options.head[0] : [];
+  const bodyRow = Array.isArray(options.body) && Array.isArray(options.body[0]) ? options.body[0] : [];
+  const colCount = Math.max(1, headRow.length || bodyRow.length || 6);
+  const pageW = doc?.internal?.pageSize?.getWidth?.() || PAGE_LETTER.width;
+  const tableW = Number(options.tableWidth) || Math.max(120, pageW - (PAGE_LETTER.margin + PAGE_LETTER.innerPadding) * 2);
+  const avgColMm = tableW / colCount;
+
+  let targetHead = 8.0;
+  let targetBody = 7.8;
+  let targetFoot = 8.0;
+  let targetPad = 1.8;
+
+  if (avgColMm < 15) {
+    targetHead = 5.8;
+    targetBody = 6.0;
+    targetFoot = 6.0;
+    targetPad = 1.15;
+  } else if (avgColMm < 18) {
+    targetHead = 6.6;
+    targetBody = 6.8;
+    targetFoot = 6.8;
+    targetPad = 1.35;
+  } else if (avgColMm < 24) {
+    targetHead = 7.2;
+    targetBody = 7.3;
+    targetFoot = 7.4;
+    targetPad = 1.55;
+  }
+
+  const origHeadSize = Number(options.headStyles?.fontSize || 0);
+  const origBodySize = Number(options.styles?.fontSize || 0);
+  const origFootSize = Number(options.footStyles?.fontSize || 0);
+
+  let finalHeadSize = Math.max(origHeadSize, targetHead);
+  const finalBodySize = Math.max(origBodySize, targetBody);
+  const finalFootSize = Math.max(origFootSize, targetFoot);
+
+  const origHeadPad = options.headStyles?.cellPadding;
+  const origBodyPad = options.styles?.cellPadding;
+  const origFootPad = options.footStyles?.cellPadding;
+
+  const resolvePad = (origPad, minPad) => {
+    if (origPad && typeof origPad === 'object') return origPad;
+    const num = Number(origPad);
+    return Number.isFinite(num) && num > 0 ? Math.max(num, minPad) : minPad;
+  };
+
+  const finalHeadPad = resolvePad(origHeadPad, targetPad);
+  const finalBodyPad = resolvePad(origBodyPad, Math.max(1.1, targetPad - 0.15));
+  const finalFootPad = resolvePad(origFootPad, targetPad);
+
+  const hPadMm = typeof finalHeadPad === 'number'
+    ? finalHeadPad * 2
+    : Number(finalHeadPad.left || 1.1) + Number(finalHeadPad.right || 1.1);
+
+  if (headRow.length > 0 && options.columnStyles && typeof doc.getTextWidth === 'function') {
+    doc.setFont('helvetica', 'bold');
+    for (let i = 0; i < headRow.length; i++) {
+      const colStyle = options.columnStyles[i];
+      const cellW = Number(colStyle?.cellWidth || 0);
+      if (!(cellW > 0)) continue;
+      const cellRaw = headRow[i];
+      const label = typeof cellRaw === 'object' ? String(cellRaw?.content || '') : String(cellRaw || '');
+      const tokens = label.trim().split(/\s+/).filter(Boolean);
+      const longestToken = tokens.reduce((a, b) => (b.length > a.length ? b : a), '');
+      if (!longestToken) continue;
+      while (finalHeadSize > 5.3) {
+        doc.setFontSize(finalHeadSize);
+        if (doc.getTextWidth(longestToken) <= cellW - hPadMm + 0.3) break;
+        finalHeadSize = Number((finalHeadSize - 0.2).toFixed(1));
+      }
+    }
+  }
+
+  return rawAutoTable(doc, {
+    ...options,
+    styles: {
+      overflow: 'linebreak',
+      ...(options.styles || {}),
+      fontSize: finalBodySize,
+      cellPadding: finalBodyPad
+    },
+    headStyles: {
+      ...(options.headStyles || {}),
+      fontSize: finalHeadSize,
+      cellPadding: finalHeadPad
+    },
+    ...(options.foot || options.footStyles ? {
+      footStyles: {
+        ...(options.footStyles || {}),
+        fontSize: finalFootSize,
+        cellPadding: finalFootPad
+      }
+    } : {})
+  });
+}
 
 /**
  * Genera un correlativo institucional único
@@ -201,7 +303,7 @@ export function createBaseReport({
   }
 
   // 3. Configuración de Caja de Metadatos (extremo superior derecho)
-  const metaBoxW = 56;
+  const metaBoxW = 62;
   const metaBoxX = margin + contentWidth - metaBoxW - innerPadding;
 
   // 4. Bloque de Identidad Empresarial (al lado del logo con zona segura calculada)
@@ -209,27 +311,27 @@ export function createBaseReport({
   const maxCompanyW = metaBoxX - infoX - 3; // Zona segura hasta la caja de metadatos
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.8);
+  doc.setFontSize(11.4);
   doc.setTextColor(...COLORS.navy);
   const companyLines = doc.splitTextToSize(config?.nombreEmpresa || 'SIGNUM MOTORVEN, C.A.', maxCompanyW);
-  doc.text(companyLines[0], infoX, margin + 8);
+  doc.text(companyLines[0], infoX, margin + 8.0);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.8);
+  doc.setFontSize(7.8);
   doc.setTextColor(...COLORS.slate);
-  const rifLines = doc.splitTextToSize(`RIF: ${config?.rif || 'J-30401927-4'} • Distribuidores Autorizados Lubricantes OILSTONE ®`, maxCompanyW);
-  doc.text(rifLines[0], infoX, margin + 11.5);
+  const rifLines = doc.splitTextToSize(`RIF: ${config?.rif || 'J-30401927-4'} • Lubricantes OILSTONE ®`, maxCompanyW);
+  doc.text(rifLines[0], infoX, margin + 11.8);
 
-  doc.setFontSize(6.0);
+  doc.setFontSize(7.0);
   doc.setTextColor(...COLORS.muted);
-  const addrLines = doc.splitTextToSize(`Dirección: ${config?.direccion || 'Barquisimeto / Caracas, Venezuela'} • Tel: ${config?.telefono || '+58 (251) 269.13.96'}`, maxCompanyW);
-  doc.text(addrLines[0], infoX, margin + 14.5);
+  const addrLines = doc.splitTextToSize(`Dir.: ${config?.direccion || 'Barquisimeto / Caracas'} • Tel: ${config?.telefono || '+58 (251) 269.13.96'}`, maxCompanyW);
+  doc.text(addrLines[0], infoX, margin + 15.0);
 
   // Dibujar Caja de Metadatos del Documento
   doc.setFillColor(...COLORS.lightBg);
   doc.setDrawColor(...COLORS.border);
   doc.setLineWidth(0.3);
-  doc.roundedRect(metaBoxX, margin + 4.5, metaBoxW, 11, 1.2, 1.2, 'FD');
+  doc.roundedRect(metaBoxX, margin + 4.2, metaBoxW, 11.6, 1.2, 1.2, 'FD');
 
   const effectiveRateNum = Number(rateValue ?? config?.tasaDolar) || 827.73;
   const rateLineText = rateDisplay
@@ -238,7 +340,7 @@ export function createBaseReport({
   const fitMetaTextSize = (txt, initialSize) => {
     let sz = initialSize;
     doc.setFontSize(sz);
-    while (doc.getTextWidth(txt) > metaBoxW - 3 && sz > 4.4) {
+    while (doc.getTextWidth(txt) > metaBoxW - 3 && sz > 5.2) {
       sz = Number((sz - 0.2).toFixed(1));
       doc.setFontSize(sz);
     }
@@ -247,50 +349,62 @@ export function createBaseReport({
 
   if (hideCorrelative) {
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.8);
+    fitMetaTextSize(`Emisión: ${dateTimeStr}`, 6.8);
     doc.setTextColor(...COLORS.slate);
     doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 8.8, { align: 'center' });
 
     doc.setFont('helvetica', 'bold');
-    fitMetaTextSize(rateLineText, 5.8);
+    fitMetaTextSize(rateLineText, 7.0);
     doc.setTextColor(...COLORS.emerald);
-    doc.text(rateLineText, metaBoxX + metaBoxW / 2, margin + 12.8, { align: 'center' });
+    doc.text(rateLineText, metaBoxX + metaBoxW / 2, margin + 13.0, { align: 'center' });
   } else {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6.2);
+    fitMetaTextSize(correlative, 7.4);
     doc.setTextColor(...COLORS.navy);
-    doc.text(correlative, metaBoxX + metaBoxW / 2, margin + 7.5, { align: 'center' });
+    doc.text(correlative, metaBoxX + metaBoxW / 2, margin + 7.6, { align: 'center' });
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.6);
+    fitMetaTextSize(`Emisión: ${dateTimeStr}`, 6.7);
     doc.setTextColor(...COLORS.slate);
-    doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 10.7, { align: 'center' });
+    doc.text(`Emisión: ${dateTimeStr}`, metaBoxX + metaBoxW / 2, margin + 11.0, { align: 'center' });
 
     doc.setFont('helvetica', 'bold');
-    fitMetaTextSize(rateLineText, 5.7);
+    fitMetaTextSize(rateLineText, 7.0);
     doc.setTextColor(...COLORS.emerald);
-    doc.text(rateLineText, metaBoxX + metaBoxW / 2, margin + 13.9, { align: 'center' });
+    doc.text(rateLineText, metaBoxX + metaBoxW / 2, margin + 14.3, { align: 'center' });
   }
 
   // 5. Franja de Título Principal con Acento Lateral Rojo
-  const bannerY = margin + 17;
+  const bannerY = margin + 17.2;
   const hasSubtitle = Boolean(subtitle && String(subtitle).trim());
-  const bannerH = hasSubtitle ? 9.2 : 7.4;
+  const bannerH = hasSubtitle ? 10.6 : 8.2;
   doc.setFillColor(...COLORS.navy);
   doc.roundedRect(startX, bannerY, tableWidth, bannerH, 1, 1, 'F');
   doc.setFillColor(...COLORS.red);
   doc.rect(startX, bannerY, 3, bannerH, 'F'); // Pip rojo
 
+  const upperTitle = title.toUpperCase();
+  let titleSize = 10.8;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.2);
+  doc.setFontSize(titleSize);
+  while (doc.getTextWidth(upperTitle) > tableWidth - 9 && titleSize > 7.8) {
+    titleSize = Number((titleSize - 0.3).toFixed(1));
+    doc.setFontSize(titleSize);
+  }
   doc.setTextColor(255, 255, 255);
-  doc.text(title.toUpperCase(), startX + 6, bannerY + (hasSubtitle ? 4.2 : 4.9));
+  doc.text(upperTitle, startX + 6, bannerY + (hasSubtitle ? 4.8 : 5.4));
 
   if (hasSubtitle) {
+    let subSize = 7.6;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.4);
+    doc.setFontSize(subSize);
+    while (doc.getTextWidth(subtitle) > tableWidth - 9 && subSize > 6.2) {
+      subSize = Number((subSize - 0.2).toFixed(1));
+      doc.setFontSize(subSize);
+    }
+    const subLines = doc.splitTextToSize(subtitle, tableWidth - 9);
     doc.setTextColor(226, 232, 240);
-    doc.text(subtitle, startX + 6, bannerY + 7.6);
+    doc.text(subLines[0] || subtitle, startX + 6, bannerY + 8.6);
   }
 
   if (hideOperatorStrip) {
@@ -311,7 +425,7 @@ export function createBaseReport({
 
   // 6. Cinta de Identificación del Operador Emisor con anchos de celda protegidos
   const emisorY = bannerY + bannerH + 1.4;
-  const emisorH = 5.2;
+  const emisorH = 6.2;
   doc.setFillColor(...COLORS.lightBg);
   doc.setDrawColor(...COLORS.border);
   doc.roundedRect(startX, emisorY, tableWidth, emisorH, 0.8, 0.8, 'FD');
@@ -321,38 +435,38 @@ export function createBaseReport({
   const userRole = currentUser?.cargo || currentUser?.rol || 'Administrador Master';
   const userDept = currentUser?.departamento || 'DIRECCIÓN';
 
-  const midX = startX + tableWidth * 0.46;
-  const rightX = startX + tableWidth * 0.77;
+  const midX = startX + tableWidth * 0.45;
+  const rightX = startX + tableWidth * 0.78;
 
-  const maxUserW = midX - (startX + 27) - 3;
-  const maxRoleW = rightX - (midX + 18) - 3;
-  const maxDeptW = (startX + tableWidth) - (rightX + 10) - 2;
+  const maxUserW = midX - (startX + 33) - 3;
+  const maxRoleW = rightX - (midX + 21) - 3;
+  const maxDeptW = (startX + tableWidth) - (rightX + 12) - 2;
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.0);
+  doc.setFontSize(7.1);
   doc.setTextColor(...COLORS.navy);
-  doc.text('OPERADOR EMISOR:', startX + 3, emisorY + 3.6);
+  doc.text('OPERADOR EMISOR:', startX + 3, emisorY + 4.2);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...COLORS.dark);
   const userLines = doc.splitTextToSize(`${userName} (${userNick})`, maxUserW);
-  doc.text(userLines[0] || userName, startX + 27, emisorY + 3.6);
+  doc.text(userLines[0] || userName, startX + 33, emisorY + 4.2);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...COLORS.slate);
-  doc.text('CARGO / ROL:', midX, emisorY + 3.6);
+  doc.text('CARGO / ROL:', midX, emisorY + 4.2);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...COLORS.dark);
   const roleLines = doc.splitTextToSize(userRole, maxRoleW);
-  doc.text(roleLines[0] || userRole, midX + 18, emisorY + 3.6);
+  doc.text(roleLines[0] || userRole, midX + 21, emisorY + 4.2);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...COLORS.slate);
-  doc.text('DEPTO:', rightX, emisorY + 3.6);
+  doc.text('DEPTO:', rightX, emisorY + 4.2);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...COLORS.red);
   const deptLines = doc.splitTextToSize(userDept, maxDeptW);
-  doc.text(deptLines[0] || userDept, rightX + 10, emisorY + 3.6);
+  doc.text(deptLines[0] || userDept, rightX + 12, emisorY + 4.2);
 
   return {
     doc,
@@ -378,7 +492,7 @@ export function addSummaryCards(doc, startY, cards = [], tableWidth = 179.9, sta
   const count = cards.length;
   const gap = 2.5;
   const cardW = (tableWidth - gap * (count - 1)) / count;
-  const cardH = 11.5;
+  const cardH = 14.0;
 
   // Guardia de desborde hacia el pie de página (orientación Portrait/Landscape)
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
@@ -402,33 +516,36 @@ export function addSummaryCards(doc, startY, cards = [], tableWidth = 179.9, sta
     doc.roundedRect(x, startY, cardW, 1.5, 0.6, 0.6, 'F');
 
     // Etiqueta del KPI
+    const labelStr = (card.label || 'KPI').toUpperCase();
+    let labelSize = 7.0;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(5.8);
+    doc.setFontSize(labelSize);
+    while (doc.getTextWidth(labelStr) > cardW - 4 && labelSize > 5.6) {
+      labelSize = Number((labelSize - 0.2).toFixed(1));
+      doc.setFontSize(labelSize);
+    }
     doc.setTextColor(...COLORS.slate);
-    doc.text((card.label || 'KPI').toUpperCase(), x + 2.5, startY + 4.4);
+    doc.text(labelStr, x + 2.5, startY + 4.8);
 
     // Valor Principal con escala tipográfica dinámica para evitar desbordes y solapes
     const valStr = String(card.value || '0');
-    let valFontSize = 8.2;
-    if (valStr.length > 17) {
-      valFontSize = 5.8;
-    } else if (valStr.length > 13) {
-      valFontSize = 6.6;
-    } else if (valStr.length > 10) {
-      valFontSize = 7.4;
-    }
+    let valFontSize = 10.2;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(valFontSize);
+    while (doc.getTextWidth(valStr) > cardW - 4.5 && valFontSize > 6.6) {
+      valFontSize = Number((valFontSize - 0.3).toFixed(1));
+      doc.setFontSize(valFontSize);
+    }
     doc.setTextColor(...(card.valueColor || COLORS.dark));
-    doc.text(valStr, x + 2.5, startY + 8.0);
+    doc.text(valStr, x + 2.5, startY + 9.2);
 
     // Subtítulo / Detalle truncado al ancho de tarjeta para que no desborde
     if (card.subtext) {
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(5.0);
+      doc.setFontSize(6.3);
       doc.setTextColor(...COLORS.muted);
       const subLines = doc.splitTextToSize(String(card.subtext), cardW - 4);
-      doc.text(subLines[0] || '', x + 2.5, startY + 10.4);
+      doc.text(subLines[0] || '', x + 2.5, startY + 12.2);
     }
   });
 
@@ -442,10 +559,10 @@ export function addAnalyticalBox(doc, startY, title = 'ANÁLISIS EJECUTIVO & RES
   if (!text) return startY;
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.4);
-  const splitText = doc.splitTextToSize(text, tableWidth - 8);
-  const textH = splitText.length * 2.8;
-  const boxH = Math.max(9.5, textH + 5.5);
+  doc.setFontSize(7.6);
+  const splitText = doc.splitTextToSize(text, tableWidth - 9);
+  const textH = splitText.length * 3.4;
+  const boxH = Math.max(11.5, textH + 7.2);
 
   // Guardia de desborde hacia el pie de página (orientación Portrait/Landscape)
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
@@ -464,14 +581,14 @@ export function addAnalyticalBox(doc, startY, title = 'ANÁLISIS EJECUTIVO & RES
   doc.rect(startX, startY, 2.2, boxH, 'F');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.0);
+  doc.setFontSize(7.4);
   doc.setTextColor(...COLORS.navy);
-  doc.text(title.toUpperCase(), startX + 4.5, startY + 3.6);
+  doc.text(title.toUpperCase(), startX + 4.5, startY + 4.2);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.2);
+  doc.setFontSize(7.6);
   doc.setTextColor(...COLORS.dark);
-  doc.text(splitText, startX + 4.5, startY + 6.8);
+  doc.text(splitText, startX + 4.5, startY + 8.0);
 
   return startY + boxH + 2.5;
 }
@@ -480,7 +597,7 @@ export function addAnalyticalBox(doc, startY, title = 'ANÁLISIS EJECUTIVO & RES
  * Añade un encabezado de sección / bloque temático (con acento corporativo rojo y azul marino)
  */
 export function addSectionHeader(doc, startY, title, subtitle = '', tableWidth = 179.9, startX = 18) {
-  const bannerH = subtitle ? 9.0 : 7.2;
+  const bannerH = subtitle ? 10.4 : 8.0;
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
   if (startY + bannerH + 2.5 > safeBottomY) {
     doc.addPage();
@@ -491,16 +608,28 @@ export function addSectionHeader(doc, startY, title, subtitle = '', tableWidth =
   doc.setFillColor(...COLORS.red);
   doc.rect(startX, startY, 3, bannerH, 'F');
 
+  const upperTitle = String(title || '').toUpperCase();
+  let secTitleSize = 10.0;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.4);
+  doc.setFontSize(secTitleSize);
+  while (doc.getTextWidth(upperTitle) > tableWidth - 9 && secTitleSize > 7.6) {
+    secTitleSize = Number((secTitleSize - 0.3).toFixed(1));
+    doc.setFontSize(secTitleSize);
+  }
   doc.setTextColor(255, 255, 255);
-  doc.text(title.toUpperCase(), startX + 6, startY + (subtitle ? 4.2 : 4.8));
+  doc.text(upperTitle, startX + 6, startY + (subtitle ? 4.6 : 5.2));
 
   if (subtitle) {
+    let secSubSize = 7.2;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.8);
+    doc.setFontSize(secSubSize);
+    while (doc.getTextWidth(subtitle) > tableWidth - 9 && secSubSize > 5.8) {
+      secSubSize = Number((secSubSize - 0.2).toFixed(1));
+      doc.setFontSize(secSubSize);
+    }
+    const subLines = doc.splitTextToSize(subtitle, tableWidth - 9);
     doc.setTextColor(226, 232, 240);
-    doc.text(subtitle, startX + 6, startY + 7.6);
+    doc.text(subLines[0] || subtitle, startX + 6, startY + 8.5);
   }
 
   return startY + bannerH + 2.5;
@@ -551,17 +680,23 @@ export function addSignatures(
     doc.setLineWidth(0.3);
     doc.line(x + 5, lineY, x + sigW - 5, lineY);
 
-    // Cargo / Rol
+    // Cargo / Rol (escalado seguro dentro de sigW)
+    const roleUpper = role.toUpperCase();
+    let roleFontSize = 7.4;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6.2);
+    doc.setFontSize(roleFontSize);
+    while (doc.getTextWidth(roleUpper) > sigW - 3 && roleFontSize > 5.8) {
+      roleFontSize = Number((roleFontSize - 0.2).toFixed(1));
+      doc.setFontSize(roleFontSize);
+    }
     doc.setTextColor(...COLORS.navy);
-    doc.text(role.toUpperCase(), x + sigW / 2, lineY + 3.5, { align: 'center' });
+    doc.text(roleUpper, x + sigW / 2, lineY + 3.6, { align: 'center' });
 
     // Leyenda
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.2);
+    doc.setFontSize(6.3);
     doc.setTextColor(...COLORS.muted);
-    doc.text('Firma y Sello Oficial', x + sigW / 2, lineY + 6.2, { align: 'center' });
+    doc.text('Firma y Sello Oficial', x + sigW / 2, lineY + 6.4, { align: 'center' });
   });
 
   return drawY + sigH + 2;
@@ -637,8 +772,8 @@ export function drawStatusBadge(doc, cell, statusText) {
     color = [185, 28, 28];
   }
 
-  const badgeH = 4.2;
-  const badgeW = Math.min(cell.width - 2, 25);
+  const badgeH = 4.8;
+  const badgeW = Math.min(cell.width - 1.5, 26);
   const badgeX = cell.x + (cell.width - badgeW) / 2;
   const badgeY = cell.y + (cell.height - badgeH) / 2;
 
@@ -647,8 +782,13 @@ export function drawStatusBadge(doc, cell, statusText) {
   doc.setLineWidth(0.2);
   doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.0, 1.0, 'FD');
 
+  let badgeFontSize = 6.2;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.2);
+  doc.setFontSize(badgeFontSize);
+  while (doc.getTextWidth(text) > badgeW - 1.6 && badgeFontSize > 4.6) {
+    badgeFontSize = Number((badgeFontSize - 0.2).toFixed(1));
+    doc.setFontSize(badgeFontSize);
+  }
   doc.setTextColor(...color);
   doc.text(text, cell.x + cell.width / 2, badgeY + badgeH / 2 + 1.2, { align: 'center' });
 }
@@ -678,9 +818,9 @@ export function drawMiniProgressBar(doc, cell, rawValue) {
 
   // Texto porcentual
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.4);
+  doc.setFontSize(6.5);
   doc.setTextColor(...COLORS.dark);
-  doc.text(`${pct.toFixed(1)}%`, startX + barW + 1.8, barY + barH - 0.3);
+  doc.text(`${pct.toFixed(1)}%`, startX + barW + 1.8, barY + barH - 0.2);
 }
 
 /**
@@ -689,7 +829,7 @@ export function drawMiniProgressBar(doc, cell, rawValue) {
 export function addGrandTotalBox(doc, startY, items = [], tableWidth = 179.9, startX = 18) {
   if (!items || items.length === 0) return startY;
 
-  const boxH = 15.5;
+  const boxH = 18.0;
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
   if (startY + boxH > safeBottomY) {
     doc.addPage();
@@ -711,28 +851,40 @@ export function addGrandTotalBox(doc, startY, items = [], tableWidth = 179.9, st
 
   items.forEach((item, idx) => {
     const x = startX + 5 + idx * colW;
-    const midY = startY + 4.2;
+    const midY = startY + 4.6;
 
+    const lblText = (item.label || 'TOTAL').toUpperCase();
+    let lblSize = 7.2;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(5.8);
+    doc.setFontSize(lblSize);
+    while (doc.getTextWidth(lblText) > colW - 4 && lblSize > 5.8) {
+      lblSize = Number((lblSize - 0.2).toFixed(1));
+      doc.setFontSize(lblSize);
+    }
     doc.setTextColor(...COLORS.slate);
-    doc.text((item.label || 'TOTAL').toUpperCase(), x, midY);
+    doc.text(lblText, x, midY);
 
     const valStr = String(item.value || '$ 0.00');
+    let valSize = 10.4;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(valStr.length > 14 ? 7.0 : 8.2);
+    doc.setFontSize(valSize);
+    while (doc.getTextWidth(valStr) > colW - 4 && valSize > 7.0) {
+      valSize = Number((valSize - 0.3).toFixed(1));
+      doc.setFontSize(valSize);
+    }
     doc.setTextColor(...(item.color || COLORS.navy));
-    doc.text(valStr, x, midY + 4.2);
+    doc.text(valStr, x, midY + 4.8);
 
     if (item.subtext) {
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(5.2);
+      doc.setFontSize(6.5);
       doc.setTextColor(...COLORS.muted);
-      doc.text(String(item.subtext), x, midY + 7.0);
+      const subLines = doc.splitTextToSize(String(item.subtext), colW - 4);
+      doc.text(subLines[0] || '', x, midY + 8.3);
     }
 
     // Doble línea contable inferior debajo del subtexto (sin colisión)
-    const lineW = Math.min(colW - 8, 32);
+    const lineW = Math.min(colW - 8, 34);
     const lineY = startY + boxH - 1.8;
     doc.setDrawColor(...COLORS.slate);
     doc.setLineWidth(0.2);
@@ -827,14 +979,14 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
       // Cabezal compacto de desbordamiento (1/2, 2/2) en páginas de continuación
       if (totalPages > 1 && !options.skipOverflowHeader) {
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(5.8);
+        doc.setFontSize(7.2);
         doc.setTextColor(...COLORS.navy);
-        doc.text(`CONTINUACIÓN DE REPORTE • PÁGINA ${i}/${totalPages}`, startX, margin + 4.9);
+        doc.text(`CONTINUACIÓN DE REPORTE • PÁGINA ${i}/${totalPages}`, startX, margin + 5.2);
 
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(5.6);
+        doc.setFontSize(6.8);
         doc.setTextColor(...COLORS.slate);
-        doc.text(`Desbordamiento ${i}/${totalPages}`, startX + tableWidth, margin + 4.9, { align: 'right' });
+        doc.text(`Desbordamiento ${i}/${totalPages}`, startX + tableWidth, margin + 5.2, { align: 'right' });
       }
     }
 
@@ -843,28 +995,33 @@ export function finalizeAndSave(doc, filename = 'reporte_signum.pdf', currentUse
     doc.setLineWidth(0.3);
     doc.line(startX, footerY, startX + tableWidth, footerY);
 
-    // Texto legal a la izquierda
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.6);
-    doc.setTextColor(...COLORS.muted);
-    doc.text(
-      options.legalFooter || 'SIGNUM MOTORVEN C.A. • Sistema de Gestión ERP • Documento Oficial Tamaño Carta • Válido para Impresión',
-      startX + 1,
-      footerY + 3.8
-    );
-
-    // Usuario y numeración estándar de desbordamiento (1/1, 1/2, 2/2) a la derecha
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6.0);
-    doc.setTextColor(...COLORS.slate);
+    // Texto legal a la izquierda (auto-acotado para no colisionar con la derecha)
     const basePageLabel = useDeFormat ? `Página ${i} de ${totalPages}` : `Página ${i}/${totalPages}`;
     const contSuffix = (totalPages > 1 && i < totalPages && !options.skipOverflowNotice)
       ? ` (Continúa ${i + 1}/${totalPages})`
       : '';
+    const rightText = `${basePageLabel}${contSuffix} • Emitido por: ${userName}`;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.1);
+    const rightWidth = typeof doc.getTextWidth === 'function' ? doc.getTextWidth(rightText) : 55;
+    const maxLegalW = Math.max(50, tableWidth - rightWidth - 6);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.6);
+    doc.setTextColor(...COLORS.muted);
+    const legalStr = options.legalFooter || 'SIGNUM MOTORVEN C.A. • Sistema ERP • Documento Oficial Tamaño Carta';
+    const legalClipped = doc.splitTextToSize(legalStr, maxLegalW)[0] || legalStr;
+    doc.text(legalClipped, startX + 1, footerY + 4.0);
+
+    // Usuario y numeración estándar de desbordamiento (1/1, 1/2, 2/2) a la derecha
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.1);
+    doc.setTextColor(...COLORS.slate);
     doc.text(
-      `${basePageLabel}${contSuffix} • Emitido por: ${userName}`,
+      rightText,
       startX + tableWidth - 1,
-      footerY + 3.8,
+      footerY + 4.0,
       { align: 'right' }
     );
   }
@@ -4168,7 +4325,11 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
   // 2. Banner Oficial de Política de Reserva por 72 horas
-  const bannerH = 9.0;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(6.8);
+  const noticeText = `Esta nota de pedido compromete stock temporalmente en almacén durante 72 horas desde su emisión (${orderDate}). Pasado este plazo, los ítems reservados no facturados caducan y se liberan de forma automática a la disponibilidad general.`;
+  const splitNotice = base.doc.splitTextToSize(noticeText, base.tableWidth - 8);
+  const bannerH = Math.max(10.8, 5.8 + splitNotice.length * 3.1 + 1.5);
   base.doc.setFillColor(254, 243, 199); // Amber 100 soft
   base.doc.setDrawColor(...COLORS.amber);
   base.doc.setLineWidth(0.35);
@@ -4178,21 +4339,19 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
   base.doc.roundedRect(base.startX, currentY, 2.5, bannerH, 0.6, 0.6, 'F');
 
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.amber);
-  base.doc.text('POLÍTICA DE RESERVA DE INVENTARIO (CORTE OPERATIVO: 72 HORAS):', base.startX + 5, currentY + 3.4);
+  base.doc.text('POLÍTICA DE RESERVA DE INVENTARIO (CORTE OPERATIVO: 72 HORAS):', base.startX + 5, currentY + 3.8);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.6);
+  base.doc.setFontSize(6.8);
   base.doc.setTextColor(...COLORS.dark);
-  const noticeText = `Esta nota de pedido compromete stock temporalmente en almacén durante 72 horas desde su emisión (${orderDate}). Pasado este plazo, los ítems reservados no facturados caducan y se liberan de forma automática a la disponibilidad general.`;
-  const splitNotice = base.doc.splitTextToSize(noticeText, base.tableWidth - 8);
-  base.doc.text(splitNotice, base.startX + 5, currentY + 6.6);
+  base.doc.text(splitNotice, base.startX + 5, currentY + 7.2);
 
   currentY += bannerH + 2.5;
 
   // 3. Bloque Bipartito: Asesor de Ventas y Datos del Cliente
-  const boxH = 18.5;
+  const boxH = 22.0;
   const colW = (base.tableWidth - 2) / 2;
 
   base.doc.setFillColor(...COLORS.lightBg);
@@ -4206,61 +4365,65 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
 
   // Asesor de Ventas
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.3);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('DATOS DEL ASESOR / FUERZA DE VENTAS', base.startX + 3, currentY + 3.8);
+  base.doc.text('DATOS DEL ASESOR / FUERZA DE VENTAS', base.startX + 3, currentY + 4.4);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.6);
+  base.doc.setFontSize(6.9);
   base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('Asesor Comercial:', base.startX + 3, currentY + 7.5);
+  base.doc.text('Asesor Comercial:', base.startX + 3, currentY + 8.8);
   base.doc.setFont('helvetica', 'bold');
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`${sellerName} (${sellerCode})`, base.startX + 27, currentY + 7.5);
+  const sellerLabelTrunc = base.doc.splitTextToSize(`${sellerName} (${sellerCode})`, colW - 34)[0] || '';
+  base.doc.text(sellerLabelTrunc, base.startX + 31, currentY + 8.8);
 
   base.doc.setFont('helvetica', 'normal');
   base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('Canal Comercial:', base.startX + 3, currentY + 11.2);
+  base.doc.text('Canal Comercial:', base.startX + 3, currentY + 13.2);
   base.doc.setFont('helvetica', 'bold');
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(canalComercialLabel, base.startX + 27, currentY + 11.2);
+  const canalTrunc = base.doc.splitTextToSize(canalComercialLabel, colW - 34)[0] || '';
+  base.doc.text(canalTrunc, base.startX + 31, currentY + 13.2);
 
   base.doc.setFont('helvetica', 'normal');
   base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('Condición de Pago:', base.startX + 3, currentY + 14.9);
+  base.doc.text('Condición de Pago:', base.startX + 3, currentY + 17.6);
   base.doc.setFont('helvetica', 'bold');
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text(paymentTerm, base.startX + 27, currentY + 14.9);
+  const termTrunc = base.doc.splitTextToSize(paymentTerm, colW - 34)[0] || '';
+  base.doc.text(termTrunc, base.startX + 31, currentY + 17.6);
 
   // Cliente Destinatario
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.3);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('DATOS DEL CLIENTE / RECEPTOR', base.startX + colW + 3, currentY + 3.8);
+  base.doc.text('DATOS DEL CLIENTE / RECEPTOR', base.startX + colW + 3, currentY + 4.4);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.6);
+  base.doc.setFontSize(6.9);
   base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('Razón Social:', base.startX + colW + 3, currentY + 7.5);
+  base.doc.text('Razón Social:', base.startX + colW + 3, currentY + 8.8);
   base.doc.setFont('helvetica', 'bold');
   base.doc.setTextColor(...COLORS.dark);
-  const clientNameTrunc = base.doc.splitTextToSize(clientName, colW - 25)[0] || clientName;
-  base.doc.text(clientNameTrunc, base.startX + colW + 22, currentY + 7.5);
-
-  base.doc.setFont('helvetica', 'normal');
-  base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('RIF / Zona:', base.startX + colW + 3, currentY + 11.2);
-  base.doc.setFont('helvetica', 'bold');
-  base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`${clientRif}  •  Zona: ${clientZone}`, base.startX + colW + 22, currentY + 11.2);
+  const clientNameTrunc = base.doc.splitTextToSize(clientName, colW - 28)[0] || clientName;
+  base.doc.text(clientNameTrunc, base.startX + colW + 25, currentY + 8.8);
 
   base.doc.setFont('helvetica', 'normal');
   base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('Entrega en:', base.startX + colW + 3, currentY + 14.9);
+  base.doc.text('RIF / Zona:', base.startX + colW + 3, currentY + 13.2);
   base.doc.setFont('helvetica', 'bold');
   base.doc.setTextColor(...COLORS.dark);
-  const dirTrunc = base.doc.splitTextToSize(clientDir, colW - 25)[0] || clientDir;
-  base.doc.text(dirTrunc, base.startX + colW + 22, currentY + 14.9);
+  const rifZoneTrunc = base.doc.splitTextToSize(`${clientRif}  •  Zona: ${clientZone}`, colW - 28)[0] || '';
+  base.doc.text(rifZoneTrunc, base.startX + colW + 25, currentY + 13.2);
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setTextColor(...COLORS.slate);
+  base.doc.text('Entrega en:', base.startX + colW + 3, currentY + 17.6);
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setTextColor(...COLORS.dark);
+  const dirTrunc = base.doc.splitTextToSize(clientDir, colW - 28)[0] || clientDir;
+  base.doc.text(dirTrunc, base.startX + colW + 25, currentY + 17.6);
 
   currentY += boxH + 2.5;
 
@@ -4353,14 +4516,14 @@ export function generateSellerOrderPDF({ order = {}, config = {}, currentUser = 
   // Observaciones si existen
   if (hasNotes) {
     base.doc.setFont('helvetica', 'bold');
-    base.doc.setFontSize(5.8);
+    base.doc.setFontSize(7.0);
     base.doc.setTextColor(...COLORS.slate);
-    base.doc.text('OBSERVACIONES COMERCIALES:', base.startX + 2, finalYForSignatures);
+    base.doc.text('OBSERVACIONES COMERCIALES:', base.startX + 2, finalYForSignatures + 1);
     base.doc.setFont('helvetica', 'normal');
     base.doc.setTextColor(...COLORS.dark);
-    const splitNotes = base.doc.splitTextToSize(notes, base.tableWidth - 4);
-    base.doc.text(splitNotes, base.startX + 2, finalYForSignatures + 3.2);
-    finalYForSignatures += 8;
+    const splitNotes = base.doc.splitTextToSize(notes, base.tableWidth - 4).slice(0, 2);
+    base.doc.text(splitNotes, base.startX + 2, finalYForSignatures + 4.8);
+    finalYForSignatures += Math.max(8, splitNotes.length * 3.4 + 5.5);
   }
 
   // 6. Sección Oficial de Tres Firmas (anclada por sobre el pie de página)
@@ -4434,7 +4597,11 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
   // 2. Banner de Control Operativo de Almacén
-  const bannerH = 9.0;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(6.8);
+  const noticeText = `El personal de almacén debe verificar cada renglón físicamente en rampa marcando la casilla de verificación [  ]. La salida del camión requiere la firma del despachador, del transportista y el sello de recepción del cliente.`;
+  const splitNotice = base.doc.splitTextToSize(noticeText, base.tableWidth - 8);
+  const bannerH = Math.max(10.8, 5.8 + splitNotice.length * 3.1 + 1.5);
   base.doc.setFillColor(239, 246, 255); // Blue 50
   base.doc.setDrawColor(...COLORS.cyan);
   base.doc.setLineWidth(0.35);
@@ -4444,21 +4611,19 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
   base.doc.roundedRect(base.startX, currentY, 2.5, bannerH, 0.6, 0.6, 'F');
 
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.cyan);
-  base.doc.text('DOCUMENTO DE CONTROL FÍSICO DE ALMACÉN (SIN VALORES MONETARIOS):', base.startX + 5, currentY + 3.4);
+  base.doc.text('DOCUMENTO DE CONTROL FÍSICO DE ALMACÉN (SIN VALORES MONETARIOS):', base.startX + 5, currentY + 3.8);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.6);
+  base.doc.setFontSize(6.8);
   base.doc.setTextColor(...COLORS.dark);
-  const noticeText = `El personal de almacén debe verificar cada renglón físicamente en rampa marcando la casilla de verificación [  ]. La salida del camión requiere la firma del despachador, del transportista y el sello de recepción del cliente.`;
-  const splitNotice = base.doc.splitTextToSize(noticeText, base.tableWidth - 8);
-  base.doc.text(splitNotice, base.startX + 5, currentY + 6.6);
+  base.doc.text(splitNotice, base.startX + 5, currentY + 7.2);
 
   currentY += bannerH + 2.5;
 
   // 3. Bloque Bipartito: Destinatario vs Logística
-  const boxH = 19;
+  const boxH = 22.0;
   const colW = (base.tableWidth - 2) / 2;
 
   base.doc.setFillColor(...COLORS.lightBg);
@@ -4472,29 +4637,30 @@ export function generateWarehouseDispatchGuidePDF({ sale, config = {}, currentUs
 
   // Columna Izquierda: Datos del Destinatario
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('DATOS DE ENTREGA Y DESTINATARIO', base.startX + 3, currentY + 4.2);
+  base.doc.text('DATOS DE ENTREGA Y DESTINATARIO', base.startX + 3, currentY + 4.4);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.8);
+  base.doc.setFontSize(7.0);
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`Cliente: ${clienteNombre.slice(0, 42)}`, base.startX + 3, currentY + 8);
-  base.doc.text(`RIF: ${clienteRif}`, base.startX + 3, currentY + 11.5);
-  base.doc.text(`Dirección: ${direccion.slice(0, 45)}`, base.startX + 3, currentY + 15);
+  const wClip = (txt) => base.doc.splitTextToSize(String(txt), colW - 6)[0] || '';
+  base.doc.text(wClip(`Cliente: ${clienteNombre}`), base.startX + 3, currentY + 8.8);
+  base.doc.text(wClip(`RIF: ${clienteRif}`), base.startX + 3, currentY + 13.0);
+  base.doc.text(wClip(`Dirección: ${direccion}`), base.startX + 3, currentY + 17.2);
 
   // Columna Derecha: Trazabilidad Logística
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('TRAZABILIDAD DE FACTURACIÓN Y TRANSPORTE', base.startX + colW + 3, currentY + 4.2);
+  base.doc.text('TRAZABILIDAD DE FACTURACIÓN Y TRANSPORTE', base.startX + colW + 3, currentY + 4.4);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.8);
+  base.doc.setFontSize(7.0);
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`Nota Pedido Origen: ${pedidoOrigen} • Factura: ${facturaDoc}`, base.startX + colW + 3, currentY + 8);
-  base.doc.text(`Facturado por: ${cajera} • Asesor: ${vendedor}`, base.startX + colW + 3, currentY + 11.5);
-  base.doc.text(`Unidad de Carga: ${transportista} • Ruta: ${zonaLogistica}`, base.startX + colW + 3, currentY + 15);
+  base.doc.text(wClip(`Nota Pedido Origen: ${pedidoOrigen} • Factura: ${facturaDoc}`), base.startX + colW + 3, currentY + 8.8);
+  base.doc.text(wClip(`Facturado por: ${cajera} • Asesor: ${vendedor}`), base.startX + colW + 3, currentY + 13.0);
+  base.doc.text(wClip(`Unidad de Carga: ${transportista} • Ruta: ${zonaLogistica}`), base.startX + colW + 3, currentY + 17.2);
 
   currentY += boxH + 3;
 
@@ -5086,9 +5252,11 @@ export function generateDeliveryNotePDF({
   // 2. Bloque Bipartito: Datos del Receptor / Cliente vs Expedición
   const colW = (base.tableWidth - 2) / 2;
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.8);
+  base.doc.setFontSize(7.0);
+  const dnClip = (txt) => base.doc.splitTextToSize(String(txt), colW - 6)[0] || '';
   const addrLines = base.doc.splitTextToSize(`Dirección Entrega: ${clienteDireccion}`, colW - 6).slice(0, 3);
-  const boxH = Math.max(20, 15 + addrLines.length * 3.1 + 2.4);
+  const lineStep = 3.6;
+  const boxH = Math.max(22.5, 16.0 + addrLines.length * lineStep + 3.0);
 
   base.doc.setFillColor(...COLORS.lightBg);
   base.doc.setDrawColor(...COLORS.border);
@@ -5101,32 +5269,32 @@ export function generateDeliveryNotePDF({
 
   // Columna Izquierda: Datos del Receptor / Cliente
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('DATOS DEL RECEPTOR / CLIENTE', base.startX + 3, currentY + 4.2);
+  base.doc.text('DATOS DEL RECEPTOR / CLIENTE', base.startX + 3, currentY + 4.4);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.8);
+  base.doc.setFontSize(7.0);
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`Cliente: ${clienteNombre.slice(0, 44)}`, base.startX + 3, currentY + 8);
-  base.doc.text(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`, base.startX + 3, currentY + 11.5);
-  base.doc.text(addrLines, base.startX + 3, currentY + 15);
-  const condY = currentY + 15 + (addrLines.length - 1) * 3.1 + 3.4;
-  base.doc.text(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`, base.startX + 3, condY);
+  base.doc.text(dnClip(`Cliente: ${clienteNombre}`), base.startX + 3, currentY + 8.6);
+  base.doc.text(dnClip(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`), base.startX + 3, currentY + 12.4);
+  base.doc.text(addrLines, base.startX + 3, currentY + 16.2);
+  const condY = currentY + 16.2 + (addrLines.length - 1) * lineStep + 3.8;
+  base.doc.text(dnClip(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`), base.startX + 3, condY);
 
   // Columna Derecha: Expedición
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.4);
+  base.doc.setFontSize(7.6);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('EXPEDICIÓN', base.startX + colW + 3, currentY + 4.2);
+  base.doc.text('EXPEDICIÓN', base.startX + colW + 3, currentY + 4.4);
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.8);
+  base.doc.setFontSize(7.0);
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(`Despachado de: ${almacenOrigen}`, base.startX + colW + 3, currentY + 8);
-  base.doc.text(`Pedido de Origen: ${pedidoOrigen} • Vendedor: ${vendedor}`, base.startX + colW + 3, currentY + 11.5);
-  base.doc.text(`Unidad / Transportista: ${transportista.slice(0, 42)}`, base.startX + colW + 3, currentY + 15);
-  base.doc.text(`Método: ${metodoPago} • Tasa Oficial BCV: ${formatBs(tasa)} / USD`, base.startX + colW + 3, condY);
+  base.doc.text(dnClip(`Despachado de: ${almacenOrigen}`), base.startX + colW + 3, currentY + 8.6);
+  base.doc.text(dnClip(`Pedido de Origen: ${pedidoOrigen} • Vendedor: ${vendedor}`), base.startX + colW + 3, currentY + 12.4);
+  base.doc.text(dnClip(`Unidad / Transportista: ${transportista}`), base.startX + colW + 3, currentY + 16.2);
+  base.doc.text(dnClip(`Método: ${metodoPago} • Tasa Oficial BCV: ${formatBs(tasa)} / USD`), base.startX + colW + 3, condY);
 
   currentY += boxH + 2.8;
 
@@ -5135,26 +5303,26 @@ export function generateDeliveryNotePDF({
     drawParentContainer(base.doc, false);
 
     base.doc.setFillColor(...COLORS.navy);
-    base.doc.roundedRect(base.startX, 18.5, base.tableWidth, 6.8, 1, 1, 'F');
+    base.doc.roundedRect(base.startX, 18.5, base.tableWidth, 7.4, 1, 1, 'F');
     base.doc.setFillColor(...COLORS.red);
-    base.doc.rect(base.startX, 18.5, 3, 6.8, 'F');
+    base.doc.rect(base.startX, 18.5, 3, 7.4, 'F');
 
     base.doc.setFont('helvetica', 'bold');
-    base.doc.setFontSize(7.6);
+    base.doc.setFontSize(8.2);
     base.doc.setTextColor(255, 255, 255);
     base.doc.text(
       `NOTA DE ENTREGA N° ${correlativoDisplay} — CONTINUACIÓN`,
       base.startX + 5.5,
-      23.1
+      23.5
     );
 
     base.doc.setFont('helvetica', 'normal');
-    base.doc.setFontSize(6.0);
+    base.doc.setFontSize(7.0);
     base.doc.setTextColor(226, 232, 240);
     base.doc.text(
-      `Cliente: ${clienteNombre.slice(0, 36)} (${clienteRif}) • Emisión: ${fechaStr}`,
+      `Cliente: ${clienteNombre.slice(0, 30)} (${clienteRif}) • Emisión: ${fechaStr}`,
       base.startX + base.tableWidth - 3,
-      23.1,
+      23.5,
       { align: 'right' }
     );
   };
@@ -5211,7 +5379,7 @@ export function generateDeliveryNotePDF({
   const { footerY } = getPageLayoutMetrics(base.doc);
   const qrReserveBottomMm = 23.4; // 256.9 - 233.5
   const sigAnchoredTop = footerY - qrReserveBottomMm - 2 - 19; // 212.5mm
-  const summaryBoxH = 16.5;
+  const summaryBoxH = 18.0;
 
   if (finalYBottom + summaryBoxH > sigAnchoredTop - 2) {
     base.doc.addPage();
@@ -5230,24 +5398,24 @@ export function generateDeliveryNotePDF({
   const totalsW = base.tableWidth - noticeW - 6;
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(6.0);
+  base.doc.setFontSize(7.2);
   base.doc.setTextColor(...COLORS.slate);
-  base.doc.text('Subtotal Mercancía (Sin IVA):', totalsX, finalYBottom + 4.2);
+  base.doc.text('Subtotal Mercancía (Sin IVA):', totalsX, finalYBottom + 4.5);
   base.doc.setFont('helvetica', 'bold');
   base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(formatUsd(totalNetoUsd), totalsX + totalsW, finalYBottom + 4.2, { align: 'right' });
+  base.doc.text(formatUsd(totalNetoUsd), totalsX + totalsW, finalYBottom + 4.5, { align: 'right' });
 
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(7.2);
+  base.doc.setFontSize(8.6);
   base.doc.setTextColor(...COLORS.emerald);
-  base.doc.text('TOTAL NOTA DE ENTREGA USD:', totalsX, finalYBottom + 9.4);
-  base.doc.text(formatUsd(totalNetoUsd), totalsX + totalsW, finalYBottom + 9.4, { align: 'right' });
+  base.doc.text('TOTAL NOTA DE ENTREGA USD:', totalsX, finalYBottom + 10.2);
+  base.doc.text(formatUsd(totalNetoUsd), totalsX + totalsW, finalYBottom + 10.2, { align: 'right' });
 
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(6.6);
+  base.doc.setFontSize(7.8);
   base.doc.setTextColor(...COLORS.amber);
-  base.doc.text('TOTAL OFICIAL EN BOLÍVARES:', totalsX, finalYBottom + 14.3);
-  base.doc.text(formatBs(totalNetoBs), totalsX + totalsW, finalYBottom + 14.3, { align: 'right' });
+  base.doc.text('TOTAL OFICIAL EN BOLÍVARES:', totalsX, finalYBottom + 15.4);
+  base.doc.text(formatBs(totalNetoBs), totalsX + totalsW, finalYBottom + 15.4, { align: 'right' });
 
   finalYBottom += summaryBoxH + 3.0;
 
@@ -5283,26 +5451,26 @@ export function generateDeliveryNotePDF({
       base.doc.roundedRect(base.startX + qrSize + 4, qrY + 2, base.tableWidth - qrSize - 32, 7.5, 1, 1, 'FD');
 
       base.doc.setFont('helvetica', 'bold');
-      base.doc.setFontSize(6.2);
+      base.doc.setFontSize(7.0);
       base.doc.setTextColor(...COLORS.navy);
-      base.doc.text(
-        `DESBORDAMIENTO DE RENGLONES: CONTINÚA EN LA PÁGINA ${p + 1}/${totalPages}...`,
-        base.startX + qrSize + 7,
-        qrY + 6.8
-      );
+      const ovMsg = base.doc.splitTextToSize(
+        `DESBORDAMIENTO DE RENGLONES: CONTINÚA EN PÁGINA ${p + 1}/${totalPages}...`,
+        base.tableWidth - qrSize - 38
+      )[0] || '';
+      base.doc.text(ovMsg, base.startX + qrSize + 7, qrY + 6.9);
     }
 
     // Código QR estático de Cuentas Bancarias en esquina inferior izquierda
     drawDeliveryNoteQRBox(base.doc, base.startX, qrY, qrSize, qrPayload);
 
     base.doc.setFont('helvetica', 'bold');
-    base.doc.setFontSize(6.0);
+    base.doc.setFontSize(7.2);
     base.doc.setTextColor(...COLORS.navy);
     base.doc.text('CUENTAS BANCARIAS (QR)', base.startX + qrSize + 3.5, qrY + 14.5);
     base.doc.setFont('helvetica', 'normal');
-    base.doc.setFontSize(5.4);
+    base.doc.setFontSize(6.4);
     base.doc.setTextColor(...COLORS.slate);
-    base.doc.text('Escanea para ver cuentas oficiales de Grupo Motorven, C.A.', base.startX + qrSize + 3.5, qrY + 18.2);
+    base.doc.text('Escanea para ver cuentas oficiales de Grupo Motorven, C.A.', base.startX + qrSize + 3.5, qrY + 18.6);
 
     // Numeración destacada de desbordamiento (ej. 1/1 o 1/2, 2/2) en esquina inferior derecha
     const badgeW = 22;
@@ -5465,13 +5633,13 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
     }
     drawDeliveryNoteQRBox(base.doc, base.startX, qrStartY, 21.5, qrPayload);
     base.doc.setFont('helvetica', 'bold');
-    base.doc.setFontSize(6.2);
+    base.doc.setFontSize(7.6);
     base.doc.setTextColor(...COLORS.navy);
     base.doc.text('CUENTAS BANCARIAS OFICIALES (QR ESTÁTICO)', base.startX + 24.5, qrStartY + 8);
     base.doc.setFont('helvetica', 'normal');
-    base.doc.setFontSize(5.6);
+    base.doc.setFontSize(6.8);
     base.doc.setTextColor(...COLORS.slate);
-    base.doc.text('Escanea este código QR desde tu teléfono para visualizar todas las cuentas bancarias de Grupo Motorven, C.A.', base.startX + 24.5, qrStartY + 12.5, { maxWidth: base.tableWidth - 26 });
+    base.doc.text('Escanea este código QR desde tu teléfono para visualizar todas las cuentas bancarias de Grupo Motorven, C.A.', base.startX + 24.5, qrStartY + 12.8, { maxWidth: base.tableWidth - 26 });
 
     finalizeAndSave(base.doc, `Factura_${factNum}_SIGNUM.pdf`, currentUser, { skipSave: Boolean(autoPrint) });
     if (autoPrint) {
@@ -5742,19 +5910,19 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   doc.roundedRect(startX, boxY, 60, 30, 2, 2);
   doc.line(startX + 6, boxY + 16, startX + 54, boxY + 16);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.8);
+  doc.setFontSize(7.6);
   doc.setTextColor(15, 23, 42);
-  doc.text('Firma y Sello de Recepción', startX + 30, boxY + 20, { align: 'center' });
+  doc.text('Firma y Sello de Recepción', startX + 30, boxY + 20.5, { align: 'center' });
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.4);
+  doc.setFontSize(6.5);
   doc.setTextColor(100, 116, 139);
-  doc.text('C.I. / RIF • Fecha: ___/___/_____', startX + 30, boxY + 24, { align: 'center' });
+  doc.text('C.I. / RIF • Fecha: ___/___/_____', startX + 30, boxY + 25.0, { align: 'center' });
 
   // QR estático de Cuentas Bancarias
   const qrPayload = getStaticBankAccountsQRPayload(config, bankAccounts);
   drawDeliveryNoteQRBox(doc, startX + 64.5, boxY + 1.5, 24, qrPayload);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.2);
+  doc.setFontSize(6.0);
   doc.setTextColor(...COLORS.navy);
   doc.text('CUENTAS BANCARIAS', startX + 76.5, boxY + 28.5, { align: 'center' });
 
@@ -5765,22 +5933,22 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   doc.roundedRect(totalsX, boxY, totalsWidth, 30, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
+  doc.setFontSize(7.5);
   doc.setTextColor(71, 85, 105);
-  doc.text('Base Imponible General (16%):', totalsX + 3, boxY + 5);
+  doc.text('Base Imponible General (16%):', totalsX + 3, boxY + 5.2);
   doc.setFont('helvetica', 'bold');
-  doc.text(`${formatUsd(baseUsd)} (${formatBs(baseUsd * tasa)})`, totalsX + totalsWidth - 3, boxY + 5, { align: 'right' });
+  doc.text(`${formatUsd(baseUsd)} (${formatBs(baseUsd * tasa)})`, totalsX + totalsWidth - 3, boxY + 5.2, { align: 'right' });
 
   doc.setFont('helvetica', 'normal');
-  doc.text('Débito Fiscal IVA (16%):', totalsX + 3, boxY + 10);
+  doc.text('Débito Fiscal IVA (16%):', totalsX + 3, boxY + 10.2);
   doc.setFont('helvetica', 'bold');
-  doc.text(`${formatUsd(ivaUsd)} (${formatBs(ivaUsd * tasa)})`, totalsX + totalsWidth - 3, boxY + 10, { align: 'right' });
+  doc.text(`${formatUsd(ivaUsd)} (${formatBs(ivaUsd * tasa)})`, totalsX + totalsWidth - 3, boxY + 10.2, { align: 'right' });
 
   doc.setDrawColor(0, 43, 122);
   doc.setLineWidth(0.4);
   doc.line(totalsX + 3, boxY + 13, totalsX + totalsWidth - 3, boxY + 13);
 
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.8);
   doc.setTextColor(15, 23, 42);
   doc.text('TOTAL FACTURA USD:', totalsX + 3, boxY + 19);
   doc.setFont('courier', 'bold');
@@ -5789,11 +5957,11 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   doc.text(formatUsd(totUsd), totalsX + totalsWidth - 3, boxY + 19, { align: 'right' });
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.8);
   doc.setTextColor(217, 119, 6);
   doc.text('TOTAL OFICIAL BS.:', totalsX + 3, boxY + 25);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9.8);
   doc.text(formatBs(totBs), totalsX + totalsWidth - 3, boxY + 25, { align: 'right' });
 
   // 5. Paginación en todas las hojas al pie: "Página X/Y" (1/2, 2/2) y Leyenda Legal
@@ -5803,7 +5971,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
 
     if (p > 1 && totalPagesCount > 1) {
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.5);
+      doc.setFontSize(7.2);
       doc.setTextColor(0, 43, 122);
       doc.text(`Desbordamiento ${p}/${totalPagesCount}`, startX + tableWidth, topMargin - 4, { align: 'right' });
     }
@@ -5815,14 +5983,14 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
 
     if (isFacturaOrNotaEntrega) {
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.2);
+      doc.setFontSize(6.6);
       doc.setTextColor(71, 85, 105);
       const disclaimer = `Monto en ${formatBs(totBs)}, referencial a la fecha de emisión. Los pagos en Bs se deberán realizar según la tasa oficial BCV a la fecha de su cancelación.`;
-      doc.text(disclaimer, startX, bottomLimitY, { maxWidth: tableWidth - 46 });
+      doc.text(disclaimer, startX, bottomLimitY - 0.5, { maxWidth: tableWidth - 52 });
     }
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
+    doc.setFontSize(7.6);
     doc.setTextColor(100, 116, 139);
     const contText = (totalPagesCount > 1 && p < totalPagesCount) ? ` • Continúa ${p + 1}/${totalPagesCount}` : '';
     doc.text(`Página ${p}/${totalPagesCount}${contText}`, startX + tableWidth, bottomLimitY, { align: 'right' });
@@ -8114,8 +8282,34 @@ function formatDateTimeVe(rawDate) {
 function renderTwoColMetaCard(doc, startX, startY, tableWidth, leftBlock = {}, rightBlock = {}) {
   const leftLines = (leftBlock.lines || []).filter(Boolean);
   const rightLines = (rightBlock.lines || []).filter(Boolean);
-  const maxLines = Math.max(leftLines.length, rightLines.length, 2);
-  const boxH = 8.5 + maxLines * 4.0;
+  const midX = startX + tableWidth * 0.54;
+  const maxLeftW = midX - startX - 7;
+  const maxRightW = startX + tableWidth - midX - 4;
+  const lineStep = 4.6;
+
+  const prepareLines = (lines, maxW, isLeft) => {
+    const rendered = [];
+    lines.forEach((rawLine, i) => {
+      const isStrong = i === 0;
+      const fontSize = isStrong ? (isLeft ? 9.0 : 8.6) : 7.8;
+      doc.setFont('helvetica', isStrong ? 'bold' : 'normal');
+      doc.setFontSize(fontSize);
+      const wrapped = doc.splitTextToSize(String(rawLine), maxW).slice(0, 2);
+      wrapped.forEach((seg, segIdx) => {
+        rendered.push({
+          text: seg,
+          fontSize,
+          isStrong: isStrong && segIdx === 0
+        });
+      });
+    });
+    return rendered;
+  };
+
+  const renderedLeft = prepareLines(leftLines, maxLeftW, true);
+  const renderedRight = prepareLines(rightLines, maxRightW, false);
+  const maxLines = Math.max(renderedLeft.length, renderedRight.length, 2);
+  const boxH = 10.2 + maxLines * lineStep;
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(doc);
   if (startY + boxH > safeBottomY) {
     doc.addPage();
@@ -8127,35 +8321,27 @@ function renderTwoColMetaCard(doc, startX, startY, tableWidth, leftBlock = {}, r
   doc.setLineWidth(0.3);
   doc.roundedRect(startX, startY, tableWidth, boxH, 1.5, 1.5, 'FD');
 
-  const midX = startX + tableWidth * 0.54;
   doc.setDrawColor(...COLORS.border);
   doc.line(midX - 3, startY + 2, midX - 3, startY + boxH - 2);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.2);
+  doc.setFontSize(7.6);
   doc.setTextColor(...COLORS.navy);
-  doc.text(String(leftBlock.title || 'DATOS DEL TERCERO').toUpperCase(), startX + 3, startY + 4.8);
-  doc.text(String(rightBlock.title || 'METADATOS DEL DOCUMENTO').toUpperCase(), midX, startY + 4.8);
+  doc.text(String(leftBlock.title || 'DATOS DEL TERCERO').toUpperCase(), startX + 3, startY + 5.2);
+  doc.text(String(rightBlock.title || 'METADATOS DEL DOCUMENTO').toUpperCase(), midX, startY + 5.2);
 
-  const maxLeftW = midX - startX - 7;
-  const maxRightW = startX + tableWidth - midX - 3;
-
-  leftLines.forEach((line, i) => {
-    const isStrong = i === 0;
-    doc.setFont('helvetica', isStrong ? 'bold' : 'normal');
-    doc.setFontSize(isStrong ? 7.4 : 6.4);
-    doc.setTextColor(...(isStrong ? COLORS.dark : COLORS.slate));
-    const txt = doc.splitTextToSize(String(line), maxLeftW)[0] || '';
-    doc.text(txt, startX + 3, startY + 9.0 + i * 4.0);
+  renderedLeft.forEach((item, i) => {
+    doc.setFont('helvetica', item.isStrong ? 'bold' : 'normal');
+    doc.setFontSize(item.fontSize);
+    doc.setTextColor(...(item.isStrong ? COLORS.dark : COLORS.slate));
+    doc.text(item.text, startX + 3, startY + 10.2 + i * lineStep);
   });
 
-  rightLines.forEach((line, i) => {
-    const isStrong = i === 0;
-    doc.setFont('helvetica', isStrong ? 'bold' : 'normal');
-    doc.setFontSize(isStrong ? 7.0 : 6.4);
-    doc.setTextColor(...(isStrong ? COLORS.navy : COLORS.slate));
-    const txt = doc.splitTextToSize(String(line), maxRightW)[0] || '';
-    doc.text(txt, midX, startY + 9.0 + i * 4.0);
+  renderedRight.forEach((item, i) => {
+    doc.setFont('helvetica', item.isStrong ? 'bold' : 'normal');
+    doc.setFontSize(item.fontSize);
+    doc.setTextColor(...(item.isStrong ? COLORS.navy : COLORS.slate));
+    doc.text(item.text, midX, startY + 10.2 + i * lineStep);
   });
 
   return startY + boxH + 3;
@@ -9188,19 +9374,19 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
     head: [['#', 'N° DOCUMENTO', 'TIPO', 'CLASIF. TASA', 'TASA PAGO', 'SALDO ANT. ($)', 'ABONO ($)', 'EQUIV. (BS.)', 'RESTANTE ($)']],
     body,
     theme: 'grid',
-    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 5.2, fontStyle: 'bold', cellPadding: 1.3, halign: 'center' },
-    styles: { fontSize: 5.3, cellPadding: 1.3, textColor: COLORS.dark, valign: 'middle' },
+    headStyles: { fillColor: COLORS.navy, textColor: [255, 255, 255], fontSize: 7.2, fontStyle: 'bold', cellPadding: 1.55, halign: 'center' },
+    styles: { fontSize: 7.3, cellPadding: 1.55, textColor: COLORS.dark, valign: 'middle' },
     alternateRowStyles: { fillColor: COLORS.lightBg },
     columnStyles: {
       0: { halign: 'center', cellWidth: 7 },
       1: { halign: 'center', cellWidth: 22, fontStyle: 'bold', textColor: COLORS.navy },
-      2: { halign: 'center', cellWidth: 18 },
+      2: { halign: 'center', cellWidth: 22 },
       3: { halign: 'center', fontStyle: 'bold', cellWidth: 16 },
       4: { halign: 'right', cellWidth: 19 },
       5: { halign: 'right', cellWidth: 23 },
-      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.emerald, cellWidth: 24 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: COLORS.emerald, cellWidth: 22.5 },
       7: { halign: 'right', fontStyle: 'bold', cellWidth: 26 },
-      8: { halign: 'right', fontStyle: 'bold', textColor: COLORS.red, cellWidth: 24.9 }
+      8: { halign: 'right', fontStyle: 'bold', textColor: COLORS.red, cellWidth: 22.4 }
     }
   });
 
@@ -9753,7 +9939,12 @@ export function generateCreditApplicationAndPromissoryNotePDF({
     base.startX
   );
 
-  const pagareH = 32;
+  const legalText = `POR ESTE PAGARÉ MERCANTIL, que emitimos conforme a los Artículos 486, 487 y concordantes del Código de Comercio de la República Bolivariana de Venezuela, la sociedad mercantil ${clientName.toUpperCase()}, RIF ${clientRif}, con domicilio en ${direccion}, representada por ${repLegal} (C.I. ${ciRep}), declara que DEBE y se obliga a PAGAR incondicionalmente a la orden de SIGNUM MOTORVEN, C.A. (RIF J-30401927-4 / J-50478166-0), en su sede en Barquisimeto, Estado Lara, la cantidad neta de hasta: ${formatUsd(limiteUsd)} (${formatBs(limiteBs)} a Tasa Oficial BCV), por concepto de mercancías recibidas a entera satisfacción.\n\nCONDICIONES ESPECIALES: 1. VENCIMIENTO Y MORA: El incumplimiento en el pago de cualquiera de las facturas comerciales emitidas dentro de este límite de crédito producirá la pérdida del beneficio del plazo y la exigibilidad inmediata de la totalidad del saldo deudor. 2. RENUNCIA AL PROTESTO: El deudor renuncia expresamente a los avisos de rechazo y al protesto del presente título valor. 3. DOMICILIO ESPECIAL: Para todos los efectos judiciales dimanantes del presente título, las partes eligen como domicilio especial la ciudad de Barquisimeto, Estado Lara, a cuyos tribunales declaran someterse expresamente.`;
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(6.8);
+  const splitLegal = base.doc.splitTextToSize(legalText, base.tableWidth - 6);
+  const pagareH = Math.max(32, splitLegal.length * 3.1 + 6.0);
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
   if (y + pagareH > safeBottomY - 24) {
     base.doc.addPage();
@@ -9765,13 +9956,10 @@ export function generateCreditApplicationAndPromissoryNotePDF({
   base.doc.setLineWidth(0.3);
   base.doc.roundedRect(base.startX, y, base.tableWidth, pagareH, 1.2, 1.2, 'FD');
 
-  const legalText = `POR ESTE PAGARÉ MERCANTIL, que emitimos conforme a los Artículos 486, 487 y concordantes del Código de Comercio de la República Bolivariana de Venezuela, la sociedad mercantil ${clientName.toUpperCase()}, RIF ${clientRif}, con domicilio en ${direccion}, representada por ${repLegal} (C.I. ${ciRep}), declara que DEBE y se obliga a PAGAR incondicionalmente a la orden de SIGNUM MOTORVEN, C.A. (RIF J-30401927-4 / J-50478166-0), en su sede en Barquisimeto, Estado Lara, la cantidad neta de hasta: ${formatUsd(limiteUsd)} (${formatBs(limiteBs)} a Tasa Oficial BCV), por concepto de mercancías recibidas a entera satisfacción.\n\nCONDICIONES ESPECIALES: 1. VENCIMIENTO Y MORA: El incumplimiento en el pago de cualquiera de las facturas comerciales emitidas dentro de este límite de crédito producirá la pérdida del beneficio del plazo y la exigibilidad inmediata de la totalidad del saldo deudor. 2. RENUNCIA AL PROTESTO: El deudor renuncia expresamente a los avisos de rechazo y al protesto del presente título valor. 3. DOMICILIO ESPECIAL: Para todos los efectos judiciales dimanantes del presente título, las partes eligen como domicilio especial la ciudad de Barquisimeto, Estado Lara, a cuyos tribunales declaran someterse expresamente.`;
-
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.2);
+  base.doc.setFontSize(6.8);
   base.doc.setTextColor(...COLORS.dark);
-  const splitLegal = base.doc.splitTextToSize(legalText, base.tableWidth - 6);
-  base.doc.text(splitLegal, base.startX + 3, y + 4.0);
+  base.doc.text(splitLegal, base.startX + 3, y + 4.4);
 
   y += pagareH + 3;
 
@@ -9933,7 +10121,11 @@ export function generatePayrollSlipPDF({
 
   y = base.doc.lastAutoTable?.finalY ? base.doc.lastAutoTable.finalY + 3 : y + 40;
 
-  const decH = 14;
+  const confText = `DECLARACIÓN DE CONFORMIDAD (ART. 106 LOTTT): Certifico haber recibido a entera satisfacción de SIGNUM MOTORVEN, C.A., la cantidad líquida descrita en el presente recibo como pago total de mis asignaciones salariales y beneficios socioeconómicos correspondientes al período indicado, declarando expresamente encontrarme al día y sin reclamo pendiente por concepto de sueldos o beneficios laborales de ley.`;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(6.8);
+  const splitConf = base.doc.splitTextToSize(confText, base.tableWidth - 6);
+  const decH = Math.max(14, splitConf.length * 3.1 + 5.5);
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
   if (y + decH > safeBottomY - 24) {
     base.doc.addPage();
@@ -9945,12 +10137,10 @@ export function generatePayrollSlipPDF({
   base.doc.setLineWidth(0.3);
   base.doc.roundedRect(base.startX, y, base.tableWidth, decH, 1.2, 1.2, 'FD');
 
-  const confText = `DECLARACIÓN DE CONFORMIDAD (ART. 106 LOTTT): Certifico haber recibido a entera satisfacción de SIGNUM MOTORVEN, C.A., la cantidad líquida descrita en el presente recibo como pago total de mis asignaciones salariales y beneficios socioeconómicos correspondientes al período indicado, declarando expresamente encontrarme al día y sin reclamo pendiente por concepto de sueldos o beneficios laborales de ley.`;
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.2);
+  base.doc.setFontSize(6.8);
   base.doc.setTextColor(...COLORS.dark);
-  const splitConf = base.doc.splitTextToSize(confText, base.tableWidth - 6);
-  base.doc.text(splitConf, base.startX + 3, y + 4.0);
+  base.doc.text(splitConf, base.startX + 3, y + 4.4);
 
   y += decH + 3;
 
@@ -10150,7 +10340,11 @@ export function generateAnnualArcRetentionPDF({
 
   y = base.doc.lastAutoTable?.finalY ? base.doc.lastAutoTable.finalY + 3 : y + 60;
 
-  const decH = 14;
+  const juradaText = `CERTIFICACIÓN Y DECLARACIÓN JURADA (ART. 24 DECRETO 1.808): SIGNUM MOTORVEN, C.A., en su condición de Agente de Retención, certifica que los montos aquí relacionados corresponden fielmente a las retenciones del Impuesto Sobre la Renta efectuadas al Sujeto Retenido y enteradas a la orden del Tesoro Nacional en el SENIAT durante el ejercicio ${targetYear}. Este documento constituye constancia válida para su Declaración Definitiva de Rentas.`;
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(6.8);
+  const splitJurada = base.doc.splitTextToSize(juradaText, base.tableWidth - 6);
+  const decH = Math.max(14, splitJurada.length * 3.1 + 5.5);
   const { safeBottomY, continuationTopY } = getPageLayoutMetrics(base.doc);
   if (y + decH > safeBottomY - 24) {
     base.doc.addPage();
@@ -10162,12 +10356,10 @@ export function generateAnnualArcRetentionPDF({
   base.doc.setLineWidth(0.3);
   base.doc.roundedRect(base.startX, y, base.tableWidth, decH, 1.2, 1.2, 'FD');
 
-  const juradaText = `CERTIFICACIÓN Y DECLARACIÓN JURADA (ART. 24 DECRETO 1.808): SIGNUM MOTORVEN, C.A., en su condición de Agente de Retención, certifica que los montos aquí relacionados corresponden fielmente a las retenciones del Impuesto Sobre la Renta efectuadas al Sujeto Retenido y enteradas a la orden del Tesoro Nacional en el SENIAT durante el ejercicio ${targetYear}. Este documento constituye constancia válida para su Declaración Definitiva de Rentas.`;
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(5.2);
+  base.doc.setFontSize(6.8);
   base.doc.setTextColor(...COLORS.dark);
-  const splitJurada = base.doc.splitTextToSize(juradaText, base.tableWidth - 6);
-  base.doc.text(splitJurada, base.startX + 3, y + 4.0);
+  base.doc.text(splitJurada, base.startX + 3, y + 4.4);
 
   y += decH + 3;
 

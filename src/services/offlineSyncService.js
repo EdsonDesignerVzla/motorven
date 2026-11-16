@@ -397,7 +397,12 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           break;
 
         case 'cash_movement':
-          if (handlers.pushCashMovementToSupabase) {
+          if (item.action === 'DELETE') {
+            if (handlers.deleteCashMovementFromSupabaseDirect) {
+              await handlers.deleteCashMovementFromSupabaseDirect(item.data?.id);
+              syncSuccess = true;
+            }
+          } else if (handlers.pushCashMovementToSupabase) {
             await handlers.pushCashMovementToSupabase(item.data);
             syncSuccess = true;
           }

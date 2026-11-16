@@ -884,6 +884,24 @@ export const addCashMovement = (mov) => {
   return newMov;
 };
 
+export const deleteCashMovement = (movOrId) => {
+  const movements = getCashMovements() || [];
+  const targetId = String(typeof movOrId === 'object' ? (movOrId?.id || '') : (movOrId || '')).trim();
+  const filtered = movements.filter((m) => {
+    if (!m) return false;
+    if (targetId && String(m.id || '').trim() === targetId) return false;
+    if (!targetId && typeof movOrId === 'object' && movOrId) {
+      const sameConcept = String(m.concepto || '').trim() === String(movOrId.concepto || '').trim();
+      const sameFecha = String(m.fecha || '').trim() === String(movOrId.fecha || '').trim();
+      const sameUsd = Number(m.montoUsd ?? m.monto_usd ?? 0) === Number(movOrId.montoUsd ?? movOrId.monto_usd ?? 0);
+      if (sameConcept && sameFecha && sameUsd) return false;
+    }
+    return true;
+  });
+  localStorage.setItem(KEYS.CASH_MOVEMENTS, JSON.stringify(filtered));
+  return filtered;
+};
+
 export const getFiscalClosures = () => {
   initStorage();
   return JSON.parse(localStorage.getItem(KEYS.FISCAL_CLOSURES)) || [];

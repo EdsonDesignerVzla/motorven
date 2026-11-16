@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { addCashMovement, getCashMovements } from '../services/storageService.js';
-import { addSupabaseCashMovement } from '../services/supabaseService.js';
+import { addCashMovement, deleteCashMovement, getCashMovements } from '../services/storageService.js';
+import { addSupabaseCashMovement, deleteSupabaseCashMovement, getSupabaseCashMovements } from '../services/supabaseService.js';
+import { getSyncQueue, clearSyncQueue } from '../services/offlineSyncService.js';
 import {
   resolveExchangeRates,
   computeBankAccountValuation,
@@ -8,7 +9,10 @@ import {
   computeCashDesksSummary,
   computeTodayCashInflows,
   validateSufficientTreasuryBalance,
-  resolveTreasuryTargetForPaymentMethod
+  resolveTreasuryTargetForPaymentMethod,
+  resolveTreasuryAccountForMovement,
+  computeMovementReversalDelta,
+  applyTreasuryBalanceDelta
 } from '../utils/treasuryAccountUtils.js';
 import { generateCashflowPDF, generateBankAccountsPDF } from '../services/pdfReportService.js';
 
@@ -160,6 +164,56 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   });
   assert.ok(docFlow.getNumberOfPages() >= 1);
   console.log('✓ 4. PDFs generateBankAccountsPDF y generateCashflowPDF soportan esquema Supabase y movimientos');
+}
+
+// 5. Resolución de caja/banco por movimiento, reversión de saldo y eliminación local/cola offline
+{
+  const desks = [
+    { id: 'CAJA-01', coCaja: 'CAJA-01', descripcion: 'Caja Efectivo $ (Valencia)', moneda: 'USD', saldoUsd: 500, saldoBs: 450000, activa: true },
+    { id: 'CAJA-04', coCaja: 'CAJA-04', descripcion: 'Caja Zelle USD', moneda: 'USD', saldoUsd: 300, saldoBs: 0, activa: true }
+  ];
+  const banks = [
+    { id: 'CTA-01', codCta: '01', bancoNombre: 'BANCO MERCANTIL', numCta: '01050027311027479197', moneda: 'BS', saldoBs: 900000, saldoUsd: 989.01 },
+    { id: 'CTA-02', codCta: '02', bancoNombre: 'BANCARIBE', numCta: '01140199671990039883', moneda: 'BS', saldoBs: 500000, saldoUsd: 500 }
+  ];
+
+  const byCajaId = resolveTreasuryAccountForMovement({ tipo: 'EGRESO', cajaId: 'CAJA-01', montoUsd: 45, montoBs: 40699.80 }, desks, banks);
+  assert.equal(byCajaId?.kind, 'CAJA');
+  assert.equal(byCajaId?.code, 'CAJA-01');
+
+  const byBankNum = resolveTreasuryAccountForMovement({ tipo: 'EGRESO', cuentaNombre: '- 01140199671990039883', montoUsd: 609.31, montoBs: 615000.96 }, desks, banks);
+  assert.equal(byBankNum?.kind, 'BANCO');
+  assert.equal(byBankNum?.id, 'CTA-02');
+
+  const byFallbackMethod = resolveTreasuryAccountForMovement({ tipo: 'INGRESO', metodoPago: 'EFECTIVO_USD', montoUsd: 82, montoBs: 74752.84 }, desks, banks);
+  assert.equal(byFallbackMethod?.kind, 'CAJA');
+  assert.equal(byFallbackMethod?.code, 'CAJA-01');
+
+  const revEgreso = computeMovementReversalDelta({ tipo: 'EGRESO', montoUsd: 45, montoBs: 40699.80 });
+  assert.equal(revEgreso.sign, 1);
+  assert.equal(revEgreso.deltaUsd, 45);
+  const restoredDesk = applyTreasuryBalanceDelta(desks[0], { deltaUsd: revEgreso.deltaUsd, deltaBs: revEgreso.deltaBs, clampZero: false });
+  assert.equal(restoredDesk.saldoUsd, 545.00);
+  assert.equal(restoredDesk.saldoBs, 490699.80);
+
+  const revIngreso = computeMovementReversalDelta({ tipo: 'INGRESO', montoUsd: 82, montoBs: 74752.84 });
+  assert.equal(revIngreso.sign, -1);
+  const deductedZelle = applyTreasuryBalanceDelta(desks[1], { deltaUsd: revIngreso.deltaUsd, deltaBs: revIngreso.deltaBs, clampZero: true });
+  assert.equal(deductedZelle.saldoUsd, 218.00);
+  assert.equal(deductedZelle.saldoBs, 0);
+
+  globalThis.localStorage.clear();
+  clearSyncQueue();
+  addCashMovement({ id: 'MOV-DEL-1', tipo: 'EGRESO', concepto: 'Flete prueba eliminar', montoUsd: 45, montoBs: 40699.80, cajaId: 'CAJA-01' });
+  assert.equal(getCashMovements().some(m => m.id === 'MOV-DEL-1'), true);
+  await deleteSupabaseCashMovement({ id: 'MOV-DEL-1', tipo: 'EGRESO', montoUsd: 45, montoBs: 40699.80 });
+  assert.equal(getCashMovements().some(m => m.id === 'MOV-DEL-1'), false);
+  const syncedList = await getSupabaseCashMovements();
+  assert.equal(syncedList.some(m => m.id === 'MOV-DEL-1'), false);
+  assert.equal(getSyncQueue().some(q => q.entity === 'cash_movement' && q.action === 'DELETE' && q.data?.id === 'MOV-DEL-1') || syncedList.every(m => m.id !== 'MOV-DEL-1'), true);
+  deleteCashMovement('MOV-DEL-1');
+  clearSyncQueue();
+  console.log('✓ 5. Eliminación de movimientos revierte saldo exacto en caja/banco y limpia almacenamiento/cola');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

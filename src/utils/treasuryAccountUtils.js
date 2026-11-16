@@ -321,3 +321,111 @@ export const resolveTreasuryTargetForPaymentMethod = (metodoPago = '', cashDesks
 
   return null;
 };
+
+/**
+ * Resuelve la caja operativa o cuenta bancaria afectada por un movimiento de caja.
+ */
+export const resolveTreasuryAccountForMovement = (movement, cashDesks = [], bankAccounts = []) => {
+  if (!movement || typeof movement !== 'object') return null;
+  const desks = Array.isArray(cashDesks) ? cashDesks : [];
+  const banks = Array.isArray(bankAccounts) ? bankAccounts : [];
+
+  const toResult = (kind, record) => {
+    if (!record) return null;
+    if (kind === 'CAJA') {
+      const code = record.coCaja || record.co_caja || record.id;
+      return {
+        kind: 'CAJA',
+        accountRef: `CAJA:${record.id || code}`,
+        id: record.id || code,
+        code,
+        record,
+        label: record.descripcion || record.desCaja || code
+      };
+    }
+    const code = record.codCta || record.cod_cta || record.id;
+    return {
+      kind: 'BANCO',
+      accountRef: `BANCO:${record.id || code}`,
+      id: record.id || code,
+      code,
+      record,
+      label: record.bancoNombre || record.banco_nombre || record.numCta || code
+    };
+  };
+
+  // 1. Identificador explícito de caja
+  const rawCajaId = String(movement.cajaId || movement.caja_id || '').trim();
+  if (rawCajaId) {
+    const desk = desks.find((d) => matchesCashDesk(d, rawCajaId));
+    if (desk) return toResult('CAJA', desk);
+  }
+
+  // 2. Identificador explícito de cuenta (cuentaId / cuenta_id)
+  const rawCuentaId = String(movement.cuentaId || movement.cuenta_id || '').trim();
+  if (rawCuentaId) {
+    const inferredKind = inferTreasuryAccountKind(rawCuentaId);
+    if (inferredKind === 'BANCO') {
+      const bank = banks.find((b) => matchesBankAccount(b, rawCuentaId));
+      if (bank) return toResult('BANCO', bank);
+    } else if (inferredKind === 'CAJA') {
+      const desk = desks.find((d) => matchesCashDesk(d, rawCuentaId));
+      if (desk) return toResult('CAJA', desk);
+    }
+    const anyDesk = desks.find((d) => matchesCashDesk(d, rawCuentaId));
+    if (anyDesk) return toResult('CAJA', anyDesk);
+    const anyBank = banks.find((b) => matchesBankAccount(b, rawCuentaId));
+    if (anyBank) return toResult('BANCO', anyBank);
+  }
+
+  // 3. Emparejamiento por nombre, número de cuenta bancaria o código en cuentaNombre / cajaOBanco
+  const accountName = String(
+    movement.cuentaNombre || movement.cuenta_nombre || movement.cajaOBanco || movement.caja_o_banco || ''
+  ).trim();
+  const normName = accountName.toUpperCase();
+  if (normName) {
+    const matchingDesk = desks.find((d) => {
+      const desc = String(d?.descripcion || d?.desCaja || '').trim().toUpperCase();
+      const code = String(d?.coCaja || d?.co_caja || '').trim().toUpperCase();
+      return (desc && (normName === desc || normName.includes(desc) || desc.includes(normName)))
+        || (code && (normName === code || normName.startsWith(`${code} `) || normName.includes(code)));
+    });
+    if (matchingDesk) return toResult('CAJA', matchingDesk);
+
+    const matchingBank = banks.find((b) => {
+      const bName = String(b?.bancoNombre || b?.banco_nombre || '').trim().toUpperCase();
+      const numCta = String(b?.numCta || b?.num_cta || '').trim().toUpperCase();
+      const codCta = String(b?.codCta || b?.cod_cta || '').trim().toUpperCase();
+      return (numCta && numCta.length >= 6 && normName.includes(numCta))
+        || (bName && (normName === bName || normName.includes(bName) || bName.includes(normName)))
+        || (codCta && normName === codCta);
+    });
+    if (matchingBank) return toResult('BANCO', matchingBank);
+  }
+
+  // 4. Fallback por método de pago (EFECTIVO_USD, ZELLE, PAGO_MOVIL, etc.)
+  const methodCandidate = movement.metodoPago || movement.metodo_pago || movement.metodo || accountName;
+  const fallbackTarget = resolveTreasuryTargetForPaymentMethod(methodCandidate, desks, banks);
+  if (fallbackTarget?.record) {
+    return toResult(fallbackTarget.kind, fallbackTarget.record);
+  }
+
+  return null;
+};
+
+/**
+ * Calcula los deltas inversos necesarios en USD y Bs para revertir un movimiento eliminado.
+ * - Eliminar un INGRESO resta su monto del saldo (-monto).
+ * - Eliminar un EGRESO devuelve su monto al saldo (+monto).
+ */
+export const computeMovementReversalDelta = (movement) => {
+  const tipoUpper = String(movement?.tipo || '').trim().toUpperCase();
+  const sign = tipoUpper === 'EGRESO' ? 1 : -1;
+  const rawUsd = round2(Math.abs(Number(movement?.montoUsd ?? movement?.monto_usd ?? 0) || 0));
+  const rawBs = round2(Math.abs(Number(movement?.montoBs ?? movement?.monto_bs ?? 0) || 0));
+  return {
+    sign,
+    deltaUsd: round2(sign * rawUsd),
+    deltaBs: round2(sign * rawBs)
+  };
+};

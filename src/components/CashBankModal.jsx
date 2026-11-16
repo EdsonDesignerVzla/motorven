@@ -11,6 +11,9 @@ import {
   Lock,
   ArrowUpRight,
   ArrowDownRight,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   RefreshCw,
   Printer,
   X,
@@ -36,7 +39,9 @@ import {
   computeBankAccountValuation,
   computeBankBalancesSummary,
   computeCashDesksSummary,
-  validateSufficientTreasuryBalance
+  validateSufficientTreasuryBalance,
+  resolveTreasuryAccountForMovement,
+  computeMovementReversalDelta
 } from '../utils/treasuryAccountUtils';
 import { useNotification } from '../context/NotificationContext';
 
@@ -76,6 +81,7 @@ export default function CashBankModal({
   cashMovements = [],
   profitIncomeExpenseAccounts = [],
   onAddMovement,
+  onDeleteMovement,
   onUpdateCashDesk,
   onDeleteCashDesk,
   onUpdateBankAccount,
@@ -88,6 +94,8 @@ export default function CashBankModal({
   const [activeTab, setActiveTab] = useState(initialTab || 'cajas'); // 'cajas' | 'bancos' | 'movimientos' | 'arqueo'
   const [bankSearch, setBankSearch] = useState('');
   const [movSearch, setMovSearch] = useState('');
+  const [movSort, setMovSort] = useState({ field: 'fecha', direction: 'desc' });
+  const [deletingMovId, setDeletingMovId] = useState(null);
 
   // Estado para nuevo movimiento de caja / banco / transferencia
   const [showNewMovForm, setShowNewMovForm] = useState(false);
@@ -200,7 +208,7 @@ export default function CashBankModal({
     return list;
   }, [bankAccounts, bankSearch]);
 
-  // Filtrado de movimientos
+  // Filtrado y ordenamiento de movimientos
   const filteredMovements = useMemo(() => {
     let list = Array.isArray(cashMovements) ? [...cashMovements] : [];
     if (movSearch.trim()) {
@@ -213,8 +221,111 @@ export default function CashBankModal({
         (m.cuentaNombre || m.cajaOBanco || '').toLowerCase().includes(q)
       );
     }
+
+    const dir = movSort.direction === 'asc' ? 1 : -1;
+    const field = movSort.field || 'fecha';
+    const getSortValue = (m) => {
+      switch (field) {
+        case 'fecha':
+          return new Date(m?.fecha || m?.createdAt || 0).getTime() || 0;
+        case 'tipo':
+          return String(m?.tipo || '');
+        case 'concepto':
+          return String(m?.concepto || m?.descripcion || '');
+        case 'cuenta':
+          return String(m?.cuentaNombre || m?.cuenta_nombre || m?.cajaOBanco || m?.caja_o_banco || m?.metodoPago || m?.metodo || '');
+        case 'usuario':
+          return String(m?.usuario || 'Sistema');
+        case 'montoUsd':
+          return Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0;
+        case 'montoBs':
+          return Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0;
+        default:
+          return 0;
+      }
+    };
+
+    list.sort((a, b) => {
+      const va = getSortValue(a);
+      const vb = getSortValue(b);
+      let cmp = 0;
+      if (typeof va === 'number' && typeof vb === 'number') {
+        cmp = va - vb;
+      } else {
+        cmp = String(va).localeCompare(String(vb), 'es', { numeric: true, sensitivity: 'base' });
+      }
+      return cmp * dir;
+    });
+
     return list;
-  }, [cashMovements, movSearch]);
+  }, [cashMovements, movSearch, movSort]);
+
+  const handleMovSort = (field) => {
+    setMovSort((prev) => {
+      if (prev.field === field) {
+        return { field, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      const defaultDesc = field === 'fecha' || field === 'montoUsd' || field === 'montoBs';
+      return { field, direction: defaultDesc ? 'desc' : 'asc' };
+    });
+  };
+
+  const renderMovSortableTh = (label, field, align = 'left') => {
+    const isActive = movSort.field === field;
+    const justify = align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start';
+    return (
+      <th
+        onClick={() => handleMovSort(field)}
+        title={`Ordenar por ${label}`}
+        style={{
+          padding: '0.85rem 1rem',
+          fontWeight: 600,
+          color: isActive ? '#38bdf8' : 'var(--text-secondary)',
+          textAlign: align,
+          cursor: 'pointer',
+          userSelect: 'none',
+          whiteSpace: 'nowrap'
+        }}
+      >
+        <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: justify, gap: '5px' }}>
+          <span>{label}</span>
+          {isActive ? (
+            movSort.direction === 'asc'
+              ? <ArrowUp size={12} color="#38bdf8" />
+              : <ArrowDown size={12} color="#38bdf8" />
+          ) : (
+            <ArrowUpDown size={12} style={{ opacity: 0.6 }} />
+          )}
+        </div>
+      </th>
+    );
+  };
+
+  const handleDeleteMovementClick = async (m) => {
+    if (!m || !onDeleteMovement) return;
+    const targetAcc = resolveTreasuryAccountForMovement(m, cashDesks, bankAccounts);
+    const { sign, deltaUsd, deltaBs } = computeMovementReversalDelta(m);
+    const usdTxt = formatUsd(Math.abs(deltaUsd));
+    const bsTxt = Math.abs(deltaBs) > 0 ? ` / ${formatBs(Math.abs(deltaBs))}` : '';
+    const effectDesc = targetAcc
+      ? `${sign > 0 ? 'Se reintegrarán' : 'Se descontarán'} ${usdTxt}${bsTxt} en "${targetAcc.label}".`
+      : 'No se encontró una caja o banco asociado para ajustar saldo automáticamente.';
+
+    const ok = window.confirm(
+      `¿Eliminar movimiento "${m.concepto || m.id}" (${m.tipo || 'MOV'} por ${usdTxt})?\n\n${effectDesc}`
+    );
+    if (!ok) return;
+
+    const rowKey = m.id || `${m.fecha}-${m.concepto}`;
+    try {
+      setDeletingMovId(rowKey);
+      await onDeleteMovement(m);
+    } catch (err) {
+      console.error('Error al eliminar movimiento:', err);
+    } finally {
+      setDeletingMovId(null);
+    }
+  };
 
   // Selección de caja física para arqueo (evita mezclar cajas digitales como Zelle/Binance)
   const effectiveArqueoDesk = useMemo(() => {
@@ -3068,14 +3179,14 @@ export default function CashBankModal({
                   <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
                     <thead>
                       <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Fecha</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Tipo</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Concepto</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Cuenta / Método</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Usuario</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto USD</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Monto Bs</th>
-                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center' }}>Vale PDF</th>
+                        {renderMovSortableTh('Fecha', 'fecha', 'left')}
+                        {renderMovSortableTh('Tipo', 'tipo', 'left')}
+                        {renderMovSortableTh('Concepto', 'concepto', 'left')}
+                        {renderMovSortableTh('Cuenta / Método', 'cuenta', 'left')}
+                        {renderMovSortableTh('Usuario', 'usuario', 'left')}
+                        {renderMovSortableTh('Monto USD', 'montoUsd', 'right')}
+                        {renderMovSortableTh('Monto Bs', 'montoBs', 'right')}
+                        <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center', whiteSpace: 'nowrap' }}>Vale PDF / Acción</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3085,6 +3196,8 @@ export default function CashBankModal({
                         const movBs = Number(m.montoBs ?? m.monto_bs ?? 0);
                         const accountLabel = m.cuentaNombre || m.cuenta_nombre || m.cajaOBanco || m.caja_o_banco || m.metodoPago || m.metodo || 'Efectivo';
                         const methodLabel = m.metodoPago || m.metodo_pago || m.metodo || '';
+                        const rowKey = m.id || `${m.fecha}-${m.concepto}`;
+                        const isDeleting = deletingMovId === rowKey;
                         return (
                           <tr
                             key={m.id || idx}
@@ -3130,16 +3243,41 @@ export default function CashBankModal({
                             <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)' }}>
                               {formatBs(movBs)}
                             </td>
-                            <td style={{ padding: '0.85rem 1rem', textAlign: 'center' }}>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
-                                onClick={() => generateExpenseVoucherPDF({ movement: m, config, currentUser })}
-                                title="Generar Comprobante / Vale de Caja en PDF"
-                              >
-                                <Printer size={12} /> Vale PDF
-                              </button>
+                            <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                              <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '3px 8px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                  onClick={() => generateExpenseVoucherPDF({ movement: m, config, currentUser })}
+                                  title="Generar Comprobante / Vale de Caja en PDF"
+                                >
+                                  <Printer size={12} /> Vale PDF
+                                </button>
+                                {onDeleteMovement && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm"
+                                    disabled={isDeleting}
+                                    onClick={() => handleDeleteMovementClick(m)}
+                                    title="Eliminar movimiento y revertir su saldo en caja o banco"
+                                    style={{
+                                      padding: '4px 7px',
+                                      borderRadius: '6px',
+                                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                                      background: 'rgba(239, 68, 68, 0.12)',
+                                      color: '#ef4444',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      cursor: isDeleting ? 'wait' : 'pointer',
+                                      opacity: isDeleting ? 0.55 : 1
+                                    }}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );

@@ -88,6 +88,7 @@ import {
   updateStoragePurchase,
   getCashMovements as getStorageCashMovements,
   addCashMovement as addStorageCashMovement,
+  deleteCashMovement as deleteStorageCashMovement,
   getFiscalClosures as getStorageFiscalClosures,
   saveFiscalClosure as saveStorageFiscalClosure,
   closeSalesInStorage,
@@ -3683,7 +3684,7 @@ export const saveSupabasePurchase = async (purchaseData) => {
 
 // Cash Movements
 export const getSupabaseCashMovements = async () => {
-  if (!isSupabaseAvailable) return getStorageCashMovements();
+  if (!isSupabaseAvailable) return applyPendingQueueToEntities('cash_movement', getStorageCashMovements());
   try {
     const { data, error } = await withTimeout(
       supabase.from('cash_movements').select('*').order('fecha', { ascending: false })
@@ -3691,17 +3692,66 @@ export const getSupabaseCashMovements = async () => {
 
     if (error) {
       markSupabaseOffline(error, 'getSupabaseCashMovements');
-      return getStorageCashMovements();
+      return applyPendingQueueToEntities('cash_movement', getStorageCashMovements());
     }
     isSupabaseAvailable = true;
-    const mapped = (data || []).map(mapCashMovementFromDb);
+    const mapped = applyPendingQueueToEntities('cash_movement', (data || []).map(mapCashMovementFromDb));
     try {
       localStorage.setItem('sm_cash_movements_v4_fiscal', JSON.stringify(mapped));
     } catch (_) {}
     return mapped;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseCashMovements');
-    return getStorageCashMovements();
+    return applyPendingQueueToEntities('cash_movement', getStorageCashMovements());
+  }
+};
+
+export const deleteCashMovementFromSupabaseDirect = async (movId) => {
+  const cleanId = String(movId || '').trim();
+  if (!cleanId) return true;
+  const { error } = await withTimeout(
+    supabase.from('cash_movements').delete().eq('id', cleanId),
+    4000
+  );
+  if (error) throw error;
+  isSupabaseAvailable = true;
+  return true;
+};
+
+export const deleteSupabaseCashMovement = async (movOrId) => {
+  const targetId = String(typeof movOrId === 'object' ? (movOrId?.id || '') : (movOrId || '')).trim();
+  const updatedLocal = deleteStorageCashMovement(movOrId);
+
+  const emit = () => {
+    if (!targetId) return;
+    broadcastReconcileChange({
+      tableId: 'cash_movements',
+      action: 'DELETE',
+      key: targetId,
+      item: { id: targetId }
+    });
+  };
+
+  if (!targetId) {
+    return updatedLocal;
+  }
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('cash_movement', 'DELETE', { id: targetId });
+    emit();
+    return updatedLocal;
+  }
+
+  try {
+    await deleteCashMovementFromSupabaseDirect(targetId);
+    emit();
+    return updatedLocal;
+  } catch (err) {
+    console.warn('[Supabase] Encolando eliminación de movimiento de caja:', err?.message || err);
+    markSupabaseOffline(err, 'deleteSupabaseCashMovement');
+    enqueueSyncAction('cash_movement', 'DELETE', { id: targetId });
+    emit();
+    return updatedLocal;
   }
 };
 

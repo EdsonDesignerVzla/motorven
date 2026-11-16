@@ -5,6 +5,8 @@ import {
   matchesBankAccount,
   applyTreasuryBalanceDelta,
   resolveTreasuryTargetForPaymentMethod,
+  resolveTreasuryAccountForMovement,
+  computeMovementReversalDelta,
   resolveExchangeRates
 } from './utils/treasuryAccountUtils';
 import { normalizeRateType } from './utils/rateClassificationUtils';
@@ -96,6 +98,7 @@ import {
   processSupabaseSale,
   getSupabaseCashMovements,
   addSupabaseCashMovement,
+  deleteSupabaseCashMovement,
   getSupabasePurchases,
   saveSupabasePurchase,
   getSupabaseOrders,
@@ -2763,6 +2766,64 @@ function MainApp() {
     }
   };
 
+  // Eliminar Movimiento de Caja y revertir su efecto en la caja/banco correspondiente
+  const handleDeleteCashMovement = async (movOrId) => {
+    try {
+      const targetId = String(typeof movOrId === 'object' ? (movOrId?.id || '') : (movOrId || '')).trim();
+      const targetMov = (typeof movOrId === 'object' && movOrId)
+        ? movOrId
+        : (cashMovements || []).find((m) => String(m?.id || '').trim() === targetId);
+
+      if (!targetMov && !targetId) {
+        notify.warning('No se identificó el movimiento a eliminar');
+        return;
+      }
+
+      const desksList = Array.isArray(profitCashDesksRef.current) && profitCashDesksRef.current.length > 0
+        ? profitCashDesksRef.current
+        : profitCashDesks;
+      const banksList = Array.isArray(profitBankAccountsRef.current) && profitBankAccountsRef.current.length > 0
+        ? profitBankAccountsRef.current
+        : profitBankAccounts;
+
+      const resolvedAccount = targetMov
+        ? resolveTreasuryAccountForMovement(targetMov, desksList, banksList)
+        : null;
+      const { sign, deltaUsd, deltaBs } = computeMovementReversalDelta(targetMov);
+
+      if (resolvedAccount && (Math.abs(deltaUsd) > 0 || Math.abs(deltaBs) > 0)) {
+        await applyTreasuryAccountDelta({
+          account: {
+            kind: resolvedAccount.kind,
+            id: resolvedAccount.id,
+            coCaja: resolvedAccount.code,
+            codCta: resolvedAccount.code
+          },
+          deltaUsd,
+          deltaBs,
+          clampZero: sign < 0
+        });
+      }
+
+      const remainingLocal = await deleteSupabaseCashMovement(targetMov || targetId);
+      const nextList = Array.isArray(remainingLocal)
+        ? remainingLocal
+        : (await getSupabaseCashMovements().catch(() => []));
+      setCashMovementsState([...nextList]);
+
+      if (resolvedAccount) {
+        const actionWord = sign > 0 ? 'reintegrado en' : 'descontado de';
+        notify.success(`Movimiento eliminado y saldo ${actionWord} ${resolvedAccount.label}`);
+      } else {
+        notify.success('Movimiento eliminado del historial de caja');
+      }
+    } catch (err) {
+      console.error('Error eliminando movimiento de caja:', err);
+      notify.error('Error al eliminar el movimiento: ' + (err?.message || 'Error desconocido'));
+      throw err;
+    }
+  };
+
   const handleUpdateCashDesk = async (desk) => {
     await updateSupabaseProfitCashDesk(desk);
     const fresh = await getSupabaseProfitCashDesks();
@@ -3759,6 +3820,7 @@ function MainApp() {
         onRejectClient={handleRejectClient}
         onRegisterPurchase={handleRegisterPurchase}
         onAddCashMovement={handleAddCashMovement}
+        onDeleteCashMovement={handleDeleteCashMovement}
         onUpdateCashDesk={handleUpdateCashDesk}
         onDeleteCashDesk={handleDeleteCashDesk}
         onUpdateBankAccount={handleUpdateBankAccount}
@@ -4074,6 +4136,7 @@ function MainApp() {
               cashMovements={cashMovements}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={handleAddCashMovement}
+              onDeleteMovement={handleDeleteCashMovement}
               onUpdateCashDesk={handleUpdateCashDesk}
               onDeleteCashDesk={handleDeleteCashDesk}
               onUpdateBankAccount={handleUpdateBankAccount}
