@@ -38,6 +38,7 @@ import SupabaseTablesView from './views/SupabaseTablesView';
 import ProfitCxcStandaloneView from './views/ProfitCxcStandaloneView';
 import DeviceSimulatorView from './views/DeviceSimulatorView';
 import SellerOrderPOSView from './views/SellerOrderPOSView';
+import PasivosView from './views/PasivosView';
 import LoginView from './views/LoginView';
 import OrdersSalesModal from './components/OrdersSalesModal';
 import AppConfigModal from './components/AppConfigModal';
@@ -3726,6 +3727,10 @@ function MainApp() {
     setPartnerPayableAccountsState(prev => removePartnerPayableAccountFromList(prev, idOrCode));
   };
 
+  const handleAdjustPartnerPayableBalance = ({ targetRef, deltaUsd = 0, deltaBs = 0 }) => {
+    setPartnerPayableAccountsState(prev => applyPartnerPayableBalanceDeltaInList(prev, { targetRef, deltaUsd, deltaBs }));
+  };
+
   // Registrar Pago a Proveedor en Cuentas por Pagar (Parte A) con atomicidad y egreso en flujo de caja
   const handleRegisterCxpPayment = async ({ updatedDoc, paymentPayload, selectedAccount }) => {
     const prevDocSnapshot = (profitAccountsPayable || []).find(p => doesPayableMatchDocument(p, updatedDoc)) || null;
@@ -4359,9 +4364,6 @@ function MainApp() {
               cashDesks={profitCashDesks}
               bankAccounts={profitBankAccounts}
               cashMovements={cashMovements}
-              partnerPayableAccounts={partnerPayableAccounts}
-              onSavePartnerPayableAccount={handleSavePartnerPayableAccount}
-              onDeletePartnerPayableAccount={handleDeletePartnerPayableAccount}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={handleAddCashMovement}
               onUpdateMovement={handleUpdateCashMovement}
@@ -4421,6 +4423,22 @@ function MainApp() {
               onRegisterPayment={handleRegisterCxpPayment}
               onSaveDocument={handleSaveCxpDocument}
               onDeleteDocument={handleDeleteCxpDocument}
+            />
+          )}
+
+          {/* MÓDULO 8.3: CUENTAS DE PASIVO & SOCIOS (2.02.01.001) */}
+          {activeTab === 'pasivos' && canAccessModule(currentUser?.rol, 'pasivos', currentUser) && (
+            <PasivosView
+              partnerPayableAccounts={partnerPayableAccounts}
+              onSavePartnerPayableAccount={handleSavePartnerPayableAccount}
+              onDeletePartnerPayableAccount={handleDeletePartnerPayableAccount}
+              onAdjustPartnerPayableBalance={handleAdjustPartnerPayableBalance}
+              accountsPayable={profitAccountsPayable}
+              profitAccountsPayable={profitAccountsPayable}
+              supplierPayments={profitSupplierPayments}
+              config={config}
+              currentUser={currentUser}
+              onNavigate={setActiveTab}
             />
           )}
 

@@ -20,7 +20,8 @@ import {
   Database,
   Settings,
   Bell,
-  Smartphone
+  Smartphone,
+  Scale
 } from 'lucide-react';
 import MotorvenLogo from './MotorvenLogo';
 import { canAccessModule, getRoleMeta, normalizeRole, isMasterAdmin } from '../services/authService';
@@ -87,6 +88,7 @@ export default function Navigation({
     { id: 'caja', label: 'Caja Chica & Bancos', icon: Wallet },
     { id: 'cxc', label: 'Cuentas por Cobrar (CxC)', icon: DollarSign },
     { id: 'cxp', label: 'Cuentas por Pagar (CxP)', icon: Building2 },
+    { id: 'pasivos', label: 'Cuentas de Pasivo', icon: Scale },
     { id: 'reportes', label: 'Libros Fiscales SENIAT', icon: FileSpreadsheet },
     { id: 'auditoria', label: 'Auditoría & Contable', icon: ShieldCheck },
     { id: 'usuarios', label: 'Gestión de Usuarios', icon: Users },

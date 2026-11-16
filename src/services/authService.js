@@ -59,7 +59,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #e60012 0%, #99000c 100%)',
     avatar: '👑',
     defaultCargo: 'Administrador Master / Propietario',
-    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios'],
+    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     defaultTab: 'dashboard'
   },
   {
@@ -89,7 +89,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
     avatar: '👔',
     defaultCargo: 'Gerente General / Dirección',
-    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios'],
+    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     defaultTab: 'dashboard'
   },
   {
@@ -104,7 +104,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
     avatar: '👨‍💼',
     defaultCargo: 'Administración & Finanzas',
-    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios'],
+    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     defaultTab: 'dashboard'
   },
   {
@@ -324,7 +324,7 @@ export const DEFAULT_USERS = TEMPORARY_USERS && TEMPORARY_USERS.length > 0 ? TEM
     cargo: 'Administrador Master / Dirección',
     rol: 'ADMINISTRADOR MASTER',
     departamento: 'TI',
-    modulos: ['dashboard', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios'],
+    modulos: ['dashboard', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     avatar: '👑',
     foto: null,
     color: '#e60012',
@@ -371,6 +371,7 @@ export const SYSTEM_MODULES = [
   { id: 'caja', label: 'Caja Chica & Bancos', badge: 'Arqueo & Tesorería' },
   { id: 'cxc', label: 'Cuentas por Cobrar (CxC)', badge: 'Aging & Cobranzas' },
   { id: 'cxp', label: 'Cuentas por Pagar (CxP)', badge: 'Proveedores & Deudas' },
+  { id: 'pasivos', label: 'Cuentas de Pasivo', badge: 'Socios & Pasivos Contables' },
   { id: 'reportes', label: 'Libros Fiscales SENIAT', badge: 'Ventas/Compras IVA' },
   { id: 'auditoria', label: 'Auditoría & Contabilidad', badge: 'Libro Diario & Trazabilidad' },
   { id: 'usuarios', label: 'Usuarios & Accesos', badge: 'Gestión Operadores' },
@@ -380,12 +381,12 @@ export const SYSTEM_MODULES = [
 
 // Módulos permitidos por cada rol por defecto
 export const ROLE_PERMISSIONS = {
-  'ADMINISTRADOR MASTER': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'ADMINISTRADOR MASTER': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
   'TECNOLOGÍA & INFORMÁTICA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
   'ADMINISTRADOR DEL SISTEMA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
-  'GERENCIA': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
-  'ADMINISTRACIÓN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
-  'ADMIN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'GERENCIA': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMINISTRACIÓN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMIN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
   'VENTAS': ['preventa', 'pedidos', 'ventas', 'vendedores', 'inventario', 'cxc', 'notificaciones'],
   'VENDEDOR': ['preventa', 'pedidos', 'ventas', 'vendedores', 'inventario', 'cxc', 'notificaciones'],
   'ALMACEN': ['pedidos', 'inventario', 'compras', 'notificaciones'],
