@@ -132,8 +132,15 @@ export default function SalesPOSView({
   useEffect(() => {
     if (!selectedClient && approvedClients && approvedClients.length > 0) {
       setSelectedClient(resolveDefaultPosClient(approvedClients));
+      return;
     }
-  }, [approvedClients, selectedClient]);
+    if (selectedClient?.id && !isOrderLocked && approvedClients && approvedClients.length > 0) {
+      const freshClient = approvedClients.find(c => c && c.id === selectedClient.id);
+      if (freshClient && freshClient !== selectedClient) {
+        setSelectedClient(freshClient);
+      }
+    }
+  }, [approvedClients, selectedClient, isOrderLocked]);
 
   const [cartItems, setCartItems] = useState([]);
   const [condicionPago, setCondicionPago] = useState('CONTADO');
@@ -208,25 +215,37 @@ export default function SalesPOSView({
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase();
 
-  // Lista de clientes aprobados ordenada alfabéticamente y filtrada por palabras clave + tipo SENIAT
-  const filteredSortedClients = useMemo(() => {
-    const sorted = [...approvedClients]
-      .filter(c => clientTypeFilter === 'ALL' || resolveClientContributorType(c) === clientTypeFilter)
+  // Pre-indexar clientes aprobados (ordenados y con texto normalizado) una sola vez para búsqueda instantánea
+  const indexedApprovedClients = useMemo(() => {
+    return [...approvedClients]
       .sort((a, b) =>
         String(a?.nombre || '').localeCompare(String(b?.nombre || ''), 'es', { sensitivity: 'base' })
-      );
+      )
+      .map((c) => ({
+        client: c,
+        contribType: resolveClientContributorType(c),
+        searchHaystack: normalizeText(
+          [c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' ')
+        )
+      }));
+  }, [approvedClients]);
+
+  // Lista de clientes aprobados filtrada en O(N) sobre índice ya normalizado y ordenado
+  const filteredSortedClients = useMemo(() => {
     const keywords = normalizeText(clientSearch).split(/\s+/).filter(Boolean);
-    if (keywords.length === 0) return sorted;
-    return sorted.filter(c => {
-      const haystack = normalizeText(
-        [c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' ')
-      );
-      return keywords.every(k => haystack.includes(k));
-    });
-  }, [approvedClients, clientSearch, clientTypeFilter]);
+    return indexedApprovedClients
+      .filter((entry) => {
+        if (clientTypeFilter !== 'ALL' && entry.contribType !== clientTypeFilter) return false;
+        if (keywords.length === 0) return true;
+        return keywords.every((k) => entry.searchHaystack.includes(k));
+      })
+      .map((entry) => entry.client);
+  }, [indexedApprovedClients, clientSearch, clientTypeFilter]);
 
   const pendingClientsMatchingSearch = useMemo(() => {
-    const keywords = normalizeText(clientSearch).split(/\s+/).filter(Boolean);
+    const raw = clientSearch.trim();
+    if (!raw) return [];
+    const keywords = normalizeText(raw).split(/\s+/).filter(Boolean);
     if (keywords.length === 0) return [];
     return (clients || []).filter(c => {
       if (isClientApproved(c)) return false;
@@ -237,7 +256,7 @@ export default function SalesPOSView({
     });
   }, [clients, clientSearch]);
 
-  // Lista de pedidos de preventa listos y aprobados para facturar en Caja
+  // Lista de pedidos de preventa válidos (excluye solicitudes de cliente y pedidos huérfanos sin ítems)
   const pendingSellerOrders = useMemo(() => {
     if (!Array.isArray(orders)) return [];
     return orders.filter((o) => {
@@ -246,7 +265,9 @@ export default function SalesPOSView({
       const mod = String(o.modalidadVenta || o.modalidad_venta || '').trim().toUpperCase();
       if (tipo === 'SOLICITUD_CLIENTE' || mod === 'SOLICITUD_CLIENTE') return false;
       const st = String(o.status || o.estado || '').trim().toUpperCase();
-      return st === 'APROBADO' || st === 'EMITIDO' || st === 'EN_TRANSITO';
+      if (st !== 'APROBADO' && st !== 'EMITIDO' && st !== 'EN_TRANSITO') return false;
+      const orderItems = Array.isArray(o.items) ? o.items : (Array.isArray(o.renglones) ? o.renglones : []);
+      return orderItems.length > 0;
     });
   }, [orders]);
 
@@ -340,9 +361,15 @@ export default function SalesPOSView({
       setCreditOverrideJustification('');
     }
 
-    // 4. Cargar renglones al carrito
-    if (Array.isArray(orderToLoad.items) && orderToLoad.items.length > 0) {
-      const loadedCart = orderToLoad.items.map((it) => {
+    // 4. Cargar renglones al carrito (rechazar pedidos huérfanos sin ítems)
+    const rawOrderItems = Array.isArray(orderToLoad.items)
+      ? orderToLoad.items
+      : (Array.isArray(orderToLoad.renglones) ? orderToLoad.renglones : []);
+    if (rawOrderItems.length === 0) {
+      notify.warning(`El pedido ${orderToLoad.numeroDoc || orderToLoad.id} no contiene productos válidos para facturar.`);
+      return;
+    }
+    const loadedCart = rawOrderItems.map((it) => {
         const matchedProd = products.find((p) => p.id === it.articuloId || p.codigo === it.articuloId || p.codigo === it.codigo);
         const precio = Number(it.precioUnitarioUsd) > 0
           ? Number(it.precioUnitarioUsd)
@@ -380,7 +407,6 @@ export default function SalesPOSView({
       if (!loadedStockCheck.isValid) {
         notify.error(loadedStockCheck.message);
       }
-    }
 
     const parsedOrderEmission = parseInvoiceDateInfo(orderToLoad.fechaEmision || orderToLoad.fecha || orderToLoad.created_at);
     const safeOrderEmissionDate = parsedOrderEmission?.date || new Date();
@@ -712,16 +738,38 @@ export default function SalesPOSView({
   // -------------------------------------------------------------------------
   // EVALUACIÓN DE NORMAS DE CRÉDITO COMERCIAL EN POS MOSTRADOR Y OFICINA
   // -------------------------------------------------------------------------
+  const selectedClientCreditDocs = useMemo(() => {
+    if (!selectedClient) return { invoices: [], sales: [] };
+    const cRif = String(selectedClient.rif || '').trim().toUpperCase();
+    const cId = String(selectedClient.id || '').trim();
+    const cCod = String(selectedClient.codigo || '').trim();
+    const cNom = String(selectedClient.nombre || selectedClient.razonSocial || '').trim().toLowerCase();
+    const matchesClient = (d) => {
+      if (!d) return false;
+      const dRif = String(d.clienteRif || d.rif || d.cliente_rif || '').trim().toUpperCase();
+      if (cRif && dRif && dRif === cRif) return true;
+      const dId = String(d.clienteId || d.cliente_id || d.id || '').trim();
+      if (cId && dId && dId === cId) return true;
+      if (cCod && dId && dId === cCod) return true;
+      const dNom = String(d.clienteNombre || d.cliente_nombre || d.nombre || '').trim().toLowerCase();
+      return Boolean(cNom && dNom && dNom === cNom);
+    };
+    return {
+      invoices: (profitInvoices || []).filter(matchesClient),
+      sales: (sales || []).filter(matchesClient)
+    };
+  }, [selectedClient, profitInvoices, sales]);
+
   const clientCreditEvaluation = useMemo(
     () =>
       evaluateClientCreditPolicy({
         client: selectedClient,
-        profitInvoices,
-        sales,
+        profitInvoices: selectedClientCreditDocs.invoices,
+        sales: selectedClientCreditDocs.sales,
         tasaBcv,
         montoOrdenUsd: totalUsd
       }),
-    [selectedClient, profitInvoices, sales, tasaBcv, totalUsd]
+    [selectedClient, selectedClientCreditDocs, tasaBcv, totalUsd]
   );
 
   const isTermRequiresMandatoryApproval = condicionPago === 'CREDITO' && creditTerm === '30_DIAS';
@@ -784,8 +832,8 @@ export default function SalesPOSView({
       return;
     }
 
-    if (tipoDoc === 'FACTURA' && !validateRif(selectedClient?.rif || '')) {
-      notify.warning('El cliente seleccionado no posee un RIF o Cédula fiscal válida para emitir Factura SENIAT.');
+    if ((tipoDoc === 'FACTURA' || tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') && !validateRif(selectedClient?.rif || '')) {
+      notify.warning('El cliente seleccionado no posee un RIF o Cédula fiscal válida para emitir documentos fiscales SENIAT.');
       return;
     }
 
@@ -956,24 +1004,47 @@ export default function SalesPOSView({
     }
   };
 
-  const filteredProducts = products.filter(p => {
+  const productsByKey = useMemo(() => {
+    const map = new Map();
+    (products || []).forEach((p) => {
+      if (!p) return;
+      if (p.id) map.set(p.id, p);
+      if (p.codigo) map.set(p.codigo, p);
+    });
+    return map;
+  }, [products]);
+
+  const cartQtyById = useMemo(() => {
+    const map = new Map();
+    (cartItems || []).forEach((item) => {
+      if (item?.articuloId) map.set(item.articuloId, Number(item.cantidad || 0));
+    });
+    return map;
+  }, [cartItems]);
+
+  const filteredProducts = useMemo(() => {
     const query = searchQuery.toLowerCase();
-    const matchesQuery =
-      p.codigo.toLowerCase().includes(query) ||
-      p.oem.toLowerCase().includes(query) ||
-      p.descripcion.toLowerCase().includes(query) ||
-      (p.viscosidad && p.viscosidad.toLowerCase().includes(query));
+    return (products || []).filter(p => {
+      if (!p) return false;
+      const matchesQuery = !query ||
+        (p.codigo && p.codigo.toLowerCase().includes(query)) ||
+        (p.oem && p.oem.toLowerCase().includes(query)) ||
+        (p.descripcion && p.descripcion.toLowerCase().includes(query)) ||
+        (p.viscosidad && p.viscosidad.toLowerCase().includes(query));
 
-    const matchesCat = selectedCategory === 'TODOS' || p.categoria === selectedCategory;
-    return matchesQuery && matchesCat;
-  });
+      const matchesCat = selectedCategory === 'TODOS' || p.categoria === selectedCategory;
+      return matchesQuery && matchesCat;
+    });
+  }, [products, searchQuery, selectedCategory]);
 
-  const availableCount = filteredProducts.filter(p => {
-    const wStocks = getProductWarehouseStocks(p);
-    const rawStock = activeDocumentWarehouseTarget.warehouseCode === '02' ? wStocks.stock02 : wStocks.stock01;
-    const committed = getProductCommittedQty(p);
-    return (rawStock - committed) > 0;
-  }).length;
+  const availableCount = useMemo(() => {
+    return filteredProducts.filter(p => {
+      const wStocks = getProductWarehouseStocks(p);
+      const rawStock = activeDocumentWarehouseTarget.warehouseCode === '02' ? wStocks.stock02 : wStocks.stock01;
+      const committed = getProductCommittedQty(p);
+      return (rawStock - committed) > 0;
+    }).length;
+  }, [filteredProducts, activeDocumentWarehouseTarget.warehouseCode, committedStockMap]);
   const outOfStockCount = filteredProducts.length - availableCount;
 
   // Filtrado de la bandeja de órdenes de preventa para la cajera
@@ -1385,8 +1456,7 @@ export default function SalesPOSView({
                 const pLiters = resolveProductLitersPerUnit(p);
                 const committedQty = getProductCommittedQty(p);
                 const stockMin = Number(p.stockMinimo ?? p.stock_minimo ?? 10);
-                const cartItem = cartItems.find(item => item.articuloId === p.id);
-                const inCartQty = cartItem?.cantidad || 0;
+                const inCartQty = cartQtyById.get(p.id) || 0;
                 const maxAvailable = Math.max(0, rawStock - committedQty);
                 const disponibleReal = Math.max(0, maxAvailable - inCartQty);
                 const isOutOfStock = maxAvailable <= 0;
@@ -1945,15 +2015,20 @@ export default function SalesPOSView({
                     onChange={(e) => {
                       const value = e.target.value;
                       setClientSearch(value);
-                      // Si hay una sola coincidencia aprobada en el filtro activo, se selecciona automáticamente
+                      // Si hay una sola coincidencia aprobada en el filtro activo, se selecciona automáticamente (usando índice pre-normalizado)
                       const kws = normalizeText(value).split(/\s+/).filter(Boolean);
                       if (kws.length > 0) {
-                        const matches = approvedClients.filter(c => {
-                          if (clientTypeFilter !== 'ALL' && resolveClientContributorType(c) !== clientTypeFilter) return false;
-                          const h = normalizeText([c.nombre, c.rif, c.tipoCliente, c.domicilioFiscal, c.ciudad, c.estado, c.telefono, c.email].join(' '));
-                          return kws.every(k => h.includes(k));
-                        });
-                        if (matches.length === 1) setSelectedClient(matches[0]);
+                        let singleMatch = null;
+                        let matchCount = 0;
+                        for (const entry of indexedApprovedClients) {
+                          if (clientTypeFilter !== 'ALL' && entry.contribType !== clientTypeFilter) continue;
+                          if (kws.every(k => entry.searchHaystack.includes(k))) {
+                            singleMatch = entry.client;
+                            matchCount++;
+                            if (matchCount > 1) break;
+                          }
+                        }
+                        if (matchCount === 1 && singleMatch) setSelectedClient(singleMatch);
                       }
                     }}
                     style={{ width: '100%', fontSize: '0.75rem', padding: '0.4rem 1.8rem 0.4rem 1.8rem' }}
@@ -2081,7 +2156,7 @@ export default function SalesPOSView({
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', paddingRight: '4px', paddingBottom: '0.45rem' }}>
                 {cartItems.map(item => {
-                  const itemProd = products.find(p => p && (p.id === item.articuloId || p.codigo === item.codigo || p.codigo === item.articuloId));
+                  const itemProd = productsByKey.get(item.articuloId) || productsByKey.get(item.codigo);
                   const itemWhStocks = itemProd ? getProductWarehouseStocks(itemProd) : { stock01: 0, stock02: 0 };
                   const itemWhStock = cartWarehouseValidation.warehouseCode === '02' ? Number(itemWhStocks.stock02 || 0) : Number(itemWhStocks.stock01 || 0);
                   const isItemBlockedZero = cartWarehouseValidation.requiresPositiveStock && (!(itemWhStock > 0) || !(Number(item.cantidad) > 0));
@@ -2693,33 +2768,37 @@ export default function SalesPOSView({
         />
       )}
 
-      {/* Modal de Control de Devoluciones y Garantías de Clientes Supabase */}
-      <CustomerReturnsModal
-        isOpen={showReturnsModal}
-        onClose={() => setShowReturnsModal(false)}
-        profitReturns={profitReturns}
-        clients={clients}
-        products={products}
-        sales={sales}
-        profitInvoices={profitInvoices}
-        config={safeConfig}
-        currentUser={currentUser}
-        onSyncProfit={onSyncProfit}
-        onSaveCustomerReturn={onSaveCustomerReturn}
-      />
+      {/* Modal de Control de Devoluciones y Garantías de Clientes Supabase (montaje perezoso cuando está abierto) */}
+      {showReturnsModal && (
+        <CustomerReturnsModal
+          isOpen={showReturnsModal}
+          onClose={() => setShowReturnsModal(false)}
+          profitReturns={profitReturns}
+          clients={clients}
+          products={products}
+          sales={sales}
+          profitInvoices={profitInvoices}
+          config={safeConfig}
+          currentUser={currentUser}
+          onSyncProfit={onSyncProfit}
+          onSaveCustomerReturn={onSaveCustomerReturn}
+        />
+      )}
 
-      {/* Modal de Score de Crédito & Validación Pre-Despacho */}
-      <CreditScoreEngineModal
-        isOpen={showCreditScoreModal}
-        onClose={() => setShowCreditScoreModal(false)}
-        clients={clients}
-        profitInvoices={profitInvoices}
-        profitCollections={profitCollections}
-        config={safeConfig}
-        currentUser={currentUser}
-        tasaBcv={tasaBcv}
-        onSelectClientForSale={(client) => setSelectedClient(client)}
-      />
+      {/* Modal de Score de Crédito & Validación Pre-Despacho (montaje perezoso cuando está abierto) */}
+      {showCreditScoreModal && (
+        <CreditScoreEngineModal
+          isOpen={showCreditScoreModal}
+          onClose={() => setShowCreditScoreModal(false)}
+          clients={clients}
+          profitInvoices={profitInvoices}
+          profitCollections={profitCollections}
+          config={safeConfig}
+          currentUser={currentUser}
+          tasaBcv={tasaBcv}
+          onSelectClientForSale={(client) => setSelectedClient(client)}
+        />
+      )}
 
       {/* Modal / Drawer: Bandeja de Pedidos de Vendedores */}
       {showOrdersDrawer && (
@@ -3114,52 +3193,58 @@ export default function SalesPOSView({
       )}
 
       {/* MODAL: REGISTRO DIRECTO / SOLICITUD DE NUEVO CLIENTE EN CAJA */}
-      <ClientRegistrationModal
-        isOpen={showNewClientModal}
-        onClose={() => setShowNewClientModal(false)}
-        clients={clients}
-        profitSellers={profitSellers}
-        profitZones={profitZones}
-        currentUser={currentUser}
-        onSaveClient={onSaveClient}
-        onSuccess={(saved) => {
-          if (saved && isClientApproved(saved)) {
-            setSelectedClient(saved);
-          }
-        }}
-      />
+      {showNewClientModal && (
+        <ClientRegistrationModal
+          isOpen={showNewClientModal}
+          onClose={() => setShowNewClientModal(false)}
+          clients={clients}
+          profitSellers={profitSellers}
+          profitZones={profitZones}
+          currentUser={currentUser}
+          onSaveClient={onSaveClient}
+          onSuccess={(saved) => {
+            if (saved && isClientApproved(saved)) {
+              setSelectedClient(saved);
+            }
+          }}
+        />
+      )}
 
       {/* MODAL: APROBACIONES DE CLIENTES NUEVOS (CAJA PRINCIPAL / GERENCIA / COBRANZAS) */}
-      <ClientApprovalsModal
-        isOpen={showClientApprovalsModal}
-        onClose={() => setShowClientApprovalsModal(false)}
-        clients={clients}
-        currentUser={currentUser}
-        onApproveClient={onApproveClient}
-        onRejectClient={onRejectClient}
-        onOpenNewClient={() => setShowNewClientModal(true)}
-      />
+      {showClientApprovalsModal && (
+        <ClientApprovalsModal
+          isOpen={showClientApprovalsModal}
+          onClose={() => setShowClientApprovalsModal(false)}
+          clients={clients}
+          currentUser={currentUser}
+          onApproveClient={onApproveClient}
+          onRejectClient={onRejectClient}
+          onOpenNewClient={() => setShowNewClientModal(true)}
+        />
+      )}
 
       {/* MODAL: DIRECTORIO DE CLIENTES */}
-      <ClientsDirectoryModal
-        isOpen={showClientsDirectoryModal}
-        onClose={() => setShowClientsDirectoryModal(false)}
-        clients={clients}
-        profitInvoices={profitInvoices}
-        sales={sales}
-        tasaBcv={Number(safeConfig.tasaDolar) || 827.73}
-        currentUser={currentUser}
-        profitSellers={profitSellers}
-        profitZones={profitZones}
-        onSaveClient={onSaveClient}
-        onDeleteClient={onDeleteClient}
-        onApproveClient={onApproveClient}
-        onRejectClient={onRejectClient}
-        onSelectClientForPOS={(client) => {
-          setSelectedClient(client);
-          notify.success(`Cliente "${client.nombre}" seleccionado para facturar en POS.`);
-        }}
-      />
+      {showClientsDirectoryModal && (
+        <ClientsDirectoryModal
+          isOpen={showClientsDirectoryModal}
+          onClose={() => setShowClientsDirectoryModal(false)}
+          clients={clients}
+          profitInvoices={profitInvoices}
+          sales={sales}
+          tasaBcv={Number(safeConfig.tasaDolar) || 827.73}
+          currentUser={currentUser}
+          profitSellers={profitSellers}
+          profitZones={profitZones}
+          onSaveClient={onSaveClient}
+          onDeleteClient={onDeleteClient}
+          onApproveClient={onApproveClient}
+          onRejectClient={onRejectClient}
+          onSelectClientForPOS={(client) => {
+            setSelectedClient(client);
+            notify.success(`Cliente "${client.nombre}" seleccionado para facturar en POS.`);
+          }}
+        />
+      )}
     </div>
   );
 }

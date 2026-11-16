@@ -149,11 +149,14 @@ import {
   buildCxpCompositeKey,
   buildCxpLookupKeys,
   buildCxpStableId,
+  dedupePayablesList,
+  dedupeSupplierPaymentsList,
   doesPayableMatchDocument,
   normalizeProviderRif,
   normalizeDocNumber,
   normalizeDocType
 } from '../utils/cxpUtils.js';
+import { dedupeCashMovements } from '../utils/treasuryAccountUtils.js';
 import { round2 } from './formatService.js';
 
 const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
@@ -3685,8 +3688,79 @@ export const saveSupabasePurchase = async (purchaseData) => {
 };
 
 // Cash Movements
+export const CASH_MOVEMENTS_DELETED_KEY = 'sm_deleted_cash_movements_v1';
+
+const getDeletedCashMovementIds = () => {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(CASH_MOVEMENTS_DELETED_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+const markCashMovementDeleted = (id) => {
+  const cleanId = String(id || '').trim();
+  if (!cleanId || typeof localStorage === 'undefined') return;
+  try {
+    const list = getDeletedCashMovementIds();
+    if (!list.includes(cleanId)) {
+      list.push(cleanId);
+      localStorage.setItem(CASH_MOVEMENTS_DELETED_KEY, JSON.stringify(list));
+    }
+  } catch (_) {}
+};
+
+const unmarkCashMovementDeleted = (id) => {
+  const cleanId = String(id || '').trim();
+  if (!cleanId || typeof localStorage === 'undefined') return;
+  try {
+    const list = getDeletedCashMovementIds();
+    const next = list.filter((x) => x !== cleanId);
+    if (next.length !== list.length) {
+      localStorage.setItem(CASH_MOVEMENTS_DELETED_KEY, JSON.stringify(next));
+    }
+  } catch (_) {}
+};
+
+const filterAndReconcileCashMovements = (rawList = [], hasRemoteResponse = false) => {
+  const queue = getSyncQueue().filter((q) => q && q.entity === 'cash_movement');
+  const pendingDeleteIds = new Set(
+    queue
+      .filter((q) => q.action === 'DELETE' && q.data?.id)
+      .map((q) => String(q.data.id).trim())
+  );
+
+  let delIds = getDeletedCashMovementIds();
+  if (hasRemoteResponse && delIds.length > 0 && Array.isArray(rawList)) {
+    const remoteIdSet = new Set(
+      rawList.map((m) => String(m?.id || '').trim()).filter(Boolean)
+    );
+    const pruned = delIds.filter((id) => remoteIdSet.has(id) || pendingDeleteIds.has(id));
+    if (pruned.length !== delIds.length) {
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(CASH_MOVEMENTS_DELETED_KEY, JSON.stringify(pruned));
+        }
+      } catch (_) {}
+      delIds = pruned;
+    }
+  }
+
+  const delSet = new Set([...delIds, ...pendingDeleteIds]);
+  const applied = applyPendingQueueToEntities('cash_movement', Array.isArray(rawList) ? rawList : []);
+  return dedupeCashMovements(applied).filter((m) => {
+    const mId = String(m?.id || '').trim();
+    return !mId || !delSet.has(mId);
+  });
+};
+
 export const getSupabaseCashMovements = async () => {
-  if (!isSupabaseAvailable) return applyPendingQueueToEntities('cash_movement', getStorageCashMovements());
+  if (!isSupabaseAvailable) {
+    return filterAndReconcileCashMovements(getStorageCashMovements(), false);
+  }
   try {
     const { data, error } = await withTimeout(
       supabase.from('cash_movements').select('*').order('fecha', { ascending: false })
@@ -3694,17 +3768,17 @@ export const getSupabaseCashMovements = async () => {
 
     if (error) {
       markSupabaseOffline(error, 'getSupabaseCashMovements');
-      return applyPendingQueueToEntities('cash_movement', getStorageCashMovements());
+      return filterAndReconcileCashMovements(getStorageCashMovements(), false);
     }
     isSupabaseAvailable = true;
-    const mapped = applyPendingQueueToEntities('cash_movement', (data || []).map(mapCashMovementFromDb));
+    const mapped = filterAndReconcileCashMovements((data || []).map(mapCashMovementFromDb), true);
     try {
       localStorage.setItem('sm_cash_movements_v4_fiscal', JSON.stringify(mapped));
     } catch (_) {}
     return mapped;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseCashMovements');
-    return applyPendingQueueToEntities('cash_movement', getStorageCashMovements());
+    return filterAndReconcileCashMovements(getStorageCashMovements(), false);
   }
 };
 
@@ -3713,7 +3787,7 @@ export const deleteCashMovementFromSupabaseDirect = async (movId) => {
   if (!cleanId) return true;
   const { error } = await withTimeout(
     supabase.from('cash_movements').delete().eq('id', cleanId),
-    4000
+    8000
   );
   if (error) throw error;
   isSupabaseAvailable = true;
@@ -3722,7 +3796,10 @@ export const deleteCashMovementFromSupabaseDirect = async (movId) => {
 
 export const deleteSupabaseCashMovement = async (movOrId) => {
   const targetId = String(typeof movOrId === 'object' ? (movOrId?.id || '') : (movOrId || '')).trim();
-  const updatedLocal = deleteStorageCashMovement(movOrId);
+  if (targetId) {
+    markCashMovementDeleted(targetId);
+  }
+  const updatedLocal = filterAndReconcileCashMovements(deleteStorageCashMovement(movOrId), false);
 
   const emit = () => {
     if (!targetId) return;
@@ -3776,6 +3853,7 @@ export const addSupabaseCashMovement = async (mov) => {
   }
 
   const uniqueId = mov?.id || `MOV-${Date.now().toString().slice(-6)}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+  unmarkCashMovementDeleted(uniqueId);
   const cleanInput = {
     ...mov,
     id: uniqueId,
@@ -3849,6 +3927,7 @@ export const updateSupabaseCashMovement = async (mov) => {
     throw new Error('El monto del movimiento debe ser mayor a 0 en USD o Bolívares.');
   }
 
+  unmarkCashMovementDeleted(mov.id);
   const cleanInput = {
     ...mov,
     tipo,
@@ -7372,10 +7451,10 @@ export const getSupabaseProfitAccountsPayable = async () => {
       updated_at: d.updated_at || d.fecha_sincronizacion || d.fechaSincronizacion,
       updatedAt: d.updated_at || d.fecha_sincronizacion || d.fechaSincronizacion
     }));
-    return applyLocalCxpOverridesToPayables(mapped, Array.isArray(data));
+    return dedupePayablesList(applyLocalCxpOverridesToPayables(mapped, Array.isArray(data)));
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseProfitAccountsPayable');
-    return applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE, false);
+    return dedupePayablesList(applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE, false));
   }
 };
 
@@ -7698,7 +7777,7 @@ export const getSupabaseProfitSupplierPayments = async () => {
       } catch (_) {}
     }
 
-    return mapped;
+    return dedupeSupplierPaymentsList(mapped);
   } catch (err) {
     console.warn('[Supabase] Error cargando pagos de proveedores Profit:', err.message);
     let list = [...REAL_PROFIT_SUPPLIER_PAYMENTS];
@@ -7713,7 +7792,7 @@ export const getSupabaseProfitSupplierPayments = async () => {
         }
       } catch (_) {}
     }
-    return list;
+    return dedupeSupplierPaymentsList(list);
   }
 };
 

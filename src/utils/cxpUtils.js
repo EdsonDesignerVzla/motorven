@@ -170,3 +170,84 @@ export const doesSupplierPaymentMatchPayable = (payment = {}, payable = {}) => {
   const tokenRegex = new RegExp(`(?:#|\\b)${escapedNro}\\b`, 'i');
   return tokenRegex.test(desc);
 };
+
+const resolveTimestampMs = (doc = {}) => {
+  const raw = doc?._localSavedAt || doc?.updated_at || doc?.updatedAt || doc?.fechaSincronizacion || doc?.fecha_sincronizacion || '';
+  if (!raw) return 0;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? 0 : ms;
+};
+
+/**
+ * Deduplica documentos de Cuentas por Pagar por ID exacto y por clave canónica (tipoDoc|nroDoc|proveedor),
+ * conservando la versión más reciente sin colisionar entre distintos proveedores o tipos.
+ */
+export const dedupePayablesList = (list = []) => {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const byId = new Map();
+  const byComp = new Map();
+
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const rawId = String(item.id || '').trim();
+    const compKey = buildCxpCompositeKey(item);
+    let existingIdx = -1;
+    if (rawId && byId.has(rawId)) {
+      existingIdx = byId.get(rawId);
+    } else if (compKey && byComp.has(compKey)) {
+      existingIdx = byComp.get(compKey);
+    }
+
+    if (existingIdx >= 0) {
+      const prev = out[existingIdx];
+      const prevTs = resolveTimestampMs(prev);
+      const nextTs = resolveTimestampMs(item);
+      out[existingIdx] = nextTs >= prevTs ? { ...prev, ...item } : { ...item, ...prev };
+      const merged = out[existingIdx];
+      if (merged.id) byId.set(String(merged.id).trim(), existingIdx);
+      const mergedComp = buildCxpCompositeKey(merged);
+      if (mergedComp) byComp.set(mergedComp, existingIdx);
+    } else {
+      const newIdx = out.length;
+      out.push(item);
+      if (rawId) byId.set(rawId, newIdx);
+      if (compKey) byComp.set(compKey, newIdx);
+    }
+  }
+  return out;
+};
+
+/**
+ * Deduplica pagos a proveedores por ID (y pagoNum+proveedor si aplica), conservando el registro más reciente.
+ */
+export const dedupeSupplierPaymentsList = (list = []) => {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const byKey = new Map();
+
+  for (const pay of list) {
+    if (!pay || typeof pay !== 'object') continue;
+    const rawId = String(pay.id || '').trim();
+    const pagoNum = normalizeDocNumber(pay.pagoNum ?? pay.pago_num);
+    const provKey = resolveCxpProviderKey(pay);
+    const canonKey = pagoNum ? `${provKey || 'GEN'}|${pagoNum}` : '';
+
+    let existingIdx = -1;
+    if (rawId && byKey.has(`ID:${rawId}`)) existingIdx = byKey.get(`ID:${rawId}`);
+    else if (canonKey && byKey.has(`NUM:${canonKey}`)) existingIdx = byKey.get(`NUM:${canonKey}`);
+
+    if (existingIdx >= 0) {
+      const prev = out[existingIdx];
+      out[existingIdx] = resolveTimestampMs(pay) >= resolveTimestampMs(prev)
+        ? { ...prev, ...pay }
+        : { ...pay, ...prev };
+    } else {
+      const idx = out.length;
+      out.push(pay);
+      if (rawId) byKey.set(`ID:${rawId}`, idx);
+      if (canonKey) byKey.set(`NUM:${canonKey}`, idx);
+    }
+  }
+  return out;
+};

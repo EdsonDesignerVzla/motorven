@@ -31,6 +31,8 @@ import { soundFX } from '../services/soundService';
 import {
   buildCxpCompositeKey,
   buildCxpStableId,
+  dedupePayablesList,
+  dedupeSupplierPaymentsList,
   doesPayableMatchDocument,
   doesSupplierPaymentMatchPayable
 } from '../utils/cxpUtils';
@@ -466,11 +468,12 @@ export default function AccountsPayableModal({
     }
   }, [catalogCuentas, pagoCuentaKey]);
 
-  // Conjunto base de cuentas por pagar
+  // Conjunto base de cuentas por pagar (deduplicado por ID y clave canónica tipo|nro|proveedor)
   const targetPayables = useMemo(() => {
-    return (Array.isArray(profitAccountsPayable) && profitAccountsPayable.length > 0)
+    const base = (Array.isArray(profitAccountsPayable) && profitAccountsPayable.length > 0)
       ? profitAccountsPayable
       : (Array.isArray(accountsPayable) ? accountsPayable : []);
+    return dedupePayablesList(base);
   }, [accountsPayable, profitAccountsPayable]);
 
   // Lista de tipos de documentos únicos
@@ -488,6 +491,10 @@ export default function AccountsPayableModal({
     });
     return Array.from(setProvs).sort();
   }, [targetPayables]);
+
+  const uniqueSupplierPayments = useMemo(() => {
+    return dedupeSupplierPaymentsList(supplierPayments || []);
+  }, [supplierPayments]);
 
   // Procesamiento integral de Cuentas por Pagar (fechas, saldos, días de mora y estado)
   const processedPayables = useMemo(() => {
@@ -559,7 +566,7 @@ export default function AccountsPayableModal({
         const docContext = { ...resolved, id: resolvedDocId, tipoDoc, nroDoc, provNombre, provRif };
 
         // Historial de pagos específicos: requiere coincidencia de proveedor Y referencia al documento
-        const matchingPayments = (supplierPayments || []).filter(pay =>
+        const matchingPayments = uniqueSupplierPayments.filter(pay =>
           !pay?.anulado && doesSupplierPaymentMatchPayable(pay, docContext)
         );
 
@@ -601,7 +608,7 @@ export default function AccountsPayableModal({
           historialPagos: matchingPayments
         };
       });
-  }, [targetPayables, localDocOverrides, tasaKeystone, supplierPayments]);
+  }, [targetPayables, localDocOverrides, tasaKeystone, uniqueSupplierPayments]);
 
   // Documentos con saldo pendiente seleccionables en Parte A
   const payableDocsWithBalance = useMemo(() => {

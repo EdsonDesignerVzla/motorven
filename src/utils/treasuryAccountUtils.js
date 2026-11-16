@@ -611,3 +611,64 @@ export const computeMovementEditAccountAdjustments = (oldMov, nextMov, cashDesks
 
   return adjustments;
 };
+
+/**
+ * Deduplica movimientos de caja por ID (o firma fecha|tipo|concepto|monto cuando falta ID)
+ * preservando el primer registro válido y descartando entradas nulas o corruptas sin datos.
+ */
+export const dedupeCashMovements = (list = []) => {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const m of list) {
+    if (!m || typeof m !== 'object') continue;
+    const rawId = String(m.id || '').trim();
+    const usd = round2(m.montoUsd ?? m.monto_usd ?? 0);
+    const bs = round2(m.montoBs ?? m.monto_bs ?? 0);
+    const concepto = String(m.concepto || m.descripcion || '').trim();
+    if (!rawId && !concepto && usd === 0 && bs === 0) continue;
+    const key = rawId
+      ? `ID:${rawId}`
+      : `SIG:${String(m.fecha || '').trim()}|${String(m.tipo || '').toUpperCase()}|${concepto.toLowerCase()}|${usd}|${bs}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(m);
+  }
+  return out;
+};
+
+/**
+ * Inserta o actualiza un movimiento de caja en una lista sin duplicar por ID.
+ */
+export const upsertCashMovementInList = (list = [], item) => {
+  const base = Array.isArray(list) ? [...list] : [];
+  if (!item || typeof item !== 'object') return dedupeCashMovements(base);
+  const itemId = String(item.id || '').trim();
+  if (!itemId) return dedupeCashMovements([item, ...base]);
+  const idx = base.findIndex((m) => m && String(m.id || '').trim() === itemId);
+  if (idx >= 0) {
+    base[idx] = { ...base[idx], ...item, id: base[idx].id || item.id };
+    return dedupeCashMovements(base);
+  }
+  return dedupeCashMovements([item, ...base]);
+};
+
+/**
+ * Elimina un movimiento de caja de una lista por ID (o por coincidencia exacta si carece de ID).
+ */
+export const removeCashMovementFromList = (list = [], idOrItem) => {
+  if (!Array.isArray(list)) return [];
+  const isObj = idOrItem && typeof idOrItem === 'object';
+  const targetId = String(isObj ? (idOrItem.id || '') : (idOrItem || '')).trim();
+  return list.filter((m) => {
+    if (!m) return false;
+    if (targetId && String(m.id || '').trim() === targetId) return false;
+    if (!targetId && isObj) {
+      const sameConcept = String(m.concepto || '').trim() === String(idOrItem.concepto || '').trim();
+      const sameFecha = String(m.fecha || '').trim() === String(idOrItem.fecha || '').trim();
+      const sameUsd = Number(m.montoUsd ?? m.monto_usd ?? 0) === Number(idOrItem.montoUsd ?? idOrItem.monto_usd ?? 0);
+      if (sameConcept && sameFecha && sameUsd) return false;
+    }
+    return true;
+  });
+};

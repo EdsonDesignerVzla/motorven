@@ -56,6 +56,7 @@ export default function CreditScoreEngineModal({
   // 1. MOTOR DE CÁLCULO DE SCORE DE CRÉDITO Y EVALUACIÓN DE RIESGO
   // =========================================================================
   const scoredClients = useMemo(() => {
+    if (!isOpen) return [];
     const { clients: reconciledClients } = reconcileClientsWithRealCxc({
       clients,
       profitInvoices,
@@ -67,19 +68,55 @@ export default function CreditScoreEngineModal({
     const normCode = (v) => String(v || '').trim().toUpperCase();
     const normName = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
+    // Indexar facturas y cobros en O(M) una sola vez para evitar búsquedas O(N*M)
+    const invCountByRif = new Map();
+    const invCountByCode = new Map();
+    const invCountByName = new Map();
+    for (const f of (profitInvoices || [])) {
+      if (!f || isCxcInvoiceCancelled(f)) continue;
+      const r = normRif(f.clienteRif || f.cliente_rif || f.rif);
+      if (r) invCountByRif.set(r, (invCountByRif.get(r) || 0) + 1);
+      const codes = new Set([f.clienteId, f.cliente_id, f.coCli, f.co_cli].map(normCode).filter(Boolean));
+      for (const cd of codes) invCountByCode.set(cd, (invCountByCode.get(cd) || 0) + 1);
+      const nm = normName(f.clienteNombre || f.cliente_nombre || f.cli_des || f.cliente);
+      if (nm) invCountByName.set(nm, (invCountByName.get(nm) || 0) + 1);
+    }
+
+    const colStatsByRif = new Map();
+    const colStatsByCode = new Map();
+    const colStatsByName = new Map();
+    const recordColStat = (map, k, hasCash) => {
+      if (!k) return;
+      const prev = map.get(k) || { count: 0, hasZelleOrCash: false };
+      prev.count += 1;
+      if (hasCash) prev.hasZelleOrCash = true;
+      map.set(k, prev);
+    };
+    for (const c of (profitCollections || [])) {
+      if (!c) continue;
+      const hasCash = (c.formasPago || []).some(fp => fp.tipo === 'ZELLE' || fp.tipo === 'EFECTIVO_USD');
+      recordColStat(colStatsByRif, normRif(c.clienteRif || c.cliente_rif || c.rif), hasCash);
+      const codes = new Set([c.clienteId, c.cliente_id, c.coCli, c.co_cli].map(normCode).filter(Boolean));
+      for (const cd of codes) recordColStat(colStatsByCode, cd, hasCash);
+      recordColStat(colStatsByName, normName(c.clienteNombre || c.cliente_nombre || c.cli_des || c.cliente), hasCash);
+    }
+
     return reconciledClients.map(client => {
       const rif = normRif(client.rif);
       const nombre = client.nombre || client.razonSocial || 'Cliente';
       const nombreLower = normName(nombre);
       const coCli = normCode(client.codigo || client.id);
 
-      const matchesDoc = (d) =>
-        (rif && normRif(d.clienteRif || d.cliente_rif || d.rif) === rif) ||
-        (coCli && [d.clienteId, d.cliente_id, d.coCli, d.co_cli].some(v => normCode(v) === coCli)) ||
-        (nombreLower && normName(d.clienteNombre || d.cliente_nombre || d.cli_des || d.cliente) === nombreLower);
-
-      const clientInvoices = (profitInvoices || []).filter(f => !isCxcInvoiceCancelled(f) && matchesDoc(f));
-      const clientCollections = (profitCollections || []).filter(c => matchesDoc(c));
+      const facturasCount = Math.max(
+        (rif ? (invCountByRif.get(rif) || 0) : 0),
+        (coCli ? (invCountByCode.get(coCli) || 0) : 0),
+        (nombreLower ? (invCountByName.get(nombreLower) || 0) : 0)
+      );
+      const colStat =
+        (rif && colStatsByRif.get(rif)) ||
+        (coCli && colStatsByCode.get(coCli)) ||
+        (nombreLower && colStatsByName.get(nombreLower)) ||
+        { count: 0, hasZelleOrCash: false };
 
       const unpaidInvoices = Array.isArray(client.openDocs) ? client.openDocs : [];
       const maxDiasMora = Number(client.maxDiasMora || 0);
@@ -115,7 +152,6 @@ export default function CreditScoreEngineModal({
 
       // Factor 3: Frecuencia y Volumen de Compra Histórico (Max 20 pts)
       let scoreVolumen = 15;
-      const facturasCount = clientInvoices.length;
       if (facturasCount >= 8) scoreVolumen = 20;
       else if (facturasCount >= 4) scoreVolumen = 16;
       else if (facturasCount >= 1) scoreVolumen = 12;
@@ -123,9 +159,8 @@ export default function CreditScoreEngineModal({
 
       // Factor 4: Confiabilidad de Instrumentos de Pago (Max 10 pts)
       let scoreMetodos = 10;
-      const hasZelleOrCash = clientCollections.some(c => (c.formasPago || []).some(fp => fp.tipo === 'ZELLE' || fp.tipo === 'EFECTIVO_USD'));
-      if (hasZelleOrCash) scoreMetodos = 10;
-      else if (clientCollections.length > 0) scoreMetodos = 8;
+      if (colStat.hasZelleOrCash) scoreMetodos = 10;
+      else if (colStat.count > 0) scoreMetodos = 8;
       else scoreMetodos = 6;
 
       // Factor 5: Perfil Jurídico / Fiscal / Antigüedad (Max 10 pts)
@@ -224,7 +259,7 @@ export default function CreditScoreEngineModal({
         limiteSugeridoUsd
       };
     }).sort((a, b) => b.creditScore - a.creditScore);
-  }, [clients, profitInvoices, sales, profitCollections, tasaBcv]);
+  }, [isOpen, clients, profitInvoices, sales, profitCollections, tasaBcv]);
 
   // Selección inicial
   const activeEvaluatedClient = selectedClient || scoredClients[0] || null;

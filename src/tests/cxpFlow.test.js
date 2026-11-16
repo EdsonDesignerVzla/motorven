@@ -4,6 +4,8 @@ import {
   normalizeProviderName,
   doProvidersMatch,
   buildCxpCompositeKey,
+  dedupePayablesList,
+  dedupeSupplierPaymentsList,
   doesPayableMatchDocument,
   doesSupplierPaymentMatchPayable
 } from '../utils/cxpUtils.js';
@@ -254,6 +256,29 @@ resetState();
     );
   }
   console.log('  ✓ 5. Recuperación y flush offline de entidades CxP y procura verificados.');
+}
+
+// 6. Deduplicación CxP sin colisionar entre distintos tipos/proveedores con mismo número
+resetState();
+{
+  const dupPayables = [
+    { id: 'DOC-CP-FACT-12-J311153659', tipoDoc: 'FACT', nroDoc: '12', coProv: 'J311153659', saldoUsd: 100, updated_at: '2026-11-10T10:00:00Z' },
+    { id: 'DOC-CP-FACT-12-J311153659', tipoDoc: 'FACT', nroDoc: '12', coProv: 'J311153659', saldoUsd: 40, updated_at: '2026-11-12T10:00:00Z' },
+    { id: 'DOC-CP-N/DB-12-J311153659', tipoDoc: 'N/DB', nroDoc: '12', coProv: 'J311153659', saldoUsd: 56.66 },
+    { id: 'DOC-CP-FACT-12-J999999999', tipoDoc: 'FACT', nroDoc: '12', coProv: 'J999999999', saldoUsd: 220 }
+  ];
+  const dedupedCxp = dedupePayablesList(dupPayables);
+  assert.strictEqual(dedupedCxp.length, 3);
+  assert.strictEqual(dedupedCxp[0].saldoUsd, 40);
+
+  const dupPayments = [
+    { id: 'PAG-100', pagoNum: '100', coProv: 'J311153659', montoUsd: 50, updated_at: '2026-11-10T10:00:00Z' },
+    { id: 'PAG-100', pagoNum: '100', coProv: 'J311153659', montoUsd: 50, updated_at: '2026-11-11T10:00:00Z' },
+    { id: 'PAG-101', pagoNum: '101', coProv: 'J311153659', montoUsd: 75 }
+  ];
+  const dedupedPays = dedupeSupplierPaymentsList(dupPayments);
+  assert.strictEqual(dedupedPays.length, 2);
+  console.log('  ✓ 6. Deduplicación CxP y pagos a proveedores sin colisión verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXP Y SINCRONIZACIÓN PASARON AL 100% ---');

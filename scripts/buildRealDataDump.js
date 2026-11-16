@@ -649,8 +649,15 @@ db.orders = (db.orders || []).map(o => {
   };
 });
 
-// 9. Normalize profit_accounts_payable (191 rows) & fix BS==USD anomaly
-db.profit_accounts_payable = (db.profit_accounts_payable || []).map(d => {
+// 9. Normalize profit_accounts_payable (191 rows), deduplicate & fix BS==USD anomaly
+const seenCxpCanonKeys = new Set();
+db.profit_accounts_payable = (db.profit_accounts_payable || []).filter(d => {
+  if (!d) return false;
+  const k = `${String(d.tipo_doc || d.tipoDoc || 'FACT').trim().toUpperCase()}|${String(d.nro_doc || d.nroDoc || '').trim().toUpperCase()}|${String(d.co_prov || d.coProv || '').trim().toUpperCase()}`;
+  if (seenCxpCanonKeys.has(k)) return false;
+  seenCxpCanonKeys.add(k);
+  return true;
+}).map(d => {
   const tipoDoc = d.tipo_doc || d.tipoDoc || 'FACT';
   const nroDoc = String(d.nro_doc || d.nroDoc || '').trim();
   const coProv = String(d.co_prov || d.coProv || '').trim();
@@ -935,39 +942,58 @@ db.suppliers = (db.suppliers || []).map(s => {
   };
 });
 
-db.cash_movements = (db.cash_movements || []).map(m => {
-  const montoUsd = Number(m.monto_usd ?? m.montoUsd ?? 0);
-  const montoBs = Number(m.monto_bs ?? m.montoBs ?? Number((montoUsd * BCV_RATE).toFixed(2)));
-  const tasaBcv = Number(m.tasa_bcv ?? m.tasaBcv ?? (montoUsd > 0 && montoBs > 0 ? Number((montoBs / montoUsd).toFixed(2)) : BCV_RATE));
-  const concepto = m.concepto || m.descripcion || 'Ingreso Operativo de Caja';
-  const categoria = m.categoria || 'VENTAS';
-  const metodoPago = m.metodo_pago || m.metodoPago || m.caja_o_banco || m.cajaOBanco || 'Efectivo USD';
-  const referencia = m.referencia || m.id;
-  const moneda = m.moneda || 'USD';
-  const usuarioId = m.usuario_id || m.usuarioId || 'usr-muq3bdll';
-  return {
-    id: m.id,
-    fecha: m.fecha || NOW_ISO,
-    tipo: m.tipo || 'INGRESO',
-    categoria,
-    concepto,
-    descripcion: concepto,
-    metodo_pago: metodoPago,
-    metodoPago,
-    caja_o_banco: metodoPago,
-    cajaOBanco: metodoPago,
-    referencia,
-    moneda,
-    monto_usd: montoUsd,
-    montoUsd,
-    monto_bs: montoBs,
-    montoBs,
-    tasa_bcv: tasaBcv,
-    tasaBcv,
-    usuario_id: usuarioId,
-    usuarioId
-  };
-});
+const seenCashMovIds = new Set();
+db.cash_movements = (db.cash_movements || [])
+  .filter(m => {
+    if (!m || !m.id) return false;
+    const usd = Number(m.monto_usd ?? m.montoUsd ?? 0);
+    const bs = Number(m.monto_bs ?? m.montoBs ?? 0);
+    // Eliminar movimientos fantasma/corruptos en cero ($0.00 y Bs 0.00 sin referencia)
+    if (usd <= 0 && bs <= 0) return false;
+    const idKey = String(m.id).trim();
+    if (seenCashMovIds.has(idKey)) return false;
+    seenCashMovIds.add(idKey);
+    return true;
+  })
+  .map(m => {
+    const montoUsd = Number(m.monto_usd ?? m.montoUsd ?? 0);
+    const montoBs = Number(m.monto_bs ?? m.montoBs ?? Number((montoUsd * BCV_RATE).toFixed(2)));
+    const tasaBcv = Number(m.tasa_bcv ?? m.tasaBcv ?? (montoUsd > 0 && montoBs > 0 ? Number((montoBs / montoUsd).toFixed(2)) : BCV_RATE));
+    const concepto = m.concepto || m.descripcion || 'Ingreso Operativo de Caja';
+    const categoria = m.categoria || 'VENTAS';
+    const metodoPago = m.metodo_pago || m.metodoPago || m.caja_o_banco || m.cajaOBanco || 'Efectivo USD';
+    const referencia = m.referencia || m.id;
+    const moneda = m.moneda || 'USD';
+    const usuarioId = m.usuario_id || m.usuarioId || 'usr-muq3bdll';
+    const inferredCajaId = (!m.caja_id && !m.cajaId && !m.cuenta_id && !m.cuentaId && /efectivo\s*usd/i.test(metodoPago))
+      ? 'caja-01'
+      : (m.caja_id || m.cajaId || null);
+    const cuentaId = m.cuenta_id || m.cuentaId || inferredCajaId || null;
+    return {
+      id: m.id,
+      fecha: m.fecha || NOW_ISO,
+      tipo: m.tipo || 'INGRESO',
+      categoria,
+      concepto,
+      descripcion: concepto,
+      metodo_pago: metodoPago,
+      metodoPago,
+      caja_o_banco: metodoPago,
+      cajaOBanco: metodoPago,
+      ...(inferredCajaId ? { caja_id: inferredCajaId, cajaId: inferredCajaId } : {}),
+      ...(cuentaId ? { cuenta_id: cuentaId, cuentaId } : {}),
+      referencia,
+      moneda,
+      monto_usd: montoUsd,
+      montoUsd,
+      monto_bs: montoBs,
+      montoBs,
+      tasa_bcv: tasaBcv,
+      tasaBcv,
+      usuario_id: usuarioId,
+      usuarioId
+    };
+  });
 
 db.fiscal_closures = (db.fiscal_closures || []).map(c => {
   const numeroZ = c.numero_z || c.numeroZ || String(c.numero_cierre ?? c.numeroCierre ?? 1).padStart(4, '0');
@@ -1126,7 +1152,8 @@ db.SIGNUM_MOTORVEN = (db.SIGNUM_MOTORVEN || []).map(row => ({
   registros_sincronizados: liveCountByRowId[row.id] ?? row.registros_sincronizados
 }));
 
-// Save cleaned local_database.json
+// Remove corrupted empty root keys and save cleaned local_database.json
+delete db[''];
 fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
 console.log('✅ Cleaned and normalized supabase/local_database.json');
 

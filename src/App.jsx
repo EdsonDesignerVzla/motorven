@@ -8,6 +8,9 @@ import {
   resolveTreasuryAccountForMovement,
   computeMovementReversalDelta,
   computeMovementEditAccountAdjustments,
+  dedupeCashMovements,
+  upsertCashMovementInList,
+  removeCashMovementFromList,
   resolveExchangeRates
 } from './utils/treasuryAccountUtils';
 import { normalizeRateType } from './utils/rateClassificationUtils';
@@ -204,7 +207,12 @@ import {
   sortUsersByHierarchy
 } from './services/authService';
 import { subscribeToRealtimeChanges } from './services/profitService';
-import { doesPayableMatchDocument, doProvidersMatch } from './utils/cxpUtils';
+import {
+  dedupePayablesList,
+  dedupeSupplierPaymentsList,
+  doesPayableMatchDocument,
+  doProvidersMatch
+} from './utils/cxpUtils';
 import {
   inferCxcDocType,
   normalizeCollectionWriteAmounts,
@@ -705,8 +713,9 @@ function MainApp() {
 
   // Suscripción en Tiempo Real: Reconciliaciones desde el Comparador (Modal o Nueva Pestaña)
   useEffect(() => {
-    const unsubscribe = subscribeToRealtimeSync(({ tableId, action, key, item, allTableData, clientId }) => {
+    const unsubscribe = subscribeToRealtimeSync(({ tableId, action, eventType, key, item, allTableData, clientId }) => {
       const isSelfEvent = clientId === getRealtimeClientId();
+      const isDeleteAction = action === 'DELETE' || eventType === 'DELETE';
       console.log(`[App Realtime Sync] Recibida reconciliación en tabla '${tableId}' (Acción: ${action}, Clave: ${key})`);
 
       if (tableId === 'products') {
@@ -1167,6 +1176,13 @@ function MainApp() {
           setPurchasesState(allTableData);
           return;
         }
+        if (isDeleteAction) {
+          const delKey = String(key || item?.id || '').trim();
+          if (delKey) {
+            setPurchasesState(prev => (prev || []).filter(p => String(p?.id || '').trim() !== delKey));
+          }
+          return;
+        }
         if (item) {
           setPurchasesState(prev => {
             const index = prev.findIndex(p => String(p.id) === String(key || item.id) || (item.facturaNumero && p.facturaNumero === item.facturaNumero));
@@ -1180,23 +1196,37 @@ function MainApp() {
         }
       } else if (tableId === 'cash_movements') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
-          setCashMovementsState(allTableData);
+          setCashMovementsState(dedupeCashMovements(allTableData));
+          return;
+        }
+        if (isDeleteAction) {
+          const delTarget = item || (key ? { id: key } : null);
+          if (delTarget || key) {
+            setCashMovementsState(prev => removeCashMovementFromList(prev, delTarget || key));
+          }
           return;
         }
         if (item) {
-          setCashMovementsState(prev => {
-            const index = prev.findIndex(m => String(m.id) === String(key || item.id));
-            if (index >= 0) {
-              const next = [...prev];
-              next[index] = { ...next[index], ...item };
-              return next;
+          try {
+            const rawDel = localStorage.getItem('sm_deleted_cash_movements_v1');
+            const delSet = rawDel ? new Set(JSON.parse(rawDel).map(x => String(x || '').trim())) : null;
+            const itemId = String(item.id || key || '').trim();
+            if (delSet && itemId && delSet.has(itemId)) {
+              return;
             }
-            return [item, ...prev];
-          });
+          } catch (_) {}
+          setCashMovementsState(prev => upsertCashMovementInList(prev, item));
         }
       } else if (tableId === 'fiscal_closures') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
           setFiscalClosures(allTableData);
+          return;
+        }
+        if (isDeleteAction) {
+          const delKey = String(key || item?.id || '').trim();
+          if (delKey) {
+            setFiscalClosures(prev => (prev || []).filter(c => String(c?.id || '').trim() !== delKey));
+          }
           return;
         }
         if (item) {
@@ -1276,17 +1306,18 @@ function MainApp() {
         }
       } else if (tableId === 'accounts_payable') {
         if (Array.isArray(allTableData)) {
-          setProfitAccountsPayable(allTableData);
+          setProfitAccountsPayable(dedupePayablesList(allTableData));
           return;
         }
-        if (action === 'DELETE') {
-          const delKey = String(key || item?.id || item?.nroDoc || item?.nro_doc || '').trim();
-          if (delKey) {
-            setProfitAccountsPayable(prev => (prev || []).filter(p =>
-              String(p.id || '').trim() !== delKey &&
-              String(p.nroDoc ?? p.nro_doc ?? '').trim() !== delKey
-            ));
-          }
+        if (isDeleteAction) {
+          const delKey = String(key || item?.id || '').trim();
+          setProfitAccountsPayable(prev => (prev || []).filter(p => {
+            if (!p) return false;
+            if (item && (item.nroDoc || item.nro_doc || item.coProv || item.co_prov || item.provRif || item.prov_rif)) {
+              return !doesPayableMatchDocument(p, item);
+            }
+            return delKey ? String(p.id || '').trim() !== delKey : true;
+          }));
           return;
         }
         if (item) {
@@ -1315,23 +1346,22 @@ function MainApp() {
           setProfitAccountsPayable(prev => {
             const list = Array.isArray(prev) ? [...prev] : [];
             const idx = list.findIndex(p =>
-              (resolvedId && String(p.id || '').trim() === resolvedId) ||
-              (key && (String(p.id || '').trim() === String(key) || String(p.nroDoc ?? p.nro_doc ?? '').trim() === String(key))) ||
-              (resolvedNro && String(p.nroDoc ?? p.nro_doc ?? '').trim() === resolvedNro)
+              doesPayableMatchDocument(p, normalizedCxp) ||
+              (key && String(p?.id || '').trim() === String(key).trim())
             );
             if (idx >= 0) {
               list[idx] = { ...list[idx], ...normalizedCxp };
-              return list;
+              return dedupePayablesList(list);
             }
-            return [normalizedCxp, ...list];
+            return dedupePayablesList([normalizedCxp, ...list]);
           });
         }
       } else if (tableId === 'supplier_payments') {
         if (Array.isArray(allTableData)) {
-          setProfitSupplierPayments(allTableData);
+          setProfitSupplierPayments(dedupeSupplierPaymentsList(allTableData));
           return;
         }
-        if (action === 'DELETE') {
+        if (isDeleteAction) {
           const delKey = String(key || item?.id || item?.pagoNum || item?.pago_num || '').trim();
           if (delKey) {
             setProfitSupplierPayments(prev => (prev || []).filter(p =>
@@ -1344,12 +1374,12 @@ function MainApp() {
         if (item) {
           setProfitSupplierPayments(prev => {
             const list = Array.isArray(prev) ? [...prev] : [];
-            const idx = list.findIndex(p => String(p.id) === String(item.id || key) || String(p.pagoNum ?? p.pago_num ?? '') === String(item.pagoNum || key));
+            const idx = list.findIndex(p => String(p.id) === String(item.id || key) || (item.pagoNum && String(p.pagoNum ?? p.pago_num ?? '') === String(item.pagoNum)));
             if (idx >= 0) {
               list[idx] = { ...list[idx], ...item };
-              return list;
+              return dedupeSupplierPaymentsList(list);
             }
-            return [item, ...list];
+            return dedupeSupplierPaymentsList([item, ...list]);
           });
         }
       } else if (tableId === 'zones' && Array.isArray(allTableData)) {
@@ -1831,7 +1861,8 @@ function MainApp() {
         latestSups, latestPurs, latestCxp, latestPays, latestSellers, latestZones, latestTrans,
         latestReturns, latestAju, latestTra, latestIslr, latestBen, latestOrders, latestWithholdings,
         latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs,
-        latestIncExp, latestSettlements, latestExpenses, latestEmployees, latestPayroll
+        latestIncExp, latestSettlements, latestExpenses, latestEmployees, latestPayroll,
+        latestCashDesks, latestCashMovements
       ] = await Promise.all([
         getSupabaseProducts(),
         getSupabaseClients(),
@@ -1863,7 +1894,9 @@ function MainApp() {
         getSupabaseCommissionSettlements(),
         getSupabaseExpenses(),
         getSupabaseEmployees(),
-        getSupabasePayroll()
+        getSupabasePayroll(),
+        getSupabaseProfitCashDesks(),
+        getSupabaseCashMovements()
       ]);
       if (latestProds && latestProds.length > 0) setProductsState(latestProds);
       if (latestClis && latestClis.length > 0) setClientsState(latestClis);
@@ -1896,6 +1929,8 @@ function MainApp() {
       if (latestExpenses) setExpensesState(latestExpenses);
       if (latestEmployees) setEmployeesState(latestEmployees);
       if (latestPayroll) setPayrollState(latestPayroll);
+      if (latestCashDesks) setProfitCashDesks(latestCashDesks);
+      if (latestCashMovements) setCashMovementsState(dedupeCashMovements(latestCashMovements));
       return true;
     } catch (err) {
       console.warn('Sync Profit feedback:', err.message);
@@ -3488,7 +3523,7 @@ function MainApp() {
         };
         const createdMov = await addSupabaseCashMovement(mov);
         if (createdMov) {
-          setCashMovementsState(prev => [createdMov, ...(Array.isArray(prev) ? prev : [])]);
+          setCashMovementsState(prev => upsertCashMovementInList(prev, createdMov));
         }
       } catch (movErr) {
         console.warn('[handleRegisterCxcCollection] No se pudo registrar ingreso en flujo de caja:', movErr?.message || movErr);
@@ -3650,7 +3685,7 @@ function MainApp() {
       try {
         savedPay = await saveSupabaseProfitSupplierPayment(paymentPayload);
         if (savedPay) {
-          setProfitSupplierPayments(prev => [savedPay, ...(Array.isArray(prev) ? prev : [])]);
+          setProfitSupplierPayments(prev => dedupeSupplierPaymentsList([savedPay, ...(Array.isArray(prev) ? prev : [])]));
         }
       } catch (payErr) {
         if (prevDocSnapshot) {
@@ -3708,7 +3743,7 @@ function MainApp() {
         };
         const createdMov = await addSupabaseCashMovement(mov);
         if (createdMov) {
-          setCashMovementsState(prev => [createdMov, ...(Array.isArray(prev) ? prev : [])]);
+          setCashMovementsState(prev => upsertCashMovementInList(prev, createdMov));
         }
       } catch (movErr) {
         console.warn('[handleRegisterCxpPayment] No se pudo registrar egreso en flujo de caja:', movErr?.message || movErr);

@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { addCashMovement, deleteCashMovement, getCashMovements } from '../services/storageService.js';
-import { addSupabaseCashMovement, updateSupabaseCashMovement, deleteSupabaseCashMovement, getSupabaseCashMovements } from '../services/supabaseService.js';
+import {
+  CASH_MOVEMENTS_DELETED_KEY,
+  addSupabaseCashMovement,
+  updateSupabaseCashMovement,
+  deleteSupabaseCashMovement,
+  getSupabaseCashMovements,
+  supabase
+} from '../services/supabaseService.js';
 import { getSyncQueue, clearSyncQueue } from '../services/offlineSyncService.js';
 import {
   resolveExchangeRates,
@@ -16,7 +23,10 @@ import {
   doesMovementBelongToAccount,
   summarizeAccountMovements,
   filterMovementsByPeriod,
-  computeMovementEditAccountAdjustments
+  computeMovementEditAccountAdjustments,
+  dedupeCashMovements,
+  upsertCashMovementInList,
+  removeCashMovementFromList
 } from '../utils/treasuryAccountUtils.js';
 import { generateCashflowPDF, generateBankAccountsPDF } from '../services/pdfReportService.js';
 
@@ -33,6 +43,38 @@ const createMemoryStorage = () => {
 if (typeof globalThis.localStorage === 'undefined') {
   globalThis.localStorage = createMemoryStorage();
 }
+
+// Aislar pruebas de Supabase en memoria para no escribir ni leer del servidor real durante npm test
+const mockRemoteMovs = new Map();
+supabase.from = (table) => {
+  if (table !== 'cash_movements') {
+    return {
+      select: () => ({ order: () => Promise.resolve({ data: [], error: null }) }),
+      upsert: () => ({ select: () => ({ single: () => Promise.resolve({ data: {}, error: null }) }) }),
+      delete: () => ({ eq: () => Promise.resolve({ error: null }) })
+    };
+  }
+  return {
+    select: () => ({
+      order: () => Promise.resolve({ data: Array.from(mockRemoteMovs.values()), error: null })
+    }),
+    upsert: (rows) => {
+      const arr = Array.isArray(rows) ? rows : [rows];
+      arr.forEach(r => { if (r?.id) mockRemoteMovs.set(String(r.id), r); });
+      return {
+        select: () => ({
+          single: () => Promise.resolve({ data: arr[0] || {}, error: null })
+        })
+      };
+    },
+    delete: () => ({
+      eq: (_col, val) => {
+        mockRemoteMovs.delete(String(val));
+        return Promise.resolve({ error: null });
+      }
+    })
+  };
+};
 
 console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
 
@@ -346,6 +388,40 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   deleteCashMovement('MOV-UPD-1');
   clearSyncQueue();
   console.log('✓ 7. Filtros Día/Semana/Mes/Período y edición/actualización con Doble Seguridad y recálculo de saldos verificados');
+}
+
+// 8. Blindaje anti-resurrección de movimientos eliminados y anti-duplicación en memoria/reconciliación
+{
+  globalThis.localStorage.clear();
+  clearSyncQueue();
+
+  // Deduplicación de movimientos duplicados (reconcile + state update simultáneo)
+  const listA = upsertCashMovementInList(
+    [{ id: 'MOV-DUP-1', tipo: 'INGRESO', concepto: 'Inicial', montoUsd: 50 }],
+    { id: 'MOV-DUP-1', tipo: 'INGRESO', concepto: 'Actualizado', montoUsd: 60 }
+  );
+  assert.equal(listA.length, 1);
+  assert.equal(listA[0].montoUsd, 60);
+
+  const listAfterDel = removeCashMovementFromList(listA, { id: 'MOV-DUP-1' });
+  assert.equal(listAfterDel.length, 0);
+
+  // Tombstone persistente al eliminar: aunque remoto o localStorage devuelva un caché viejo con el ID eliminado, queda filtrado
+  await addSupabaseCashMovement({ id: 'MOV-ZOMBIE-1', tipo: 'EGRESO', concepto: 'No debe revivir', montoUsd: 15, montoBs: 0, cajaId: 'CAJA-01' });
+  await addSupabaseCashMovement({ id: 'MOV-ALIVE-1', tipo: 'INGRESO', concepto: 'Vivo', montoUsd: 25, montoBs: 0, cajaId: 'CAJA-01' });
+  await deleteSupabaseCashMovement({ id: 'MOV-ZOMBIE-1', tipo: 'EGRESO', montoUsd: 15, montoBs: 0 });
+  const tombstoneList = JSON.parse(globalThis.localStorage.getItem(CASH_MOVEMENTS_DELETED_KEY) || '[]');
+  assert.ok(tombstoneList.includes('MOV-ZOMBIE-1'));
+
+  // Simular respuesta remota rezagada que aún incluye MOV-ZOMBIE-1 (no debe resucitar en la UI)
+  mockRemoteMovs.set('MOV-ZOMBIE-1', { id: 'MOV-ZOMBIE-1', tipo: 'EGRESO', concepto: 'No debe revivir', monto_usd: 15, monto_bs: 0 });
+  const fetched = await getSupabaseCashMovements();
+  assert.equal(fetched.some(m => m.id === 'MOV-ZOMBIE-1'), false);
+  assert.equal(fetched.some(m => m.id === 'MOV-ALIVE-1'), true);
+  assert.equal(dedupeCashMovements([fetched[0], fetched[0]]).length, 1);
+
+  clearSyncQueue();
+  console.log('✓ 8. Blindaje anti-resurrección (tombstone DELETE) y anti-duplicación de movimientos verificado');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');
