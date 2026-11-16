@@ -2339,10 +2339,10 @@ export default function OrdersSalesModal({
     };
     try {
       if (isNe) {
-        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser, products: safeProducts, clients: safeClients, autoPrint: true });
+        generateDeliveryNotePDF({ sale: saleForPrint, config, currentUser, products: safeProducts, clients: safeClients, sellers: profitSellers, autoPrint: true });
         notify.success(`Nota de Entrega #${correlativo} enviada a impresión`);
       } else {
-        generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser, clients: safeClients, autoPrint: true });
+        generateLetterInvoiceSeniatPDF({ sale: saleForPrint, config, currentUser, clients: safeClients, sellers: profitSellers, autoPrint: true });
         notify.success(`Factura #${correlativo} enviada a impresión`);
       }
     } catch (err) {

@@ -4875,6 +4875,80 @@ export function resolveDocumentClientInfo(docData = {}, client = null, clients =
 }
 
 /**
+ * Resuelve el nombre completo del vendedor asignado al documento (Factura / Nota de Entrega)
+ * cruzando códigos Profit (ej. VV -> Victor Veloz), datos del pedido/venta o ficha del cliente.
+ */
+export function resolveDocumentSellerName(docData = {}, client = null, clients = null, sellers = null, currentUser = null) {
+  const safeDoc = docData || {};
+  const sellersPool = [];
+  if (Array.isArray(sellers)) sellersPool.push(...sellers);
+  if (Array.isArray(REAL_PROFIT_SELLERS)) sellersPool.push(...REAL_PROFIT_SELLERS);
+
+  const normCode = (v) => String(v || '').trim().toUpperCase();
+  const findSeller = (raw) => {
+    const token = normCode(raw);
+    if (!token || token === 'OFICINA PRINCIPAL' || token === 'ASESOR COMERCIAL' || token === 'ASESOR GENERAL') return null;
+    return sellersPool.find((s) =>
+      s && (
+        normCode(s.coVen || s.co_ven || s.id) === token ||
+        normCode(s.venDes || s.ven_des || s.nombre) === token
+      )
+    ) || null;
+  };
+
+  const explicitNames = [
+    safeDoc.vendedorNombre,
+    safeDoc.vendedor_nombre,
+    safeDoc.vendedorDisplay,
+    safeDoc.venDes,
+    safeDoc.ven_des,
+    safeDoc.vendedor
+  ].map((v) => String(v || '').trim()).filter(Boolean);
+
+  for (const cand of explicitNames) {
+    const matched = findSeller(cand);
+    if (matched) return String(matched.venDes || matched.ven_des || matched.nombre || cand).trim();
+    if (cand.length > 3 && !['N/A', 'UNDEFINED', 'NULL'].includes(cand.toUpperCase())) {
+      return cand;
+    }
+  }
+
+  const sellerCodes = [
+    safeDoc.vendedorId,
+    safeDoc.vendedor_id,
+    safeDoc.vendedorCoVen,
+    safeDoc.vendedor_co_ven,
+    safeDoc.coVen,
+    safeDoc.co_ven
+  ].map((v) => String(v || '').trim()).filter(Boolean);
+
+  for (const code of sellerCodes) {
+    const matched = findSeller(code);
+    if (matched) return String(matched.venDes || matched.ven_des || matched.nombre || code).trim();
+  }
+
+  const resolvedClient = client || resolveDocumentClientInfo(safeDoc, null, clients)?.client;
+  if (resolvedClient) {
+    const cliSellerRaw = String(
+      resolvedClient.vendedorNombre ||
+      resolvedClient.vendedor ||
+      resolvedClient.coVen ||
+      resolvedClient.co_ven ||
+      ''
+    ).trim();
+    if (cliSellerRaw) {
+      const matched = findSeller(cliSellerRaw);
+      if (matched) return String(matched.venDes || matched.ven_des || matched.nombre || cliSellerRaw).trim();
+      if (cliSellerRaw.length > 3) return cliSellerRaw;
+    }
+  }
+
+  if (sellerCodes.length > 0) return sellerCodes[0];
+  if (explicitNames.length > 0) return explicitNames[0];
+  return String(safeDoc.creadoPor || currentUser?.nombre || 'Asesor Comercial').trim();
+}
+
+/**
  * Construye el texto estático de las Cuentas Bancarias oficiales de Grupo Motorven
  * para codificarlo en el QR de Notas de Entrega y Documentos Fiscales.
  */
@@ -5156,6 +5230,7 @@ export function generateDeliveryNotePDF({
   currentUser = null,
   client = null,
   clients = null,
+  sellers = null,
   products = null,
   bankAccounts = null,
   tasaBcv = null,
@@ -5189,7 +5264,7 @@ export function generateDeliveryNotePDF({
   const clienteTelefono = resolvedClient.telefono;
 
   const almacenOrigen = docData.almacen || 'Almacén 02 (Mercancía General / Preventa)';
-  const vendedor = docData.vendedor || docData.vendedorNombre || docData.vendedorDisplay || docData.vendedorId || currentUser?.nombre || 'Asesor Comercial';
+  const vendedor = resolveDocumentSellerName(docData, client, clients, sellers, currentUser);
   const pedidoOrigen = docData.pedidoOrigenDoc || docData.pedidoId || order?.id || docData.pedidoNumero || 'VENTA DIRECTA';
   const transportista = docData.transportista || docData.chofer || 'Transporte Motorven';
   const condicionPago = docData.condicionPago || (diasCredito > 0 ? `${diasCredito}_DIAS` : 'CONTADO');
@@ -5249,14 +5324,20 @@ export function generateDeliveryNotePDF({
 
   let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-  // 2. Bloque Bipartito: Datos del Receptor / Cliente vs Expedición
+  // 2. Bloque Bipartito: Datos del Receptor / Cliente vs Expedición (fuente ampliada para legibilidad)
   const colW = (base.tableWidth - 2) / 2;
+  const lineStep = 4.2;
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(8.8);
+  const clientNameLines = base.doc.splitTextToSize(`Cliente: ${clienteNombre}`, colW - 6).slice(0, 2);
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(7.0);
+  base.doc.setFontSize(8.4);
   const dnClip = (txt) => base.doc.splitTextToSize(String(txt), colW - 6)[0] || '';
   const addrLines = base.doc.splitTextToSize(`Dirección Entrega: ${clienteDireccion}`, colW - 6).slice(0, 3);
-  const lineStep = 3.6;
-  const boxH = Math.max(22.5, 16.0 + addrLines.length * lineStep + 3.0);
+
+  const leftRowsH = 9.4 + (clientNameLines.length * 4.3) + 4.3 + (addrLines.length * lineStep) + 4.5;
+  const rightRowsH = 9.4 + (5 * 4.4) + 1.5;
+  const boxH = Math.max(29.0, leftRowsH, rightRowsH);
 
   base.doc.setFillColor(...COLORS.lightBg);
   base.doc.setDrawColor(...COLORS.border);
@@ -5269,34 +5350,50 @@ export function generateDeliveryNotePDF({
 
   // Columna Izquierda: Datos del Receptor / Cliente
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(7.6);
+  base.doc.setFontSize(9.0);
   base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('DATOS DEL RECEPTOR / CLIENTE', base.startX + 3, currentY + 4.4);
+  base.doc.text('DATOS DEL RECEPTOR / CLIENTE', base.startX + 3, currentY + 5.0);
 
-  base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(7.0);
-  base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(dnClip(`Cliente: ${clienteNombre}`), base.startX + 3, currentY + 8.6);
-  base.doc.text(dnClip(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`), base.startX + 3, currentY + 12.4);
-  base.doc.text(addrLines, base.startX + 3, currentY + 16.2);
-  const condY = currentY + 16.2 + (addrLines.length - 1) * lineStep + 3.8;
-  base.doc.text(dnClip(`Condición: ${condicionPago} • Vencimiento: ${fechaVencStr}`), base.startX + 3, condY);
-
-  // Columna Derecha: Expedición
+  let leftY = currentY + 9.6;
   base.doc.setFont('helvetica', 'bold');
-  base.doc.setFontSize(7.6);
-  base.doc.setTextColor(...COLORS.navy);
-  base.doc.text('EXPEDICIÓN', base.startX + colW + 3, currentY + 4.4);
+  base.doc.setFontSize(8.8);
+  base.doc.setTextColor(...COLORS.dark);
+  base.doc.text(clientNameLines, base.startX + 3, leftY);
+  leftY += clientNameLines.length * 4.3;
 
   base.doc.setFont('helvetica', 'normal');
-  base.doc.setFontSize(7.0);
-  base.doc.setTextColor(...COLORS.dark);
-  base.doc.text(dnClip(`Despachado de: ${almacenOrigen}`), base.startX + colW + 3, currentY + 8.6);
-  base.doc.text(dnClip(`Pedido de Origen: ${pedidoOrigen} • Vendedor: ${vendedor}`), base.startX + colW + 3, currentY + 12.4);
-  base.doc.text(dnClip(`Unidad / Transportista: ${transportista}`), base.startX + colW + 3, currentY + 16.2);
-  base.doc.text(dnClip(`Método: ${metodoPago} • Tasa Oficial BCV: ${formatBs(tasa)} / USD`), base.startX + colW + 3, condY);
+  base.doc.setFontSize(8.4);
+  base.doc.text(dnClip(`RIF / C.I.: ${clienteRif}${clienteTelefono ? ` • Tel: ${clienteTelefono}` : ''}`), base.startX + 3, leftY);
+  leftY += 4.3;
+  base.doc.text(addrLines, base.startX + 3, leftY);
+  leftY += addrLines.length * lineStep;
+  base.doc.text(dnClip(`Condición: ${condicionPago} • Vence: ${fechaVencStr}`), base.startX + 3, leftY);
 
-  currentY += boxH + 2.8;
+  // Columna Derecha: Datos de Expedición
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(9.0);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text('DATOS DE EXPEDICIÓN', base.startX + colW + 3, currentY + 5.0);
+
+  let rightY = currentY + 9.6;
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(8.6);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text(dnClip(`Vendedor: ${vendedor}`), base.startX + colW + 3, rightY);
+  rightY += 4.4;
+
+  base.doc.setFont('helvetica', 'normal');
+  base.doc.setFontSize(8.4);
+  base.doc.setTextColor(...COLORS.dark);
+  base.doc.text(dnClip(`Despachado de: ${almacenOrigen}`), base.startX + colW + 3, rightY);
+  rightY += 4.4;
+  base.doc.text(dnClip(`Pedido Origen: ${pedidoOrigen}`), base.startX + colW + 3, rightY);
+  rightY += 4.4;
+  base.doc.text(dnClip(`Transportista: ${transportista}`), base.startX + colW + 3, rightY);
+  rightY += 4.4;
+  base.doc.text(dnClip(`Método: ${metodoPago} • Tasa BCV: ${formatBs(tasa)}`), base.startX + colW + 3, rightY);
+
+  currentY += boxH + 3.0;
 
   // Función auxiliar para dibujar el encabezado de continuación en páginas 2+
   const drawContinuationHeader = () => {
@@ -5339,14 +5436,14 @@ export function generateDeliveryNotePDF({
     headStyles: {
       fillColor: COLORS.navy,
       textColor: [255, 255, 255],
-      fontSize: 6.8,
+      fontSize: 8.2,
       fontStyle: 'bold',
-      cellPadding: { top: 1.8, bottom: 1.8, left: 1.1, right: 1.1 },
+      cellPadding: { top: 2.2, bottom: 2.2, left: 1.2, right: 1.2 },
       valign: 'middle'
     },
     styles: {
-      fontSize: 7.0,
-      cellPadding: { top: 1.7, bottom: 1.7, left: 1.1, right: 1.1 },
+      fontSize: 8.4,
+      cellPadding: { top: 2.1, bottom: 2.1, left: 1.2, right: 1.2 },
       textColor: COLORS.dark,
       overflow: 'linebreak',
       valign: 'middle'
@@ -5355,15 +5452,15 @@ export function generateDeliveryNotePDF({
       fillColor: COLORS.lightBg
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 6.5 },
-      1: { halign: 'center', fontStyle: 'bold', cellWidth: 18.5 },
-      2: { halign: 'left', cellWidth: 47.9 },
-      3: { halign: 'center', cellWidth: 21 },
-      4: { halign: 'center', fontStyle: 'bold', cellWidth: 11.5 },
-      5: { halign: 'right', cellWidth: 16 },
-      6: { halign: 'right', cellWidth: 17.5 },
+      0: { halign: 'center', cellWidth: 7 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 19 },
+      2: { halign: 'left', cellWidth: 44.4 },
+      3: { halign: 'center', cellWidth: 19.5 },
+      4: { halign: 'center', fontStyle: 'bold', cellWidth: 12.5 },
+      5: { halign: 'right', cellWidth: 17.5 },
+      6: { halign: 'right', cellWidth: 18.5 },
       7: { halign: 'right', fontStyle: 'bold', cellWidth: 19 },
-      8: { halign: 'right', fontStyle: 'bold', cellWidth: 22 }
+      8: { halign: 'right', fontStyle: 'bold', cellWidth: 22.5 }
     },
     didDrawPage: (data) => {
       if (data.pageNumber > 1) {
@@ -5516,7 +5613,7 @@ export function generateDeliveryNotePDF({
 // =========================================================================
 // 9. REPORTE DE VENTAS & FACTURACIÓN POS
 // =========================================================================
-export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = null, tipoDoc = 'GENERAL', client = null, clients = null, bankAccounts = null, autoPrint = false }) {
+export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = null, tipoDoc = 'GENERAL', client = null, clients = null, sellers = null, bankAccounts = null, autoPrint = false }) {
   const tasa = Number(config?.tasaDolar) || 827.73;
 
   // Si es un documento individual y corresponde a una Nota de Entrega, usar el formato Carta de Nota de Entrega
@@ -5525,7 +5622,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
     const rawDocType = String(singleDoc.tipoDoc || singleDoc.tipo_doc || tipoDoc || '').toUpperCase();
     const rawDocNum = String(singleDoc.numeroDoc || singleDoc.factNum || singleDoc.factura || singleDoc.nroFactura || '').toUpperCase();
     if (rawDocType.includes('NOTA_ENTREGA') || rawDocType.includes('NOTA DE ENTREGA') || rawDocNum.startsWith('NE')) {
-      return generateDeliveryNotePDF({ sale: singleDoc, config, currentUser, client, clients, bankAccounts, autoPrint });
+      return generateDeliveryNotePDF({ sale: singleDoc, config, currentUser, client, clients, sellers, bankAccounts, autoPrint });
     }
   }
 
@@ -5533,8 +5630,12 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
   if (sales.length === 1 && ((sales[0].items && sales[0].items.length > 0) || (sales[0].renglones && sales[0].renglones.length > 0))) {
     const sale = sales[0];
     const items = sale.items || sale.renglones || [];
-    const factNum = sale.factNum || sale.nroFactura || sale.id || 'FACT-001';
+    const factNum = sale.factNum || sale.nroFactura || sale.numeroDoc || sale.id || 'FACT-001';
     const resolvedClient = resolveDocumentClientInfo(sale, client, clients);
+    const vendedorNombre = resolveDocumentSellerName(sale, client, clients, sellers, currentUser);
+    const parsedFecEmis = parseInvoiceDateInfo(sale);
+    const fecEmis = (parsedFecEmis.date || new Date()).toLocaleDateString('es-VE');
+    const condPago = sale.condicionPago || 'CONTADO';
     const base = createBaseReport({
       title: 'FACTURA COMERCIAL / COMPROBANTE FISCAL DE VENTA',
       subtitle: 'Documento Mercantil de Venta Oficial • Emisión en Divisas y Bolívares (Tasa BCV)',
@@ -5552,19 +5653,66 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
       { label: 'Total Factura USD', value: formatUsd(totUsd), subtext: formatBs(totBs), color: COLORS.navy },
       { label: 'Base Imponible USD', value: formatUsd(baseUsd), subtext: formatBs(baseUsd * tasa), color: COLORS.cyan },
       { label: 'IVA 16% Fiscal', value: formatUsd(ivaUsd), subtext: formatBs(ivaUsd * tasa), color: COLORS.emerald },
-      { label: 'Forma de Pago', value: sale.formaPago || 'EFECTIVO_USD', subtext: `Tasa: ${formatBs(tasa)}`, color: COLORS.amber }
+      { label: 'Forma de Pago', value: sale.formaPago || sale.metodoPago || 'EFECTIVO_USD', subtext: `Tasa: ${formatBs(tasa)}`, color: COLORS.amber }
     ];
 
     let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
 
-    currentY = addAnalyticalBox(
-      base.doc,
-      currentY,
-      `DATOS FISCALES DEL CLIENTE & EMISIÓN (${factNum})`,
-      `Cliente: ${resolvedClient.nombre} • RIF/CI: ${resolvedClient.rif} • Teléfono: ${resolvedClient.telefono || 'N/A'}\nDirección Entrega / Fiscal: ${resolvedClient.direccion} • Vendedor Asignado: ${sale.vendedor || 'Asesor General'} • N° Control: ${sale.controlNum || sale.nroControl || '00-000001'}`,
-      base.tableWidth,
-      base.startX
-    );
+    // Bloque Bipartito de Datos del Cliente y Datos de Expedición con fuente ampliada
+    const colW = (base.tableWidth - 2) / 2;
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(8.8);
+    const cliNameLines = base.doc.splitTextToSize(`Cliente: ${resolvedClient.nombre}`, colW - 6).slice(0, 2);
+    base.doc.setFont('helvetica', 'normal');
+    base.doc.setFontSize(8.4);
+    const clipTxt = (txt) => base.doc.splitTextToSize(String(txt), colW - 6)[0] || '';
+    const cliAddrLines = base.doc.splitTextToSize(`Dirección: ${resolvedClient.direccion}`, colW - 6).slice(0, 2);
+    const boxH = Math.max(27.5, 9.6 + cliNameLines.length * 4.3 + 4.3 + cliAddrLines.length * 4.2 + 2.5);
+
+    base.doc.setFillColor(...COLORS.lightBg);
+    base.doc.setDrawColor(...COLORS.border);
+    base.doc.setLineWidth(0.3);
+    base.doc.roundedRect(base.startX, currentY, base.tableWidth, boxH, 1.2, 1.2, 'FD');
+    base.doc.line(base.startX + colW, currentY + 1.5, base.startX + colW, currentY + boxH - 1.5);
+
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(9.0);
+    base.doc.setTextColor(...COLORS.navy);
+    base.doc.text('DATOS DEL CLIENTE', base.startX + 3, currentY + 5.0);
+
+    let ly = currentY + 9.6;
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(8.8);
+    base.doc.setTextColor(...COLORS.dark);
+    base.doc.text(cliNameLines, base.startX + 3, ly);
+    ly += cliNameLines.length * 4.3;
+
+    base.doc.setFont('helvetica', 'normal');
+    base.doc.setFontSize(8.4);
+    base.doc.text(clipTxt(`RIF / C.I.: ${resolvedClient.rif}${resolvedClient.telefono ? ` • Tel: ${resolvedClient.telefono}` : ''}`), base.startX + 3, ly);
+    ly += 4.3;
+    base.doc.text(cliAddrLines, base.startX + 3, ly);
+
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(9.0);
+    base.doc.setTextColor(...COLORS.navy);
+    base.doc.text(`DATOS DE EXPEDICIÓN (${factNum})`, base.startX + colW + 3, currentY + 5.0);
+
+    let ry = currentY + 9.6;
+    base.doc.setFont('helvetica', 'bold');
+    base.doc.setFontSize(8.6);
+    base.doc.setTextColor(...COLORS.navy);
+    base.doc.text(clipTxt(`Vendedor: ${vendedorNombre}`), base.startX + colW + 3, ry);
+    ry += 4.4;
+
+    base.doc.setFont('helvetica', 'normal');
+    base.doc.setFontSize(8.4);
+    base.doc.setTextColor(...COLORS.dark);
+    base.doc.text(clipTxt(`Fecha Emisión: ${fecEmis} • N° Control: ${sale.controlNum || sale.nroControl || sale.numeroControl || '00-000001'}`), base.startX + colW + 3, ry);
+    ry += 4.4;
+    base.doc.text(clipTxt(`Condición: ${condPago} • Método: ${sale.metodoPago || sale.formaPago || 'EFECTIVO_USD'}`), base.startX + colW + 3, ry);
+
+    currentY += boxH + 3.0;
 
     const tableData = items.map((it, idx) => {
       const cant = resolveItemQty(it);
@@ -5591,14 +5739,14 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
       headStyles: {
         fillColor: COLORS.navy,
         textColor: [255, 255, 255],
-        fontSize: 7.4,
+        fontSize: 8.6,
         fontStyle: 'bold',
-        cellPadding: { top: 1.8, bottom: 1.8, left: 1.3, right: 1.3 },
+        cellPadding: { top: 2.2, bottom: 2.2, left: 1.4, right: 1.4 },
         valign: 'middle'
       },
       styles: {
-        fontSize: 7.2,
-        cellPadding: { top: 1.7, bottom: 1.7, left: 1.3, right: 1.3 },
+        fontSize: 8.8,
+        cellPadding: { top: 2.1, bottom: 2.1, left: 1.4, right: 1.4 },
         textColor: COLORS.dark,
         overflow: 'linebreak',
         valign: 'middle'
@@ -5607,13 +5755,13 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
         fillColor: COLORS.lightBg
       },
       columnStyles: {
-        0: { fontStyle: 'bold', halign: 'center', cellWidth: 21 },
-        1: { cellWidth: 61.9 },
+        0: { fontStyle: 'bold', halign: 'center', cellWidth: 20 },
+        1: { cellWidth: 55.9 },
         2: { halign: 'center', cellWidth: 14 },
         3: { halign: 'center', fontStyle: 'bold', cellWidth: 13 },
-        4: { halign: 'right', cellWidth: 21 },
-        5: { halign: 'right', fontStyle: 'bold', cellWidth: 21 },
-        6: { halign: 'right', fontStyle: 'bold', cellWidth: 28 }
+        4: { halign: 'right', cellWidth: 22 },
+        5: { halign: 'right', fontStyle: 'bold', cellWidth: 23 },
+        6: { halign: 'right', fontStyle: 'bold', cellWidth: 32 }
       }
     });
 
@@ -5734,7 +5882,7 @@ export function generateSalesPOSPDF({ sales = [], config = {}, currentUser = nul
  * - Correlativo de 6 dígitos consecutivos (Ej: 000000, 000001, 000002...)
  * - Paginación dinámica "1/2", "2/2" al pie
  */
-export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser = null, client = null, clients = null, bankAccounts = null, autoPrint = false }) {
+export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser = null, client = null, clients = null, sellers = null, bankAccounts = null, autoPrint = false }) {
   if (!sale) return;
   const tasa = Number(sale.tasaDolar || config?.tasaDolar) || 827.73;
   const doc = new jsPDF({
@@ -5744,6 +5892,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   });
 
   const resolvedClient = resolveDocumentClientInfo(sale, client, clients);
+  const vendedorNombre = resolveDocumentSellerName(sale, client, clients, sellers, currentUser);
   const correlativo = String(sale.numeroDoc || sale.nroFactura || '000000').replace(/[^0-9]/g, '').slice(-6).padStart(6, '0') || '000000';
   const items = sale.items || sale.renglones || [];
 
@@ -5764,7 +5913,7 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
 
   // 1. Correlativo a la derecha
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
+  doc.setFontSize(8.5);
   doc.setTextColor(100, 116, 139);
   const docHeaderTitle = isNe ? 'NOTA DE ENTREGA N°' : (isNc ? 'NOTA DE CRÉDITO N°' : (isNd ? 'NOTA DE DÉBITO N°' : 'FACTURA N°'));
   doc.text(docHeaderTitle, startX + tableWidth, currentY + 3, { align: 'right' });
@@ -5775,33 +5924,50 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
 
   currentY += 12;
 
-  // 2. Metadatos del Adquirente
-  const midX = startX + 110;
+  // 2. Metadatos del Adquirente y Datos de Expedición (fuente ampliada + Vendedor visible)
+  const midX = startX + 104;
+  const leftColW = (midX - 6) - (startX + 3);
+  const rightColW = (startX + tableWidth - 3) - midX;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.2);
+  const acqNameLines = doc.splitTextToSize(resolvedClient.nombre, leftColW).slice(0, 2);
+
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  const addrLines = doc.splitTextToSize(`Domicilio Fiscal: ${resolvedClient.direccion}`, (midX - 7) - (startX + 3)).slice(0, 3);
-  const acqBoxH = Math.max(22, 17 + addrLines.length * 3.4);
+  doc.setFontSize(8.5);
+  const addrLines = doc.splitTextToSize(`Domicilio Fiscal: ${resolvedClient.direccion}`, leftColW).slice(0, 3);
+  const leftClip = (txt) => doc.splitTextToSize(String(txt), leftColW)[0] || '';
+  const rightClip = (txt) => doc.splitTextToSize(String(txt), rightColW)[0] || '';
+
+  const leftBlockH = 9.8 + (acqNameLines.length * 4.6) + 4.5 + (addrLines.length * 4.1) + 2.0;
+  const rightBlockH = 9.8 + (5 * 4.5) + 2.0;
+  const acqBoxH = Math.max(30.5, leftBlockH, rightBlockH);
 
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
   doc.roundedRect(startX, currentY, tableWidth, acqBoxH, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.setTextColor(100, 116, 139);
-  doc.text('DATOS DEL ADQUIRENTE:', startX + 3, currentY + 4.5);
+  doc.setFontSize(8.8);
+  doc.setTextColor(0, 43, 122);
+  doc.text('DATOS DEL ADQUIRENTE / CLIENTE:', startX + 3, currentY + 5.2);
 
-  doc.setFontSize(9);
+  let acqY = currentY + 10.2;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.2);
   doc.setTextColor(15, 23, 42);
-  doc.text(resolvedClient.nombre.slice(0, 45), startX + 3, currentY + 9.5);
+  doc.text(acqNameLines, startX + 3, acqY);
+  acqY += acqNameLines.length * 4.6;
 
-  doc.setFontSize(7.5);
+  doc.setFontSize(8.6);
   doc.setFont('helvetica', 'normal');
-  doc.setTextColor(71, 85, 105);
-  doc.text(`RIF / C.I.: ${resolvedClient.rif}${resolvedClient.telefono ? ` • Tel: ${resolvedClient.telefono}` : ''}`, startX + 3, currentY + 13.8);
-  doc.text(addrLines, startX + 3, currentY + 17.8);
+  doc.setTextColor(51, 65, 85);
+  doc.text(leftClip(`RIF / C.I.: ${resolvedClient.rif}${resolvedClient.telefono ? ` • Tel: ${resolvedClient.telefono}` : ''}`), startX + 3, acqY);
+  acqY += 4.5;
+  doc.setFontSize(8.5);
+  doc.text(addrLines, startX + 3, acqY);
 
-  // Columna derecha del adquirente
+  // Columna derecha: Datos de Expedición & Vendedor
   doc.setDrawColor(226, 232, 240);
   doc.line(midX - 4, currentY + 2, midX - 4, currentY + acqBoxH - 2);
 
@@ -5811,14 +5977,30 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   const fecVenc = (parsedFecVenc && parsedFecVenc.date) ? parsedFecVenc.date.toLocaleDateString('es-VE') : fecEmis;
   const condPago = sale.condicionPago || 'CONTADO';
 
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.8);
+  doc.setTextColor(0, 43, 122);
+  doc.text('DATOS DE EXPEDICIÓN:', midX, currentY + 5.2);
+
+  let expY = currentY + 10.0;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.6);
+  doc.setTextColor(15, 23, 42);
+  doc.text(rightClip(`Vendedor: ${vendedorNombre}`), midX, expY);
+  expY += 4.5;
+
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.text(`Fecha Emisión: ${fecEmis}`, midX, currentY + 5);
-  doc.text(`Vencimiento: ${fecVenc} (${sale.diasCredito || 0} Días)`, midX, currentY + 9.5);
-  doc.text(`Condición: ${condPago} • Método: ${sale.metodoPago || 'EFECTIVO USD'}`, midX, currentY + 14);
+  doc.setFontSize(8.4);
+  doc.setTextColor(51, 65, 85);
+  doc.text(rightClip(`Fecha Emisión: ${fecEmis}`), midX, expY);
+  expY += 4.5;
+  doc.text(rightClip(`Vencimiento: ${fecVenc} (${sale.diasCredito || 0} Días)`), midX, expY);
+  expY += 4.5;
+  doc.text(rightClip(`Condición: ${condPago} • Método: ${sale.metodoPago || 'EFECTIVO USD'}`), midX, expY);
+  expY += 4.5;
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(217, 119, 6);
-  doc.text(`Tasa Oficial BCV: ${formatBs(tasa)} / USD`, midX, currentY + 18.5);
+  doc.text(rightClip(`Tasa Oficial BCV: ${formatBs(tasa)} / USD`), midX, expY);
 
   currentY += acqBoxH + 4;
 
@@ -5847,8 +6029,8 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
     body: tableRows,
     theme: 'grid',
     styles: {
-      fontSize: 8.6,
-      cellPadding: { top: 2.1, bottom: 2.1, left: 1.6, right: 1.6 },
+      fontSize: 9.5,
+      cellPadding: { top: 2.3, bottom: 2.3, left: 1.5, right: 1.5 },
       lineColor: [226, 232, 240],
       lineWidth: 0.15,
       textColor: [15, 23, 42],
@@ -5858,25 +6040,25 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
     headStyles: {
       fillColor: [0, 43, 122],
       textColor: [255, 255, 255],
-      fontSize: 8.4,
+      fontSize: 9.2,
       fontStyle: 'bold',
       halign: 'left',
-      cellPadding: { top: 2.2, bottom: 2.2, left: 1.6, right: 1.6 },
+      cellPadding: { top: 2.4, bottom: 2.4, left: 1.5, right: 1.5 },
       valign: 'middle'
     },
     columnStyles: {
       0: { halign: 'center', cellWidth: 10 },
-      1: { halign: 'left', cellWidth: 61.9 },
+      1: { halign: 'left', cellWidth: 57.9 },
       2: { halign: 'center', cellWidth: 16 },
-      3: { halign: 'right', cellWidth: 23 },
+      3: { halign: 'right', cellWidth: 24 },
       4: { halign: 'center', cellWidth: 15 },
-      5: { halign: 'right', cellWidth: 26 },
-      6: { halign: 'right', cellWidth: 34 }
+      5: { halign: 'right', cellWidth: 27 },
+      6: { halign: 'right', cellWidth: 36 }
     },
     didDrawPage: (data) => {
       if (data.pageNumber > 1) {
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(8);
+        doc.setFontSize(8.4);
         doc.setTextColor(71, 85, 105);
         doc.text(`CONTINUACIÓN FACTURA N° ${correlativo} - Adquirente: ${resolvedClient.nombre}`, startX, topMargin - 4);
       }

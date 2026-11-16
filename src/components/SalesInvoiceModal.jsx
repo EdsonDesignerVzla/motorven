@@ -19,7 +19,7 @@ import {
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { parseInvoiceDateInfo, resolveCreditDaysFromTerm } from '../services/creditPolicyService';
 import { formatBs, formatUsd, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, generateCreditDebitNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, generateCreditDebitNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, resolveDocumentSellerName, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -64,6 +64,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
   if (!sale) return null;
 
   const resolvedClientInfo = resolveDocumentClientInfo(sale, client, clients);
+  const resolvedSellerName = resolveDocumentSellerName(sale, client, clients, null, currentUser);
 
   const safeConfig = config || {};
   const isNc = sale.tipoDoc === 'NOTA_CREDITO';
@@ -1092,12 +1093,12 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                               </div>
 
                               {/* Cuadro de 2 Columnas: DATOS DEL RECEPTOR / CLIENTE y EXPEDICIÓN */}
-                              <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '12px', background: '#f8fafc', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '10px', fontSize: '0.72rem' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '12px', background: '#f8fafc', padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '10px', fontSize: '0.8rem' }}>
                                 <div>
-                                  <div style={{ fontSize: '0.66rem', fontWeight: 900, color: '#0b1e36', textTransform: 'uppercase', marginBottom: '4px' }}>
+                                  <div style={{ fontSize: '0.74rem', fontWeight: 900, color: '#0b1e36', textTransform: 'uppercase', marginBottom: '5px' }}>
                                     DATOS DEL RECEPTOR / CLIENTE
                                   </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '115px 1fr', rowGap: '2px' }}>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '122px 1fr', rowGap: '3px' }}>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Cliente:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.clienteNombre}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>RIF / C.I.:</span>
@@ -1110,14 +1111,16 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                                 </div>
 
                                 <div style={{ borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
-                                  <div style={{ fontSize: '0.66rem', fontWeight: 900, color: '#0b1e36', textTransform: 'uppercase', marginBottom: '4px' }}>
-                                    EXPEDICIÓN
+                                  <div style={{ fontSize: '0.74rem', fontWeight: 900, color: '#0b1e36', textTransform: 'uppercase', marginBottom: '5px' }}>
+                                    DATOS DE EXPEDICIÓN
                                   </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '125px 1fr', rowGap: '2px' }}>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '125px 1fr', rowGap: '3px' }}>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Vendedor:</span>
+                                    <strong style={{ color: '#0b1e36' }}>{resolvedSellerName}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Despachado de:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.almacenOrigen || '02 - Almacén 02 (Despacho General)'}</strong>
-                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Pedido • Vendedor:</span>
-                                    <strong style={{ color: '#0f172a' }}>{sale.pedidoOrigenDoc || sale.pedidoOrigenId || sale.orderId || 'VENTA DIRECTA POS'} • {sale.vendedor || 'OFICINA PRINCIPAL'}</strong>
+                                    <span style={{ color: '#64748b', fontWeight: 700 }}>Pedido Origen:</span>
+                                    <strong style={{ color: '#0f172a' }}>{sale.pedidoOrigenDoc || sale.pedidoOrigenId || sale.orderId || 'VENTA DIRECTA POS'}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Unidad / Transp.:</span>
                                     <strong style={{ color: '#0f172a' }}>{sale.transportista || sale.transporte || 'Retiro Directo por Cliente en Rampa'}</strong>
                                     <span style={{ color: '#64748b', fontWeight: 700 }}>Método • {rateLabel}:</span>
@@ -1136,7 +1139,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                           )}
 
                           {/* Tabla de Renglones de Nota de Entrega */}
-                          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.8rem' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.88rem' }}>
                             <thead>
                               <tr style={{ background: '#0b1e36', color: '#ffffff', textAlign: 'left' }}>
                                 <th style={{ padding: '6px 6px', width: '28px', textAlign: 'center' }}>#</th>
@@ -1358,36 +1361,37 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                             </div>
 
                             {/* Metadatos del Cliente y Venta */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '0.85rem', background: '#f8fafc', padding: '0.7rem 0.85rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '0.85rem' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '0.85rem', background: '#f8fafc', padding: '0.8rem 0.95rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '0.85rem' }}>
                               <div>
-                                <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Datos del Adquirente:</div>
-                                <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>{sale.clienteNombre}</div>
-                                <div style={{ fontSize: '0.75rem', color: '#334155' }}>
+                                <div style={{ fontSize: '0.74rem', textTransform: 'uppercase', color: '#002b7a', fontWeight: 800 }}>Datos del Adquirente / Cliente:</div>
+                                <div style={{ fontSize: '1.02rem', fontWeight: 800, color: '#0f172a', margin: '3px 0' }}>{sale.clienteNombre}</div>
+                                <div style={{ fontSize: '0.84rem', color: '#334155' }}>
                                   <strong>RIF / C.I.:</strong> <code>{sale.clienteRif}</code>
                                 </div>
-                                <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '2px' }}>
+                                <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '3px' }}>
                                   Domicilio Fiscal: {resolvedClientInfo.direccion || 'No registrada'}
                                 </div>
                               </div>
 
-                              <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '0.85rem', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '2px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
+                              <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '0.85rem', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '3px' }}>
+                                <div style={{ fontSize: '0.74rem', textTransform: 'uppercase', color: '#002b7a', fontWeight: 800, marginBottom: '1px' }}>Datos de Expedición:</div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem' }}>
+                                  <span style={{ color: '#64748b' }}>Vendedor:</span>
+                                  <strong style={{ color: '#002b7a' }}>{resolvedSellerName}</strong>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                                   <span style={{ color: '#64748b' }}>Fecha de Emisión:</span>
                                   <strong>{fechaStr} {horaStr}</strong>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                                   <span style={{ color: '#64748b' }}>Fecha de Vencimiento:</span>
                                   <strong style={{ color: '#002b7a' }}>{fechaVencStr} ({diasCreditoDoc} Días)</strong>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
-                                  <span style={{ color: '#64748b' }}>Condición de Pago:</span>
-                                  <strong>{sale.condicionPago || 'CONTADO'}</strong>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                                  <span style={{ color: '#64748b' }}>Condición • Método:</span>
+                                  <strong>{sale.condicionPago || 'CONTADO'} • {sale.metodoPago || 'EFECTIVO USD'}</strong>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
-                                  <span style={{ color: '#64748b' }}>Método de Pago:</span>
-                                  <span>{sale.metodoPago || 'EFECTIVO USD'}</span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                                   <span style={{ color: '#64748b' }}>{rateLabel}:</span>
                                   <strong style={{ color: '#d97706' }}>{formatBs(effectiveDocRate)} / USD</strong>
                                 </div>
@@ -1415,7 +1419,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                         )}
 
                         {/* 2. TABLA DE RENGLONES FACTURADOS */}
-                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.82rem' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
                           <thead>
                             <tr style={{ background: '#002b7a', color: '#ffffff', textAlign: 'left' }}>
                               <th style={{ padding: '6px 8px', width: '35px', textAlign: 'center' }}>#</th>

@@ -60,6 +60,7 @@ import {
   generateWhatsAppCollectionPDF,
   getPageLayoutMetrics,
   resolveDocumentClientInfo,
+  resolveDocumentSellerName,
   getStaticBankAccountsQRPayload,
   buildQRCodeMatrix,
   generateQuotationPDF,
@@ -1975,6 +1976,54 @@ async function runPdfTests() {
     }
     if (missingSlashFiles.length > 0) {
       throw new Error(`PDFs sin formato de paginación X/Y: ${missingSlashFiles.join(', ')}`);
+    }
+  });
+
+  // 49. Vendedor visible y tipografía ampliada en PDFs de Factura y Nota de Entrega
+  testGen('Factura SENIAT, Factura POS y Nota de Entrega muestran nombre completo de vendedor y fuentes ampliadas', () => {
+    const resolvedByCode = resolveDocumentSellerName({ vendedorId: 'VV' }, null, null, null, mockUser);
+    if (resolvedByCode !== 'Victor Veloz') {
+      throw new Error(`Se esperaba 'Victor Veloz' para coVen 'VV', obtuvo: ${resolvedByCode}`);
+    }
+    const sampleSale = {
+      numeroDoc: '000999',
+      nroFactura: '000999',
+      clienteNombre: 'Lubricantes Valencia 2026 C.A.',
+      clienteRif: 'J-31115365-9',
+      vendedorId: 'VV',
+      condicionPago: 'CREDITO',
+      diasCredito: 15,
+      totalUsd: 116,
+      items: [{ codigo: '001208', descripcion: 'Oilstone 15W40 Caja', cantidad: 2, precioUsd: 50, subtotalUsd: 100 }]
+    };
+
+    const seniatDoc = generateLetterInvoiceSeniatPDF({ sale: sampleSale, config: mockConfig, currentUser: mockUser, autoPrint: true });
+    const seniatStream = (seniatDoc.internal.pages[1] || []).join('\n');
+    if (!seniatStream.includes('Victor Veloz') || !seniatStream.includes('DATOS DE EXPEDICI')) {
+      throw new Error('Factura SENIAT PDF debe incluir nombre del vendedor y cabecera DATOS DE EXPEDICIÓN');
+    }
+    if (!seniatStream.includes('9.5 Tf') && !seniatStream.includes('9.50 Tf')) {
+      throw new Error('Factura SENIAT PDF debe usar fuente ampliada >= 9.5pt en tabla');
+    }
+
+    const posDoc = generateSalesPOSPDF({ sales: [sampleSale], config: mockConfig, currentUser: mockUser, autoPrint: true });
+    const posStream = (posDoc.internal.pages[1] || []).join('\n');
+    if (!posStream.includes('Victor Veloz')) {
+      throw new Error('Factura POS PDF debe incluir nombre del vendedor');
+    }
+
+    const neRes = generateDeliveryNotePDF({
+      sale: { ...sampleSale, numeroDoc: 'NE-000999', tipoDoc: 'NOTA_ENTREGA' },
+      config: mockConfig,
+      currentUser: mockUser,
+      autoPrint: true
+    });
+    const neStream = (neRes.doc.internal.pages[1] || []).join('\n');
+    if (!neStream.includes('Victor Veloz')) {
+      throw new Error('Nota de Entrega PDF debe incluir nombre del vendedor');
+    }
+    if (!neStream.includes('8.4 Tf') && !neStream.includes('8.40 Tf')) {
+      throw new Error('Nota de Entrega PDF debe usar fuente ampliada >= 8.4pt en cliente/expedición/tabla');
     }
   });
 
