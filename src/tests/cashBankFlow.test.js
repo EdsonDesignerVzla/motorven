@@ -490,4 +490,63 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   console.log('✓ 10. División de Cajas en Sub-caja Fiscal + Sub-caja No Fiscal = Sumatoria Consolidada verificada');
 }
 
+// 11. Enrutamiento automático de abonos CxC a Sub-caja Fiscal (Factura) vs No Fiscal (N/E) y sumatoria en Caja original
+{
+  const initialDesk = {
+    id: 'caja-01',
+    coCaja: 'CAJA-01',
+    descripcion: 'Caja Efectivo $ (Valencia)',
+    moneda: 'USD',
+    saldoUsd: 872,
+    saldoBs: 797025.44
+  };
+  // Pago CxC Factura Fiscal #671 ($87.00 en efectivo USD -> montoBs = 0)
+  let updatedDesk = applyTreasuryBalanceDelta(initialDesk, { deltaUsd: 87, deltaBs: 0 });
+  const movFiscalCxc = {
+    id: 'MOV-CXC-F671',
+    tipo: 'INGRESO',
+    categoria: 'COBRO_CXC',
+    tipoDoc: 'FACTURA',
+    fiscalScope: 'FISCAL',
+    subcaja: 'CAJA-01-F',
+    referenciaTipo: 'FISCAL',
+    referenciaId: '000671',
+    cajaId: 'caja-01',
+    cuentaId: 'caja-01',
+    concepto: 'Mov. #004130 • Cobro Factura Fiscal #000671 [Divisa Efectivo USD]',
+    montoUsd: 87,
+    montoBs: 0
+  };
+  // Pago CxC Nota de Entrega NE-002226 ($82.00 -> Sub-caja No Fiscal)
+  updatedDesk = applyTreasuryBalanceDelta(updatedDesk, { deltaUsd: 82, deltaBs: 0 });
+  const movNoFiscalCxc = {
+    id: 'MOV-CXC-NE2226',
+    tipo: 'INGRESO',
+    categoria: 'COBRO_CXC',
+    tipoDoc: 'NOTA_ENTREGA',
+    fiscalScope: 'NO_FISCAL',
+    subcaja: 'CAJA-01-NF',
+    referenciaTipo: 'NO_FISCAL',
+    referenciaId: 'NE-002226',
+    cajaId: 'caja-01',
+    cuentaId: 'caja-01',
+    concepto: 'Mov. #004131 • Cobro Nota de Entrega #NE-002226 [Divisa Efectivo USD]',
+    montoUsd: 82,
+    montoBs: 0
+  };
+
+  const bd = computeCashDeskFiscalBreakdown(
+    updatedDesk,
+    [movFiscalCxc, movNoFiscalCxc],
+    [updatedDesk],
+    [],
+    { tasaDolar: 914.02 }
+  );
+  assert.equal(bd.fiscalUsd, 87, 'Abono de Factura Fiscal debe ir a CAJA-01-F');
+  assert.equal(bd.noFiscalUsd, 954, 'Saldo inicial (872) + Abono Nota de Entrega (82) debe ir a CAJA-01-NF');
+  assert.equal(bd.totalUsd, 1041, 'La sumatoria Fiscal (87) + No Fiscal (954) debe guardar 1041 en CAJA-01 original');
+  assert.equal(Number((bd.fiscalUsd + bd.noFiscalUsd).toFixed(2)), bd.totalUsd);
+  console.log('✓ 11. Enrutamiento de cobros CxC (Factura -> Fiscal, N/E -> No Fiscal) y sumatoria en Caja original verificado');
+}
+
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

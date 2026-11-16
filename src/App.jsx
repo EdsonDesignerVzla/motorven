@@ -13,7 +13,7 @@ import {
   removeCashMovementFromList,
   resolveExchangeRates
 } from './utils/treasuryAccountUtils';
-import { normalizeRateType } from './utils/rateClassificationUtils';
+import { normalizeRateType, isDirectCurrencyRateType } from './utils/rateClassificationUtils';
 import { resolveInvoiceLitros, resolveInvoiceCajas, matchesSeller } from './services/commissionService';
 import { ShieldAlert, Smartphone } from 'lucide-react';
 import Navigation from './components/Navigation';
@@ -3409,19 +3409,22 @@ function MainApp() {
     }
 
     const effectiveDocType = raw.tipoDoc || savedDoc?.tipoDoc || docToSave?.tipoDoc || 'FACTURA';
+    const isNeDocCobro = String(effectiveDocType || '').toUpperCase().trim() === 'NOTA_ENTREGA';
+    const fiscalScopeTag = raw.fiscalScope || (isNeDocCobro ? 'NO_FISCAL' : 'FISCAL');
     const resolvedMonedaPago = raw.monedaPago || raw.collectionPayload?.monedaPago || (String(raw.tipoTasa || raw.collectionPayload?.tipoTasa || raw.moneda || '').toUpperCase().includes('USD') || String(raw.moneda || '').toUpperCase() === 'US$' ? 'USD' : 'BS');
     const resolvedTipoTasa = normalizeRateType(raw.tipoTasa ?? raw.collectionPayload?.tipoTasa, {
       tipoDoc: effectiveDocType,
       monedaPago: resolvedMonedaPago,
       fallback: 'BCV'
     });
+    const isDirectUsdRate = isDirectCurrencyRateType(resolvedTipoTasa);
     const baseRate = Number(raw.collectionPayload?.tasaPago || raw.tasaPago || raw.collectionPayload?.tasa || raw.tasa || config?.tasaDolar || 1) || 1;
     const rawAmounts = normalizeCollectionWriteAmounts({
       montoUsd: raw.collectionPayload?.montoUsd ?? raw.montoUsd ?? 0,
-      montoBs: resolvedTipoTasa === 'USD' ? (raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0) : (raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0),
+      montoBs: raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0,
       tasa: baseRate
     });
-    const finalMontoBs = resolvedTipoTasa === 'USD' && Number(raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0) === 0
+    const finalMontoBs = isDirectUsdRate && Number(raw.collectionPayload?.montoBs ?? raw.montoBs ?? 0) === 0
       ? 0
       : rawAmounts.montoBs;
 
@@ -3433,7 +3436,7 @@ function MainApp() {
           tasa: rawAmounts.tasa,
           tipoTasa: resolvedTipoTasa,
           tasaPago: Number(raw.collectionPayload?.tasaPago ?? raw.tasaPago ?? rawAmounts.tasa ?? baseRate),
-          monedaPago: resolvedTipoTasa === 'USD' ? 'USD' : resolvedMonedaPago
+          monedaPago: isDirectUsdRate ? 'USD' : resolvedMonedaPago
         }
       : null;
 
@@ -3452,7 +3455,7 @@ function MainApp() {
         tasa: rawAmounts.tasa,
         tipoTasa: resolvedTipoTasa,
         tasaPago: Number(raw.tasaPago ?? rawAmounts.tasa ?? baseRate),
-        monedaPago: resolvedTipoTasa === 'USD' ? 'USD' : resolvedMonedaPago,
+        monedaPago: isDirectUsdRate ? 'USD' : resolvedMonedaPago,
         cuentaId: raw.accountId || raw.cuentaId || '',
         cuentaNombre: raw.cuentaDestino || raw.cuentaNombre || '',
         descrip: raw.observaciones || `Cobro ${raw.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${raw.factNum || ''}`,
@@ -3517,22 +3520,38 @@ function MainApp() {
     const montoCobradoUsd = Number(savedCob?.montoUsd ?? colPayload?.montoUsd ?? rawAmounts.montoUsd ?? 0);
     const montoCobradoBs = Number(savedCob?.montoBs ?? colPayload?.montoBs ?? rawAmounts.montoBs ?? 0);
 
-    // Registrar movimiento INGRESO en Flujo de Caja / Caja Chica
+    // Registrar movimiento INGRESO en Flujo de Caja / Caja Chica enlazado a su Sub-caja (Fiscal vs No Fiscal)
     if (montoCobradoUsd > 0) {
       try {
+        const isCajaDest = inferTreasuryAccountKind(account) === 'CAJA';
+        const cajaTargetId = isCajaDest ? (account?.rawId || account?.id || account?.coCaja || '') : '';
+        const cajaTargetCode = String(account?.coCaja || account?.co_caja || cajaTargetId || '').trim().toUpperCase();
+        const subCajaCode = raw.subcaja || (isCajaDest && cajaTargetCode ? `${cajaTargetCode}-${isNeDocCobro ? 'NF' : 'F'}` : '');
+        const rawConcepto = colPayload?.descrip || `Cobro CxC ${raw.clienteNombre || savedDoc?.clienteNombre || ''} (#${raw.factNum || savedDoc?.factNum || ''})`.trim();
+        const hasDocIndicator = /FACTURA\s+FISCAL|NOTA\s+DE\s+ENTREGA|\[(?:NO[\s_-]*)?FISCAL\]/i.test(rawConcepto);
+        const movConcepto = hasDocIndicator
+          ? rawConcepto
+          : `[${fiscalScopeTag === 'FISCAL' ? 'FISCAL' : 'NO FISCAL'}] ${rawConcepto}`;
         const mov = {
           tipo: 'INGRESO',
           categoria: 'COBRO_CXC',
-          concepto: colPayload?.descrip || `Cobro CxC ${raw.clienteNombre || savedDoc?.clienteNombre || ''} (#${raw.factNum || savedDoc?.factNum || ''})`.trim(),
+          concepto: movConcepto,
+          tipoDoc: effectiveDocType,
+          fiscalScope: fiscalScopeTag,
+          subcaja: subCajaCode,
+          referenciaTipo: fiscalScopeTag,
+          referenciaId: String(raw.factNum || savedDoc?.factNum || ''),
           montoUsd: montoCobradoUsd,
           montoBs: montoCobradoBs,
           tasa: Number(colPayload?.tasaPago || colPayload?.tasa || rawAmounts.tasa || config?.tasaDolar || 1),
           tipoTasa: colPayload?.tipoTasa || resolvedTipoTasa,
           tasaPago: Number(colPayload?.tasaPago || colPayload?.tasa || rawAmounts.tasa || config?.tasaDolar || 1),
-          monedaPago: colPayload?.monedaPago || (resolvedTipoTasa === 'USD' ? 'USD' : 'BS'),
+          monedaPago: colPayload?.monedaPago || (isDirectUsdRate ? 'USD' : 'BS'),
           moneda: raw.moneda || (account?.moneda === 'USD' ? 'US$' : 'BS'),
+          cajaId: isCajaDest ? (cajaTargetId || null) : null,
           cuentaId: account?.rawId || account?.id || colPayload?.cuentaId || '',
           cuentaNombre: account?.nombre || colPayload?.cuentaNombre || '',
+          cajaOBanco: account?.nombre || colPayload?.cuentaNombre || '',
           referencia: raw.referencia || savedCob?.cobNum || colPayload?.cobNum || '',
           fecha: colPayload?.fecha || raw.fecha || new Date().toISOString().split('T')[0],
           usuario: currentUser?.nombre || currentUser?.username || 'COBRANZAS'

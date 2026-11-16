@@ -325,6 +325,7 @@ export function AccountsReceivableModal({
             setCobroTasa(round2(tasaUsdt).toFixed(2));
         } else if (isDirectCurrencyRateType(cobroTipoTasa)) {
             setCobroTasa('1.00');
+            setCobroMontoBs('0.00');
         }
     }, [cobroTipoTasa, tasaBcv, tasaKeystone, tasaEuro, tasaUsdt]);
 
@@ -904,7 +905,7 @@ export function AccountsReceivableModal({
                 setCobroDocKey(first.factNum);
                 const rate = Number(cobroTasa) > 0 ? Number(cobroTasa) : tasaBcv;
                 setCobroMontoUsd(String(first.restanteUsd.toFixed(2)));
-                setCobroMontoBs(String(round2(first.restanteUsd * rate).toFixed(2)));
+                setCobroMontoBs(isDirectCurrencyRateType(cobroTipoTasa) ? '0.00' : String(round2(first.restanteUsd * rate).toFixed(2)));
             }
         }
     }, [searchedPayableDocs, cobroDocSearch]);
@@ -917,7 +918,7 @@ export function AccountsReceivableModal({
             setCobroDocKey(firstDoc.factNum);
             const rate = Number(cobroTasa) > 0 ? Number(cobroTasa) : tasaBcv;
             setCobroMontoUsd(String(firstDoc.restanteUsd.toFixed(2)));
-            setCobroMontoBs(String(round2(firstDoc.restanteUsd * rate).toFixed(2)));
+            setCobroMontoBs(isDirectCurrencyRateType(cobroTipoTasa) ? '0.00' : String(round2(firstDoc.restanteUsd * rate).toFixed(2)));
         } else {
             setCobroDocKey('');
             setCobroMontoUsd('');
@@ -1318,12 +1319,19 @@ export function AccountsReceivableModal({
             const observacionCobro = isDirectUsdCobro
                 ? `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} [${RATE_TYPE_META[resolvedTipoTasa]?.label || resolvedTipoTasa}]`
                 : `Mov. #${cobNum} • Cobro ${selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'} #${factKey} @ Tasa ${tasaNum} [${resolvedTipoTasa}]`;
+            const isNeDocCobro = selectedCobroDoc.tipoDoc === 'NOTA_ENTREGA';
+            const fiscalScopeVal = isNeDocCobro ? 'NO_FISCAL' : 'FISCAL';
+            const subCajaCode = cuentaObj.accountType === 'CAJA'
+                ? `${String(cuentaObj.coCaja || cuentaObj.rawId || cuentaObj.id || '').trim().toUpperCase()}-${isNeDocCobro ? 'NF' : 'F'}`
+                : '';
             const cobroRecord = {
                 id: `mov-${cobNum}-${Date.now().toString().slice(-4)}`,
                 correlativo: cobNum,
                 cobNum,
                 factNum: factKey,
                 tipoDoc: selectedCobroDoc.tipoDoc,
+                fiscalScope: fiscalScopeVal,
+                subcaja: subCajaCode,
                 fecha: cobroFecha,
                 tasa: effectiveTasaPago,
                 tasaPago: effectiveTasaPago,
@@ -1437,6 +1445,8 @@ export function AccountsReceivableModal({
                     selectedAccount: cuentaObj,
                     factNum: factKey,
                     tipoDoc: selectedCobroDoc.tipoDoc,
+                    fiscalScope: fiscalScopeVal,
+                    subcaja: subCajaCode,
                     clienteId: selectedCobroDoc.clienteId,
                     clienteNombre: selectedCobroDoc.cliente,
                     vendedorId: cobradorId,
@@ -3056,6 +3066,25 @@ export function AccountsReceivableModal({
                                     ))}
                                 </optgroup>
                             </select>
+                            {selectedCobroAccount?.accountType === 'CAJA' && (
+                                <div style={{
+                                    marginTop: '0.35rem',
+                                    padding: '0.3rem 0.6rem',
+                                    borderRadius: '6px',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    background: isSelectedCobroFiscal ? 'rgba(168, 85, 247, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                                    border: `1px solid ${isSelectedCobroFiscal ? 'rgba(168, 85, 247, 0.35)' : 'rgba(245, 158, 11, 0.35)'}`,
+                                    color: isSelectedCobroFiscal ? '#c084fc' : '#f59e0b'
+                                }}>
+                                    <span>
+                                        Sub-caja destino: {String(selectedCobroAccount.coCaja || selectedCobroAccount.id || '').toUpperCase()}-{isSelectedCobroFiscal ? 'F (Fiscal)' : 'NF (No Fiscal)'} · suma al consolidado de {String(selectedCobroAccount.coCaja || selectedCobroAccount.id || '').toUpperCase()}
+                                    </span>
+                                </div>
+                            )}
                         </div>
 
                         {/* Monto Abono en USD */}
