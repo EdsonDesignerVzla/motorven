@@ -1,5 +1,5 @@
 import { getProductWarehouseStocks, resolveProductUnit } from '../services/formatService.js';
-import { getCanonicalDocKey } from '../services/fiscalService.js';
+import { getEraScopedCanonicalDocKey } from '../services/fiscalService.js';
 
 export function isDocumentAnnulled(doc) {
   if (!doc || typeof doc !== 'object') return false;
@@ -172,7 +172,7 @@ export function buildConsolidatedKardex({
   const seenSaleKeys = new Set();
   const processSaleDoc = (doc) => {
     if (!doc || isDocumentAnnulled(doc)) return;
-    const canon = getCanonicalDocKey(doc) || String(doc.id || doc.factNum || doc.numeroFactura || '').trim().toUpperCase();
+    const canon = getEraScopedCanonicalDocKey(doc) || String(doc.id || doc.factNum || doc.numeroFactura || '').trim().toUpperCase();
     if (canon && seenSaleKeys.has(canon)) return;
     if (canon) seenSaleKeys.add(canon);
 

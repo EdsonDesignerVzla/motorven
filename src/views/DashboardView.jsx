@@ -66,7 +66,7 @@ import { isMasterOrGerencia, isMasterAdmin, getClientApprovalStatus } from '../s
 import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { generateDashboardPDF, generateNotificationsPDF } from '../services/pdfReportService';
 import { getSupabaseNotifications, seedInitialNotificationsIfEmpty } from '../services/supabaseService';
-import { getCanonicalDocKey, dedupeCanonicalDocs } from '../services/fiscalService';
+import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from '../services/fiscalService';
 import { resolveExchangeRates, computeBankAccountValuation } from '../utils/treasuryAccountUtils';
 import { matchesSeller } from '../services/commissionService';
 import {
@@ -689,20 +689,9 @@ export default function DashboardView({
       const d = (desc || '').toLowerCase();
       return d.includes('flete') || d.includes('servicio');
     };
-    const getDocDedupKey = (tipoRaw, numRaw) => {
-      const str = String(numRaw || '').trim().toUpperCase();
-      if (!str) return '';
-      const m = str.match(/(\d+)$/);
-      const num = m ? String(Number(m[1])) : str;
-      const tUpper = String(tipoRaw || '').toUpperCase();
-      const prefix = (tUpper.includes('NOTA_ENTREGA') || str.startsWith('NE-') || str.startsWith('NDE-'))
-        ? 'NE'
-        : (tUpper.includes('NOTA_CREDITO') || str.startsWith('NC-'))
-          ? 'NC'
-          : (tUpper.includes('NOTA_DEBITO') || str.startsWith('ND-'))
-            ? 'ND'
-            : 'FAC';
-      return `${prefix}|${num}`;
+    const getDocDedupKey = (docObj) => {
+      if (!docObj || typeof docObj !== 'object') return '';
+      return getEraScopedCanonicalDocKey(docObj);
     };
     const normalizeDocItems = (rawItems = [], tasaDoc = tasaBcv, headerLitros = 0) => {
       const mapped = (rawItems || []).map(it => {
@@ -741,7 +730,7 @@ export default function DashboardView({
     (sales || []).forEach(s => {
       if (!s || s.anulada) return;
       if (s.id) salesById.set(String(s.id), s);
-      const dk = getDocDedupKey(s.tipoDoc || s.tipo_doc, s.numeroDoc || s.numero_doc || s.id);
+      const dk = getDocDedupKey(s);
       if (dk && !salesByKey.has(dk)) salesByKey.set(dk, s);
     });
 
@@ -757,7 +746,7 @@ export default function DashboardView({
       if (!dateKey) return;
 
       const idStr = inv.id ? String(inv.id) : '';
-      const dk = getDocDedupKey(tipo, inv.factNum || inv.fact_num || inv.originalFactNum || inv.id);
+      const dk = getDocDedupKey(inv);
       if ((idStr && seenIds.has(idStr)) || (dk && seenDocKeys.has(dk))) return;
       if (idStr) seenIds.add(idStr);
       if (dk) seenDocKeys.add(dk);
@@ -773,7 +762,7 @@ export default function DashboardView({
         : (matchingSale?.items || []);
       const items = normalizeDocItems(rawItems, tasaDoc, headerLitros);
       const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
-      const docCategory = dk.startsWith('NE|') ? 'NE' : 'FISCAL';
+      const docCategory = dk.startsWith('NE:') ? 'NE' : 'FISCAL';
 
       docs.push({
         dateKey,
@@ -792,7 +781,7 @@ export default function DashboardView({
       if (String(tipo).toUpperCase() === 'NOTA_CREDITO') return;
 
       const idStr = s.id ? String(s.id) : '';
-      const dk = getDocDedupKey(tipo, s.numeroDoc || s.numero_doc || s.id);
+      const dk = getDocDedupKey(s);
       if ((idStr && seenIds.has(idStr)) || (dk && seenDocKeys.has(dk))) return;
       if (idStr) seenIds.add(idStr);
       if (dk) seenDocKeys.add(dk);
@@ -805,7 +794,7 @@ export default function DashboardView({
       const headerLitros = Number(s.totalLitros ?? s.total_litros ?? 0) || 0;
       const items = normalizeDocItems(s.items || [], tasaDoc, headerLitros);
       const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
-      const docCategory = dk.startsWith('NE|') ? 'NE' : 'FISCAL';
+      const docCategory = dk.startsWith('NE:') ? 'NE' : 'FISCAL';
 
       docs.push({
         dateKey,

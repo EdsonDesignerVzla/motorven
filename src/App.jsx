@@ -221,7 +221,6 @@ import {
 } from './utils/cxcUtils';
 import { subscribeToRealtimeSync, broadcastReconcileChange, getRealtimeClientId } from './services/realtimeSyncBridge';
 import {
-  getCanonicalDocKey,
   getEraScopedCanonicalDocKey,
   commitInvoiceCorrelativo,
   commitNotaEntregaCorrelativo
@@ -916,12 +915,14 @@ function MainApp() {
         }
         if (action === 'DELETE') {
           const targetTipo = inferCxcDocType(item || key);
-          const targetCanon = getCanonicalDocKey(item || key, item?.tipoDoc || item?.tipo_doc || targetTipo);
+          const targetCanon = item && typeof item === 'object'
+            ? getEraScopedCanonicalDocKey(item, item?.tipoDoc || item?.tipo_doc || targetTipo)
+            : getEraScopedCanonicalDocKey(key, targetTipo);
           const targetId = String(item?.id || (typeof key === 'string' && !/^\d+$/.test(key) ? key : '') || '').trim();
           setProfitInvoices(prev => (prev || []).filter(f => {
             if (!f) return false;
             const fId = String(f.id ?? '').trim();
-            const fCanon = getCanonicalDocKey(f);
+            const fCanon = getEraScopedCanonicalDocKey(f);
             if (targetCanon && fCanon) return fCanon !== targetCanon;
             return targetId ? fId !== targetId : true;
           }));
@@ -952,14 +953,17 @@ function MainApp() {
             ...(resolvedFechaSinc ? { fechaSincronizacion: resolvedFechaSinc, updated_at: item.updated_at || resolvedFechaSinc } : {})
           };
           setProfitInvoices(prev => {
-            const targetCanon = getCanonicalDocKey(normalizedInvItem);
+            const targetCanon = getEraScopedCanonicalDocKey(normalizedInvItem);
             const targetKey = String(key || resolvedId || resolvedNum).replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const targetId = String(key || resolvedId).trim();
             const index = prev.findIndex(f => {
-              const fCanon = getCanonicalDocKey(f);
+              const fCanon = getEraScopedCanonicalDocKey(f);
+              if (targetCanon && fCanon) {
+                return fCanon === targetCanon;
+              }
               const fNum = String(f.factNum ?? f.fact_num ?? f.facturaNumero ?? f.id ?? '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
               const fId = String(f.id ?? '').trim();
-              return (targetCanon && fCanon === targetCanon) || (targetKey && fNum === targetKey) || (targetId && fId === targetId);
+              return (targetId && fId === targetId) || (targetKey && fNum === targetKey);
             });
             if (index >= 0) {
               const next = [...prev];
@@ -1131,14 +1135,16 @@ function MainApp() {
           return;
         }
         if (action === 'DELETE') {
-          const targetCanon = getCanonicalDocKey(item || key, item?.tipoDoc || item?.tipo_doc || '');
+          const targetCanon = item && typeof item === 'object'
+            ? getEraScopedCanonicalDocKey(item, item?.tipoDoc || item?.tipo_doc || '')
+            : getEraScopedCanonicalDocKey(key, '');
           const targetKey = String(key || item?.id || item?.numeroDoc || item?.factNum || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
           const targetId = String(key || item?.id || '').trim();
           setSalesState(prev => prev.filter(s => {
             const sNum = String(s.numeroDoc || s.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const sId = String(s.id || '').trim();
-            const sCanon = getCanonicalDocKey(s);
-            if (targetCanon && sCanon && sCanon === targetCanon) return false;
+            const sCanon = getEraScopedCanonicalDocKey(s);
+            if (targetCanon && sCanon) return sCanon !== targetCanon;
             return (targetKey ? sNum !== targetKey : true) && (targetId ? sId !== targetId : true);
           }));
           return;
@@ -1157,14 +1163,17 @@ function MainApp() {
             ...(resolvedAbonosUsd !== undefined ? { abonosUsd: Number(resolvedAbonosUsd), abonos_usd: Number(resolvedAbonosUsd) } : {})
           };
           setSalesState(prev => {
-            const targetCanon = getCanonicalDocKey(normalizedSaleItem);
+            const targetCanon = getEraScopedCanonicalDocKey(normalizedSaleItem);
             const targetKey = String(key || item.id || item.numeroDoc || item.numero_doc || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
             const targetId = String(key || item.id || '').trim();
             const index = prev.findIndex(s => {
-              const sCanon = getCanonicalDocKey(s);
+              const sCanon = getEraScopedCanonicalDocKey(s);
+              if (targetCanon && sCanon) {
+                return sCanon === targetCanon;
+              }
               const sNum = String(s.numeroDoc || s.numero_doc || s.id || '').replace(/^(FAC-|FACT-|NE-|fac-|doc-|inv-)/i, '').trim();
               const sId = String(s.id || '').trim();
-              return (targetCanon && sCanon === targetCanon) || (targetKey && sNum === targetKey) || (targetId && sId === targetId);
+              return (targetId && sId === targetId) || (targetKey && sNum === targetKey);
             });
             if (index >= 0) {
               const next = [...prev];
@@ -3100,7 +3109,7 @@ function MainApp() {
         ? String(saleIdOrDoc?.factNum || saleIdOrDoc?.factura || saleIdOrDoc?.numeroDoc || saleIdOrDoc?.id || '').trim()
         : String(saleIdOrDoc || '').trim();
       const targetTipo = inferCxcDocType(saleIdOrDoc);
-      const targetCanon = getCanonicalDocKey(saleIdOrDoc, targetTipo);
+      const targetCanon = getEraScopedCanonicalDocKey(saleIdOrDoc, targetTipo);
       const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
       const cleanId = rawId;
 
@@ -3114,7 +3123,7 @@ function MainApp() {
         if (cleanId && entryId && entryId === cleanId && inferCxcDocType(entry) === targetTipo) {
           return true;
         }
-        const entryCanon = getCanonicalDocKey(entry);
+        const entryCanon = getEraScopedCanonicalDocKey(entry);
         if (targetCanon && entryCanon) {
           return entryCanon === targetCanon;
         }

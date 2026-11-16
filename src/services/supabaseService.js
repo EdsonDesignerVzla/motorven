@@ -2690,33 +2690,30 @@ const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false 
   const stockCols =
     'id,codigo,sku,nombre,descripcion,almacen,co_alm,stock,stock_almacen_01,stock_almacen_02,stockAlmacen01,stockAlmacen02';
   const uniqueKeys = Array.from(qtyByKey.keys());
-  const canBatchIn = uniqueKeys.every(k => !/[(),]/.test(k));
   const resolvedByProdId = new Map();
 
-  if (canBatchIn) {
-    try {
-      const joined = uniqueKeys.join(',');
-      const { data: batchRows } = await withTimeout(
-        supabase.from('products').select(stockCols).or(`id.in.(${joined}),codigo.in.(${joined})`),
-        4500
-      );
-      if (Array.isArray(batchRows)) {
-        for (const row of batchRows) {
-          if (!row) continue;
-          const rId = String(row.id || '').trim();
-          const rCode = String(row.codigo || '').trim();
-          const qId = rId ? (qtyByKey.get(rId) || 0) : 0;
-          const qCode = rCode && rCode !== rId ? (qtyByKey.get(rCode) || 0) : 0;
-          const matchedQty = qId + qCode;
-          if (matchedQty > 0) {
-            const existing = resolvedByProdId.get(rId) || { prodData: row, totalQty: 0 };
-            existing.totalQty += matchedQty;
-            resolvedByProdId.set(rId, existing);
-          }
+  // Consultar todos los productos ligeros sin .or(in) para evitar omisiones en filtros compuestos
+  try {
+    const { data: allStockRows } = await withTimeout(
+      supabase.from('products').select(stockCols),
+      5000
+    );
+    if (Array.isArray(allStockRows)) {
+      for (const row of allStockRows) {
+        if (!row) continue;
+        const rId = String(row.id || '').trim();
+        const rCode = String(row.codigo || '').trim();
+        const qId = rId ? (qtyByKey.get(rId) || 0) : 0;
+        const qCode = rCode && rCode !== rId ? (qtyByKey.get(rCode) || 0) : 0;
+        const matchedQty = qId + qCode;
+        if (matchedQty > 0) {
+          const existing = resolvedByProdId.get(rId) || { prodData: row, totalQty: 0 };
+          existing.totalQty += matchedQty;
+          resolvedByProdId.set(rId, existing);
         }
       }
-    } catch (_) {}
-  }
+    }
+  } catch (_) {}
 
   // Fallback paralelo para claves no resueltas por lote
   const matchedKeys = new Set();

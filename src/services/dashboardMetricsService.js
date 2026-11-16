@@ -1,4 +1,4 @@
-import { getCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
+import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
 import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord } from '../utils/cxcUtils.js';
 
 /**
@@ -56,14 +56,14 @@ export function getUnduplicatedSales(sales = [], existingInvoices = []) {
   if (Array.isArray(existingInvoices)) {
     dedupeCanonicalDocs(existingInvoices).forEach((inv) => {
       if (!inv || inv.anulada) return;
-      const ck = getCanonicalDocKey(inv);
+      const ck = getEraScopedCanonicalDocKey(inv);
       if (ck) seenKeys.add(ck);
     });
   }
   if (!Array.isArray(sales)) return [];
   return dedupeCanonicalDocs(sales).filter((s) => {
     if (!s || s.anulada) return false;
-    const ck = getCanonicalDocKey(s);
+    const ck = getEraScopedCanonicalDocKey(s);
     if (ck && seenKeys.has(ck)) return false;
     return true;
   });
@@ -105,7 +105,7 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
   if (Array.isArray(profitInvoices)) {
     dedupeCanonicalDocs(profitInvoices).forEach((f) => {
       if (!f || isCxcInvoiceCancelled(f)) return;
-      const ck = getCanonicalDocKey(f);
+      const ck = getEraScopedCanonicalDocKey(f);
       if (ck) seenCxcKeys.add(ck);
       if (isCxcInvoiceSettled(f)) return;
       let saldo = Number(f.saldoUsd ?? f.saldo_usd ?? 0);
@@ -128,7 +128,7 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
       if (!s || isCxcInvoiceCancelled(s)) return;
       const rawTipo = String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim();
       if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
-      const ck = getCanonicalDocKey(s);
+      const ck = getEraScopedCanonicalDocKey(s);
       if (ck && seenCxcKeys.has(ck)) return;
       if (isCxcInvoiceSettled(s)) return;
       const statusUpper = String(s.estado || s.status || '').toUpperCase().trim();

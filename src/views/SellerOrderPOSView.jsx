@@ -45,7 +45,7 @@ import {
   computeContributorTypeCounts,
   calculateFiscalTaxes,
   validateRif,
-  getCanonicalDocKey,
+  getEraScopedCanonicalDocKey,
   dedupeCanonicalDocs
 } from '../services/fiscalService';
 import {
@@ -130,7 +130,7 @@ export default function SellerOrderPOSView({
     const seenKeys = new Set();
     const profitFiltered = dedupeCanonicalDocs(profitInvoices || []).filter((inv) => {
       if (!inv || inv.anulada || inv.anulado) return false;
-      const ck = getCanonicalDocKey(inv);
+      const ck = getEraScopedCanonicalDocKey(inv);
       if (ck) seenKeys.add(ck);
       const raw = inv?.fechaEmision || inv?.fec_emis || inv?.fecEmis || inv?.fecha || inv?.created_at;
       const dateKey = getVeDateKey(parseInvoiceDateInfo(raw)?.date || raw);
@@ -138,7 +138,7 @@ export default function SellerOrderPOSView({
     });
     const localSalesFiltered = dedupeCanonicalDocs(sales || []).filter((s) => {
       if (!s || s.anulada || s.anulado || String(s.estado || s.status || '').toUpperCase() === 'ANULADA') return false;
-      const ck = getCanonicalDocKey(s);
+      const ck = getEraScopedCanonicalDocKey(s);
       if (ck && seenKeys.has(ck)) return false;
       const raw = s?.fechaEmision || s?.fecha || s?.created_at;
       const dateKey = getVeDateKey(parseInvoiceDateInfo(raw)?.date || raw);

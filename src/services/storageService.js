@@ -27,7 +27,7 @@ import {
   commitInvoiceCorrelativo,
   getNextNotaEntregaCorrelativo,
   commitNotaEntregaCorrelativo,
-  getCanonicalDocKey
+  getEraScopedCanonicalDocKey
 } from './fiscalService.js';
 import { isCreditPaymentCondition, resolveCreditDaysFromTerm, calculateExpirationDate } from './creditPolicyService.js';
 import { getProductWarehouseStocks, validateWarehouseStockForDocument } from './formatService.js';
@@ -611,11 +611,11 @@ export const saveSale = (saleData, options = {}) => {
     }
   }
 
-  const newSaleCanonKey = getCanonicalDocKey(newSale);
+  const newSaleCanonKey = getEraScopedCanonicalDocKey(newSale);
   const existingIdx = sales.findIndex(s =>
     s && (
       (newSale.id && s.id === newSale.id) ||
-      (newSaleCanonKey && getCanonicalDocKey(s) === newSaleCanonKey)
+      (newSaleCanonKey && getEraScopedCanonicalDocKey(s) === newSaleCanonKey)
     )
   );
   if (existingIdx >= 0) {
@@ -637,9 +637,9 @@ export const saveSale = (saleData, options = {}) => {
 export const saveFiscalAdjustmentSale = (saleObj) => {
   if (!saleObj || typeof saleObj !== 'object') return null;
   const sales = getSales();
-  const key = getCanonicalDocKey(saleObj);
+  const key = getEraScopedCanonicalDocKey(saleObj);
   const existingIdx = sales.findIndex(
-    (s) => s && ((saleObj.id && s.id === saleObj.id) || (key && getCanonicalDocKey(s) === key))
+    (s) => s && ((saleObj.id && s.id === saleObj.id) || (key && getEraScopedCanonicalDocKey(s) === key))
   );
   if (existingIdx >= 0) {
     sales[existingIdx] = { ...sales[existingIdx], ...saleObj };

@@ -1,5 +1,5 @@
 import { formatNumberUs } from './formatService.js';
-import { getCanonicalDocKey } from './fiscalService.js';
+import { getEraScopedCanonicalDocKey } from './fiscalService.js';
 
 export const CREDIT_APPROVERS_CATALOG = [
   {
@@ -361,7 +361,7 @@ export function evaluateClientCreditPolicy({
   (profitInvoices || []).forEach(f => {
     if (matchesClient(f)) {
       const docKey = f.id || f.factNum || f.fact_num;
-      const canonicalKey = getCanonicalDocKey(f);
+      const canonicalKey = getEraScopedCanonicalDocKey(f);
       if ((docKey && !seenIds.has(docKey)) && (!canonicalKey || !seenCanonicalKeys.has(canonicalKey))) {
         seenIds.add(docKey);
         if (canonicalKey) seenCanonicalKeys.add(canonicalKey);
@@ -388,7 +388,7 @@ export function evaluateClientCreditPolicy({
     if (rawDocType === 'SOLICITUD_CLIENTE' || rawDocType === 'COTIZACION') return;
     if (matchesClient(s)) {
       const docKey = s.id || s.numeroDoc;
-      const canonicalKey = getCanonicalDocKey(s);
+      const canonicalKey = getEraScopedCanonicalDocKey(s);
       if ((docKey && !seenIds.has(docKey)) && (!canonicalKey || !seenCanonicalKeys.has(canonicalKey))) {
         seenIds.add(docKey);
         if (canonicalKey) seenCanonicalKeys.add(canonicalKey);

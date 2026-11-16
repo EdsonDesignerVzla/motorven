@@ -7,6 +7,7 @@ import {
   summarizeReceivablesAging
 } from '../services/dashboardMetricsService.js';
 import { matchesSeller } from '../services/commissionService.js';
+import { buildConsolidatedKardex } from '../utils/kardexUtils.js';
 
 console.log('--- INICIANDO PRUEBAS DE MÉTRICAS DEL DASHBOARD EJECUTIVO ---');
 
@@ -76,4 +77,37 @@ assert.equal(matchesSeller(carlosSeller, 'CARMEN MORALES'), false);
 assert.equal(matchesSeller(carlosSeller, { vendedorId: 'CM', vendedor: 'Carlos Mendez' }), true);
 console.log('  ✓ 5. Coincidencia exacta de vendedores anti-colisión verificada.');
 
-console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (5/5).');
+// 6. Separación por serie/era (fac-18..21 de Feb-2026 NO colisionan ni omiten 000018..000021 de Nov-2026 en Dashboard, CxC ni Kardex)
+const legacySeriesInvoices = [
+  { id: 'fac-18', factNum: 18, tipoDoc: 'FACTURA', fechaEmision: '2026-02-11T00:00:00Z', status: 'COBRADA', saldoUsd: 0, totNetoUsd: 61.99, items: [{ codigo: '001208', cantidad: 1 }] },
+  { id: 'fac-19', factNum: 19, tipoDoc: 'FACTURA', fechaEmision: '2026-02-12T00:00:00Z', status: 'COBRADA', saldoUsd: 0, totNetoUsd: 105.62, items: [{ codigo: '100102', cantidad: 1 }] }
+];
+const modernPosSales = [
+  { id: '000018', numeroDoc: '000018', tipoDoc: 'FACTURA', fecha: '2026-11-16T15:23:00Z', estado: 'PENDIENTE', saldoUsd: 163.4, totalUsd: 163.4, items: [{ codigo: '001208', cantidad: 2 }] },
+  { id: '000019', numeroDoc: '000019', tipoDoc: 'FACTURA', fecha: '2026-11-16T15:30:00Z', estado: 'PENDIENTE', saldoUsd: 163.4, totalUsd: 163.4, items: [{ codigo: '100102', cantidad: 2 }] },
+  { id: 'NE-002226', numeroDoc: 'NE-002226', tipoDoc: 'NOTA_ENTREGA', fecha: '2026-11-16T16:21:00Z', estado: 'PENDIENTE', saldoUsd: 82, totalUsd: 82, items: [{ codigo: '001201', cantidad: 1 }] }
+];
+const eraUndup = getUnduplicatedSales(modernPosSales, legacySeriesInvoices);
+assert.equal(eraUndup.length, 3);
+const eraAging = summarizeReceivablesAging({
+  profitInvoices: legacySeriesInvoices,
+  sales: modernPosSales,
+  tasaBcv: 914,
+  todayKey: '2026-11-16'
+});
+assert.equal(eraAging.cxcTot, 408.8);
+const eraKardex = buildConsolidatedKardex({
+  products: [
+    { id: '001208', codigo: '001208', descripcion: '15W40', stock: 100, stockAlmacen01: 100, stockAlmacen02: 0 },
+    { id: '100102', codigo: '100102', descripcion: '20W50', stock: 100, stockAlmacen01: 100, stockAlmacen02: 0 },
+    { id: '001201', codigo: '001201', descripcion: '15W40 Semi', stock: 100, stockAlmacen01: 80, stockAlmacen02: 20 }
+  ],
+  profitInvoices: legacySeriesInvoices,
+  sales: modernPosSales
+});
+assert.equal(eraKardex.find(r => r.codigo === '001208')?.salidasVentas, 3);
+assert.equal(eraKardex.find(r => r.codigo === '100102')?.salidasVentas, 3);
+assert.equal(eraKardex.find(r => r.codigo === '001201')?.salidasVentas, 1);
+console.log('  ✓ 6. Serie histórica fac-18..21 no suprime facturas modernas 000018..000021 en Dashboard, CxC ni Kardex.');
+
+console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (6/6).');

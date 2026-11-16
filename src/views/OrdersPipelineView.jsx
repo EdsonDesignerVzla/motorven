@@ -110,7 +110,14 @@ export default function OrdersPipelineView({
   currentUser
 }) {
   const notify = useNotification();
-  const safeOrders = useMemo(() => Array.isArray(orders) ? orders : [], [orders]);
+  const safeOrders = useMemo(
+    () => (Array.isArray(orders) ? orders : []).filter((o) => {
+      if (!o) return false;
+      const tipo = String(o.tipoDoc || o.tipo_doc || '').trim().toUpperCase();
+      return tipo !== 'SOLICITUD_CLIENTE';
+    }),
+    [orders]
+  );
   const safeClients = useMemo(() => Array.isArray(clients) ? clients : [], [clients]);
   const clientsByLookup = useMemo(() => {
     const map = new Map();
