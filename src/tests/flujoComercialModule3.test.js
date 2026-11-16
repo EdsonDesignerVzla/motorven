@@ -10,6 +10,10 @@ import {
   canApproveClients,
   isMasterOrGerencia
 } from '../services/authService.js';
+import {
+  mapOrderToDb,
+  mapOrderFromDb
+} from '../services/supabaseService.js';
 
 console.log('--- INICIANDO PRUEBAS DEL MÓDULO 3 (FLUJO COMERCIAL Y PEDIDOS) ---');
 
@@ -173,5 +177,19 @@ assert.equal(isMasterOrGerencia({ rol: 'LOGISTICA', username: 'log1' }), false, 
 assert.equal(isMasterOrGerencia({ rol: 'ADMINISTRADOR MASTER', username: 'edson designer' }), true);
 assert.equal(isMasterOrGerencia({ rol: 'TECNOLOGÍA & INFORMÁTICA', username: 'manuel' }), true);
 console.log('  ✓ 4. RBAC de excepciones de crédito, aprobación de clientes y admin estricto verificados.');
+
+// 5. Sincronización consistente status <-> estado en mapOrderToDb / mapOrderFromDb (evitar que estado viejo sobrescriba FACTURADO)
+const dbMappedOrder = mapOrderToDb({
+  id: 'PED-TEST-BILL-1',
+  estado: 'APROBADO',
+  status: 'FACTURADO',
+  clienteNombre: 'Cliente Test',
+  totalUsd: 100
+});
+assert.equal(dbMappedOrder.estado, 'FACTURADO');
+assert.equal(dbMappedOrder.status, 'FACTURADO');
+const uiMappedOrder = mapOrderFromDb({ id: 'PED-TEST-BILL-1', estado: 'APROBADO', status: 'FACTURADO' });
+assert.equal(uiMappedOrder.status, 'FACTURADO');
+console.log('  ✓ 5. mapOrderToDb / mapOrderFromDb conservan status FACTURADO sobre estado previo APROBADO.');
 
 console.log('✅ TODAS LAS PRUEBAS DEL MÓDULO 3 PASARON EXITOSAMENTE.');

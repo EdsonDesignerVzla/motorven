@@ -189,6 +189,7 @@ export default function OrdersSalesModal({
   const [feedbackMsg, setFeedbackMsg] = useState(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceModalSale, setInvoiceModalSale] = useState(null);
+  const [invoiceRenderLimit, setInvoiceRenderLimit] = useState(80);
   const [deliveryDocView, setDeliveryDocView] = useState('GUIA'); // 'GUIA' | 'FACTURA'
 
   // Modal para Cargar Facturas y Notas de Entrega Editables a Cobranzas (CxC)
@@ -827,17 +828,39 @@ export default function OrdersSalesModal({
     }, 0);
   }, [orderRows, safeProducts]);
 
-  // Evaluación de Estatus de Crédito Comercial centralizada (Profit + POS sin doble conteo y fechas DD/MM/YYYY)
+  // Evaluación de Estatus de Crédito Comercial centralizada (prefiltrando docs del cliente en O(N) una vez)
+  const activeClientCreditDocs = useMemo(() => {
+    if (!activeClientObj) return { invoices: [], sales: [] };
+    const cRif = String(activeClientObj.rif || '').trim().toUpperCase();
+    const cId = String(activeClientObj.id || '').trim();
+    const cCod = String(activeClientObj.codigo || '').trim();
+    const cNom = String(activeClientObj.nombre || activeClientObj.razonSocial || '').trim().toLowerCase();
+    const matchesClient = (d) => {
+      if (!d) return false;
+      const dRif = String(d.clienteRif || d.rif || d.cliente_rif || '').trim().toUpperCase();
+      if (cRif && dRif && dRif === cRif) return true;
+      const dId = String(d.clienteId || d.cliente_id || d.id || '').trim();
+      if (cId && dId && dId === cId) return true;
+      if (cCod && dId && dId === cCod) return true;
+      const dNom = String(d.clienteNombre || d.cliente_nombre || d.nombre || '').trim().toLowerCase();
+      return Boolean(cNom && dNom && dNom === cNom);
+    };
+    return {
+      invoices: (profitInvoices || []).filter(matchesClient),
+      sales: (sales || []).filter(matchesClient)
+    };
+  }, [activeClientObj, profitInvoices, sales]);
+
   const clientCreditEvaluation = useMemo(
     () =>
       evaluateClientCreditPolicy({
         client: activeClientObj,
-        profitInvoices,
-        sales,
+        profitInvoices: activeClientCreditDocs.invoices,
+        sales: activeClientCreditDocs.sales,
         tasaBcv,
         montoOrdenUsd: formOrderSubtotalUsd
       }),
-    [activeClientObj, profitInvoices, sales, tasaBcv, formOrderSubtotalUsd]
+    [activeClientObj, activeClientCreditDocs, tasaBcv, formOrderSubtotalUsd]
   );
 
   const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
@@ -2020,9 +2043,7 @@ export default function OrdersSalesModal({
     invoiceMinUsdFilter,
     invoiceMinBsFilter,
     invoiceSortField,
-    invoiceSortDirection,
-    tasaBcv,
-    safeProfitSellers
+    invoiceSortDirection
   ]);
 
   // Métricas y KPIs consolidados de facturación (excluye documentos anulados)
@@ -6313,7 +6334,7 @@ export default function OrdersSalesModal({
                                 </td>
                               </tr>
                             ) : (
-                              filteredInvoices.map((inv, idx) => {
+                              filteredInvoices.slice(0, invoiceRenderLimit).map((inv, idx) => {
                                 const correlativo = formatInvoiceCorrelativo(inv);
                                 const tipoDocNorm = resolveInvoiceTipoDoc(inv);
                                 const isCredit = checkIsCredit(inv);
@@ -6569,6 +6590,29 @@ export default function OrdersSalesModal({
                           </tbody>
                         </table>
                       </div>
+                      {filteredInvoices.length > invoiceRenderLimit && (
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', padding: '0.85rem', borderTop: '1px solid var(--border-glass)' }}>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Mostrando {invoiceRenderLimit} de {filteredInvoices.length} documentos
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setInvoiceRenderLimit(prev => prev + 80)}
+                            style={{ fontWeight: 700, fontSize: '0.78rem' }}
+                          >
+                            Cargar 80 más ({filteredInvoices.length - invoiceRenderLimit} restantes)
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setInvoiceRenderLimit(filteredInvoices.length)}
+                            style={{ fontWeight: 700, fontSize: '0.76rem' }}
+                          >
+                            Ver todos
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </>
                 );
@@ -8506,39 +8550,43 @@ export default function OrdersSalesModal({
           />
         )}
 
-        {/* MODAL DE CARGA Y CUADRE A COBRANZAS (CxC) */}
-        <CxcInvoiceCreationModal
-          isOpen={showCxcInvoiceModal}
-          onClose={() => setShowCxcInvoiceModal(false)}
-          onSaveDocument={handleSaveCxcInvoice}
-          clients={clients}
-          sellers={profitSellers}
-          config={config}
-          suggestedCorrelativo={currentNextCorrelativo}
-          existingInvoices={allInvoices}
-        />
+        {/* MODAL DE CARGA Y CUADRE A COBRANZAS (CxC) (montaje perezoso cuando está abierto) */}
+        {showCxcInvoiceModal && (
+          <CxcInvoiceCreationModal
+            isOpen={showCxcInvoiceModal}
+            onClose={() => setShowCxcInvoiceModal(false)}
+            onSaveDocument={handleSaveCxcInvoice}
+            clients={clients}
+            sellers={profitSellers}
+            config={config}
+            suggestedCorrelativo={currentNextCorrelativo}
+            existingInvoices={allInvoices}
+          />
+        )}
 
-        {/* MODAL: CARTERA MAESTRA DE CLIENTES */}
-        <ClientsDirectoryModal
-          isOpen={showClientsDirectoryModal}
-          onClose={() => setShowClientsDirectoryModal(false)}
-          clients={clients}
-          profitInvoices={profitInvoices}
-          sales={sales}
-          tasaBcv={tasaBcv}
-          currentUser={currentUser}
-          profitSellers={profitSellers}
-          profitZones={profitZones}
-          onSaveClient={onSaveClient}
-          onDeleteClient={onDeleteClient}
-          onApproveClient={onApproveClient}
-          onRejectClient={onRejectClient}
-          onSelectClientForOrder={(client) => {
-            setSelectedClientId(client.id || client.codigo);
-            setActiveTab('nuevo');
-            notify.success(`Cliente "${client.nombre}" seleccionado para Nota de Pedido.`);
-          }}
-        />
+        {/* MODAL: CARTERA MAESTRA DE CLIENTES (montaje perezoso cuando está abierto) */}
+        {showClientsDirectoryModal && (
+          <ClientsDirectoryModal
+            isOpen={showClientsDirectoryModal}
+            onClose={() => setShowClientsDirectoryModal(false)}
+            clients={clients}
+            profitInvoices={profitInvoices}
+            sales={sales}
+            tasaBcv={tasaBcv}
+            currentUser={currentUser}
+            profitSellers={profitSellers}
+            profitZones={profitZones}
+            onSaveClient={onSaveClient}
+            onDeleteClient={onDeleteClient}
+            onApproveClient={onApproveClient}
+            onRejectClient={onRejectClient}
+            onSelectClientForOrder={(client) => {
+              setSelectedClientId(client.id || client.codigo);
+              setActiveTab('nuevo');
+              notify.success(`Cliente "${client.nombre}" seleccionado para Nota de Pedido.`);
+            }}
+          />
+        )}
 
         </div>
     </section>

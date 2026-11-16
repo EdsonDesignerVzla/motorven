@@ -1114,12 +1114,15 @@ function MainApp() {
           }
           setOrdersState(prev => {
             const index = prev.findIndex(o => String(o.id) === String(key || item.id) || (item.numeroPedido && o.numeroPedido === item.numeroPedido));
+            const normalizedOrderPatch = (item.status && !item.estado)
+              ? { ...item, estado: item.status }
+              : (!item.status && item.estado ? { ...item, status: item.estado } : item);
             if (index >= 0) {
               const next = [...prev];
-              next[index] = { ...next[index], ...item };
+              next[index] = { ...next[index], ...normalizedOrderPatch };
               return next;
             }
-            return [item, ...prev];
+            return [normalizedOrderPatch, ...prev];
           });
         }
       } else if (tableId === 'sales') {
@@ -2415,9 +2418,13 @@ function MainApp() {
             const billedOrder = {
               ...existingOrder,
               status: 'FACTURADO',
+              estado: 'FACTURADO',
               nroFactura: newSale?.numeroDoc || saleData.numeroDoc || existingOrder.nroFactura,
+              nro_factura: newSale?.numeroDoc || saleData.numeroDoc || existingOrder.nro_factura,
               facturaId: newSale?.id || existingOrder.facturaId,
+              factura_id: newSale?.id || existingOrder.factura_id,
               fechaFactura: newSale?.fechaEmision || newSale?.fecha || new Date().toISOString(),
+              fecha_factura: newSale?.fechaEmision || newSale?.fecha || new Date().toISOString(),
               metodoPagoFactura: newSale?.metodoPago || saleData.metodoPago,
               totalBrutoUsd: newSale?.subtotalUsd ?? saleData.subtotalUsd ?? existingOrder.totalBrutoUsd,
               ivaUsd: newSale?.ivaUsd ?? saleData.ivaUsd ?? existingOrder.ivaUsd,
@@ -3058,7 +3065,7 @@ function MainApp() {
     try {
       const updated = await updateSupabaseOrderStatus(orderId, newStatus);
       setOrdersState(prev =>
-        prev.map(o => (o.id === orderId ? { ...o, status: newStatus } : o))
+        prev.map(o => (o.id === orderId ? { ...o, status: newStatus, estado: newStatus } : o))
       );
       notify.success(`Estado del pedido actualizado a "${newStatus}"`);
       return updated;

@@ -1552,7 +1552,7 @@ export const mapOrderToDb = (o) => {
   const totalUsd = Number(o.totalUsd ?? o.total_usd ?? o.totalNetoUsd ?? o.total_neto_usd ?? subtotalUsd);
   const tasaCambio = Number(o.tasaCambio ?? o.tasa_cambio ?? o.tasaBcv ?? o.tasa_bcv ?? 886.22);
   const totalBs = Number(o.totalBs ?? o.total_bs ?? (totalUsd * tasaCambio));
-  const estado = o.estado || o.status || 'Aprobado';
+  const estado = o.status || o.estado || 'Aprobado';
   const condicionPago = o.condicionPago || o.condicion_pago || o.formaPago || o.forma_pago || 'Contado';
   return {
     id: o.id,
@@ -1683,7 +1683,7 @@ export const mapOrderFromDb = (o) => {
   const totalBs = Number(o.total_bs ?? o.totalBs ?? (totalUsd * tasaCambio));
   const totalLitros = Number(o.total_litros ?? o.totalLitros ?? mappedItems.reduce((s, i) => s + Number(i.litrosTotales || 0), 0));
   const totalUnidades = Number(o.total_unidades ?? o.totalUnidades ?? o.total_cajas ?? o.totalCajas ?? mappedItems.reduce((s, i) => s + Number(i.cantidad || 0), 0));
-  const estado = o.estado || o.status || 'Aprobado';
+  const estado = o.status || o.estado || 'Aprobado';
   const condicionPago = o.condicion_pago || o.condicionPago || o.forma_pago || o.formaPago || 'Contado';
   const observaciones = o.observaciones || o.comentarios || '';
 
@@ -4116,7 +4116,7 @@ export const updateSupabaseOrderStatus = async (orderId, newStatus) => {
   }
   try {
     const { error } = await withTimeout(
-      supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId)
+      supabase.from('orders').update({ status: newStatus, estado: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId)
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -6084,7 +6084,7 @@ export const pushOrderToSupabase = async (orderData) => {
 
 export const updateOrderStatusDirect = async (orderId, newStatus) => {
   const { error } = await withTimeout(
-    supabase.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId),
+    supabase.from('orders').update({ status: newStatus, estado: newStatus, updated_at: new Date().toISOString() }).eq('id', orderId),
     8000
   );
   if (error) throw error;

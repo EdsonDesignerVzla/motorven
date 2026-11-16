@@ -122,6 +122,12 @@ export default function SalesPOSView({
   );
   const [selectedClient, setSelectedClient] = useState(() => preselectedClient || resolveDefaultPosClient(approvedClients));
 
+  // Estados de la Bandeja de Pedidos de Preventa (Vendedores en Calle) y bloqueo de pedido
+  const [showOrdersDrawer, setShowOrdersDrawer] = useState(false);
+  const [ordersDrawerSearch, setOrdersDrawerSearch] = useState('');
+  const [activeOrderInPOS, setActiveOrderInPOS] = useState(null);
+  const isOrderLocked = Boolean(activeOrderInPOS);
+
   useEffect(() => {
     if (preselectedClient) {
       setSelectedClient(preselectedClient);
@@ -160,14 +166,6 @@ export default function SalesPOSView({
   const [selectedCategory, setSelectedCategory] = useState('TODOS');
   const [selectedSpecProduct, setSelectedSpecProduct] = useState(null);
   const [isSubmittingSale, setIsSubmittingSale] = useState(false);
-
-  // Estados de la Bandeja de Pedidos de Preventa (Vendedores en Calle)
-  const [showOrdersDrawer, setShowOrdersDrawer] = useState(false);
-  const [ordersDrawerSearch, setOrdersDrawerSearch] = useState('');
-  const [activeOrderInPOS, setActiveOrderInPOS] = useState(null);
-
-  // Restricción de NO MODIFICAR cuando un pedido es enviado a caja desde Nota de Pedido o Flujo Comercial
-  const isOrderLocked = Boolean(activeOrderInPOS);
 
   // Estados de Evaluación y Aprobación Excepcional de Crédito en POS Mostrador / Oficina
   const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);

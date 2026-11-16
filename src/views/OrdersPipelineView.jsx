@@ -112,6 +112,26 @@ export default function OrdersPipelineView({
   const notify = useNotification();
   const safeOrders = useMemo(() => Array.isArray(orders) ? orders : [], [orders]);
   const safeClients = useMemo(() => Array.isArray(clients) ? clients : [], [clients]);
+  const clientsByLookup = useMemo(() => {
+    const map = new Map();
+    for (const c of safeClients) {
+      if (!c) continue;
+      if (c.id) map.set(`ID:${String(c.id).trim()}`, c);
+      if (c.codigo) map.set(`ID:${String(c.codigo).trim()}`, c);
+      if (c.rif) map.set(`RIF:${String(c.rif).trim().toUpperCase()}`, c);
+      if (c.nombre) map.set(`NOM:${String(c.nombre).trim().toLowerCase()}`, c);
+    }
+    return map;
+  }, [safeClients]);
+  const findOrderClient = (o) => {
+    if (!o) return null;
+    return (
+      (o.clienteId && clientsByLookup.get(`ID:${String(o.clienteId).trim()}`)) ||
+      (o.clienteRif && clientsByLookup.get(`RIF:${String(o.clienteRif).trim().toUpperCase()}`)) ||
+      (o.clienteNombre && clientsByLookup.get(`NOM:${String(o.clienteNombre).trim().toLowerCase()}`)) ||
+      null
+    );
+  };
   const approvedClients = useMemo(() => safeClients.filter(c => isClientApproved(c)), [safeClients]);
   const [newOrderClientTypeFilter, setNewOrderClientTypeFilter] = useState('ALL');
   const newOrderContributorCounts = useMemo(
@@ -199,7 +219,7 @@ export default function OrdersPipelineView({
         if (!o) return false;
         const oZone = (o.zonaVenta || '').trim();
         if (oZone && oZone === zCode) return true;
-        const matchedCli = safeClients.find(c => c && (c.id === o.clienteId || c.codigo === o.clienteId || c.rif === o.clienteRif || c.nombre === o.clienteNombre));
+        const matchedCli = findOrderClient(o);
         if (matchedCli && ((matchedCli.zona_venta && matchedCli.zona_venta.trim() === zCode) || (matchedCli.zonaVenta && matchedCli.zonaVenta.trim() === zCode))) return true;
         return false;
       });
@@ -266,7 +286,7 @@ export default function OrdersPipelineView({
   const totalCajasEnCola = activeOrders.reduce((acc, o) => acc + (Number(o.totalCajas) || (Number(o.totalLitros) / 11.35) || 0), 0);
   const totalMontoColaUsd = activeOrders.reduce((acc, o) => acc + (Number(o.totalNetoUsd) || 0), 0);
   const pedidosRiesgoCredito = activeOrders.filter(o => {
-    const client = safeClients.find(c => c && (c.id === o.clienteId || c.codigo === o.clienteId || c.rif === o.clienteRif));
+    const client = findOrderClient(o);
     return client && (client.sinCredito || (Number(client.saldoDeudorUsd) || 0) > (Number(client.limiteCreditoUsd) || 0));
   }).length;
 
@@ -276,7 +296,7 @@ export default function OrdersPipelineView({
       await onUpdateOrderStatus(orderId, newStatus);
     }
     if (selectedOrder && selectedOrder.id === orderId) {
-      setSelectedOrder(prev => prev ? { ...prev, status: newStatus } : null);
+      setSelectedOrder(prev => prev ? { ...prev, status: newStatus, estado: newStatus } : null);
     }
   };
 
@@ -1623,7 +1643,7 @@ export default function OrdersPipelineView({
   function renderKanbanCard(order) {
     if (!order) return null;
     const st = STATUS_CONFIG[order.status] || STATUS_CONFIG.PENDIENTE;
-    const client = safeClients.find(c => c && (c.id === order.clienteId || c.codigo === order.clienteId || c.rif === order.clienteRif));
+    const client = findOrderClient(order);
     const isCreditRisk = client && (client.sinCredito || (Number(client.saldoDeudorUsd) || 0) > (Number(client.limiteCreditoUsd) || 0));
 
     return (
