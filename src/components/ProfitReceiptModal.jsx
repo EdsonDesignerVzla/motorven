@@ -171,7 +171,7 @@ export default function ProfitReceiptModal({ receipt, onClose, config = {}, curr
                 {fechaFormatted}
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Asesor: <strong>{receipt.vendedorId || 'VV'}</strong>
+                Cobrador: <strong>{receipt.cobradorNombre || receipt.vendedorNombre || receipt.vendedorId || 'Oficina'}</strong>
               </div>
             </div>
 

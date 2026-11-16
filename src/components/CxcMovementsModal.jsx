@@ -1698,8 +1698,9 @@ export function CxcMovementsModal({
                     </span>
                   </div>
                   {selectedInsertDoc && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', fontFamily: 'var(--font-code)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', fontFamily: 'var(--font-code)', flexWrap: 'wrap' }}>
                       <span style={{ color: '#94a3b8' }}>Doc: <strong style={{ color: '#fff' }}>#{selectedInsertDoc.factNum}</strong></span>
+                      <span style={{ color: '#94a3b8' }}>Cobrador: <strong style={{ color: '#38bdf8' }}>{selectedInsertDoc.vendedorNombre || selectedInsertDoc.vendedorId || 'Oficina'}</strong></span>
                       <span style={{ color: '#94a3b8' }}>Total: <strong style={{ color: '#e2e8f0' }}>{formatUsd(selectedInsertDoc.montoFacturaUsd)}</strong></span>
                       <span style={{ color: '#10b981' }}>Abonado: <strong>{formatUsd(selectedInsertDoc.abonosUsd)}</strong></span>
                       <span style={{ color: '#f87171', fontWeight: 800 }}>Restante: {formatUsd(selectedInsertDoc.restanteUsd)}</span>
@@ -2439,6 +2440,10 @@ export function CxcMovementsModal({
                                               coCli: mov.clienteId,
                                               clienteRif: mov.clienteRif,
                                               rif: mov.clienteRif,
+                                              vendedorId: mov.vendedorId,
+                                              vendedorNombre: mov.vendedorNombre,
+                                              cobradorId: mov.vendedorId,
+                                              cobradorNombre: mov.vendedorNombre,
                                               tasa: mov.tasa,
                                               tasaPago: mov.tasa,
                                               tipoTasa: mov.tipoTasa,

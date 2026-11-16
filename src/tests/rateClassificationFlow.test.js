@@ -244,6 +244,7 @@ console.log('--- INICIANDO PRUEBAS DE CLASIFICACIÓN E INMUTABILIDAD DE TASAS --
       cobNum: '004200',
       clienteNombre: 'Cliente Recibo Test',
       clienteRif: 'J-33333333-3',
+      vendedorId: 'VV',
       fecha: '2026-11-13',
       montoUsd: 150,
       montoBs: 141000,
@@ -260,6 +261,9 @@ console.log('--- INICIANDO PRUEBAS DE CLASIFICACIÓN E INMUTABILIDAD DE TASAS --
   const recPageStream = Array.isArray(recDoc.internal?.pages?.[1]) ? recDoc.internal.pages[1].join('\n') : '';
   assert.ok(recPageStream.includes('940,00'), 'El recibo debe mostrar la tasa real del cobro (940,00)');
   assert.ok(recPageStream.includes('Tasa Keystone'), 'El recibo debe etiquetar Tasa Keystone');
+  assert.ok(recPageStream.includes('Cobrador:'), 'El recibo debe mostrar etiqueta Cobrador:');
+  assert.ok(!/Vendedor\s*:/i.test(recPageStream), 'El recibo no debe usar etiqueta Vendedor:');
+  assert.ok(recPageStream.includes('Victor Veloz'), 'El recibo debe resolver el nombre del cobrador desde el código de vendedor');
 
   // Escenario histórico (ej. #004090 sobre NOTA_ENTREGA #002074) sin tipoTasa ni tasa explícita guardada,
   // pero realizado en Bolívares (50.467,00 / $50 = 1.009,34), distinto al BCV actual (911,62):

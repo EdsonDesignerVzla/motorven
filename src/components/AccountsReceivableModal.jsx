@@ -1238,6 +1238,11 @@ export function AccountsReceivableModal({
         const scopedCobroKey = getCxcScopedDocKey(selectedCobroDoc, selectedCobroDoc.tipoDoc);
         const prevOverrideSnapshot = localDocOverrides[scopedCobroKey];
         const prevRecentlyPaidHadKey = recentlyPaidKeys.has(scopedCobroKey);
+        const cobradorId = selectedCobroDoc.vendedorId || 'OF';
+        const cobradorNombre =
+            selectedCobroDoc.vendedorNombre ||
+            sellerCatalog.get(String(cobradorId).trim().toUpperCase()) ||
+            cobradorId;
 
         setIsSavingCobro(true);
         try {
@@ -1276,7 +1281,10 @@ export function AccountsReceivableModal({
                 clienteId: selectedCobroDoc.clienteId || '',
                 clienteNombre: selectedCobroDoc.cliente || 'Cliente General',
                 clienteRif: selectedCobroDoc.rif || '',
-                vendedorId: selectedCobroDoc.vendedorId || 'OF',
+                vendedorId: cobradorId,
+                vendedorNombre: cobradorNombre,
+                cobradorId,
+                cobradorNombre,
                 montoUsd: effectiveAbonoUsd,
                 montoBs: effectiveAbonoBs,
                 tasa: effectiveTasaPago,
@@ -1363,7 +1371,10 @@ export function AccountsReceivableModal({
                     tipoDoc: selectedCobroDoc.tipoDoc,
                     clienteId: selectedCobroDoc.clienteId,
                     clienteNombre: selectedCobroDoc.cliente,
-                    vendedorId: selectedCobroDoc.vendedorId,
+                    vendedorId: cobradorId,
+                    vendedorNombre: cobradorNombre,
+                    cobradorId,
+                    cobradorNombre,
                     fecha: cobroFecha,
                     tasa: effectiveTasaPago,
                     tasaPago: effectiveTasaPago,
@@ -1400,6 +1411,10 @@ export function AccountsReceivableModal({
                   coCli: selectedCobroDoc.clienteId,
                   clienteRif: selectedCobroDoc.rif || '',
                   rif: selectedCobroDoc.rif || '',
+                  vendedorId: cobradorId,
+                  vendedorNombre: cobradorNombre,
+                  cobradorId,
+                  cobradorNombre,
                   tasa: effectiveTasaPago,
                   tasaPago: effectiveTasaPago,
                   tipoTasa: resolvedTipoTasa,
@@ -2514,6 +2529,13 @@ export function AccountsReceivableModal({
                                 </span>
                                 <span style={{ color: 'var(--border-glass)' }}>|</span>
                                 <span style={{ color: 'var(--text-muted)' }}>
+                                    Cobrador:{' '}
+                                    <strong style={{ color: '#38bdf8' }}>
+                                        {selectedCobroDoc.vendedorNombre || sellerCatalog.get(String(selectedCobroDoc.vendedorId || '').trim().toUpperCase()) || selectedCobroDoc.vendedorId || 'Oficina'}
+                                    </strong>
+                                </span>
+                                <span style={{ color: 'var(--border-glass)' }}>|</span>
+                                <span style={{ color: 'var(--text-muted)' }}>
                                     Total:{' '}
                                     <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>{formatUsd(selectedCobroDoc.montoFacturaUsd)}</strong>
                                 </span>
@@ -2551,7 +2573,7 @@ export function AccountsReceivableModal({
                                     type="text"
                                     value={cobroDocSearch}
                                     onChange={(e) => setCobroDocSearch(e.target.value)}
-                                    placeholder={`Buscar por N° ${isNotaEntregaTab ? 'nota' : 'factura'}, cliente, vendedor o RIF...`}
+                                    placeholder={`Buscar por N° ${isNotaEntregaTab ? 'nota' : 'factura'}, cliente, cobrador o RIF...`}
                                     className="input-modern"
                                     style={{
                                         width: '100%',
@@ -2599,7 +2621,7 @@ export function AccountsReceivableModal({
                                 ) : (
                                     searchedPayableDocs.map(doc => (
                                         <option key={doc.factNum} value={doc.factNum}>
-                                            #{doc.factura} • {doc.cliente.slice(0, 22)} • RIF: {doc.rif} • Vend: {doc.vendedorId} • Restante: ${formatNumberUs(doc.restanteUsd)}
+                                            #{doc.factura} • {doc.cliente.slice(0, 22)} • RIF: {doc.rif} • Cobrador: {doc.vendedorNombre || sellerCatalog.get(String(doc.vendedorId || '').trim().toUpperCase()) || doc.vendedorId} • Restante: ${formatNumberUs(doc.restanteUsd)}
                                         </option>
                                     ))
                                 )}
@@ -2757,7 +2779,7 @@ export function AccountsReceivableModal({
                         </div>
 
                         {/* N° Referencia / Comprobante */}
-                        <div style={{ gridColumn: 'span 2' }}>
+                        <div>
                             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
                                 N° Referencia / Comprobante (Opcional)
                             </label>
@@ -2768,6 +2790,32 @@ export function AccountsReceivableModal({
                                 placeholder="Ej. Ref. Transferencia / Pago Móvil / Recibo #1234"
                                 className="input-modern"
                                 style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.85rem' }}
+                            />
+                        </div>
+
+                        {/* Cobrador asignado según venta */}
+                        <div>
+                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                                Cobrador (Venta)
+                            </label>
+                            <input
+                                type="text"
+                                readOnly
+                                value={
+                                    selectedCobroDoc
+                                        ? (selectedCobroDoc.vendedorNombre || sellerCatalog.get(String(selectedCobroDoc.vendedorId || '').trim().toUpperCase()) || selectedCobroDoc.vendedorId || 'Oficina')
+                                        : '—'
+                                }
+                                className="input-modern"
+                                style={{
+                                    width: '100%',
+                                    padding: '0.65rem 0.85rem',
+                                    fontSize: '0.85rem',
+                                    fontWeight: 700,
+                                    color: '#38bdf8',
+                                    cursor: 'default'
+                                }}
+                                title="Cobrador asignado según el vendedor que realizó la venta"
                             />
                         </div>
 
@@ -2820,7 +2868,7 @@ export function AccountsReceivableModal({
                                         onClick={() => generateCollectionReceiptPDF({
                                             receipt: cobroFeedback.receipt,
                                             allocations: cobroFeedback.allocations || [],
-                                            config,
+                                            config: { ...config, profitSellers },
                                             currentUser
                                         })}
                                         className="btn btn-sm btn-print-report"

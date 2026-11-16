@@ -17,7 +17,7 @@ import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLi
 import { parseInvoiceDateInfo } from './creditPolicyService.js';
 import { getProductRetailPrice } from './pricingService.js';
 import { resolveProductListPrice, safePct, PRICE_LIST_TIERS } from '../utils/profitabilityUtils.js';
-import { REAL_PRODUCTS, REAL_CLIENTS, REAL_PROFIT_BANK_ACCOUNTS } from '../data/supabaseRealData.js';
+import { REAL_PRODUCTS, REAL_CLIENTS, REAL_PROFIT_BANK_ACCOUNTS, REAL_PROFIT_SELLERS } from '../data/supabaseRealData.js';
 import { buildTrialBalance, buildGeneralLedger, buildFinancialStatements } from './accountingService.js';
 import { SYSTEM_METADATA, MODULES_DOCUMENTATION, WORKFLOWS_STEP_BY_STEP } from '../data/appDocumentationData.js';
 import {
@@ -8976,6 +8976,63 @@ export function generatePaymentOrderPDF({ paymentOrder = {}, config = {}, curren
   return base.doc;
 }
 
+function resolveCollectionCobradorName({ receipt = {}, allocations = [], config = {} } = {}) {
+  const firstAlloc = Array.isArray(allocations) && allocations.length > 0 ? allocations[0] : {};
+  const codeCandidates = [
+    receipt.cobradorId,
+    receipt.vendedorId,
+    receipt.coVen,
+    receipt.co_ven,
+    firstAlloc?.cobradorId,
+    firstAlloc?.vendedorId,
+    firstAlloc?.coVen,
+    firstAlloc?.co_ven
+  ]
+    .map(v => String(v || '').trim())
+    .filter(Boolean);
+
+  const nameCandidates = [
+    receipt.cobradorNombre,
+    receipt.cobrador,
+    receipt.vendedorNombre,
+    receipt.venDes,
+    receipt.ven_des,
+    receipt.vendedor,
+    firstAlloc?.cobradorNombre,
+    firstAlloc?.cobrador,
+    firstAlloc?.vendedorNombre,
+    firstAlloc?.venDes,
+    firstAlloc?.vendedor
+  ]
+    .map(v => String(v || '').trim())
+    .filter(Boolean);
+
+  const sellersPool = [
+    ...(Array.isArray(config?.profitSellers) ? config.profitSellers : []),
+    ...(Array.isArray(REAL_PROFIT_SELLERS) ? REAL_PROFIT_SELLERS : [])
+  ];
+
+  const byCode = new Map();
+  sellersPool.forEach((s) => {
+    const cid = String(s?.id || s?.co_ven || s?.coVen || '').trim().toUpperCase();
+    const cname = String(s?.venDes || s?.ven_des || s?.name || s?.nombre || '').trim();
+    if (cid && cname && !byCode.has(cid)) {
+      byCode.set(cid, cname);
+    }
+  });
+
+  const rawCode = codeCandidates[0] || '';
+  const codeUpper = rawCode.toUpperCase();
+  const explicitName = nameCandidates.find(n => n.toUpperCase() !== codeUpper && n.length > 2) || nameCandidates[0] || '';
+  if (explicitName && explicitName.toUpperCase() !== codeUpper) {
+    return explicitName;
+  }
+  if (codeUpper && byCode.has(codeUpper)) {
+    return byCode.get(codeUpper);
+  }
+  return explicitName || rawCode || 'Oficina';
+}
+
 // =========================================================================
 // 29. RECIBO OFICIAL DE COBRO / ABONO A CUENTAS POR COBRAR (CxC)
 // =========================================================================
@@ -9086,6 +9143,7 @@ export function generateCollectionReceiptPDF({ receipt = {}, allocations = [], c
       lines: [
         receipt.clienteNombre || receipt.cliDes || 'CLIENTE GENERAL',
         `RIF / C.I.: ${receipt.clienteRif || receipt.rif || 'N/A'}`,
+        `Cobrador: ${resolveCollectionCobradorName({ receipt, allocations: list, config })}`,
         `Observaciones: ${receipt.concepto || receipt.descrip || receipt.observaciones || 'Abono aplicado a facturas vigentes en cartera'}`
       ]
     },
