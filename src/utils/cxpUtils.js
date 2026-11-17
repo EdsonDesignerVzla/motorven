@@ -2,6 +2,11 @@
  * Utilidades compartidas para Cuentas por Pagar (CxP), normalización de proveedores
  * y prevención de colisiones por nroDoc repetido entre distintos proveedores.
  */
+import { suggestCreditDebitControlNumber } from './cxcUtils.js';
+
+export { suggestCreditDebitControlNumber };
+
+const round2Cxp = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
 export const normalizeProviderRif = (val) =>
   String(val || '')
@@ -251,3 +256,260 @@ export const dedupeSupplierPaymentsList = (list = []) => {
   }
   return out;
 };
+
+/**
+ * Calcula el próximo correlativo NC-XXXXXX o ND-XXXXXX para Cuentas por Pagar (CxP).
+ */
+export const getNextCxpCreditDebitNoteCorrelativo = (noteType = 'NOTA_CREDITO', payables = []) => {
+  const isDebit =
+    String(noteType || '').toUpperCase().includes('DEB') ||
+    String(noteType || '').toUpperCase() === 'ND' ||
+    String(noteType || '').toUpperCase() === 'N/DB';
+  const prefix = isDebit ? 'ND' : 'NC';
+  let maxNum = 0;
+
+  const inspectCode = (rawVal) => {
+    const clean = String(rawVal || '').toUpperCase().trim().replace(/^NE-/, '');
+    const m = clean.match(new RegExp(`^${prefix}-?0*(\\d+)$`));
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (!Number.isNaN(n) && n > maxNum) maxNum = n;
+    }
+  };
+
+  (Array.isArray(payables) ? payables : []).forEach((p) => {
+    if (!p) return;
+    inspectCode(p.nroDoc ?? p.nro_doc);
+    inspectCode(p.id);
+    const hist = Array.isArray(p.historialPagos) ? p.historialPagos : (Array.isArray(p.historial_pagos) ? p.historial_pagos : []);
+    hist.forEach((h) => {
+      if (!h) return;
+      inspectCode(h.correlativo);
+      inspectCode(h.pagoNum);
+      inspectCode(h.referencia);
+    });
+  });
+
+  return `${prefix}-${String(maxNum + 1).padStart(6, '0')}`;
+};
+
+/**
+ * Construye los objetos de persistencia, ajuste de saldo CxP y datos PDF/Forma Libre
+ * para emitir una Nota de Crédito (N/CR) o Nota de Débito (N/DB) sobre un documento CxP.
+ */
+export function buildCxpCreditDebitNoteResult({
+  noteType = 'NOTA_CREDITO',
+  affectedDoc,
+  noteNum,
+  numeroControl = '',
+  isFiscal = undefined,
+  fechaEmision,
+  subtotalUsd = 0,
+  aplicaIva = true,
+  tasa = 827.73,
+  motivo = ''
+}) {
+  if (!affectedDoc || !(affectedDoc.nroDoc ?? affectedDoc.nro_doc)) {
+    throw new Error('Debe seleccionar un documento CxP afectado válido.');
+  }
+
+  const normalizedNoteType =
+    String(noteType || '').toUpperCase().includes('DEB') || String(noteType || '').toUpperCase() === 'N/DB'
+      ? 'NOTA_DEBITO'
+      : 'NOTA_CREDITO';
+  const isDebit = normalizedNoteType === 'NOTA_DEBITO';
+  const prefix = isDebit ? 'ND' : 'NC';
+
+  const rawNumInput = String(noteNum || '').trim().toUpperCase();
+  const cleanNoteNum = rawNumInput
+    ? (/^(NC|ND)-/i.test(rawNumInput) ? rawNumInput : `${prefix}-${rawNumInput.replace(/[^0-9A-Z]/gi, '').padStart(6, '0')}`)
+    : `${prefix}-000001`;
+
+  const affectedTipo = normalizeDocType(affectedDoc.tipoDoc ?? affectedDoc.tipo_doc);
+  const affectedIsFiscal = affectedDoc.isFiscal !== undefined
+    ? Boolean(affectedDoc.isFiscal)
+    : affectedTipo === 'FACT';
+  const effectiveIsFiscal = isFiscal === undefined ? affectedIsFiscal : Boolean(isFiscal);
+  const effectiveAplicaIva = effectiveIsFiscal && Boolean(aplicaIva);
+
+  const cleanSub = round2Cxp(Math.max(0, Number(subtotalUsd || 0)));
+  const cleanIva = effectiveAplicaIva ? round2Cxp(cleanSub * 0.16) : 0;
+  const cleanTotal = round2Cxp(cleanSub + cleanIva);
+  if (!(cleanTotal > 0)) {
+    throw new Error('El monto total de la nota debe ser mayor a $0.00.');
+  }
+
+  const cleanTasa = Number(tasa || affectedDoc.tasa || 0) > 1 ? Number(tasa || affectedDoc.tasa) : 827.73;
+  const subtotalBs = round2Cxp(cleanSub * cleanTasa);
+  const ivaBs = round2Cxp(cleanIva * cleanTasa);
+  const totalBs = round2Cxp(cleanTotal * cleanTasa);
+  const cleanFecha = String(fechaEmision || new Date().toISOString().split('T')[0]).trim();
+  const affectedNro = String(affectedDoc.nroDoc ?? affectedDoc.nro_doc).trim();
+  const cleanMotivo = String(motivo || '').trim() || (
+    isDebit
+      ? `Cargo / Ajuste adicional sobre documento CxP #${affectedNro}`
+      : `Rebaja / Descuento comercial aplicado a documento CxP #${affectedNro}`
+  );
+
+  const montoOrigUsd = round2Cxp(Number(affectedDoc.montoNetUsd ?? affectedDoc.monto_net_usd ?? 0));
+  const abonosOrigUsd = round2Cxp(Number(affectedDoc.abonosUsd ?? affectedDoc.abonos_usd ?? 0));
+  const saldoOrigUsd = round2Cxp(Math.max(0, Number(affectedDoc.saldoUsd ?? affectedDoc.saldo_usd ?? (montoOrigUsd - abonosOrigUsd))));
+
+  if (!isDebit && cleanTotal > round2Cxp(saldoOrigUsd + 0.01)) {
+    throw new Error(`La Nota de Crédito ($${cleanTotal.toFixed(2)}) no puede superar el saldo pendiente por pagar ($${saldoOrigUsd.toFixed(2)}).`);
+  }
+
+  const resolvedControl = effectiveIsFiscal
+    ? (String(numeroControl || '').trim() || suggestCreditDebitControlNumber(cleanNoteNum, false))
+    : String(numeroControl || '').trim();
+
+  const provRif = String(affectedDoc.provRif ?? affectedDoc.prov_rif ?? affectedDoc.coProv ?? affectedDoc.co_prov ?? 'J-00000000-0').trim();
+  const provNombre = String(affectedDoc.provNombre ?? affectedDoc.prov_nombre ?? 'Proveedor General').trim();
+  const docTasa = Number(affectedDoc.tasa || cleanTasa);
+
+  let updatedAffectedDoc = null;
+  let createdDebitDoc = null;
+
+  if (!isDebit) {
+    const ncEntry = {
+      id: `nc-cxp-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
+      correlativo: cleanNoteNum,
+      pagoNum: cleanNoteNum,
+      numeroControl: resolvedControl,
+      isFiscal: effectiveIsFiscal,
+      tipo: 'NOTA_CREDITO',
+      tipoDoc: 'N/CR',
+      nroDoc: affectedNro,
+      documentoAfectado: affectedNro,
+      fecha: cleanFecha,
+      tasa: cleanTasa,
+      tasaPago: cleanTasa,
+      tipoTasa: effectiveIsFiscal ? 'BCV' : (affectedDoc.tipoTasa || 'KEYSTONE'),
+      monedaPago: 'BS',
+      subtotalUsd: cleanSub,
+      subtotalBs,
+      ivaUsd: cleanIva,
+      ivaBs,
+      montoUsd: cleanTotal,
+      montoBs: totalBs,
+      formaPago: 'NOTA_CREDITO',
+      cuentaId: 'NC-CXP',
+      cuentaNombre: `N/CR CxP #${cleanNoteNum}`,
+      accountType: 'NOTA_CREDITO',
+      referencia: cleanNoteNum,
+      observaciones: `Nota de Crédito CxP #${cleanNoteNum} • ${cleanMotivo}`
+    };
+
+    const appliedAmount = round2Cxp(Math.min(saldoOrigUsd, cleanTotal));
+    const newAbonosUsd = round2Cxp(Math.min(montoOrigUsd, abonosOrigUsd + appliedAmount));
+    const newSaldoUsd = round2Cxp(Math.max(0, montoOrigUsd - newAbonosUsd));
+    const newSaldoBs = round2Cxp(newSaldoUsd * docTasa);
+    const existingHist = Array.isArray(affectedDoc.historialPagos)
+      ? affectedDoc.historialPagos
+      : (Array.isArray(affectedDoc.historial_pagos) ? affectedDoc.historial_pagos : []);
+
+    updatedAffectedDoc = {
+      ...affectedDoc,
+      id: buildCxpStableId(affectedDoc),
+      tipoDoc: affectedTipo,
+      nroDoc: affectedNro,
+      coProv: provRif,
+      provRif,
+      provNombre,
+      fechaEmision: affectedDoc.fechaEmisionIso || affectedDoc.fechaEmision || cleanFecha,
+      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
+      montoNetUsd: montoOrigUsd,
+      montoNetBs: round2Cxp(Number(affectedDoc.montoNetBs ?? affectedDoc.monto_net_bs ?? (montoOrigUsd * docTasa))),
+      abonosUsd: newAbonosUsd,
+      saldoUsd: newSaldoUsd,
+      saldoBs: newSaldoBs,
+      tasa: docTasa,
+      historialPagos: [ncEntry, ...existingHist]
+    };
+  } else {
+    const ndDocNum = !effectiveIsFiscal && !cleanNoteNum.startsWith('NE-')
+      ? `NE-${cleanNoteNum}`
+      : cleanNoteNum;
+    createdDebitDoc = {
+      id: buildCxpStableId({ tipoDoc: 'N/DB', nroDoc: ndDocNum, provRif, provNombre }),
+      tipoDoc: 'N/DB',
+      isFiscal: effectiveIsFiscal,
+      documentoAfectado: affectedNro,
+      numeroControl: resolvedControl,
+      nroDoc: ndDocNum,
+      coProv: provRif,
+      provNombre,
+      provRif,
+      fechaEmision: cleanFecha,
+      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
+      diasCredito: Number(affectedDoc.diasCredito || 0),
+      baseImponibleUsd: cleanSub,
+      baseImponibleBs: subtotalBs,
+      ivaUsd: cleanIva,
+      ivaBs,
+      exentoIva: !effectiveAplicaIva,
+      montoNetUsd: cleanTotal,
+      montoNetBs: totalBs,
+      abonosUsd: 0,
+      saldoUsd: cleanTotal,
+      saldoBs: totalBs,
+      tasa: cleanTasa,
+      tipoTasa: effectiveIsFiscal ? 'BCV' : (affectedDoc.tipoTasa || 'KEYSTONE'),
+      moneda: 'US$',
+      observaciones: `Nota de Débito CxP #${cleanNoteNum} (Afecta #${affectedNro}) • ${cleanMotivo}`,
+      historialPagos: [],
+      _customCreated: true
+    };
+  }
+
+  const notePdfData = {
+    isPayableNote: true,
+    tipoDoc: normalizedNoteType,
+    isFiscal: effectiveIsFiscal,
+    isExento: !effectiveAplicaIva,
+    numeroDoc: cleanNoteNum,
+    numeroControl: effectiveIsFiscal ? (resolvedControl || '00-000000') : (resolvedControl || 'NO FISCAL'),
+    documentoAfectado: affectedNro,
+    fechaEmision: cleanFecha,
+    fecha: cleanFecha,
+    clienteNombre: provNombre,
+    clienteRif: provRif,
+    provNombre,
+    provRif,
+    clienteDireccion: 'Venezuela',
+    tasaDolar: cleanTasa,
+    tasa: cleanTasa,
+    subtotalUsd: cleanSub,
+    subtotalBs,
+    baseGeneralUsd: effectiveAplicaIva ? cleanSub : 0,
+    ivaGeneralUsd: cleanIva,
+    baseExentaUsd: effectiveAplicaIva ? 0 : cleanSub,
+    ivaUsd: cleanIva,
+    ivaBs,
+    totalUsd: cleanTotal,
+    totalBs,
+    motivo: cleanMotivo,
+    descrip: cleanMotivo,
+    observaciones: cleanMotivo,
+    condicionPago: effectiveIsFiscal ? 'AJUSTE FISCAL CxP' : 'AJUSTE NO FISCAL CxP',
+    items: [
+      {
+        codigo: affectedNro,
+        descripcion: cleanMotivo,
+        cantidad: 1,
+        precioUsd: cleanSub,
+        tipoAlicuota: effectiveAplicaIva ? '16%' : 'EXENTO',
+        subtotalUsd: cleanSub
+      }
+    ]
+  };
+
+  return {
+    noteType: normalizedNoteType,
+    isFiscal: effectiveIsFiscal,
+    noteNum: cleanNoteNum,
+    updatedAffectedDoc,
+    createdDebitDoc,
+    notePdfData
+  };
+}

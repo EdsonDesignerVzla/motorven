@@ -25,7 +25,8 @@ import {
   markCxcDocDeleted,
   isCxcEntryDeleted,
   saveSupabaseProfitCollection,
-  getSupabaseProfitCollections
+  getSupabaseProfitCollections,
+  deleteSupabaseProfitCollection
 } from '../services/supabaseService.js';
 
 const createMemoryStorage = () => {
@@ -546,11 +547,12 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     /no puede superar/i
   );
 
-  // NC de $100 base + 16% IVA ($116 total) rebaja el saldo restante a $116 y genera registro SENIAT
+  // NC de $100 base + 16% IVA ($116 total) con N° Control manual rebaja el saldo restante a $116 y genera registro SENIAT
   const ncRes = buildCxcCreditDebitNoteResult({
     noteType: 'NOTA_CREDITO',
     affectedDoc: fiscalInvoice,
     noteNum: 'NC-000008',
+    numeroControl: '00-001450',
     fechaEmision: '2026-11-16',
     subtotalUsd: 100,
     aplicaIva: true,
@@ -560,9 +562,15 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.equal(ncRes.updatedAffectedDoc.abonosUsd, 116);
   assert.equal(ncRes.updatedAffectedDoc.saldoUsd, 116);
   assert.equal(ncRes.updatedAffectedDoc.historialCobros[0].formaPago, 'NOTA_CREDITO');
+  assert.equal(ncRes.updatedAffectedDoc.historialCobros[0].numeroControl, '00-001450');
+  assert.equal(ncRes.updatedAffectedDoc.historialCobros[0].subtotalBs, 91400);
+  assert.equal(ncRes.updatedAffectedDoc.historialCobros[0].montoBs, 106024);
   assert.equal(ncRes.clientDebtDeltaUsd, -116);
   assert.equal(ncRes.fiscalSaleRecord?.tipoDoc, 'NOTA_CREDITO');
+  assert.equal(ncRes.fiscalSaleRecord?.numeroControl, '00-001450');
   assert.equal(ncRes.fiscalSaleRecord?.documentoAfectado, '002050');
+  assert.equal(ncRes.notePdfData?.numeroControl, '00-001450');
+  assert.equal(ncRes.notePdfData?.totalBs, 106024);
   const pdfNc = generateCreditDebitNotePDF({ docData: ncRes.notePdfData, config: { tasaDolar: 914 } });
   assert.ok(pdfNc.getNumberOfPages() >= 1);
 
@@ -596,6 +604,61 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.equal(ndNeRes.fiscalSaleRecord, null);
   const pdfNd = generateCreditDebitNotePDF({ docData: ndNeRes.notePdfData, config: { tasaDolar: 914 } });
   assert.ok(pdfNd.getNumberOfPages() >= 1);
+
+  // ND fiscal con N° Control manual debe reflejar montos en USD y Bs. y conservar numeroControl
+  const ndFiscalRes = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: fiscalInvoice,
+    noteNum: 'ND-000010',
+    numeroControl: '00-009876',
+    fechaEmision: '2026-11-17',
+    subtotalUsd: 75,
+    aplicaIva: true,
+    tasa: 915.74,
+    motivo: 'Diferencial cambiario'
+  });
+  assert.equal(ndFiscalRes.createdDebitDoc?.numeroControl, '00-009876');
+  assert.equal(ndFiscalRes.createdDebitDoc?.totBrutoUsd, 75);
+  assert.equal(ndFiscalRes.createdDebitDoc?.totNetoUsd, 87);
+  assert.equal(ndFiscalRes.createdDebitDoc?.totNetoBs, 79669.38);
+  assert.equal(ndFiscalRes.fiscalSaleRecord?.numeroControl, '00-009876');
+  assert.equal(ndFiscalRes.notePdfData?.numeroControl, '00-009876');
+  assert.equal(ndFiscalRes.isFiscal, true);
+
+  // Selector explícito: permitir emitir Nota No Fiscal sobre Factura (sin IVA y sin Libro SENIAT)
+  // y permitir emitir Nota Fiscal sobre Nota de Entrega (con IVA y Libro SENIAT)
+  const ncOverrideNoFiscal = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_CREDITO',
+    affectedDoc: fiscalInvoice,
+    noteNum: 'NC-000099',
+    isFiscal: false,
+    fechaEmision: '2026-11-17',
+    subtotalUsd: 50,
+    aplicaIva: true,
+    tasa: 915.74,
+    motivo: 'Ajuste interno no fiscal'
+  });
+  assert.equal(ncOverrideNoFiscal.isFiscal, false);
+  assert.equal(ncOverrideNoFiscal.notePdfData?.isFiscal, false);
+  assert.equal(ncOverrideNoFiscal.notePdfData?.ivaUsd, 0);
+  assert.equal(ncOverrideNoFiscal.fiscalSaleRecord, null);
+
+  const ndOverrideFiscalOnNe = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: neDoc,
+    noteNum: 'ND-000099',
+    numeroControl: '00-001134',
+    isFiscal: true,
+    fechaEmision: '2026-11-17',
+    subtotalUsd: 100,
+    aplicaIva: true,
+    tasa: 915.74,
+    motivo: 'Recargo fiscalizado'
+  });
+  assert.equal(ndOverrideFiscalOnNe.isFiscal, true);
+  assert.equal(ndOverrideFiscalOnNe.createdDebitDoc?.tipoDoc, 'FACTURA');
+  assert.equal(ndOverrideFiscalOnNe.createdDebitDoc?.ivaUsd, 16);
+  assert.equal(ndOverrideFiscalOnNe.fiscalSaleRecord?.numeroControl, '00-001134');
 
   console.log('  ✓ 9. Emisión de Notas de Crédito/Débito en CxC (rebaja/cargo, N/E Sin IVA, SENIAT y PDF) verificada.');
 }
@@ -703,6 +766,76 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     'USDT_BS'
   );
   console.log('  ✓ 11. Tasa USDT en Bolívares (USDT_BS) para Nota de Entrega verificada.');
+}
+
+// 12. Edición de datos del cobro y eliminación con tombstone persistente en profit_collections
+{
+  const colId = `cob-test-edit-del-${Date.now()}`;
+  const createdCol = await saveSupabaseProfitCollection({
+    id: colId,
+    cobNum: '004999',
+    correlativo: '004999',
+    fecha: '2026-11-17T14:00:00.000Z',
+    clienteId: 'CLI-TEST',
+    clienteNombre: 'Cliente Test Edit',
+    vendedorId: 'V1',
+    vendedorNombre: 'Vendedor Uno',
+    cobradorId: 'V1',
+    cobradorNombre: 'Vendedor Uno',
+    montoUsd: 100,
+    montoBs: 91574,
+    tasa: 915.74,
+    tipoTasa: 'BCV',
+    monedaPago: 'BS',
+    cuentaId: 'BANCO-BDV',
+    cuentaNombre: 'Banco de Venezuela',
+    formaPago: 'TRANSFERENCIA',
+    referencia: 'REF-100',
+    descrip: 'Abono inicial',
+    documentosAfectados: [{ numDoc: '002093', tipoDoc: 'FACTURA', montoCobradoUsd: 100, montoCobrado: 91574 }],
+    formasPago: [{ formaPago: 'TRANSFERENCIA', montoUsd: 100, montoBs: 91574, tasa: 915.74, tipoTasa: 'BCV', referencia: 'REF-100' }]
+  });
+
+  assert.equal(createdCol.correlativo, '004999');
+  assert.equal(createdCol.formaPago, 'TRANSFERENCIA');
+  assert.equal(createdCol.referencia, 'REF-100');
+
+  const updatedCol = await saveSupabaseProfitCollection({
+    ...createdCol,
+    formaPago: 'ZELLE',
+    tipoTasa: 'ZELLE',
+    tasa: 1,
+    tasaPago: 1,
+    monedaPago: 'USD',
+    montoUsd: 120,
+    montoBs: 0,
+    cuentaId: 'CAJA-ZELLE',
+    cuentaNombre: 'Cuenta Zelle USD',
+    referencia: 'ZELLE-8899',
+    descrip: 'Datos corregidos',
+    formasPago: [{ formaPago: 'ZELLE', moneda: 'USD', montoUsd: 120, montoBs: 0, tasa: 1, tipoTasa: 'ZELLE', referencia: 'ZELLE-8899' }],
+    documentosAfectados: [{ numDoc: '002093', tipoDoc: 'FACTURA', montoCobradoUsd: 120, montoCobrado: 120 }],
+    _localEditedAt: new Date().toISOString()
+  });
+
+  assert.equal(updatedCol.formaPago, 'ZELLE');
+  assert.equal(updatedCol.montoUsd, 120);
+  assert.equal(updatedCol.montoBs, 0);
+  assert.equal(updatedCol.referencia, 'ZELLE-8899');
+  assert.equal(updatedCol.cuentaNombre, 'Cuenta Zelle USD');
+
+  await deleteSupabaseProfitCollection(colId);
+  const rawDeleted = localStorage.getItem('signum_deleted_cxc_collections_v1');
+  const parsedDeleted = rawDeleted ? JSON.parse(rawDeleted) : [];
+  assert.ok(parsedDeleted.includes(colId), 'El cobro eliminado debe quedar marcado en tombstones locales');
+
+  const collectionsAfterDelete = await getSupabaseProfitCollections();
+  assert.equal(
+    collectionsAfterDelete.some((c) => String(c.id) === colId),
+    false,
+    'Un cobro eliminado no debe reaparecer al consultar getSupabaseProfitCollections'
+  );
+  console.log('  ✓ 12. Edición de datos de cobro y eliminación con tombstone verificados.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');

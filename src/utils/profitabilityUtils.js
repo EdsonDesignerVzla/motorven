@@ -16,7 +16,8 @@ export const EXPENSE_STANDARD_CATEGORIES = [
   { id: 'SERVICIOS', label: 'Servicios Públicos, Internet & Sistemas', pnlBucket: 'OPEX' },
   { id: 'IMPUESTOS', label: 'Impuestos, Tributos & Retenciones', pnlBucket: 'IMPUESTOS' },
   { id: 'MANTENIMIENTO', label: 'Mantenimiento de Flota & Equipos', pnlBucket: 'OPEX' },
-  { id: 'OTROS_GASTOS', label: 'Otros Gastos Administrativos', pnlBucket: 'OPEX' }
+  { id: 'OTROS_GASTOS', label: 'Otros Gastos Administrativos', pnlBucket: 'OPEX' },
+  { id: 'ABONO_PASIVO_SOCIO', label: '2.02.01.001 - Abono / Reembolso Cuenta por Pagar Socio', pnlBucket: 'PASIVO_SOCIO' }
 ];
 
 const STANDARD_CATEGORY_IDS = new Set(EXPENSE_STANDARD_CATEGORIES.map((c) => c.id));
@@ -602,6 +603,16 @@ export const computeOperationalPandL = ({
     const cat = normalizeText(m.categoria);
     const cuentaDesc = `${m.cuentaGastoDesc || m.cuenta_gasto || ''} ${m.concepto || ''}`;
     const bucket = classifyExpenseBucket(cat, cuentaDesc);
+    // Movimientos puramente patrimoniales / pasivos o transferencias entre cuentas no son OPEX del Estado de Resultados
+    if (
+      cat === 'ABONO_PASIVO_SOCIO' ||
+      bucket === 'PASIVO_SOCIO' ||
+      cat === 'PAGO_PROVEEDOR' ||
+      cat === 'TRANSFERENCIA_INTERNA' ||
+      String(m.cuentaGasto || m.cuenta_gasto || '').trim().startsWith('2.02.')
+    ) {
+      return;
+    }
     const isOperationalCashOut =
       STANDARD_CATEGORY_IDS.has(cat) ||
       Boolean(m.cuentaGasto || m.cuenta_gasto) ||

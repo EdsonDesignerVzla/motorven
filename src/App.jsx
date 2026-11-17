@@ -17,6 +17,7 @@ import {
   removePartnerPayableAccountFromList,
   applyPartnerPayableBalanceDeltaInList
 } from './utils/treasuryAccountUtils';
+import { removePartnerLiabilityMovementByCashId } from './utils/liabilityAccountUtils';
 import { normalizeRateType, isDirectCurrencyRateType } from './utils/rateClassificationUtils';
 import { resolveInvoiceLitros, resolveInvoiceCajas, matchesSeller } from './services/commissionService';
 import { ShieldAlert, Smartphone } from 'lucide-react';
@@ -123,6 +124,7 @@ import {
   deleteSupabaseProfitCashDesk,
   getSupabaseProfitCollections,
   saveSupabaseProfitCollection,
+  deleteSupabaseProfitCollection,
   getSupabaseProfitInvoices,
   saveSupabaseProfitInvoice,
   updateSupabaseInvoiceDocument,
@@ -2927,6 +2929,27 @@ function MainApp() {
         : (await getSupabaseCashMovements().catch(() => []));
       setCashMovementsState([...nextList]);
 
+      const movCatUpper = String(targetMov?.categoria || '').trim().toUpperCase();
+      const linkedPartnerId =
+        targetMov?.partnerAccountId ||
+        targetMov?.partner_account_id ||
+        (String(targetMov?.referenciaTipo || targetMov?.referencia_tipo || '').toUpperCase() === 'PASIVO_SOCIO'
+          ? (targetMov?.referenciaId || targetMov?.referencia_id)
+          : '');
+      if (movCatUpper === 'ABONO_PASIVO_SOCIO' && linkedPartnerId) {
+        const revUsd = Math.abs(Number(targetMov?.montoUsd ?? targetMov?.monto_usd ?? 0));
+        const revBs = Math.abs(Number(targetMov?.montoBs ?? targetMov?.monto_bs ?? 0));
+        const revSign = String(targetMov?.tipo || '').toUpperCase() === 'INGRESO' ? -1 : 1;
+        setPartnerPayableAccountsState(prev =>
+          applyPartnerPayableBalanceDeltaInList(prev, {
+            targetRef: linkedPartnerId,
+            deltaUsd: Number((revSign * revUsd).toFixed(2)),
+            deltaBs: Number((revSign * revBs).toFixed(2))
+          })
+        );
+        removePartnerLiabilityMovementByCashId(targetMov?.id || targetId);
+      }
+
       if (resolvedAccount) {
         const actionWord = sign > 0 ? 'reintegrado en' : 'descontado de';
         notify.success(`Movimiento eliminado y saldo ${actionWord} ${resolvedAccount.label}`);
@@ -3664,22 +3687,394 @@ function MainApp() {
     };
   };
 
-  // Actualizar metadatos (ej. correlativo manual) de un cobro / movimiento CxC sin alterar saldos de caja ni deuda
-  const handleUpdateCxcCollection = async (collectionData) => {
-    if (!collectionData || !collectionData.id) return null;
-    const savedCob = await saveSupabaseProfitCollection(collectionData);
-    if (savedCob) {
-      setProfitCollections(prev => {
-        const list = Array.isArray(prev) ? [...prev] : [];
-        const idx = list.findIndex(c => String(c.id) === String(savedCob.id));
-        if (idx >= 0) {
-          list[idx] = { ...list[idx], ...savedCob };
-          return list;
+  const resolveCxcTreasuryAccount = (hint = {}) => {
+    if (!hint) return null;
+    const formaUpper = String(hint.formaPago || hint.accountType || '').trim().toUpperCase();
+    if (formaUpper === 'NOTA_CREDITO' || formaUpper === 'N/CR' || formaUpper === 'NCR') {
+      return null;
+    }
+
+    const desks = Array.isArray(profitCashDesksRef.current) ? profitCashDesksRef.current : [];
+    const banks = Array.isArray(profitBankAccountsRef.current) ? profitBankAccountsRef.current : [];
+    const accountObj = hint.account && typeof hint.account === 'object' ? hint.account : hint;
+    const inferredKind = inferTreasuryAccountKind(accountObj);
+    const normStr = (v) => String(v || '').trim().toUpperCase();
+    const cuentaIdHint = normStr(hint.cuentaId || accountObj.rawId || accountObj.id || accountObj.coCaja || accountObj.codCta);
+    const cuentaNombreHint = normStr(hint.cuentaNombre || accountObj.nombre || accountObj.descripcion || accountObj.banco);
+
+    if (inferredKind === 'CAJA' || (!inferredKind && (cuentaIdHint.includes('CAJ') || cuentaNombreHint.includes('CAJA')))) {
+      const matchedDesk = desks.find((d) =>
+        matchesCashDesk(d, accountObj) ||
+        (cuentaIdHint && matchesCashDesk(d, cuentaIdHint)) ||
+        (cuentaNombreHint && (normStr(d.nombre) === cuentaNombreHint || normStr(d.descripcion) === cuentaNombreHint))
+      );
+      if (matchedDesk) return { kind: 'CAJA', account: { ...matchedDesk, kind: 'CAJA', accountType: 'CAJA' } };
+    }
+
+    if (inferredKind === 'BANCO' || !inferredKind) {
+      const matchedBank = banks.find((b) =>
+        matchesBankAccount(b, accountObj) ||
+        (cuentaIdHint && matchesBankAccount(b, cuentaIdHint)) ||
+        (cuentaNombreHint && (normStr(b.nombre) === cuentaNombreHint || normStr(b.banco) === cuentaNombreHint || normStr(b.numCta) === cuentaNombreHint))
+      );
+      if (matchedBank) return { kind: 'BANCO', account: { ...matchedBank, kind: 'BANCO', accountType: 'BANCO' } };
+    }
+
+    const fallbackDesk = desks.find((d) =>
+      matchesCashDesk(d, accountObj) ||
+      (cuentaIdHint && matchesCashDesk(d, cuentaIdHint)) ||
+      (cuentaNombreHint && normStr(d.nombre) === cuentaNombreHint)
+    );
+    if (fallbackDesk) return { kind: 'CAJA', account: { ...fallbackDesk, kind: 'CAJA', accountType: 'CAJA' } };
+
+    if (inferredKind === 'CAJA' || inferredKind === 'BANCO') {
+      return { kind: inferredKind, account: { ...accountObj, kind: inferredKind, accountType: inferredKind } };
+    }
+    return null;
+  };
+
+  const isSameTreasuryAccount = (acctA, acctB) => {
+    if (!acctA || !acctB || acctA.kind !== acctB.kind) return false;
+    return acctA.kind === 'CAJA'
+      ? matchesCashDesk(acctA.account, acctB.account)
+      : matchesBankAccount(acctA.account, acctB.account);
+  };
+
+  const adjustCxcClientDebt = ({ clienteId, clienteRif, deltaUsd = 0 }) => {
+    const cleanDelta = Number(Number(deltaUsd || 0).toFixed(2));
+    if (Math.abs(cleanDelta) < 0.005 || (!clienteId && !clienteRif)) return;
+    setClientsState((prev) => {
+      const list = Array.isArray(prev) ? [...prev] : [];
+      return list.map((c) => {
+        const matches =
+          (clienteId && (String(c.id) === String(clienteId) || String(c.codigo) === String(clienteId))) ||
+          (clienteRif && String(c.rif) === String(clienteRif));
+        if (!matches) return c;
+        const currentDebt = Number(c.saldoDeudorUsd || 0);
+        const nuevoSaldoDeudor = Number(Math.max(0, currentDebt + cleanDelta).toFixed(2));
+        const updatedClient = {
+          ...c,
+          saldoDeudorUsd: nuevoSaldoDeudor,
+          saldo_deudor_usd: nuevoSaldoDeudor
+        };
+        saveSupabaseClient(updatedClient).catch(() => {});
+        return updatedClient;
+      });
+    });
+  };
+
+  const findMatchingCxcCashMovement = ({
+    factNum = '',
+    cobNum = '',
+    correlativo = '',
+    referencia = '',
+    fecha = '',
+    montoUsd = 0,
+    cuentaId = '',
+    cuentaNombre = ''
+  } = {}) => {
+    const list = Array.isArray(cashMovements) ? cashMovements : [];
+    const stripZeros = (v) => String(v || '').trim().replace(/^#/, '').replace(/^0+/, '') || String(v || '').trim();
+    const normFact = stripZeros(factNum);
+    const refTokens = new Set(
+      [referencia, cobNum, correlativo]
+        .map((v) => String(v || '').trim().toUpperCase().replace(/^#/, ''))
+        .filter((v) => v && v !== 'S/R' && v !== '-')
+    );
+    const fechaDay = String(fecha || '').slice(0, 10);
+    const acctIdUpper = String(cuentaId || '').trim().toUpperCase();
+    const acctNameUpper = String(cuentaNombre || '').trim().toUpperCase();
+
+    let best = null;
+    let bestScore = 0;
+
+    list.forEach((m) => {
+      if (!m || m.anulado) return;
+      const cat = String(m.categoria || '').trim().toUpperCase();
+      const tipo = String(m.tipo || '').trim().toUpperCase();
+      if (cat !== 'COBRO_CXC' || tipo !== 'INGRESO') return;
+
+      const movDoc = stripZeros(m.referenciaId || m.referencia_id || '');
+      const movConcept = String(m.concepto || '').toUpperCase();
+      const docMatches =
+        (normFact && movDoc === normFact) ||
+        (normFact && movConcept.includes(`#${normFact}`));
+      if (normFact && !docMatches) return;
+
+      const movRefUpper = String(m.referencia || '').trim().toUpperCase().replace(/^#/, '');
+      const refMatched = Boolean(movRefUpper && refTokens.has(movRefUpper));
+      const movDay = String(m.fecha || '').slice(0, 10);
+      const dayMatched = Boolean(fechaDay && movDay === fechaDay);
+      const usdMatched = Math.abs(Number(m.montoUsd || 0) - Number(montoUsd || 0)) <= 0.05;
+      const movAcctId = String(m.cuentaId || m.cajaId || '').trim().toUpperCase();
+      const movAcctName = String(m.cuentaNombre || m.cajaOBanco || '').trim().toUpperCase();
+      const acctMatched =
+        (acctIdUpper && movAcctId === acctIdUpper) ||
+        (acctNameUpper && movAcctName === acctNameUpper);
+
+      let score = docMatches ? 10 : 0;
+      if (refMatched) score += 40;
+      if (usdMatched) score += 25;
+      if (dayMatched) score += 15;
+      if (acctMatched) score += 10;
+
+      if (refMatched || (docMatches && usdMatched && dayMatched)) {
+        if (score > bestScore) {
+          bestScore = score;
+          best = m;
         }
-        return [savedCob, ...list];
+      }
+    });
+
+    return best;
+  };
+
+  // Actualizar metadatos o datos financieros de un cobro / movimiento CxC
+  const handleUpdateCxcCollection = async (collectionData, reconcileMeta = null) => {
+    let savedCob = null;
+    if (collectionData && collectionData.id) {
+      savedCob = await saveSupabaseProfitCollection(collectionData);
+      if (savedCob) {
+        setProfitCollections(prev => {
+          const list = Array.isArray(prev) ? [...prev] : [];
+          const idx = list.findIndex(c => String(c.id) === String(savedCob.id));
+          if (idx >= 0) {
+            list[idx] = { ...list[idx], ...savedCob };
+            return list;
+          }
+          return [savedCob, ...list];
+        });
+      }
+    }
+
+    if (!reconcileMeta) {
+      return savedCob;
+    }
+
+    const updatedDocsList = Array.isArray(reconcileMeta.updatedDocs)
+      ? reconcileMeta.updatedDocs
+      : (reconcileMeta.updatedDoc ? [reconcileMeta.updatedDoc] : []);
+    for (const docPayload of updatedDocsList) {
+      if (docPayload) {
+        await handleSaveCxcDocument(docPayload);
+      }
+    }
+
+    const oldMontoUsd = Number(reconcileMeta.oldMontoUsd || 0);
+    const newMontoUsd = Number(reconcileMeta.newMontoUsd || 0);
+    const oldMontoBs = Number(reconcileMeta.oldMontoBs || 0);
+    const newMontoBs = Number(reconcileMeta.newMontoBs || 0);
+    const oldForma = String(reconcileMeta.oldFormaPago || '').trim().toUpperCase();
+    const newForma = String(reconcileMeta.newFormaPago || '').trim().toUpperCase();
+    const corrStr = String(reconcileMeta.correlativo || '');
+    const isOldCreditNote = oldForma === 'NOTA_CREDITO' || /^NC-/i.test(corrStr);
+    const isNewCreditNote = newForma === 'NOTA_CREDITO';
+
+    const oldAcct = !isOldCreditNote
+      ? resolveCxcTreasuryAccount({
+          account: reconcileMeta.oldAccount,
+          cuentaId: reconcileMeta.oldCuentaId,
+          cuentaNombre: reconcileMeta.oldCuentaNombre,
+          formaPago: oldForma
+        })
+      : null;
+
+    const newAcct = !isNewCreditNote
+      ? resolveCxcTreasuryAccount({
+          account: reconcileMeta.newAccount,
+          cuentaId: reconcileMeta.newCuentaId,
+          cuentaNombre: reconcileMeta.newCuentaNombre,
+          formaPago: newForma
+        })
+      : null;
+
+    if (oldAcct && newAcct && isSameTreasuryAccount(oldAcct, newAcct)) {
+      const deltaUsd = Number((newMontoUsd - oldMontoUsd).toFixed(2));
+      const deltaBs = Number((newMontoBs - oldMontoBs).toFixed(2));
+      if (Math.abs(deltaUsd) >= 0.01 || Math.abs(deltaBs) >= 0.01) {
+        await applyTreasuryAccountDelta({
+          account: newAcct.account,
+          deltaUsd,
+          deltaBs,
+          clampZero: true
+        });
+      }
+    } else {
+      if (oldAcct && (oldMontoUsd > 0 || oldMontoBs > 0)) {
+        await applyTreasuryAccountDelta({
+          account: oldAcct.account,
+          deltaUsd: -oldMontoUsd,
+          deltaBs: -oldMontoBs,
+          clampZero: true
+        });
+      }
+      if (newAcct && (newMontoUsd > 0 || newMontoBs > 0)) {
+        await applyTreasuryAccountDelta({
+          account: newAcct.account,
+          deltaUsd: newMontoUsd,
+          deltaBs: newMontoBs,
+          clampZero: false
+        });
+      }
+    }
+
+    try {
+      const matchedMov = findMatchingCxcCashMovement({
+        factNum: reconcileMeta.factNum,
+        cobNum: reconcileMeta.cobNum,
+        correlativo: reconcileMeta.correlativo,
+        referencia: reconcileMeta.oldReferencia,
+        fecha: reconcileMeta.oldFecha,
+        montoUsd: oldMontoUsd,
+        cuentaId: reconcileMeta.oldCuentaId,
+        cuentaNombre: reconcileMeta.oldCuentaNombre
+      });
+
+      if (matchedMov) {
+        if (isNewCreditNote) {
+          const remaining = await deleteSupabaseCashMovement(matchedMov);
+          setCashMovementsState((prev) =>
+            Array.isArray(remaining) ? remaining : prev.filter((m) => String(m?.id) !== String(matchedMov.id))
+          );
+        } else {
+          const resolvedNewAccount = newAcct?.account || reconcileMeta.newAccount;
+          const isCajaDest = inferTreasuryAccountKind(resolvedNewAccount) === 'CAJA';
+          const cajaTargetId = isCajaDest ? (resolvedNewAccount?.rawId || resolvedNewAccount?.id || resolvedNewAccount?.coCaja || '') : '';
+          const cajaTargetCode = String(resolvedNewAccount?.coCaja || resolvedNewAccount?.co_caja || cajaTargetId || '').trim().toUpperCase();
+          const isNeDoc = String(reconcileMeta.tipoDoc || matchedMov.tipoDoc || '').toUpperCase().includes('NOTA');
+          const subCajaCode = isCajaDest && cajaTargetCode
+            ? `${cajaTargetCode}-${isNeDoc ? 'NF' : 'F'}`
+            : '';
+          const nextMonedaPago = String(reconcileMeta.monedaPago || '').toUpperCase() === 'USD' ? 'USD' : 'BS';
+          const updatedMovPayload = {
+            ...matchedMov,
+            montoUsd: newMontoUsd,
+            montoBs: newMontoBs,
+            tasa: Number(reconcileMeta.newTasa || matchedMov.tasa || 1),
+            tasaPago: Number(reconcileMeta.newTasa || matchedMov.tasaPago || 1),
+            tipoTasa: reconcileMeta.newTipoTasa || matchedMov.tipoTasa || 'BCV',
+            monedaPago: nextMonedaPago,
+            moneda: nextMonedaPago === 'USD' ? 'US$' : (resolvedNewAccount?.moneda === 'USD' ? 'US$' : 'BS'),
+            cajaId: isCajaDest ? (cajaTargetId || null) : null,
+            subcaja: subCajaCode,
+            cuentaId: resolvedNewAccount?.rawId || resolvedNewAccount?.id || reconcileMeta.newCuentaId || matchedMov.cuentaId || '',
+            cuentaNombre: resolvedNewAccount?.nombre || reconcileMeta.newCuentaNombre || matchedMov.cuentaNombre || '',
+            cajaOBanco: resolvedNewAccount?.nombre || reconcileMeta.newCuentaNombre || matchedMov.cajaOBanco || '',
+            referencia: reconcileMeta.newReferencia !== undefined ? String(reconcileMeta.newReferencia || '') : matchedMov.referencia,
+            concepto: reconcileMeta.observaciones
+              ? `${matchedMov.fiscalScope === 'FISCAL' ? '[FISCAL]' : '[NO FISCAL]'} Cobro CxC ${reconcileMeta.clienteNombre || ''} (#${reconcileMeta.factNum || ''}) • ${reconcileMeta.observaciones}`.trim()
+              : matchedMov.concepto
+          };
+          const savedMov = await updateSupabaseCashMovement(updatedMovPayload);
+          if (savedMov) {
+            setCashMovementsState((prev) => upsertCashMovementInList(prev, savedMov));
+          }
+        }
+      }
+    } catch (movErr) {
+      console.warn('[handleUpdateCxcCollection] Aviso actualizando movimiento en Caja:', movErr?.message || movErr);
+    }
+
+    const debtDeltaUsd = Number((oldMontoUsd - newMontoUsd).toFixed(2));
+    if (Math.abs(debtDeltaUsd) >= 0.005) {
+      adjustCxcClientDebt({
+        clienteId: reconcileMeta.clienteId,
+        clienteRif: reconcileMeta.clienteRif,
+        deltaUsd: debtDeltaUsd
       });
     }
+
     return savedCob;
+  };
+
+  // Eliminar completamente o desagregar un cobro CxC reconciliando documento, profit_collections, caja/banco, flujo de caja y saldo cliente
+  const handleDeleteCxcCollection = async ({
+    movement,
+    updatedDocs = [],
+    updatedCollections = [],
+    deletedCollectionIds = [],
+    oldAccount = null
+  } = {}) => {
+    for (const docPayload of updatedDocs) {
+      if (docPayload) {
+        await handleSaveCxcDocument(docPayload);
+      }
+    }
+
+    for (const colPayload of updatedCollections) {
+      if (colPayload && colPayload.id) {
+        await handleUpdateCxcCollection(colPayload, null);
+      }
+    }
+
+    const delIds = Array.from(new Set((deletedCollectionIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+    for (const colId of delIds) {
+      await deleteSupabaseProfitCollection(colId);
+    }
+    if (delIds.length > 0) {
+      const delSet = new Set(delIds);
+      setProfitCollections((prev) => (Array.isArray(prev) ? prev.filter((c) => !delSet.has(String(c?.id || '').trim())) : []));
+    }
+
+    if (movement) {
+      const revUsd = Number(movement.montoUsd || 0);
+      const revBs = Number(movement.montoBs || 0);
+      const formaUpper = String(movement.formaPago || '').trim().toUpperCase();
+      const acctTypeUpper = String(movement.accountType || '').trim().toUpperCase();
+      const corrStr = String(movement.correlativo || '');
+      const isCreditNoteMov =
+        formaUpper === 'NOTA_CREDITO' ||
+        acctTypeUpper === 'NOTA_CREDITO' ||
+        /^NC-/i.test(corrStr);
+
+      if (!isCreditNoteMov) {
+        const resolvedAcct = resolveCxcTreasuryAccount({
+          account: oldAccount,
+          cuentaId: movement.cuentaId,
+          cuentaNombre: movement.cuentaNombre || movement.bancoCuenta,
+          formaPago: formaUpper
+        });
+        if (resolvedAcct && (revUsd > 0 || revBs > 0)) {
+          await applyTreasuryAccountDelta({
+            account: resolvedAcct.account,
+            deltaUsd: -revUsd,
+            deltaBs: -revBs,
+            clampZero: true
+          });
+        }
+
+        try {
+          const matchedMov = findMatchingCxcCashMovement({
+            factNum: movement.factNum,
+            cobNum: movement.cobNum || movement.collectionId,
+            correlativo: movement.correlativo,
+            referencia: movement.referencia,
+            fecha: movement.fecha,
+            montoUsd: revUsd,
+            cuentaId: movement.cuentaId,
+            cuentaNombre: movement.cuentaNombre || movement.bancoCuenta
+          });
+          if (matchedMov) {
+            const remaining = await deleteSupabaseCashMovement(matchedMov);
+            setCashMovementsState((prev) =>
+              Array.isArray(remaining) ? remaining : removeCashMovementFromList(prev, matchedMov.id)
+            );
+          }
+        } catch (movErr) {
+          console.warn('[handleDeleteCxcCollection] Aviso eliminando movimiento en Caja:', movErr?.message || movErr);
+        }
+      }
+
+      if (revUsd > 0) {
+        adjustCxcClientDebt({
+          clienteId: movement.clienteId,
+          clienteRif: movement.rif || movement.clienteRif,
+          deltaUsd: revUsd
+        });
+      }
+    }
+
+    return true;
   };
 
   // Guardar o Editar Documento CxP (Factura de Compra, Adelanto, etc.)
@@ -3727,8 +4122,64 @@ function MainApp() {
     setPartnerPayableAccountsState(prev => removePartnerPayableAccountFromList(prev, idOrCode));
   };
 
-  const handleAdjustPartnerPayableBalance = ({ targetRef, deltaUsd = 0, deltaBs = 0 }) => {
-    setPartnerPayableAccountsState(prev => applyPartnerPayableBalanceDeltaInList(prev, { targetRef, deltaUsd, deltaBs }));
+  const handleAdjustPartnerPayableBalance = async ({
+    targetRef,
+    deltaUsd = 0,
+    deltaBs = 0,
+    treasuryAccount = null,
+    skipTreasuryDeduction = false
+  }) => {
+    const absUsd = Math.abs(Number(deltaUsd || 0));
+    const absBs = Math.abs(Number(deltaBs || 0));
+    let createdCashMovementId = null;
+
+    if (treasuryAccount && !skipTreasuryDeduction && deltaUsd < 0 && absUsd > 0) {
+      await applyTreasuryAccountDelta({
+        account: treasuryAccount,
+        deltaUsd: -absUsd,
+        deltaBs: -absBs,
+        clampZero: true
+      });
+      const isCaja = inferTreasuryAccountKind(treasuryAccount) === 'CAJA';
+      const tasaOp = Number(treasuryAccount.tasa || config?.tasaDolar || 827.73);
+      const movPayload = {
+        tipo: 'EGRESO',
+        categoria: 'ABONO_PASIVO_SOCIO',
+        cuentaGasto: '2.02.01.001',
+        cuentaGastoDesc: 'Cuentas por Pagar Socio',
+        concepto: treasuryAccount.concepto || `Abono / Reembolso a Cuenta Pasiva Socio (${targetRef})`,
+        montoUsd: Number(absUsd.toFixed(2)),
+        montoBs: Number(absBs.toFixed(2)),
+        tasa: tasaOp,
+        tasaPago: tasaOp,
+        tipoTasa: String(treasuryAccount.moneda || '').toUpperCase() === 'BS' ? 'BCV' : 'USD',
+        monedaPago: String(treasuryAccount.moneda || '').toUpperCase() === 'BS' ? 'BS' : 'USD',
+        moneda: String(treasuryAccount.moneda || '').toUpperCase() === 'BS' ? 'BS' : 'US$',
+        metodo: treasuryAccount.metodoPago || (isCaja ? 'EFECTIVO_USD' : 'TRANSFERENCIA'),
+        metodoPago: treasuryAccount.metodoPago || (isCaja ? 'EFECTIVO_USD' : 'TRANSFERENCIA'),
+        cajaId: isCaja ? (treasuryAccount.rawId || treasuryAccount.id || null) : null,
+        cuentaId: treasuryAccount.rawId || treasuryAccount.id || '',
+        cuentaNombre: treasuryAccount.label || '',
+        cajaOBanco: treasuryAccount.label || '',
+        accountKind: isCaja ? 'CAJA' : 'BANCO',
+        partnerAccountId: String(targetRef || ''),
+        referenciaTipo: 'PASIVO_SOCIO',
+        referenciaId: String(targetRef || ''),
+        referencia: treasuryAccount.referencia || String(targetRef || ''),
+        fecha: treasuryAccount.fecha || new Date().toISOString().split('T')[0],
+        usuario: currentUser?.nombre || currentUser?.username || 'TESORERÍA'
+      };
+      const createdMov = await addSupabaseCashMovement(movPayload);
+      if (createdMov) {
+        createdCashMovementId = createdMov.id || null;
+        setCashMovementsState(prev => upsertCashMovementInList(prev, createdMov));
+      }
+    }
+
+    setPartnerPayableAccountsState(prev =>
+      applyPartnerPayableBalanceDeltaInList(prev, { targetRef, deltaUsd, deltaBs })
+    );
+    return createdCashMovementId;
   };
 
   // Registrar Pago a Proveedor en Cuentas por Pagar (Parte A) con atomicidad y egreso en flujo de caja
@@ -3798,6 +4249,13 @@ function MainApp() {
           fallback: 'BCV'
         });
         const payTasa = Number(paymentPayload?.tasaPago || paymentPayload?.tasa || config?.tasaDolar || 1);
+        const isCashSource = Boolean(
+          selectedAccount && (
+            selectedAccount.accountType === 'CAJA' ||
+            selectedAccount.kind === 'CAJA' ||
+            inferTreasuryAccountKind(selectedAccount) === 'CAJA'
+          )
+        );
         const mov = {
           tipo: 'EGRESO',
           categoria: 'PAGO_PROVEEDOR',
@@ -3809,7 +4267,9 @@ function MainApp() {
           tasaPago: payTasa,
           monedaPago: paymentPayload?.monedaPago || (payRateType === 'USD' ? 'USD' : 'BS'),
           moneda: paymentPayload?.moneda || (selectedAccount?.moneda === 'USD' ? 'US$' : 'BS'),
-          cuentaId: selectedAccount?.id || paymentPayload?.cuentaId || '',
+          cajaId: isCashSource ? (selectedAccount?.rawId || selectedAccount?.id || paymentPayload?.cajaId || null) : null,
+          accountKind: isCashSource ? 'CAJA' : 'BANCO',
+          cuentaId: selectedAccount?.rawId || selectedAccount?.id || paymentPayload?.cuentaId || '',
           cuentaNombre: selectedAccount?.nombre || paymentPayload?.cuentaNombre || '',
           referencia: paymentPayload?.referencia || savedPay?.pagoNum || '',
           fecha: paymentPayload?.fechaPago || new Date().toISOString().split('T')[0],
@@ -4077,6 +4537,11 @@ function MainApp() {
         onDeleteEmployee={handleDeleteEmployee}
         onSavePayroll={handleSavePayroll}
         onDeletePayroll={handleDeletePayroll}
+        partnerPayableAccounts={partnerPayableAccounts}
+        onSavePartnerPayableAccount={handleSavePartnerPayableAccount}
+        onDeletePartnerPayableAccount={handleDeletePartnerPayableAccount}
+        onAdjustPartnerPayableBalance={handleAdjustPartnerPayableBalance}
+        profitAuditTrails={profitAuditTrails}
         onLogout={handleLogout}
       />
     );
@@ -4372,6 +4837,8 @@ function MainApp() {
               onDeleteCashDesk={handleDeleteCashDesk}
               onUpdateBankAccount={handleUpdateBankAccount}
               onDeleteBankAccount={handleDeleteBankAccount}
+              partnerPayableAccounts={partnerPayableAccounts}
+              onAdjustPartnerPayableBalance={handleAdjustPartnerPayableBalance}
               config={config}
               currentUser={currentUser}
             />
@@ -4397,6 +4864,7 @@ function MainApp() {
               onSaveDocument={handleSaveCxcDocument}
               onRegisterCollection={handleRegisterCxcCollection}
               onUpdateCollection={handleUpdateCxcCollection}
+              onDeleteCollection={handleDeleteCxcCollection}
               onIssueCreditDebitNote={handleIssueCxcCreditDebitNote}
               onSaveClient={handleSaveClient}
               onDeleteClient={handleDeleteClient}
@@ -4436,6 +4904,9 @@ function MainApp() {
               accountsPayable={profitAccountsPayable}
               profitAccountsPayable={profitAccountsPayable}
               supplierPayments={profitSupplierPayments}
+              cashDesks={profitCashDesks}
+              bankAccounts={profitBankAccounts}
+              onDeleteCashMovement={handleDeleteCashMovement}
               config={config}
               currentUser={currentUser}
               onNavigate={setActiveTab}
@@ -4477,6 +4948,7 @@ function MainApp() {
               config={config}
               onSyncProfit={handleSyncProfit}
               currentUser={currentUser}
+              onNavigate={setActiveTab}
             />
           )}
 

@@ -32,7 +32,7 @@ import {
   Warehouse
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, resolveDocumentWarehouseTarget, validateWarehouseStockForDocument } from '../services/formatService';
-import { calculateFiscalTaxes, resolveConfigIgtfOptions, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
+import { calculateFiscalTaxes, validateRif, validateCedula, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, generateFiscalControlNumber, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts } from '../services/fiscalService';
 import { resolveUnitPrice, getProductWholesalePrice, isWholesaleClient, lineSubtotal, PRICE_CHANNEL } from '../services/pricingService';
 import {
   resolveCreditDaysFromTerm,
@@ -691,7 +691,9 @@ export default function SalesPOSView({
     tasaBcv: effectiveTaxRate,
     porcentajeRetencionIva: resolvedPorcentajeRetIva,
     porcentajeRetencionIslr: 0,
-    ...resolveConfigIgtfOptions(safeConfig)
+    // La factura no se cobra al momento de emitirse (pasa a CxC), por lo que no aplica IGTF en emisión
+    esSujetoPasivoEspecial: false,
+    porcentajeIgtf: 0
   });
 
   const subtotalUsd = fiscalTaxes.subtotalNetoUsd;
@@ -2294,11 +2296,11 @@ export default function SalesPOSView({
                   }
                 }}
               >
-                <option value="EFECTIVO_USD">💵 Efectivo Divisas (USD) [+3% IGTF]</option>
+                <option value="EFECTIVO_USD">💵 Efectivo Divisas (USD)</option>
                 <option value="PAGO_MOVIL">📲 Pago Móvil (Bs. Oficial)</option>
                 <option value="TRANSFERENCIA_BS">🏦 Transferencia Bancaria (Bs.)</option>
                 <option value="PUNTO_DE_VENTA">💳 Punto de Venta (Débito/Crédito)</option>
-                <option value="ZELLE">💲 Zelle / Transferencia USD [+3% IGTF]</option>
+                <option value="ZELLE">💲 Zelle / Transferencia USD</option>
               </select>
             )}
 

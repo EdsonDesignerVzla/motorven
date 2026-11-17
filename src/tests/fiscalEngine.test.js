@@ -32,7 +32,8 @@ import {
   clearCxcMovementCorrelativoForce,
   getCxcMovementReportCorrelativo,
   setCxcMovementReportCorrelativo,
-  commitCxcMovementReportCorrelativo
+  commitCxcMovementReportCorrelativo,
+  recalculateEditableInvoiceAmounts
 } from '../services/fiscalService.js';
 import { formatBs, formatNumberUs, formatNumberVe, formatUnitVe, formatUsd, round2 } from '../services/formatService.js';
 
@@ -619,6 +620,34 @@ const { cierreZ: cierreZTest } = await ejecutarCierreZ({
 assert.strictEqual(cierreZTest.id, 'Z-00000002', 'Cierre Z no debe colisionar con Z-00000001 aunque numero_z sea "0000"');
 assert.strictEqual(cierreZTest.numeroZ, 2);
 console.log('  ✓ Saneamiento SENIAT completo (Libros, Retenciones IVA/ISLR, Reporte X y Cierre Z) verificado.');
+
+// 16. Recálculo automático de Subtotal, IVA 16%, Total USD y Total Bs. al editar renglones de factura
+console.log('16. Verificando recalculateEditableInvoiceAmounts (Edición de Factura y N.E.)...');
+const recalcFac = recalculateEditableInvoiceAmounts({
+  items: [
+    { codigo: '1', cantidad: 1, precioUsd: 70.43 },
+    { codigo: '2', cantidad: 2, precioUsd: 70.43 },
+    { codigo: '3', cantidad: 1, precioUsd: 70.43 }
+  ],
+  tipoDoc: 'FACTURA',
+  tasaDolar: 915.74
+});
+assert.strictEqual(recalcFac.subtotalUsd, '281.72', 'Debe sumar cantidad * precio de todos los renglones');
+assert.strictEqual(recalcFac.ivaUsd, '45.08', 'Debe recalcular IVA 16% automáticamente en FACTURA');
+assert.strictEqual(recalcFac.totalUsd, '326.80', 'Debe recalcular Total USD automáticamente');
+assert.strictEqual(recalcFac.totalBs, '299263.83', 'Debe recalcular Total Bs. automáticamente');
+assert.strictEqual(recalcFac.items[1].subtotalUsd, 140.86, 'Cada renglón debe actualizar su subtotalUsd');
+
+const recalcNe = recalculateEditableInvoiceAmounts({
+  items: [{ codigo: '1', cantidad: 2, precioUsd: 50 }],
+  tipoDoc: 'NOTA_ENTREGA',
+  tasaDolar: 900
+});
+assert.strictEqual(recalcNe.subtotalUsd, '100.00');
+assert.strictEqual(recalcNe.ivaUsd, '0.00', 'Nota de Entrega debe quedar exenta de IVA');
+assert.strictEqual(recalcNe.totalUsd, '100.00');
+assert.strictEqual(recalcNe.totalBs, '90000.00');
+console.log('  ✓ Recálculo automático de edición de facturas y N.E. verificado.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS PRUEBAS UNITARIAS FISCALES PASARON EXITOSAMENTE (100% OK) ---');

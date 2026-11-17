@@ -16,7 +16,8 @@ import {
   Building2,
   ChevronRight,
   TrendingUp,
-  Receipt
+  Receipt,
+  Scale
 } from 'lucide-react';
 
 import { isMasterOrGerencia } from '../../services/authService';
@@ -34,29 +35,31 @@ export default function MobileMenuView({
 
   const menuSections = [
     {
-      title: 'Operaciones Comerciales',
+      title: 'Cuentas Reales • Balance General (Grupos 1–3)',
       items: [
-        { id: 'ventas', label: 'Ventas & POS Mostrador', icon: ShoppingCart, color: '#10b981' },
-        { id: 'pedidos', label: 'Flujo Comercial & Pedidos', icon: Truck, color: '#38bdf8' },
-        { id: 'vendedores', label: 'Fuerza de Ventas', icon: Users, color: '#a855f7' },
-        { id: 'rentabilidad', label: 'Rentabilidad & BI', icon: TrendingUp, color: '#f59e0b' }
+        { id: 'flujo_caja', label: 'Caja Chica & Bancos (1.01 Activo)', icon: Building2, color: '#10b981' },
+        { id: 'cxc', label: 'Cuentas por Cobrar CxC (1.01.03 Activo)', icon: DollarSign, color: '#10b981' },
+        { id: 'compras', label: 'Compras & Proveedores (2.02 / 1.04)', icon: FileText, color: '#f59e0b' },
+        { id: 'cxp', label: 'Cuentas por Pagar CxP (2.02.02 Pasivo)', icon: Receipt, color: '#ef4444' },
+        { id: 'pasivos', label: 'Cuentas de Pasivo (2.01-06 Pasivo)', icon: Scale, color: '#d97706' },
+        { id: 'auditoria', label: 'Auditoría & Contable (3.01-02)', icon: ShieldCheck, color: '#0ea5e9' }
       ]
     },
     {
-      title: 'Finanzas & SENIAT',
+      title: 'Cuentas Nominales • Resultados (Grupos 4–6)',
       items: [
-        { id: 'cxc', label: 'Cuentas por Cobrar (CxC)', icon: DollarSign, color: '#10b981' },
-        { id: 'cxp', label: 'Cuentas por Pagar (CxP)', icon: Receipt, color: '#ef4444' },
-        { id: 'flujo_caja', label: 'Caja Chica & Bancos', icon: Building2, color: '#06b6d4' },
-        { id: 'seniat', label: 'Libros Fiscales SENIAT', icon: ShieldCheck, color: '#3b82f6' },
-        { id: 'compras', label: 'Compras & Proveedores', icon: FileText, color: '#eab308' }
+        { id: 'ventas', label: 'Ventas & POS Mostrador (4.01 Ingresos)', icon: ShoppingCart, color: '#3b82f6' },
+        { id: 'rentabilidad', label: 'Rentabilidad & BI (5.01 Costos & Kardex)', icon: TrendingUp, color: '#8b5cf6' },
+        { id: 'vendedores', label: 'Fuerza de Ventas (6.01 Comisiones)', icon: Users, color: '#ec4899' }
       ]
     },
     {
-      title: 'Sistema & Configuración',
+      title: 'Módulos Estructurales • Pre-Asiento, Fiscal & Gobierno',
       items: [
-        ...(isMaster ? [{ id: 'usuarios', label: 'Usuarios & Permisología', icon: Users, color: '#ec4899' }] : []),
-        { id: 'config', label: 'Configuración General', icon: Settings, color: '#94a3b8' }
+        { id: 'pedidos', label: 'Flujo Comercial & Pedidos (Pre-Asiento)', icon: Truck, color: '#06b6d4' },
+        { id: 'seniat', label: 'Libros Fiscales SENIAT (1.05 vs 2.03)', icon: ShieldCheck, color: '#eab308' },
+        ...(isMaster ? [{ id: 'usuarios', label: 'Usuarios & Permisología (Control RBAC)', icon: Users, color: '#94a3b8' }] : []),
+        { id: 'config', label: 'Configuración General (Parámetros BCV)', icon: Settings, color: '#94a3b8' }
       ]
     }
   ];

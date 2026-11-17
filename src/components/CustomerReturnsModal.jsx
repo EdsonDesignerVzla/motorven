@@ -22,7 +22,7 @@ import {
   Info
 } from 'lucide-react';
 import { formatBs, formatNumberUs, round2 } from '../services/formatService';
-import { generateSalesPOSPDF, generateCreditDebitNotePDF } from '../services/pdfReportService';
+import { generateSalesPOSPDF, outputCreditDebitNoteDocument } from '../services/pdfReportService';
 import { Plus } from 'lucide-react';
 
 export default function CustomerReturnsModal({
@@ -67,10 +67,13 @@ export default function CustomerReturnsModal({
     const totNeto = Number(ret?.totNeto || items.reduce((s, x) => s + x.totalUsd, 0) || 0);
     const subtotal = Number(ret?.totBruto || totNeto);
     const iva = Number(ret?.iva || 0);
+    const factOrigen = ret?.factNum || ret?.renglones?.[0]?.fact_origen || 'S/N';
+    const isRetFiscal = ret?.tipoDoc !== 'NOTA_ENTREGA' && !/^NE-/i.test(String(factOrigen || ''));
     return {
       tipoDoc: 'NOTA_CREDITO',
+      isFiscal: isRetFiscal,
       numeroDoc: ret?.ncNum ? `NC-${ret.ncNum}` : `NC-${String(ret?.factNum || '000000').replace(/^NC-/i, '')}`,
-      documentoAfectado: ret?.factNum || ret?.renglones?.[0]?.fact_origen || 'S/N',
+      documentoAfectado: factOrigen,
       fecha: ret?.fecEmis || new Date().toISOString(),
       clienteNombre: ret?.cliDes || ret?.coCli || 'Cliente',
       clienteRif: ret?.rif || ret?.coCli || 'N/A',
@@ -287,7 +290,7 @@ export default function CustomerReturnsModal({
                 });
                 setSelectedReturn(saved);
                 setShowCreateForm(false);
-                generateCreditDebitNotePDF({ docData: buildNcDocForReturn(saved), config, currentUser });
+                outputCreditDebitNoteDocument({ docData: buildNcDocForReturn(saved), config, currentUser, clients });
               } finally {
                 setSavingReturn(false);
               }
@@ -597,7 +600,7 @@ export default function CustomerReturnsModal({
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  generateCreditDebitNotePDF({ docData: buildNcDocForReturn(ret), config, currentUser });
+                                  outputCreditDebitNoteDocument({ docData: buildNcDocForReturn(ret), config, currentUser, clients });
                                 }}
                                 className="btn btn-sm btn-secondary"
                                 style={{ padding: '3px 7px', fontSize: '0.7rem', color: '#c084fc' }}

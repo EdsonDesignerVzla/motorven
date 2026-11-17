@@ -752,6 +752,166 @@ function releaseServerCorrelativeReservation(row) {
   }
 }
 
+const APPLIED_STOCK_DELTA_KEYS = new Map();
+const MAX_APPLIED_DELTA_KEYS = 1000;
+
+function resolveServerWarehouseStocks(p) {
+  const rawTotal = Math.max(0, Number(p?.stock ?? 0) || 0);
+  const camel01 = p?.stockAlmacen01;
+  const snake01 = p?.stock_almacen_01;
+  const camel02 = p?.stockAlmacen02;
+  const snake02 = p?.stock_almacen_02;
+  const hasC1 = camel01 !== undefined && camel01 !== null && !Number.isNaN(Number(camel01));
+  const hasS1 = snake01 !== undefined && snake01 !== null && !Number.isNaN(Number(snake01));
+  const hasC2 = camel02 !== undefined && camel02 !== null && !Number.isNaN(Number(camel02));
+  const hasS2 = snake02 !== undefined && snake02 !== null && !Number.isNaN(Number(snake02));
+  let raw01 = camel01 ?? snake01;
+  let raw02 = camel02 ?? snake02;
+  if (hasC1 && hasS1 && hasC2 && hasS2) {
+    if (Number(snake01) + Number(snake02) === rawTotal && Number(camel01) + Number(camel02) !== rawTotal) {
+      raw01 = snake01;
+      raw02 = snake02;
+    }
+  }
+  const s01 = Math.max(0, Number(raw01 ?? 0) || 0);
+  const s02 = Math.max(0, Number(raw02 ?? 0) || 0);
+  return { stock01: s01, stock02: s02, total: s01 + s02 };
+}
+
+function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idempotencyKey = '' } = {}) {
+  const cleanKey = String(idempotencyKey || '').trim();
+  if (cleanKey && APPLIED_STOCK_DELTA_KEYS.has(cleanKey)) {
+    return { ok: true, deduplicated: true, updatedProducts: APPLIED_STOCK_DELTA_KEYS.get(cleanKey) };
+  }
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return { ok: true, updatedProducts: [] };
+  }
+  if (!Array.isArray(database.products)) database.products = [];
+  if (!Array.isArray(database.profit_stock_by_warehouse)) database.profit_stock_by_warehouse = [];
+
+  const grouped = new Map();
+  for (const line of lines) {
+    const code = String(line?.codigo || line?.co_art || line?.articuloId || line?.id || '').trim();
+    const delta01 = Number(line?.delta01 || 0);
+    const delta02 = Number(line?.delta02 || 0);
+    if (!code || (delta01 === 0 && delta02 === 0)) continue;
+    const prodIdx = database.products.findIndex(
+      (p) => p && (String(p.id || '').trim() === code || String(p.codigo || '').trim() === code)
+    );
+    if (prodIdx < 0) {
+      if (validateStrict) {
+        const err = new Error(`Producto/SKU "${code}" no encontrado en el inventario.`);
+        err.statusCode = 404;
+        throw err;
+      }
+      continue;
+    }
+    const prev = grouped.get(prodIdx) || { prodIdx, delta01: 0, delta02: 0 };
+    prev.delta01 = Number((prev.delta01 + delta01).toFixed(4));
+    prev.delta02 = Number((prev.delta02 + delta02).toFixed(4));
+    grouped.set(prodIdx, prev);
+  }
+
+  const staged = [];
+  for (const { prodIdx, delta01, delta02 } of grouped.values()) {
+    const prod = database.products[prodIdx];
+    const stocks = resolveServerWarehouseStocks(prod);
+    const prodCode = String(prod.codigo || prod.id || '').trim();
+    const rawNext01 = Number((stocks.stock01 + delta01).toFixed(2));
+    const rawNext02 = Number((stocks.stock02 + delta02).toFixed(2));
+
+    if (validateStrict) {
+      if (delta01 < 0 && rawNext01 < -0.0001) {
+        const err = new Error(`Stock insuficiente para ${prodCode} en Almacén 01 (Fiscal): disponible ${stocks.stock01}, solicitado ${Math.abs(delta01)}.`);
+        err.statusCode = 409;
+        err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+        throw err;
+      }
+      if (delta02 < 0 && rawNext02 < -0.0001) {
+        const err = new Error(`Stock insuficiente para ${prodCode} en Almacén 02 (N.E.): disponible ${stocks.stock02}, solicitado ${Math.abs(delta02)}.`);
+        err.statusCode = 409;
+        err.code = 'INSUFFICIENT_WAREHOUSE_STOCK';
+        throw err;
+      }
+    }
+
+    const next01 = Math.max(0, rawNext01);
+    const next02 = Math.max(0, rawNext02);
+    const nextTotal = Number((next01 + next02).toFixed(2));
+    staged.push({ prodIdx, prod, prodCode, next01, next02, nextTotal, delta01, delta02 });
+  }
+
+  const nowIso = new Date().toISOString();
+  const updatedProducts = [];
+
+  for (const entry of staged) {
+    const { prodIdx, prod, prodCode, next01, next02, nextTotal, delta01, delta02 } = entry;
+    const patch = {
+      stock: nextTotal,
+      stockAlmacen01: next01,
+      stock_almacen_01: next01,
+      stockAlmacen02: next02,
+      stock_almacen_02: next02,
+      updated_at: nowIso
+    };
+    database.products[prodIdx] = { ...prod, ...patch };
+    const savedProd = database.products[prodIdx];
+
+    updatedProducts.push({
+      id: savedProd.id,
+      codigo: prodCode,
+      ...patch
+    });
+
+    emitRealtimeChange({
+      table: 'products',
+      eventType: 'UPDATE',
+      key: savedProd.id || prodCode,
+      item: savedProd
+    });
+
+    const syncWhRow = (whCode, nextVal) => {
+      const whId = `${savedProd.id}_${whCode}`;
+      const whIdx = database.profit_stock_by_warehouse.findIndex(
+        (w) => w && (String(w.id || '') === whId || (String(w.co_art || w.codigo || '') === String(savedProd.id) && String(w.co_alma || '') === whCode))
+      );
+      if (whIdx >= 0) {
+        database.profit_stock_by_warehouse[whIdx] = {
+          ...database.profit_stock_by_warehouse[whIdx],
+          stock_act: nextVal,
+          stock_disp: nextVal,
+          updated_at: nowIso
+        };
+      } else {
+        database.profit_stock_by_warehouse.push({
+          id: whId,
+          co_art: savedProd.id,
+          codigo: prodCode,
+          co_alma: whCode,
+          stock_act: nextVal,
+          stock_disp: nextVal,
+          updated_at: nowIso
+        });
+      }
+    };
+
+    if (delta01 !== 0) syncWhRow('01', next01);
+    if (delta02 !== 0) syncWhRow('02', next02);
+  }
+
+  if (updatedProducts.length > 0) {
+    saveDatabase();
+  }
+  if (cleanKey) {
+    if (APPLIED_STOCK_DELTA_KEYS.size >= MAX_APPLIED_DELTA_KEYS) {
+      const firstKey = APPLIED_STOCK_DELTA_KEYS.keys().next().value;
+      if (firstKey) APPLIED_STOCK_DELTA_KEYS.delete(firstKey);
+    }
+    APPLIED_STOCK_DELTA_KEYS.set(cleanKey, updatedProducts);
+  }
+  return { ok: true, updatedProducts };
+}
+
 
 // Helpers para evaluar filtros de PostgREST
 function matchFilter(value, operator, target) {
@@ -1531,6 +1691,26 @@ const server = http.createServer(async (req, res) => {
       sendJson(req, res, 200, reservation);
     } catch (err) {
       sendJson(req, res, 400, { error: err.message });
+    }
+    return;
+  }
+
+  // 2.7. Ajuste atómico de inventario por delta (evita condiciones de carrera y sobrescrituras de caché vieja)
+  if (
+    req.method === 'POST' &&
+    (pathname === '/inventory/apply-delta' || pathname === '/rest/v1/rpc/apply_stock_delta')
+  ) {
+    try {
+      const body = await parseBody(req);
+      const result = applyServerAtomicStockDelta({
+        lines: body?.lines || [],
+        validateStrict: Boolean(body?.validateStrict),
+        idempotencyKey: body?.idempotencyKey || body?.idempotency_key || ''
+      });
+      sendJson(req, res, 200, result);
+    } catch (err) {
+      const status = Number(err?.statusCode) || 400;
+      sendJson(req, res, status, { error: err.message, code: err?.code || 'STOCK_DELTA_ERROR' });
     }
     return;
   }

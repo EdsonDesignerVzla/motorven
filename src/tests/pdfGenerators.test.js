@@ -65,6 +65,8 @@ import {
   buildQRCodeMatrix,
   generateQuotationPDF,
   generateCreditDebitNotePDF,
+  outputCreditDebitNoteDocument,
+  isCreditDebitDocumentFiscal,
   generateWarehouseTransferOrAdjustmentPDF,
   generatePurchaseRequisitionPDF,
   generatePurchaseOrderPDF,
@@ -708,6 +710,35 @@ async function runPdfTests() {
     const resolved = resolveDeliveryNoteLineItems(jsonItemsDoc, null, mockConfig.tasaDolar);
     if (resolved.length !== 1 || !resolved[0].descripcion.toLowerCase().includes('15w40') || !resolved[0].codigo) {
       throw new Error(`No resolvió JSON string / código sin ceros iniciales 1208 -> 001208: ${JSON.stringify(resolved)}`);
+    }
+
+    // Regresión: Factura Fiscal con _customCreated=true NO debe escalar los precios unitarios al total con IVA/IGTF
+    const fiscalCustomInvoice = {
+      numeroDoc: '000030',
+      tipoDoc: 'FACTURA',
+      _customCreated: true,
+      tasaDolar: 915.74,
+      totBrutoUsd: 715.48,
+      subtotalUsd: 715.48,
+      ivaUsd: 114.48,
+      igtfUsd: 24.90,
+      totNetoUsd: 854.86,
+      totalUsd: 854.86,
+      items: [
+        { codigo: '100102', descripcion: 'Lubricante Oilstone SAE 20W50 API SL (Caja)', cantidad: 4, precioUsd: 70.43, subtotalUsd: 281.72 },
+        { codigo: '100103', descripcion: 'Lubricante Oilstone SAE 25W-60 API SL (Caja)', cantidad: 3, precioUsd: 70.43, subtotalUsd: 211.29 },
+        { codigo: '100104', descripcion: 'Lubricante Oilstone SAE 15W40 API SL (Caja)', cantidad: 1, precioUsd: 70.43, subtotalUsd: 70.43 },
+        { codigo: '100105', descripcion: 'Lubricante Oilstone Trans-Automatica Dexron II (LT)', cantidad: 1, precioUsd: 70.43, subtotalUsd: 70.43 },
+        { codigo: '100106', descripcion: 'Lubricante Oilstone SAE 15W40 SEMI SINTETICO (Caja)', cantidad: 1, precioUsd: 81.61, subtotalUsd: 81.61 }
+      ]
+    };
+    const resolvedFiscal = resolveDeliveryNoteLineItems(fiscalCustomInvoice, null, 915.74);
+    if (Math.abs(resolvedFiscal[0].precioUsd - 70.43) > 0.01 || Math.abs(resolvedFiscal[4].precioUsd - 81.61) > 0.01) {
+      throw new Error(`Factura Fiscal con _customCreated infló los precios unitarios: ${resolvedFiscal[0].precioUsd} / ${resolvedFiscal[4].precioUsd}`);
+    }
+    const resolvedFiscalSum = resolvedFiscal.reduce((acc, r) => acc + r.subtotalUsd, 0);
+    if (Math.abs(resolvedFiscalSum - 715.48) > 0.01) {
+      throw new Error(`Suma de renglones de Factura Fiscal debe ser la base (715.48), obtuvo ${resolvedFiscalSum}`);
     }
   });
 
@@ -1624,34 +1655,82 @@ async function runPdfTests() {
     }
   });
 
-  testGen('Nota de Crédito y Nota de Débito Fiscal Carta SENIAT', () => {
-    const ncDoc = generateCreditDebitNotePDF({
+  testGen('Nota de Crédito y Nota de Débito Fiscal Carta SENIAT y No Fiscal PDF', () => {
+    // 1. Forma Libre SENIAT para documentos fiscales (márgenes 4.5cm sin cabecera/pie)
+    const ncFiscalDoc = outputCreditDebitNoteDocument({
       docData: {
         tipoDoc: 'NOTA_CREDITO',
+        isFiscal: true,
         numeroDoc: 'NC-000045',
+        numeroControl: '00-001134',
         documentoAfectado: '00001012',
         clienteNombre: 'Lubricantes Valencia S.A.',
         clienteRif: 'J-30998877-1',
+        subtotalUsd: 84,
+        ivaUsd: 13.44,
+        totalUsd: 97.44,
         motivo: 'Devolución de 2 cajas selladas',
         items: [{ codigo: '000704', descripcion: 'OILSTONE 20W-50', cantidad: 2, precioUsd: 42 }]
       },
       config: mockConfig,
-      currentUser: mockUser
+      currentUser: mockUser,
+      autoPrint: false
     });
-    const ndDoc = generateCreditDebitNotePDF({
+    const ndFiscalDoc = outputCreditDebitNoteDocument({
       docData: {
         tipoDoc: 'NOTA_DEBITO',
+        isFiscal: true,
         numeroDoc: 'ND-000018',
+        numeroControl: '00-001135',
         documentoAfectado: '00001012',
         clienteNombre: 'Lubricantes Valencia S.A.',
-        motivo: 'Recargo por flete especial acordado',
-        totalUsd: 58
+        subtotalUsd: 50,
+        ivaUsd: 8,
+        totalUsd: 58,
+        motivo: 'Recargo por flete especial acordado'
+      },
+      config: mockConfig,
+      currentUser: mockUser,
+      autoPrint: false
+    });
+    const ncNoFiscalDoc = outputCreditDebitNoteDocument({
+      docData: {
+        tipoDoc: 'NOTA_CREDITO',
+        isFiscal: false,
+        numeroDoc: 'NC-000046',
+        documentoAfectado: 'NE-000100',
+        clienteNombre: 'Lubricantes Valencia S.A.',
+        subtotalUsd: 40,
+        ivaUsd: 0,
+        totalUsd: 40,
+        motivo: 'Rebaja interna no fiscal'
       },
       config: mockConfig,
       currentUser: mockUser
     });
-    if (ncDoc.internal.getNumberOfPages() < 1 || ndDoc.internal.getNumberOfPages() < 1) {
-      throw new Error('NC/ND no generaron páginas válidas');
+    if (
+      isCreditDebitDocumentFiscal({ tipoDoc: 'NOTA_DEBITO', isFiscal: true }) !== true ||
+      isCreditDebitDocumentFiscal({ tipoDoc: 'NOTA_DEBITO', isFiscal: false }) !== false ||
+      ncFiscalDoc.internal.getNumberOfPages() < 1 ||
+      ndFiscalDoc.internal.getNumberOfPages() < 1 ||
+      ncNoFiscalDoc.internal.getNumberOfPages() < 1
+    ) {
+      throw new Error('NC/ND Fiscal Forma Libre o No Fiscal PDF no generaron salidas válidas');
+    }
+    const pdfLegacy = generateCreditDebitNotePDF({
+      docData: {
+        tipoDoc: 'NOTA_CREDITO',
+        isFiscal: false,
+        numeroDoc: 'NC-000047',
+        documentoAfectado: '00001012',
+        clienteNombre: 'Lubricantes Valencia S.A.',
+        totalUsd: 25
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    if (pdfLegacy.internal.getNumberOfPages() < 1) {
+      throw new Error('generateCreditDebitNotePDF no generó página válida');
     }
   });
 
@@ -1826,10 +1905,10 @@ async function runPdfTests() {
   const v5GeneralLedger = buildGeneralLedger(v5AccountingEntries);
   const v5Statements = buildFinancialStatements(v5TrialBalance);
 
-  testGen('Contabilidad Automática: Plan 156 cuentas, Partida Doble & BA VEN-NIF 2', () => {
+  testGen('Contabilidad Automática: Plan 165 cuentas, Partida Doble & BA VEN-NIF 2', () => {
     const imputables = CHART_OF_ACCOUNTS.filter(c => c.imputable).length;
-    if (CHART_OF_ACCOUNTS.length !== 156 || imputables !== 99) {
-      throw new Error(`Se esperaban 156 cuentas / 99 imputables, obtenido ${CHART_OF_ACCOUNTS.length}/${imputables}`);
+    if (CHART_OF_ACCOUNTS.length !== 165 || imputables !== 106) {
+      throw new Error(`Se esperaban 165 cuentas / 106 imputables, obtenido ${CHART_OF_ACCOUNTS.length}/${imputables}`);
     }
     if (!v5TrialBalance.isBalanced) {
       throw new Error(`Balance de comprobación descuadrado: Debe=${v5TrialBalance.totalSumasDebeUsd} Haber=${v5TrialBalance.totalSumasHaberUsd}`);

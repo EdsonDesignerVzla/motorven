@@ -19,7 +19,7 @@ import {
 import { formatSaleInvoiceTicketText } from '../services/fiscalService';
 import { parseInvoiceDateInfo, resolveCreditDaysFromTerm } from '../services/creditPolicyService';
 import { formatBs, formatUsd, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit } from '../services/formatService';
-import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, generateCreditDebitNotePDF, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, resolveDocumentSellerName, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
+import { generateSalesPOSPDF, generateWarehouseDispatchGuidePDF, generateLetterInvoiceSeniatPDF, generateDeliveryNotePDF, generateQuotationPDF, outputCreditDebitNoteDocument, buildQRCodeMatrix, resolveDeliveryNoteLineItems, resolveDocumentClientInfo, resolveDocumentSellerName, getStaticBankAccountsQRPayload } from '../services/pdfReportService';
 import motorvenLogo from '../assets/logo_motorven_limpio.png';
 
 /**
@@ -136,7 +136,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
         return;
       }
       if (isNc || isNd) {
-        generateCreditDebitNotePDF({ docData: sale, config: safeConfig, currentUser });
+        outputCreditDebitNoteDocument({ docData: sale, config: safeConfig, currentUser, clients, client, autoPrint: true });
         return;
       }
       generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, products, clients, client, autoPrint: true });
@@ -705,7 +705,7 @@ export default function SalesInvoiceModal({ sale, config = {}, currentUser = nul
                   } else if (isCot) {
                     generateQuotationPDF({ quotation: sale, config: safeConfig, currentUser });
                   } else if (isNc || isNd) {
-                    generateCreditDebitNotePDF({ docData: sale, config: safeConfig, currentUser });
+                    outputCreditDebitNoteDocument({ docData: sale, config: safeConfig, currentUser, clients, client, autoPrint: false });
                   } else {
                     generateLetterInvoiceSeniatPDF({ sale, config: safeConfig, currentUser, products, clients, client });
                   }

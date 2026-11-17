@@ -7,7 +7,9 @@ import {
   dedupePayablesList,
   dedupeSupplierPaymentsList,
   doesPayableMatchDocument,
-  doesSupplierPaymentMatchPayable
+  doesSupplierPaymentMatchPayable,
+  getNextCxpCreditDebitNoteCorrelativo,
+  buildCxpCreditDebitNoteResult
 } from '../utils/cxpUtils.js';
 import {
   CXP_CUSTOM_DOCS_KEY,
@@ -279,6 +281,74 @@ resetState();
   const dedupedPays = dedupeSupplierPaymentsList(dupPayments);
   assert.strictEqual(dedupedPays.length, 2);
   console.log('  ✓ 6. Deduplicación CxP y pagos a proveedores sin colisión verificada.');
+}
+
+// 7. Notas de Crédito y Débito CxP (Fiscal Forma Libre vs No Fiscal PDF, N° Control, USD y Bs.)
+resetState();
+{
+  const payableFact = {
+    id: 'CXP-FACT-516-J311153659',
+    tipoDoc: 'FACT',
+    nroDoc: '516',
+    coProv: 'J-31115365-9',
+    provRif: 'J-31115365-9',
+    provNombre: 'Keystone, C.A.',
+    montoNetUsd: 232,
+    abonosUsd: 0,
+    saldoUsd: 232,
+    tasa: 915.74,
+    historialPagos: []
+  };
+
+  assert.strictEqual(
+    getNextCxpCreditDebitNoteCorrelativo('NOTA_CREDITO', [{ nroDoc: 'NC-000004' }]),
+    'NC-000005'
+  );
+
+  // Nota de Crédito Fiscal con N° Control manual y montos en USD y Bs.
+  const ncFiscal = buildCxpCreditDebitNoteResult({
+    noteType: 'NOTA_CREDITO',
+    affectedDoc: payableFact,
+    noteNum: 'NC-000005',
+    numeroControl: '00-001134',
+    isFiscal: true,
+    fechaEmision: '2026-11-17',
+    subtotalUsd: 100,
+    aplicaIva: true,
+    tasa: 915.74,
+    motivo: 'Descuento por volumen'
+  });
+  assert.strictEqual(ncFiscal.isFiscal, true);
+  assert.strictEqual(ncFiscal.updatedAffectedDoc.abonosUsd, 116);
+  assert.strictEqual(ncFiscal.updatedAffectedDoc.saldoUsd, 116);
+  assert.strictEqual(ncFiscal.updatedAffectedDoc.historialPagos[0].numeroControl, '00-001134');
+  assert.strictEqual(ncFiscal.updatedAffectedDoc.historialPagos[0].montoBs, 106225.84);
+  assert.strictEqual(ncFiscal.notePdfData.isPayableNote, true);
+  assert.strictEqual(ncFiscal.notePdfData.isFiscal, true);
+  assert.strictEqual(ncFiscal.notePdfData.numeroControl, '00-001134');
+  assert.strictEqual(ncFiscal.notePdfData.totalBs, 106225.84);
+
+  // Nota de Débito No Fiscal sin IVA y sin N° Control obligatorio
+  const ndNoFiscal = buildCxpCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: payableFact,
+    noteNum: 'ND-000002',
+    isFiscal: false,
+    fechaEmision: '2026-11-17',
+    subtotalUsd: 50,
+    aplicaIva: true,
+    tasa: 915.74,
+    motivo: 'Diferencial operativo no fiscal'
+  });
+  assert.strictEqual(ndNoFiscal.isFiscal, false);
+  assert.strictEqual(ndNoFiscal.createdDebitDoc.tipoDoc, 'N/DB');
+  assert.strictEqual(ndNoFiscal.createdDebitDoc.isFiscal, false);
+  assert.strictEqual(ndNoFiscal.createdDebitDoc.ivaUsd, 0);
+  assert.strictEqual(ndNoFiscal.createdDebitDoc.montoNetUsd, 50);
+  assert.strictEqual(ndNoFiscal.createdDebitDoc.montoNetBs, 45787);
+  assert.strictEqual(ndNoFiscal.notePdfData.isFiscal, false);
+  assert.strictEqual(ndNoFiscal.notePdfData.ivaUsd, 0);
+  console.log('  ✓ 7. Emisión de NC/ND CxP (Fiscal vs No Fiscal, N° Control, USD y Bs.) verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXP Y SINCRONIZACIÓN PASARON AL 100% ---');

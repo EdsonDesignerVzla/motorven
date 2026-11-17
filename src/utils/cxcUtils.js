@@ -1072,6 +1072,16 @@ export function getNextCreditDebitNoteCorrelativo(noteType = 'NOTA_CREDITO', sal
 }
 
 /**
+ * Sugiere un N° de Control SENIAT (00-XXXXXX) a partir del correlativo de Nota de Crédito / Débito.
+ * Para Notas de Entrega (no fiscales) retorna cadena vacía por defecto salvo que el usuario ingrese uno.
+ */
+export function suggestCreditDebitControlNumber(noteNum, isNotaEntregaAffected = false) {
+  if (isNotaEntregaAffected) return '';
+  const digitsPart = String(noteNum || '').replace(/\D/g, '').slice(-6).padStart(6, '0');
+  return `00-${digitsPart}`;
+}
+
+/**
  * Construye los objetos de persistencia, ajuste de saldo CxC, registro fiscal SENIAT y datos PDF
  * para emitir una Nota de Crédito (N/CR) o Nota de Débito (N/DB) directamente sobre un documento CxC.
  */
@@ -1079,6 +1089,8 @@ export function buildCxcCreditDebitNoteResult({
   noteType = 'NOTA_CREDITO',
   affectedDoc,
   noteNum,
+  numeroControl = '',
+  isFiscal = undefined,
   fechaEmision,
   subtotalUsd = 0,
   aplicaIva = true,
@@ -1100,7 +1112,8 @@ export function buildCxcCreditDebitNoteResult({
 
   const affectedType = inferCxcDocType(affectedDoc);
   const isNotaEntregaAffected = affectedType === 'NOTA_ENTREGA';
-  const effectiveAplicaIva = !isNotaEntregaAffected && Boolean(aplicaIva);
+  const effectiveIsFiscal = isFiscal === undefined ? !isNotaEntregaAffected : Boolean(isFiscal);
+  const effectiveAplicaIva = effectiveIsFiscal && Boolean(aplicaIva);
 
   const cleanSub = round2(Math.max(0, Number(subtotalUsd || 0)));
   const cleanIva = effectiveAplicaIva ? round2(cleanSub * 0.16) : 0;
@@ -1110,6 +1123,8 @@ export function buildCxcCreditDebitNoteResult({
   }
 
   const cleanTasa = Number(tasa || affectedDoc.tasa || 0) > 1 ? Number(tasa || affectedDoc.tasa) : 827.73;
+  const subtotalBs = round2(cleanSub * cleanTasa);
+  const ivaBs = round2(cleanIva * cleanTasa);
   const totalBs = round2(cleanTotal * cleanTasa);
   const cleanFecha = String(fechaEmision || new Date().toISOString().split('T')[0]).trim();
   const cleanMotivo = String(motivo || '').trim() || (
@@ -1126,8 +1141,9 @@ export function buildCxcCreditDebitNoteResult({
     throw new Error(`La Nota de Crédito ($${cleanTotal.toFixed(2)}) no puede superar el saldo pendiente del documento ($${currentRestanteUsd.toFixed(2)}).`);
   }
 
-  const digitsPart = cleanNoteNum.replace(/\D/g, '').slice(-6).padStart(6, '0');
-  const numeroControl = isNotaEntregaAffected ? '' : `00-${digitsPart}`;
+  const resolvedControl = effectiveIsFiscal
+    ? (String(numeroControl || '').trim() || suggestCreditDebitControlNumber(cleanNoteNum, false))
+    : String(numeroControl || '').trim();
   const vendedorId = affectedDoc.vendedorId || 'OF';
   const vendedorNombre = affectedDoc.vendedorNombre || 'Oficina';
   const clienteNombre = affectedDoc.cliente || affectedDoc.clienteNombre || 'Cliente General';
@@ -1144,6 +1160,8 @@ export function buildCxcCreditDebitNoteResult({
       id: `nc-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
       correlativo: cleanNoteNum,
       cobNum: cleanNoteNum,
+      numeroControl: resolvedControl,
+      isFiscal: effectiveIsFiscal,
       tipo: 'NOTA_CREDITO',
       tipoDoc: 'NOTA_CREDITO',
       factNum: String(affectedDoc.factNum),
@@ -1154,7 +1172,9 @@ export function buildCxcCreditDebitNoteResult({
       tipoTasa: 'BCV',
       monedaPago: 'BS',
       subtotalUsd: cleanSub,
+      subtotalBs,
       ivaUsd: cleanIva,
+      ivaBs,
       montoUsd: cleanTotal,
       montoBs: totalBs,
       formaPago: 'NOTA_CREDITO',
@@ -1193,16 +1213,17 @@ export function buildCxcCreditDebitNoteResult({
     clientDebtDeltaUsd = -appliedAmount;
   } else {
     // Nota de Débito: genera un nuevo documento por cobrar vinculado al documento afectado
-    const ndDocNum = isNotaEntregaAffected && !cleanNoteNum.startsWith('NE-')
+    const ndDocNum = !effectiveIsFiscal && !cleanNoteNum.startsWith('NE-')
       ? `NE-${cleanNoteNum}`
       : cleanNoteNum;
     createdDebitDoc = {
       id: ndDocNum,
       factNum: ndDocNum,
-      tipoDoc: isNotaEntregaAffected ? 'NOTA_ENTREGA' : 'FACTURA',
+      tipoDoc: effectiveIsFiscal ? 'FACTURA' : 'NOTA_ENTREGA',
       fiscalDocType: 'NOTA_DEBITO',
+      isFiscal: effectiveIsFiscal,
       documentoAfectado: String(affectedDoc.factNum),
-      numeroControl,
+      numeroControl: resolvedControl,
       vendedorId,
       vendedorNombre,
       clienteId,
@@ -1215,10 +1236,14 @@ export function buildCxcCreditDebitNoteResult({
       condicionPago: 'CREDITO',
       isExento: !effectiveAplicaIva,
       totBrutoUsd: cleanSub,
+      totBrutoBs: subtotalBs,
       ivaUsd: cleanIva,
+      ivaBs,
       totNetoUsd: cleanTotal,
+      totNetoBs: totalBs,
       abonosUsd: 0,
       saldoUsd: cleanTotal,
+      saldoBs: totalBs,
       tasa: cleanTasa,
       observaciones: `Nota de Débito #${cleanNoteNum} (Afecta #${affectedDoc.factNum}) • ${cleanMotivo}`,
       historialCobros: [],
@@ -1227,12 +1252,12 @@ export function buildCxcCreditDebitNoteResult({
     clientDebtDeltaUsd = cleanTotal;
   }
 
-  // Registro fiscal en Libro de Ventas SENIAT solo si el documento afectado es Fiscal (Factura)
-  const fiscalSaleRecord = !isNotaEntregaAffected
+  // Registro fiscal en Libro de Ventas SENIAT solo cuando el documento es Fiscal
+  const fiscalSaleRecord = effectiveIsFiscal
     ? {
         id: `${normalizedNoteType}-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
         numeroDoc: cleanNoteNum,
-        numeroControl,
+        numeroControl: resolvedControl,
         tipoDoc: normalizedNoteType,
         documentoAfectado: String(affectedDoc.factNum),
         fecha: cleanFecha,
@@ -1282,23 +1307,34 @@ export function buildCxcCreditDebitNoteResult({
 
   const notePdfData = {
     tipoDoc: normalizedNoteType,
+    isFiscal: effectiveIsFiscal,
+    isExento: !effectiveAplicaIva,
     numeroDoc: cleanNoteNum,
-    numeroControl: numeroControl || 'N/A (Control Interno)',
+    numeroControl: effectiveIsFiscal ? (resolvedControl || '00-000000') : (resolvedControl || 'NO FISCAL'),
     documentoAfectado: String(affectedDoc.factNum),
     fechaEmision: cleanFecha,
     fecha: cleanFecha,
     clienteNombre,
     clienteRif,
     clienteDireccion: clienteDireccion || 'Venezuela',
+    vendedor: vendedorNombre,
+    vendedorNombre,
+    vendedorId,
     tasaDolar: cleanTasa,
     tasa: cleanTasa,
     subtotalUsd: cleanSub,
+    subtotalBs,
+    baseGeneralUsd: effectiveAplicaIva ? cleanSub : 0,
+    ivaGeneralUsd: cleanIva,
+    baseExentaUsd: effectiveAplicaIva ? 0 : cleanSub,
     ivaUsd: cleanIva,
+    ivaBs,
     totalUsd: cleanTotal,
+    totalBs,
     motivo: cleanMotivo,
     descrip: cleanMotivo,
     observaciones: cleanMotivo,
-    condicionPago: isNotaEntregaAffected ? 'AJUSTE N/E (SIN IVA)' : 'AJUSTE FISCAL CxC',
+    condicionPago: effectiveIsFiscal ? 'AJUSTE FISCAL SENIAT' : 'AJUSTE NO FISCAL CxC',
     items: [
       {
         codigo: String(affectedDoc.factNum),
@@ -1313,6 +1349,7 @@ export function buildCxcCreditDebitNoteResult({
 
   return {
     noteType: normalizedNoteType,
+    isFiscal: effectiveIsFiscal,
     noteNum: cleanNoteNum,
     isNotaEntregaAffected,
     updatedAffectedDoc,

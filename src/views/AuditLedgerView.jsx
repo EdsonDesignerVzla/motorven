@@ -29,6 +29,7 @@ import {
 import { formatUsd, formatBs } from '../services/formatService';
 import {
   CHART_OF_ACCOUNTS,
+  STRUCTURAL_MODULES_VEN_NIF,
   generateAccountingEntries,
   buildTrialBalance,
   buildGeneralLedger,
@@ -56,9 +57,10 @@ export default function AuditLedgerView({
   usersList = [],
   config,
   onSyncProfit,
-  currentUser
+  currentUser,
+  onNavigate
 }) {
-  const [activeSubTab, setActiveSubTab] = useState('diario'); // 'diario' | 'mayor' | 'balance' | 'estados' | 'plan' | 'audit' | 'export'
+  const [activeSubTab, setActiveSubTab] = useState('diario'); // 'diario' | 'mayor' | 'balance' | 'estados' | 'plan' | 'estructura' | 'audit' | 'export'
   const [searchFilter, setSearchFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [selectedEntry, setSelectedEntry] = useState(null);
@@ -69,6 +71,10 @@ export default function AuditLedgerView({
   const [planGrupoFilter, setPlanGrupoFilter] = useState('ALL');
   const [planOnlyImputable, setPlanOnlyImputable] = useState(false);
   const [selectedMayorCode, setSelectedMayorCode] = useState('');
+
+  // Matriz Estructural VEN-NIF Filter States
+  const [estructuraBlockFilter, setEstructuraBlockFilter] = useState('ALL');
+  const [estructuraSearch, setEstructuraSearch] = useState('');
 
   // Forensic Audit Filter States
   const [auditSearch, setAuditSearch] = useState('');
@@ -300,6 +306,24 @@ export default function AuditLedgerView({
     });
   }, [planGrupoFilter, planOnlyImputable, planSearch]);
 
+  const filteredStructuralModules = useMemo(() => {
+    return (STRUCTURAL_MODULES_VEN_NIF || []).filter((m) => {
+      if (estructuraBlockFilter !== 'ALL' && m.bloqueId !== estructuraBlockFilter) return false;
+      if (estructuraSearch.trim()) {
+        const q = estructuraSearch.toLowerCase();
+        return (
+          m.modulo.toLowerCase().includes(q) ||
+          m.bloqueContable.toLowerCase().includes(q) ||
+          m.subgrupo.toLowerCase().includes(q) ||
+          m.rubroVenNif.toLowerCase().includes(q) ||
+          m.codigosResumen.toLowerCase().includes(q) ||
+          m.funcionContableAdministrativa.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [estructuraBlockFilter, estructuraSearch]);
+
   const accountBalanceMap = useMemo(() => {
     const map = {};
     (trialBalance.accounts || []).forEach(a => {
@@ -384,6 +408,20 @@ export default function AuditLedgerView({
       bg.pasivo.forEach(i => rows.push(['BALANCE GENERAL', 'PASIVO', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
       bg.patrimonio.forEach(i => rows.push(['BALANCE GENERAL', 'PATRIMONIO', i.codigo, `"${i.nombre}"`, i.saldoUsd.toFixed(2), i.saldoBs.toFixed(2)]));
       rows.push(['BALANCE GENERAL', 'PATRIMONIO', er.cuentaResultadoCodigo, `"${er.cuentaResultadoNombre}"`, bg.resultadoEjercicioUsd.toFixed(2), bg.resultadoEjercicioBs.toFixed(2)]);
+    } else if (type === 'estructura') {
+      filename = `matriz_estructural_modulos_ven_nif_${new Date().toISOString().slice(0, 10)}.csv`;
+      rows.push(['Orden', 'Bloque Contable / Estructural', 'Subgrupo y Naturaleza', 'Modulo del Sistema', 'Rubro VEN-NIF y Codigos', 'Cierra al 31/12', 'Funcion Contable y Criterio Administrativo']);
+      (STRUCTURAL_MODULES_VEN_NIF || []).forEach(m => {
+        rows.push([
+          m.orden,
+          `"${m.bloqueContable}"`,
+          `"${m.subgrupo} (${m.naturaleza})"`,
+          `"${m.modulo}"`,
+          `"${m.rubroVenNif} | ${m.codigosResumen}"`,
+          `"${m.cierraAl31Dic}"`,
+          `"${m.funcionContableAdministrativa.replace(/"/g, '""')}"`
+        ]);
+      });
     }
 
     const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + rows.map(e => e.join(';')).join('\n');
@@ -564,6 +602,15 @@ export default function AuditLedgerView({
         >
           <Layers size={15} />
           <span>Plan de Cuentas ({CHART_OF_ACCOUNTS.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('estructura')}
+          className={`btn ${activeSubTab === 'estructura' ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
+        >
+          <Building2 size={15} />
+          <span>Matriz Estructural ({STRUCTURAL_MODULES_VEN_NIF.length} Módulos)</span>
         </button>
 
         <button
@@ -1740,6 +1787,298 @@ export default function AuditLedgerView({
           </div>
         </div>
       )}
+
+      {/* SUB-TAB: MATRIZ ESTRUCTURAL DE MÓDULOS (CUENTAS REALES, NOMINALES Y ESTRUCTURALES BA VEN-NIF 2) */}
+      {activeSubTab === 'estructura' && (() => {
+        const countReales = STRUCTURAL_MODULES_VEN_NIF.filter(m => m.bloqueId === 'CUENTAS_REALES').length;
+        const countNominales = STRUCTURAL_MODULES_VEN_NIF.filter(m => m.bloqueId === 'CUENTAS_NOMINALES').length;
+        const countEstructurales = STRUCTURAL_MODULES_VEN_NIF.filter(m => m.bloqueId === 'ESTRUCTURAL').length;
+        const { balanceGeneral, estadoResultados } = financialStatements;
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Banner Ejecutivo de Clasificación VEN-NIF */}
+            <div className="card" style={{ padding: '1.15rem 1.35rem', margin: 0, background: 'var(--bg-surface)', borderLeft: '4px solid #10b981' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 800, padding: '0.2rem 0.6rem', borderRadius: '4px', background: '#10b981', color: '#fff' }}>
+                      ARQUITECTURA CONTABLE-ADMINISTRATIVA
+                    </span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Marco: <strong>BA VEN-NIF 2</strong> • Catálogo: <strong>planDeCuentasMotorven.js</strong>
+                    </span>
+                  </div>
+                  <h3 style={{ margin: '0.45rem 0 0.25rem 0', fontSize: '1.18rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Tabla Estructural de los 17 Módulos: Cuentas Reales, Nominales y Estructurales
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)', maxWidth: '920px', lineHeight: 1.5 }}>
+                    Ordenamiento profesional de los módulos del sistema separando <strong>Cuentas Reales</strong> (Balance General — acumulativas, no cierran al 31/12), <strong>Cuentas Nominales</strong> (Estado de Resultados — operativas, cierran al 31/12 contra 3.02) y <strong>Módulos Estructurales</strong> (Pre-Asiento Comercial, Control Tributario SENIAT y Gobierno Corporativo).
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <button
+                    onClick={() => handleExportCsv('estructura')}
+                    className="btn btn-secondary btn-sm"
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+                  >
+                    <Download size={14} />
+                    <span>Exportar Matriz CSV</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Resumen de los 3 Bloques Estructurales */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '0.85rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-glass)' }}>
+                <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.28)' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 800, color: '#10b981', textTransform: 'uppercase' }}>
+                    1. Cuentas Reales (Balance General)
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '2px' }}>
+                    {countReales} Módulos Patrimoniales
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                    Grupos 1 (Activo: {formatUsd(balanceGeneral.totalActivoUsd)}), 2 (Pasivo: {formatUsd(balanceGeneral.totalPasivoUsd)}) y 3 (Patrimonio: {formatUsd(balanceGeneral.totalPatrimonioUsd)}). <strong>No cierran al 31/12.</strong>
+                  </div>
+                </div>
+
+                <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.28)' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase' }}>
+                    2. Cuentas Nominales (Est. Resultados)
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '2px' }}>
+                    {countNominales} Módulos de Resultados
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                    Grupos 4 (Ingresos: {formatUsd(estadoResultados.totalIngresosUsd)}), 5 (Costos) y 6 (Egresos). <strong>Sí cierran al 31/12 contra 3.02.</strong>
+                  </div>
+                </div>
+
+                <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(148, 163, 184, 0.08)', border: '1px solid rgba(148, 163, 184, 0.28)' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
+                    3. Módulos Estructurales & Gobierno
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: 'var(--text-primary)', marginTop: '2px' }}>
+                    {countEstructurales} Módulos de Soporte y Control
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                    Síntesis Directiva, Ciclo Pre-Asiento (Preventa/Pedidos), Libros SENIAT (1.05 vs 2.03), RBAC, Alertas y Tasas BCV.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Filtros por Bloque y Buscador */}
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                {[
+                  { key: 'ALL', label: `Todos los Módulos (${STRUCTURAL_MODULES_VEN_NIF.length})` },
+                  { key: 'CUENTAS_REALES', label: `Cuentas Reales • Balance General (${countReales})` },
+                  { key: 'CUENTAS_NOMINALES', label: `Cuentas Nominales • Resultados (${countNominales})` },
+                  { key: 'ESTRUCTURAL', label: `Módulos Estructurales & Fiscal (${countEstructurales})` }
+                ].map((b) => (
+                  <button
+                    key={b.key}
+                    type="button"
+                    onClick={() => setEstructuraBlockFilter(b.key)}
+                    style={{
+                      padding: '0.38rem 0.85rem',
+                      borderRadius: '20px',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: estructuraBlockFilter === b.key ? 'var(--accent-primary)' : 'var(--bg-glass-accent)',
+                      color: estructuraBlockFilter === b.key ? '#fff' : 'var(--text-secondary)',
+                      border: estructuraBlockFilter === b.key ? '1px solid var(--accent-primary)' : '1px solid var(--border-glass)'
+                    }}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="search-wrapper" style={{ minWidth: '260px', flex: 1, maxWidth: '420px' }}>
+                <Search size={15} />
+                <input
+                  type="text"
+                  placeholder="Filtrar por módulo, cuenta (ej. 1.01, 2.02, 4.01), naturaleza o rubro..."
+                  value={estructuraSearch}
+                  onChange={(e) => setEstructuraSearch(e.target.value)}
+                  className="input-field"
+                  style={{ width: '100%', height: '38px', fontSize: '0.82rem' }}
+                />
+              </div>
+            </div>
+
+            {/* Tabla Estructural Maestra */}
+            <div className="card" style={{ padding: 0, overflow: 'hidden', margin: 0, background: 'var(--bg-surface)' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border-glass)', background: 'var(--bg-glass-accent)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                      <th style={{ padding: '0.75rem 0.85rem', width: '52px', textAlign: 'center' }}>#</th>
+                      <th style={{ padding: '0.75rem', width: '210px' }}>Bloque Contable / Estado</th>
+                      <th style={{ padding: '0.75rem', width: '210px' }}>Subgrupo, Naturaleza & Cierre</th>
+                      <th style={{ padding: '0.75rem', width: '200px' }}>Módulo en el Sistema</th>
+                      <th style={{ padding: '0.75rem', width: '280px' }}>Rubros VEN-NIF y Códigos en Motorven</th>
+                      <th style={{ padding: '0.75rem 1rem' }}>Función Contable y Criterio Administrativo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredStructuralModules.map((row) => {
+                      const isReal = row.bloqueId === 'CUENTAS_REALES';
+                      const isNominal = row.bloqueId === 'CUENTAS_NOMINALES';
+                      const blockColor = isReal ? '#10b981' : isNominal ? '#3b82f6' : '#38bdf8';
+
+                      return (
+                        <tr key={row.id} style={{ borderBottom: '1px solid var(--border-glass)', verticalAlign: 'top' }}>
+                          <td style={{ padding: '0.8rem 0.65rem', textAlign: 'center', fontWeight: 900, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                            {String(row.orden).padStart(2, '0')}
+                          </td>
+                          <td style={{ padding: '0.8rem 0.75rem' }}>
+                            <span style={{
+                              display: 'inline-block',
+                              fontSize: '0.68rem',
+                              fontWeight: 800,
+                              padding: '0.18rem 0.5rem',
+                              borderRadius: '5px',
+                              background: `${blockColor}1a`,
+                              color: blockColor,
+                              border: `1px solid ${blockColor}40`,
+                              marginBottom: '0.3rem'
+                            }}>
+                              {row.bloqueContable}
+                            </span>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                              {row.estadoFinanciero}
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.8rem 0.75rem' }}>
+                            <div style={{ fontWeight: 800, color: 'var(--text-primary)', marginBottom: '0.2rem' }}>
+                              {row.subgrupo}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: row.colorTag || 'var(--accent-primary)', fontWeight: 700 }}>
+                              Naturaleza: {row.naturaleza}
+                            </div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              ¿Cierra 31/12?: <strong>{row.cierraAl31Dic}</strong>
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.8rem 0.75rem' }}>
+                            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                              {row.modulo}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <span style={{
+                                fontSize: '0.65rem',
+                                fontWeight: 800,
+                                fontFamily: 'monospace',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                background: `${row.colorTag}20`,
+                                color: row.colorTag,
+                                border: `1px solid ${row.colorTag}45`
+                              }}>
+                                {row.badgeCorto}
+                              </span>
+                              {onNavigate && row.id !== 'auditoria' && (
+                                <button
+                                  type="button"
+                                  onClick={() => onNavigate(row.id)}
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ fontSize: '0.68rem', padding: '2px 7px', height: '24px' }}
+                                  title={`Ir directamente al módulo ${row.modulo}`}
+                                >
+                                  Ir al Módulo ➔
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.8rem 0.75rem' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.78rem', marginBottom: '0.35rem' }}>
+                              {row.rubroVenNif}
+                            </div>
+                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: '0.35rem' }}>
+                              {row.codigosResumen}
+                            </div>
+                            {Array.isArray(row.codigosPrincipales) && row.codigosPrincipales.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                {row.codigosPrincipales.map((code) => (
+                                  <button
+                                    key={code}
+                                    type="button"
+                                    onClick={() => {
+                                      if (generalLedger.accountsByCode[code]) {
+                                        setSelectedMayorCode(code);
+                                        setActiveSubTab('mayor');
+                                      } else {
+                                        setPlanSearch(code);
+                                        setActiveSubTab('plan');
+                                      }
+                                    }}
+                                    style={{
+                                      fontSize: '0.66rem',
+                                      fontFamily: 'monospace',
+                                      fontWeight: 700,
+                                      padding: '1px 6px',
+                                      borderRadius: '4px',
+                                      background: 'var(--bg-glass-accent)',
+                                      color: 'var(--accent-primary)',
+                                      border: '1px solid var(--border-glass)',
+                                      cursor: 'pointer'
+                                    }}
+                                    title={`Inspeccionar cuenta ${code} en Mayor General / Plan de Cuentas`}
+                                  >
+                                    {code}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.8rem 1rem', color: 'var(--text-secondary)', lineHeight: 1.48 }}>
+                            <div style={{ marginBottom: '0.25rem' }}>{row.funcionContableAdministrativa}</div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                              Regla Partida Doble: {row.reglaPartidaDoble}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Dictamen de Auditoría Contable y Notas Técnicas del PDF */}
+            <div className="card" style={{ padding: '1.15rem 1.35rem', margin: 0, background: 'var(--bg-surface)', borderLeft: '4px solid #f59e0b' }}>
+              <h4 style={{ margin: '0 0 0.65rem 0', fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Scale size={17} color="#f59e0b" />
+                <span>Notas Técnicas de Auditoría y Control Interno Aplicadas (Según Guía BA VEN-NIF 2)</span>
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '0.85rem', fontSize: '0.79rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <div style={{ padding: '0.75rem 0.9rem', borderRadius: '8px', background: 'var(--bg-glass-accent)', border: '1px solid var(--border-glass)' }}>
+                  <strong style={{ color: '#10b981', display: 'block', marginBottom: '0.25rem' }}>
+                    1. Cuentas Nivel 4 Incorporadas al Catálogo Oficial
+                  </strong>
+                  Se habilitaron en <code>PLAN_DE_CUENTAS_MOTORVEN</code> las subcuentas de Nivel 4 señaladas en las notas de auditoría del PDF: <code>1.01.03.002</code> Provisión para Cuentas Incobrables (Acreedora), <code>1.03.01.005</code> Depósitos en Garantía, <code>1.06.03.001</code> Licencias y Software Contable, y el rubro <code>6.01.10.001–004</code> para Comisiones Bancarias, IGTF (2%), Intereses y Multas.
+                </div>
+                <div style={{ padding: '0.75rem 0.9rem', borderRadius: '8px', background: 'var(--bg-glass-accent)', border: '1px solid var(--border-glass)' }}>
+                  <strong style={{ color: '#8b5cf6', display: 'block', marginBottom: '0.25rem' }}>
+                    2. Articulación Inventario (1.04) vs. Costo de Venta (5.01)
+                  </strong>
+                  Las compras de lubricantes entran al DEBE de <code>1.04.01.001</code> como Activo Realizable. El análisis de margen bruto y descarga de costo se audita de forma cruzada entre <strong>Rentabilidad & BI</strong> (Kardex) y <strong>Auditoría & Contable</strong>.
+                </div>
+                <div style={{ padding: '0.75rem 0.9rem', borderRadius: '8px', background: 'var(--bg-glass-accent)', border: '1px solid var(--border-glass)' }}>
+                  <strong style={{ color: '#3b82f6', display: 'block', marginBottom: '0.25rem' }}>
+                    3. Conciliación Fiscal SENIAT (1.05 Activo vs. 2.03 Pasivo)
+                  </strong>
+                  El módulo <strong>Libros Fiscales SENIAT</strong> actúa como puente estructural entre el Crédito Fiscal soportado en compras (<code>1.05.01.005</code>), las retenciones de IVA/ISLR (<code>1.05.01.007–008</code>) y el Débito Fiscal generado en ventas (<code>2.03.01.005</code>).
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* SUB-TAB 4: EXPORTACIÓN CONTABLE OFICIAL */}
       {activeSubTab === 'export' && (

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Scale,
   Users,
@@ -12,16 +13,30 @@ import {
   BookOpen,
   Search,
   Building2,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Eye,
+  Printer,
+  Download
 } from 'lucide-react';
+import rawAutoTable from 'jspdf-autotable';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
+import {
+  createBaseReport,
+  addSummaryCards,
+  addSectionHeader,
+  addGrandTotalBox,
+  addSignatures,
+  finalizeAndSave,
+  printPDFDocument
+} from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import {
   loadPartnerPayableAccounts,
   upsertPartnerPayableAccountInList,
   removePartnerPayableAccountFromList,
   applyPartnerPayableBalanceDeltaInList,
-  resolveExchangeRates
+  resolveExchangeRates,
+  validateSufficientTreasuryBalance
 } from '../utils/treasuryAccountUtils';
 import {
   loadOtherLiabilityAccounts,
@@ -57,6 +72,9 @@ export default function PasivosView({
   accountsPayable = [],
   profitAccountsPayable = [],
   supplierPayments = [],
+  cashDesks = [],
+  bankAccounts = [],
+  onDeleteCashMovement,
   config = {},
   currentUser = null,
   onNavigate
@@ -122,11 +140,48 @@ export default function PasivosView({
     observaciones: ''
   }));
 
+  // --- Opciones de Caja Chica & Banco para abonos con desembolso ---
+  const treasuryAccountOptions = useMemo(() => {
+    const opts = [];
+    (Array.isArray(cashDesks) ? cashDesks : []).forEach((d, idx) => {
+      if (!d || d.activa === false) return;
+      const rawId = d.id || d.coCaja || d.co_caja || `CAJA-${idx}`;
+      const code = d.coCaja || d.co_caja || rawId;
+      const desc = d.descripcion || d.desCaja || d.des_caja || 'Caja Chica';
+      const mon = String(d.moneda || 'USD').toUpperCase();
+      const balStr = mon === 'BS' ? formatBs(d.saldoBs ?? d.saldo_bs ?? 0) : formatUsd(d.saldoUsd ?? d.saldo_usd ?? 0);
+      opts.push({
+        value: `CAJA:${rawId}`,
+        kind: 'CAJA',
+        record: d,
+        shortLabel: `${code} - ${desc}`,
+        label: `[${code} • ${mon}] ${desc} (${balStr})`
+      });
+    });
+    (Array.isArray(bankAccounts) ? bankAccounts : []).forEach((b, idx) => {
+      if (!b || b.activa === false) return;
+      const rawId = b.id || b.codCta || b.cod_cta || `BANCO-${idx}`;
+      const code = b.codCta || b.cod_cta || rawId;
+      const desc = b.bancoNombre || b.banco_nombre || b.banco || 'Cuenta Bancaria';
+      const mon = String(b.moneda || 'BS').toUpperCase();
+      const balStr = mon === 'BS' ? formatBs(b.saldoBs ?? b.saldo_bs ?? 0) : formatUsd(b.saldoUsd ?? b.saldo_usd ?? 0);
+      opts.push({
+        value: `BANCO:${rawId}`,
+        kind: 'BANCO',
+        record: b,
+        shortLabel: `${code} - ${desc}`,
+        label: `[${code} • ${mon}] ${desc} (${balStr})`
+      });
+    });
+    return opts;
+  }, [cashDesks, bankAccounts]);
+
   // --- Modal Cargo / Abono Directo a Socio ---
   const [showMovModal, setShowMovModal] = useState(false);
   const [movForm, setMovForm] = useState({
     cuentaId: '',
     tipo: 'ABONO_SOCIO',
+    treasuryAccountKey: 'SOLO_CONTABLE',
     fecha: new Date().toISOString().split('T')[0],
     montoUsd: '',
     montoBs: '',
@@ -138,6 +193,7 @@ export default function PasivosView({
   const [showOtherModal, setShowOtherModal] = useState(false);
   const [editingOtherId, setEditingOtherId] = useState(null);
   const [confirmDeleteOtherId, setConfirmDeleteOtherId] = useState(null);
+  const [viewingLiabilityModal, setViewingLiabilityModal] = useState(null); // { kind: 'PARTNER' | 'OTHER', account }
   const [otherForm, setOtherForm] = useState({
     codigo: 'PAS-02',
     codigoContable: '2.02.01.002',
@@ -284,6 +340,7 @@ export default function PasivosView({
     setMovForm({
       cuentaId: target?.id || '',
       tipo: defaultTipo,
+      treasuryAccountKey: treasuryAccountOptions[0]?.value || 'SOLO_CONTABLE',
       fecha: new Date().toISOString().split('T')[0],
       montoUsd: '',
       montoBs: '',
@@ -293,7 +350,7 @@ export default function PasivosView({
     setShowMovModal(true);
   };
 
-  const handleSubmitPartnerMovement = (e) => {
+  const handleSubmitPartnerMovement = async (e) => {
     e.preventDefault();
     const targetAcc = effectivePartnerAccounts.find(
       (a) => a.id === movForm.cuentaId || a.codigo === movForm.cuentaId
@@ -319,36 +376,88 @@ export default function PasivosView({
       return;
     }
 
+    let treasuryAccountPayload = null;
+    if (movForm.tipo === 'ABONO_SOCIO' && movForm.treasuryAccountKey && movForm.treasuryAccountKey !== 'SOLO_CONTABLE') {
+      const selectedOpt = treasuryAccountOptions.find((o) => o.value === movForm.treasuryAccountKey);
+      if (!selectedOpt) {
+        notify.warning('Seleccione una cuenta de Caja Chica o Banco válida.');
+        return;
+      }
+      const balCheck = validateSufficientTreasuryBalance(selectedOpt.record, {
+        deltaUsd: -effectiveUsd,
+        deltaBs: -effectiveBs,
+        label: selectedOpt.shortLabel
+      });
+      if (!balCheck.ok) {
+        notify.error(balCheck.message);
+        return;
+      }
+      const rec = selectedOpt.record;
+      const isCaja = selectedOpt.kind === 'CAJA';
+      const moneda = String(rec.moneda || (isCaja ? 'USD' : 'BS')).toUpperCase();
+      treasuryAccountPayload = {
+        kind: selectedOpt.kind,
+        id: rec.id || rec.coCaja || rec.codCta,
+        rawId: rec.id || rec.coCaja || rec.codCta,
+        coCaja: rec.coCaja || rec.co_caja || '',
+        codCta: rec.codCta || rec.cod_cta || '',
+        moneda,
+        label: selectedOpt.shortLabel,
+        metodoPago: isCaja ? (moneda === 'BS' ? 'EFECTIVO_BS' : 'EFECTIVO_USD') : 'TRANSFERENCIA',
+        concepto: movForm.concepto.trim() || `Abono / Reembolso a ${targetAcc.codigo} (${targetAcc.nombre})`,
+        referencia: movForm.referencia.trim(),
+        fecha: movForm.fecha,
+        tasa: tasaBcv
+      };
+    }
+
     const deltaPayload = {
       targetRef: targetAcc.id || targetAcc.codigo,
       deltaUsd: round2(sign * effectiveUsd),
-      deltaBs: round2(sign * effectiveBs)
+      deltaBs: round2(sign * effectiveBs),
+      treasuryAccount: treasuryAccountPayload
     };
-    const nextPartnerList = applyPartnerPayableBalanceDeltaInList(effectivePartnerAccounts, deltaPayload);
-    setLocalPartnerAccounts(nextPartnerList);
-    if (onAdjustPartnerPayableBalance) {
-      onAdjustPartnerPayableBalance(deltaPayload);
-    }
 
-    const nextMovs = recordPartnerLiabilityMovement(manualMovements, {
-      fecha: movForm.fecha,
-      tipo: movForm.tipo,
-      cuentaId: targetAcc.id,
-      cuentaCodigo: targetAcc.codigo,
-      cuentaNombre: `${targetAcc.codigo} - ${targetAcc.nombre}`,
-      montoUsd: effectiveUsd,
-      montoBs: effectiveBs,
-      concepto: movForm.concepto,
-      referencia: movForm.referencia,
-      usuario: currentUser?.nombre || currentUser?.username || 'ADMINISTRACION'
-    });
-    setManualMovements(nextMovs);
-    setShowMovModal(false);
-    notify.success(
-      movForm.tipo === 'ABONO_SOCIO'
-        ? `Abono/amortización por ${formatUsd(effectiveUsd)} registrado a "${targetAcc.nombre}".`
-        : `Cargo pasivo por ${formatUsd(effectiveUsd)} acumulado en "${targetAcc.nombre}".`
-    );
+    try {
+      let createdCashMovementId = null;
+      if (onAdjustPartnerPayableBalance) {
+        createdCashMovementId = await onAdjustPartnerPayableBalance(deltaPayload);
+      }
+      const nextPartnerList = applyPartnerPayableBalanceDeltaInList(effectivePartnerAccounts, {
+        targetRef: deltaPayload.targetRef,
+        deltaUsd: deltaPayload.deltaUsd,
+        deltaBs: deltaPayload.deltaBs
+      });
+      setLocalPartnerAccounts(nextPartnerList);
+
+      const nextMovs = recordPartnerLiabilityMovement(manualMovements, {
+        fecha: movForm.fecha,
+        tipo: movForm.tipo,
+        cuentaId: targetAcc.id,
+        cuentaCodigo: targetAcc.codigo,
+        cuentaNombre: `${targetAcc.codigo} - ${targetAcc.nombre}`,
+        montoUsd: effectiveUsd,
+        montoBs: effectiveBs,
+        concepto: movForm.concepto,
+        referencia: movForm.referencia,
+        cashMovementId: createdCashMovementId || '',
+        treasuryAccountId: treasuryAccountPayload?.id || '',
+        treasuryAccountLabel: treasuryAccountPayload?.label || '',
+        usuario: currentUser?.nombre || currentUser?.username || 'ADMINISTRACION'
+      });
+      setManualMovements(nextMovs);
+      setShowMovModal(false);
+      notify.success(
+        movForm.tipo === 'ABONO_SOCIO'
+          ? treasuryAccountPayload
+            ? `Abono por ${formatUsd(effectiveUsd)} registrado a "${targetAcc.nombre}" y descontado de ${treasuryAccountPayload.label}.`
+            : `Abono interno por ${formatUsd(effectiveUsd)} registrado a "${targetAcc.nombre}".`
+          : `Cargo pasivo por ${formatUsd(effectiveUsd)} acumulado en "${targetAcc.nombre}".`
+      );
+    } catch (err) {
+      console.error('Error registrando movimiento de pasivo socio:', err);
+      notify.error('No se pudo completar el movimiento: ' + (err?.message || 'Error desconocido'));
+    }
   };
 
   // --- Handlers CRUD Otras Cuentas de Pasivo ---
@@ -443,40 +552,269 @@ export default function PasivosView({
     notify.info(`Cuenta de pasivo "${acc.nombre}" eliminada.`);
   };
 
-  const handleDeleteManualMovement = (mov) => {
-    if (!mov || mov.origen !== 'MANUAL_PASIVOS') return;
+  const handleDeleteManualMovement = async (mov) => {
+    if (!mov || !['MANUAL_PASIVOS', 'CAJA_BANCOS'].includes(mov.origen)) return;
+    if (mov.cashMovementId && onDeleteCashMovement) {
+      await onDeleteCashMovement(mov.cashMovementId);
+      setManualMovements((prev) => deletePartnerLiabilityMovementFromList(prev, mov.id));
+      setLocalPartnerAccounts(loadPartnerPayableAccounts());
+      notify.info('Movimiento de abono y su desembolso en Caja/Banco revertidos.');
+      return;
+    }
     const reverseSign = mov.tipo === 'ABONO_SOCIO' ? 1 : -1;
     const deltaPayload = {
       targetRef: mov.cuentaId || mov.cuentaCodigo,
       deltaUsd: round2(reverseSign * Number(mov.montoUsd || 0)),
-      deltaBs: round2(reverseSign * Number(mov.montoBs || 0))
+      deltaBs: round2(reverseSign * Number(mov.montoBs || 0)),
+      skipTreasuryDeduction: true
     };
     const nextPartnerList = applyPartnerPayableBalanceDeltaInList(effectivePartnerAccounts, deltaPayload);
     setLocalPartnerAccounts(nextPartnerList);
     if (onAdjustPartnerPayableBalance) {
-      onAdjustPartnerPayableBalance(deltaPayload);
+      await onAdjustPartnerPayableBalance(deltaPayload);
     }
     setManualMovements((prev) => deletePartnerLiabilityMovementFromList(prev, mov.id));
     notify.info('Movimiento manual de pasivo revertido.');
   };
 
+  // --- Helpers Ver & Imprimir Estado de Cuenta / Ficha de Pasivo ---
+  const getPartnerAccountMovements = (acc) => {
+    if (!acc) return [];
+    const accId = String(acc.id || '').trim().toUpperCase();
+    const accCode = String(acc.codigo || '').trim().toUpperCase();
+    return unifiedMovements.filter((m) => {
+      if (!m) return false;
+      const mId = String(m.cuentaId || '').trim().toUpperCase();
+      const mCode = String(m.cuentaCodigo || '').trim().toUpperCase();
+      const mName = String(m.cuentaNombre || '').trim().toUpperCase();
+      return (
+        (accId && mId === accId) ||
+        (accCode && (mCode === accCode || mId === accCode || mName.startsWith(`${accCode} `) || mName.includes(`${accCode} -`)))
+      );
+    });
+  };
+
+  const buildAccountSummaryStats = (acc, kind = 'PARTNER') => {
+    const isPartner = kind === 'PARTNER';
+    const movs = isPartner ? getPartnerAccountMovements(acc) : [];
+    let cargosUsd = 0;
+    let cargosBs = 0;
+    let abonosUsd = 0;
+    let abonosBs = 0;
+    movs.forEach((m) => {
+      const usd = round2(Number(m?.montoUsd || 0));
+      const bs = round2(Number(m?.montoBs || 0) || (tasaBcv > 0 ? usd * tasaBcv : 0));
+      if (m?.tipo === 'ABONO_SOCIO') {
+        abonosUsd = round2(abonosUsd + usd);
+        abonosBs = round2(abonosBs + bs);
+      } else {
+        cargosUsd = round2(cargosUsd + usd);
+        cargosBs = round2(cargosBs + bs);
+      }
+    });
+    const saldoUsd = round2(Number(acc?.saldoUsd || 0));
+    const saldoBs = round2(Number(acc?.saldoBs || 0) || (tasaBcv > 0 ? saldoUsd * tasaBcv : 0));
+    return {
+      isPartner,
+      movs,
+      cargosUsd,
+      cargosBs,
+      abonosUsd,
+      abonosBs,
+      saldoUsd,
+      saldoBs
+    };
+  };
+
+  const handlePrintLiabilityAccount = (acc, kind = 'PARTNER', { downloadOnly = false } = {}) => {
+    if (!acc) return;
+    try {
+      const { isPartner, movs, cargosUsd, abonosUsd, saldoUsd, saldoBs } = buildAccountSummaryStats(acc, kind);
+      const titularLabel = isPartner ? (acc.titular || 'Socio Principal') : (acc.acreedor || 'Acreedor');
+      const codeContable = acc.codigoContable || (isPartner ? '2.02.01.001' : '2.06.01.001');
+
+      const { doc, startX, tableWidth, startY } = createBaseReport({
+        title: isPartner ? 'ESTADO DE CUENTA — PASIVO SOCIO' : 'FICHA DE CUENTA DE PASIVO',
+        subtitle: `${acc.codigo} · ${acc.nombre} (${titularLabel}) · Cuenta Contable ${codeContable}`,
+        moduleCode: isPartner ? 'PAS-SOC' : 'PAS-AUX',
+        currentUser,
+        config,
+        rateValue: tasaBcv
+      });
+
+      let cursorY = addSummaryCards(
+        doc,
+        startY,
+        [
+          {
+            label: 'Saldo Pasivo Actual',
+            value: formatUsd(saldoUsd),
+            subtext: formatBs(saldoBs),
+            color: [217, 119, 6],
+            valueColor: [180, 83, 9]
+          },
+          isPartner
+            ? {
+                label: 'Cargos (+ Pasivo)',
+                value: formatUsd(cargosUsd),
+                subtext: `${movs.filter((m) => m.tipo !== 'ABONO_SOCIO').length} movimiento(s)`,
+                color: [14, 165, 233],
+                valueColor: [3, 105, 161]
+              }
+            : {
+                label: 'Subgrupo Contable',
+                value: codeContable,
+                subtext: PASIVO_SUBGROUP_LABELS[acc.subgrupo] || acc.subgrupo || 'Pasivo',
+                color: [14, 165, 233],
+                valueColor: [3, 105, 161]
+              },
+          isPartner
+            ? {
+                label: 'Abonos (- Pasivo)',
+                value: formatUsd(abonosUsd),
+                subtext: `${movs.filter((m) => m.tipo === 'ABONO_SOCIO').length} reembolso(s)`,
+                color: [5, 150, 105],
+                valueColor: [4, 120, 87]
+              }
+            : {
+                label: 'Acreedor / Ente',
+                value: titularLabel,
+                subtext: acc.codigo,
+                color: [5, 150, 105],
+                valueColor: [4, 120, 87]
+              },
+          {
+            label: 'Estatus / Moneda',
+            value: acc.activa !== false ? 'ACTIVA' : 'INACTIVA',
+            subtext: `Moneda base: ${acc.moneda || 'USD'}`,
+            color: [0, 43, 122],
+            valueColor: [0, 43, 122]
+          }
+        ],
+        tableWidth,
+        startX
+      );
+
+      cursorY = addSectionHeader(
+        doc,
+        cursorY,
+        isPartner ? `Detalle de Movimientos — ${acc.codigo} (${acc.nombre})` : `Ficha Técnica Contable — ${acc.codigo}`,
+        acc.observaciones ? `Observaciones: ${acc.observaciones}` : `Titular / Acreedor: ${titularLabel} • Plan BA VEN-NIF ${codeContable}`,
+        tableWidth,
+        startX
+      );
+
+      if (isPartner) {
+        const bodyRows = movs.length > 0
+          ? movs.map((m) => {
+              const isAbono = m.tipo === 'ABONO_SOCIO';
+              const tipoLabel = isAbono ? 'ABONO A SOCIO' : (m.origen === 'CXP_PAGO_PROVEEDOR' ? 'PAGO CXP SOCIO' : 'CARGO PASIVO');
+              const detailLines = [m.concepto || 'Movimiento de pasivo'];
+              if (m.treasuryAccountLabel) detailLines.push(`Tesorería: ${m.treasuryAccountLabel}`);
+              if (m.proveedor) detailLines.push(`Proveedor: ${m.proveedor}`);
+              return [
+                m.fecha || '—',
+                tipoLabel,
+                detailLines.join(' | '),
+                m.referencia || '—',
+                `${isAbono ? '-' : '+'}${formatUsd(m.montoUsd || 0)}`,
+                formatBs(m.montoBs || 0)
+              ];
+            })
+          : [[
+              new Date().toISOString().split('T')[0],
+              'SALDO ACTUAL',
+              'Cuenta sin movimientos detallados en el historial de sesión.',
+              acc.codigo,
+              formatUsd(saldoUsd),
+              formatBs(saldoBs)
+            ]];
+
+        rawAutoTable(doc, {
+          startY: cursorY,
+          margin: { left: startX, right: startX },
+          tableWidth,
+          head: [['FECHA', 'TIPO / ORIGEN', 'CONCEPTO / PROVEEDOR / TESORERÍA', 'REFERENCIA', 'MONTO USD', 'MONTO BS.']],
+          body: bodyRows,
+          styles: { fontSize: 7.4, cellPadding: 1.6, overflow: 'linebreak' },
+          headStyles: { fillColor: [0, 43, 122], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.4 },
+          columnStyles: {
+            0: { cellWidth: 21 },
+            1: { cellWidth: 27 },
+            2: { cellWidth: 67.9 },
+            3: { cellWidth: 22 },
+            4: { cellWidth: 20, halign: 'right' },
+            5: { cellWidth: 22, halign: 'right' }
+          }
+        });
+      } else {
+        rawAutoTable(doc, {
+          startY: cursorY,
+          margin: { left: startX, right: startX },
+          tableWidth,
+          head: [['CAMPO CONTABLE', 'DETALLE DE LA CUENTA AUXILIAR DE PASIVO']],
+          body: [
+            ['Código Auxiliar', acc.codigo],
+            ['Nombre de Cuenta', acc.nombre],
+            ['Código Plan Contable', codeContable],
+            ['Subgrupo BA VEN-NIF', PASIVO_SUBGROUP_LABELS[acc.subgrupo] || acc.subgrupo || 'Otros Pasivos'],
+            ['Acreedor / Ente', titularLabel],
+            ['Moneda / Estatus', `${acc.moneda || 'USD'} · ${acc.activa !== false ? 'Activa' : 'Inactiva'}`],
+            ['Saldo Pasivo USD', formatUsd(saldoUsd)],
+            ['Equivalente Bolívares', formatBs(saldoBs)],
+            ['Observaciones', acc.observaciones || 'Sin observaciones registradas']
+          ],
+          styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+          headStyles: { fillColor: [0, 43, 122], textColor: [255, 255, 255], fontStyle: 'bold' },
+          columnStyles: { 0: { cellWidth: 52, fontStyle: 'bold' }, 1: { cellWidth: 127.9 } }
+        });
+      }
+
+      const afterTableY = (doc.lastAutoTable?.finalY || cursorY + 25) + 4;
+      const afterTotalsY = addGrandTotalBox(
+        doc,
+        afterTableY,
+        isPartner
+          ? [
+              { label: 'Total Cargos (+)', value: formatUsd(cargosUsd), color: [3, 105, 161] },
+              { label: 'Total Abonos (-)', value: formatUsd(abonosUsd), color: [4, 120, 87] },
+              { label: 'Saldo Pasivo Pendiente', value: `${formatUsd(saldoUsd)}`, subtext: formatBs(saldoBs), color: [180, 83, 9] }
+            ]
+          : [
+              { label: 'Cuenta Contable', value: codeContable, color: [0, 43, 122] },
+              { label: 'Saldo Pasivo USD', value: formatUsd(saldoUsd), color: [180, 83, 9] },
+              { label: 'Saldo Pasivo Bs.', value: formatBs(saldoBs), color: [71, 85, 105] }
+            ],
+        tableWidth,
+        startX
+      );
+
+      addSignatures(
+        doc,
+        afterTotalsY,
+        ['Elaborado por Administración', isPartner ? 'Conforme Socio / Titular' : 'Revisado Contabilidad', 'Autorizado por Gerencia'],
+        tableWidth,
+        startX
+      );
+
+      const fileSlug = `${isPartner ? 'Estado_Cuenta' : 'Ficha_Pasivo'}_${String(acc.codigo || acc.id || 'SOC').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      finalizeAndSave(doc, fileSlug, currentUser, { skipSave: !downloadOnly });
+      if (!downloadOnly) {
+        printPDFDocument(doc);
+        notify.success(`Vista de impresión preparada para ${acc.codigo} (${acc.nombre}).`);
+      } else {
+        notify.success(`PDF descargado: ${fileSlug}`);
+      }
+    } catch (err) {
+      console.error('Error generando PDF/impresión de Cuenta de Pasivo:', err);
+      notify.error('No se pudo generar la impresión: ' + (err?.message || 'Error desconocido'));
+    }
+  };
+
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: '1.35rem', paddingBottom: '2rem' }}>
       {/* HEADER DEL MÓDULO */}
-      <div
-        className="card-surface"
-        style={{
-          padding: '1.35rem 1.6rem',
-          borderRadius: '16px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '1rem',
-          background: 'linear-gradient(135deg, rgba(255,251,235,0.9) 0%, rgba(255,255,255,0.95) 100%)',
-          border: '1px solid #fde68a'
-        }}
-      >
+      <div className="card-surface pasivos-hero-card">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.95rem' }}>
           <div
             style={{
@@ -494,10 +832,10 @@ export default function PasivosView({
             <Scale size={24} />
           </div>
           <div>
-            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a' }}>
+            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-heading)' }}>
               Cuentas de Pasivo
             </h1>
-            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.84rem', color: '#64748b' }}>
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-muted)' }}>
               Gestión integral de Cuentas por Pagar Socios (<strong>2.02.01.001</strong>) y Pasivos Contables Grupo 2 (BA VEN-NIF 2 · Tasa BCV: Bs. {tasaBcv.toFixed(2)})
             </p>
           </div>
@@ -529,17 +867,12 @@ export default function PasivosView({
             <button
               type="button"
               onClick={() => onNavigate('cxp')}
+              className="pasivos-btn-secondary"
               style={{
                 padding: '0.6rem 1rem',
                 borderRadius: '10px',
-                border: '1px solid #cbd5e1',
-                background: '#fff',
-                color: '#1e293b',
                 fontWeight: 700,
                 fontSize: '0.84rem',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
                 gap: '0.45rem'
               }}
             >
@@ -566,13 +899,13 @@ export default function PasivosView({
             borderLeft: '4px solid #d97706'
           }}
         >
-          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-amber)', textTransform: 'uppercase' }}>
             Pasivo Socios (2.02.01.001)
           </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#b45309', marginTop: '0.25rem' }}>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--accent-amber)', marginTop: '0.25rem' }}>
             {formatUsd(metrics.sociosUsd)}
           </div>
-          <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '0.15rem' }}>
+          <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
             {formatBs(metrics.sociosBs)} · {metrics.sociosActiveCount} cuenta(s) activa(s)
           </div>
         </div>
@@ -585,13 +918,13 @@ export default function PasivosView({
             borderLeft: '4px solid #dc2626'
           }}
         >
-          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: '#991b1b', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--semaforo-rojo)', textTransform: 'uppercase' }}>
             CxP Proveedores (2.02.02)
           </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#dc2626', marginTop: '0.25rem' }}>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--semaforo-rojo)', marginTop: '0.25rem' }}>
             {formatUsd(metrics.proveedoresUsd)}
           </div>
-          <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '0.15rem' }}>
+          <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
             {formatBs(metrics.proveedoresBs)} · {metrics.proveedoresDocsCount} doc(s) pendiente(s)
           </div>
         </div>
@@ -604,13 +937,13 @@ export default function PasivosView({
             borderLeft: '4px solid #0284c7'
           }}
         >
-          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: '#075985', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--neon-cyan)', textTransform: 'uppercase' }}>
             CxP Pagadas por Socios
           </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0369a1', marginTop: '0.25rem' }}>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--neon-cyan)', marginTop: '0.25rem' }}>
             {formatUsd(metrics.pagosAsumidosSociosUsd)}
           </div>
-          <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '0.15rem' }}>
+          <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
             {metrics.pagosAsumidosSociosCount} pago(s) imputado(s) desde CxP
           </div>
         </div>
@@ -620,16 +953,16 @@ export default function PasivosView({
           style={{
             padding: '1.1rem 1.25rem',
             borderRadius: '14px',
-            borderLeft: '4px solid #4f46e5'
+            borderLeft: '4px solid #6366f1'
           }}
         >
-          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: '#3730a3', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: '#818cf8', textTransform: 'uppercase' }}>
             Total Pasivos Monitoreados
           </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#312e81', marginTop: '0.25rem' }}>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '0.25rem' }}>
             {formatUsd(metrics.totalPasivosMonitoreadosUsd)}
           </div>
-          <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '0.15rem' }}>
+          <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
             {formatBs(metrics.totalPasivosMonitoreadosBs)} · Socios + Proveedores + Otros
           </div>
         </div>
@@ -637,16 +970,7 @@ export default function PasivosView({
 
       {/* CONTENEDOR PRINCIPAL CON PESTAÑAS */}
       <div className="card-surface" style={{ borderRadius: '16px', overflow: 'hidden' }}>
-        <div
-          style={{
-            display: 'flex',
-            borderBottom: '1px solid #e2e8f0',
-            background: '#f8fafc',
-            padding: '0 1rem',
-            gap: '0.25rem',
-            flexWrap: 'wrap'
-          }}
-        >
+        <div className="pasivos-tabs-bar">
           <button
             type="button"
             onClick={() => setActiveSubTab('socios')}
@@ -657,8 +981,8 @@ export default function PasivosView({
               cursor: 'pointer',
               fontWeight: 700,
               fontSize: '0.88rem',
-              color: activeSubTab === 'socios' ? '#b45309' : '#64748b',
-              borderBottom: activeSubTab === 'socios' ? '2px solid #b45309' : '2px solid transparent',
+              color: activeSubTab === 'socios' ? 'var(--accent-amber)' : 'var(--text-muted)',
+              borderBottom: activeSubTab === 'socios' ? '2px solid var(--accent-amber)' : '2px solid transparent',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '0.45rem'
@@ -678,8 +1002,8 @@ export default function PasivosView({
               cursor: 'pointer',
               fontWeight: 700,
               fontSize: '0.88rem',
-              color: activeSubTab === 'catalogo' ? 'var(--brand-blue, #002b7a)' : '#64748b',
-              borderBottom: activeSubTab === 'catalogo' ? '2px solid var(--brand-blue, #002b7a)' : '2px solid transparent',
+              color: activeSubTab === 'catalogo' ? 'var(--neon-cyan)' : 'var(--text-muted)',
+              borderBottom: activeSubTab === 'catalogo' ? '2px solid var(--neon-cyan)' : '2px solid transparent',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '0.45rem'
@@ -699,8 +1023,8 @@ export default function PasivosView({
               cursor: 'pointer',
               fontWeight: 700,
               fontSize: '0.88rem',
-              color: activeSubTab === 'movimientos' ? 'var(--brand-blue, #002b7a)' : '#64748b',
-              borderBottom: activeSubTab === 'movimientos' ? '2px solid var(--brand-blue, #002b7a)' : '2px solid transparent',
+              color: activeSubTab === 'movimientos' ? 'var(--neon-cyan)' : 'var(--text-muted)',
+              borderBottom: activeSubTab === 'movimientos' ? '2px solid var(--neon-cyan)' : '2px solid transparent',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '0.45rem'
@@ -717,11 +1041,11 @@ export default function PasivosView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                 <div>
-                  <h2 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 800, color: '#0f172a' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 800, color: 'var(--text-heading)' }}>
                     Cuentas por Pagar Pasivas — Socios / Accionistas (2.02.01.001)
                   </h2>
-                  <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: '#64748b' }}>
-                    Todas las cuentas activas aquí aparecen automáticamente en el dropdown <strong>Cuenta Origen</strong> de <strong>Cuentas por Pagar (CxP)</strong> sin descontar efectivo de Caja ni Bancos.
+                  <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Todas las cuentas activas aquí aparecen automáticamente en el dropdown <strong style={{ color: 'var(--text-primary)' }}>Cuenta Origen</strong> de <strong style={{ color: 'var(--text-primary)' }}>Cuentas por Pagar (CxP)</strong> sin descontar efectivo de Caja ni Bancos.
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -729,18 +1053,12 @@ export default function PasivosView({
                     type="button"
                     onClick={() => handleOpenPartnerMovementModal(effectivePartnerAccounts[0], 'ABONO_SOCIO')}
                     disabled={effectivePartnerAccounts.length === 0}
+                    className="pasivos-btn-info"
                     style={{
                       padding: '0.5rem 0.9rem',
                       borderRadius: '8px',
-                      border: '1px solid #0284c7',
-                      background: '#f0f9ff',
-                      color: '#0369a1',
-                      fontWeight: 700,
                       fontSize: '0.8rem',
-                      cursor: effectivePartnerAccounts.length === 0 ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.35rem'
+                      cursor: effectivePartnerAccounts.length === 0 ? 'not-allowed' : 'pointer'
                     }}
                   >
                     <ArrowRightLeft size={14} />
@@ -769,10 +1087,10 @@ export default function PasivosView({
                 </div>
               </div>
 
-              <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+              <div className="pasivos-table-wrap">
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
                   <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
+                    <tr style={{ textAlign: 'left' }}>
                       <th style={{ padding: '0.75rem 1rem' }}>Código</th>
                       <th style={{ padding: '0.75rem 1rem' }}>Cuenta / Titular</th>
                       <th style={{ padding: '0.75rem 1rem' }}>Cuenta Contable</th>
@@ -785,28 +1103,28 @@ export default function PasivosView({
                   <tbody>
                     {effectivePartnerAccounts.length === 0 ? (
                       <tr>
-                        <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>
+                        <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                           No hay Cuentas por Pagar Socio registradas. Haz clic en <strong>Crear Cuenta Socio</strong> para añadir la primera.
                         </td>
                       </tr>
                     ) : (
                       effectivePartnerAccounts.map((acc) => (
-                        <tr key={acc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          <td style={{ padding: '0.8rem 1rem', fontWeight: 800, color: '#0f172a' }}>
+                        <tr key={acc.id}>
+                          <td style={{ padding: '0.8rem 1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
                             {acc.codigo}
                           </td>
                           <td style={{ padding: '0.8rem 1rem' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>{acc.nombre}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                            <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{acc.nombre}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                               Socio / Titular: {acc.titular || 'Socio'}
                               {acc.observaciones ? ` · ${acc.observaciones}` : ''}
                             </div>
                           </td>
-                          <td style={{ padding: '0.8rem 1rem', fontFamily: 'monospace', fontWeight: 600, color: '#334155' }}>
+                          <td style={{ padding: '0.8rem 1rem', fontFamily: 'monospace', fontWeight: 600, color: 'var(--neon-cyan)' }}>
                             {acc.codigoContable || '2.02.01.001'}
                           </td>
                           <td style={{ padding: '0.8rem 1rem' }}>
-                            <span style={{ padding: '0.2rem 0.55rem', borderRadius: '999px', background: '#fef3c7', color: '#92400e', fontWeight: 700, fontSize: '0.74rem' }}>
+                            <span style={{ padding: '0.2rem 0.55rem', borderRadius: '999px', background: 'var(--semaforo-amarillo-bg)', color: 'var(--accent-amber)', border: '1px solid rgba(245, 158, 11, 0.35)', fontWeight: 700, fontSize: '0.74rem' }}>
                               {acc.moneda || 'USD'}
                             </span>
                           </td>
@@ -815,8 +1133,9 @@ export default function PasivosView({
                               style={{
                                 padding: '0.2rem 0.55rem',
                                 borderRadius: '999px',
-                                background: acc.activa !== false ? '#dcfce7' : '#f1f5f9',
-                                color: acc.activa !== false ? '#166534' : '#64748b',
+                                background: acc.activa !== false ? 'var(--semaforo-verde-bg)' : 'var(--bg-pill)',
+                                color: acc.activa !== false ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                                border: acc.activa !== false ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid var(--border-glass)',
                                 fontWeight: 700,
                                 fontSize: '0.74rem'
                               }}
@@ -825,10 +1144,10 @@ export default function PasivosView({
                             </span>
                           </td>
                           <td style={{ padding: '0.8rem 1rem', textAlign: 'right' }}>
-                            <div style={{ fontWeight: 800, color: '#b45309', fontSize: '0.94rem' }}>
+                            <div style={{ fontWeight: 800, color: 'var(--accent-amber)', fontSize: '0.94rem' }}>
                               {formatUsd(acc.saldoUsd || 0)}
                             </div>
-                            <div style={{ fontSize: '0.73rem', color: '#64748b' }}>
+                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
                               {formatBs(acc.saldoBs || 0)}
                             </div>
                           </td>
@@ -836,17 +1155,26 @@ export default function PasivosView({
                             <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                               <button
                                 type="button"
+                                onClick={() => setViewingLiabilityModal({ kind: 'PARTNER', account: acc })}
+                                className="pasivos-btn-secondary"
+                                title="Ver ficha detallada y movimientos de esta cuenta"
+                              >
+                                <Eye size={13} />
+                                Ver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handlePrintLiabilityAccount(acc, 'PARTNER', { downloadOnly: false })}
+                                className="pasivos-btn-secondary"
+                                title="Imprimir estado de cuenta de esta cuenta pasiva"
+                              >
+                                <Printer size={13} />
+                                Imprimir
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => handleOpenPartnerMovementModal(acc, 'ABONO_SOCIO')}
-                                style={{
-                                  padding: '0.35rem 0.55rem',
-                                  borderRadius: '6px',
-                                  border: '1px solid #bae6fd',
-                                  background: '#f0f9ff',
-                                  color: '#0369a1',
-                                  cursor: 'pointer',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 700
-                                }}
+                                className="pasivos-btn-info"
                                 title="Registrar cargo o abono en esta cuenta"
                               >
                                 Cargo/Abono
@@ -854,19 +1182,7 @@ export default function PasivosView({
                               <button
                                 type="button"
                                 onClick={() => handleOpenEditPartner(acc)}
-                                style={{
-                                  padding: '0.35rem 0.55rem',
-                                  borderRadius: '6px',
-                                  border: '1px solid #cbd5e1',
-                                  background: '#fff',
-                                  color: '#334155',
-                                  cursor: 'pointer',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.25rem',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600
-                                }}
+                                className="pasivos-btn-secondary"
                               >
                                 <Edit2 size={13} />
                                 Editar
@@ -892,15 +1208,7 @@ export default function PasivosView({
                                   <button
                                     type="button"
                                     onClick={() => setConfirmDeletePartnerId(null)}
-                                    style={{
-                                      padding: '0.35rem 0.5rem',
-                                      borderRadius: '6px',
-                                      border: '1px solid #cbd5e1',
-                                      background: '#fff',
-                                      color: '#64748b',
-                                      cursor: 'pointer',
-                                      fontSize: '0.74rem'
-                                    }}
+                                    className="pasivos-btn-secondary"
                                   >
                                     No
                                   </button>
@@ -909,19 +1217,7 @@ export default function PasivosView({
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeletePartnerId(acc.id)}
-                                  style={{
-                                    padding: '0.35rem 0.55rem',
-                                    borderRadius: '6px',
-                                    border: '1px solid #fecaca',
-                                    background: '#fef2f2',
-                                    color: '#b91c1c',
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.25rem',
-                                    fontSize: '0.74rem',
-                                    fontWeight: 600
-                                  }}
+                                  className="pasivos-btn-danger"
                                 >
                                   <Trash2 size={13} />
                                   Eliminar
@@ -945,10 +1241,10 @@ export default function PasivosView({
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.6rem' }}>
                   <div>
-                    <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+                    <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)' }}>
                       Cuentas Auxiliares de Otros Pasivos ({otherLiabilityAccounts.length})
                     </h2>
-                    <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.78rem', color: '#64748b' }}>
+                    <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                       Administra préstamos bancarios, aportes transitorios de socios (2.02.01.002), retenciones u obligaciones laborales.
                     </p>
                   </div>
@@ -959,7 +1255,7 @@ export default function PasivosView({
                       padding: '0.5rem 0.9rem',
                       borderRadius: '8px',
                       border: 'none',
-                      background: 'var(--brand-blue, #002b7a)',
+                      background: 'var(--motorven-navy, #002b7a)',
                       color: '#fff',
                       fontWeight: 700,
                       fontSize: '0.8rem',
@@ -974,10 +1270,10 @@ export default function PasivosView({
                   </button>
                 </div>
 
-                <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                <div className="pasivos-table-wrap">
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
                     <thead>
-                      <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
+                      <tr style={{ textAlign: 'left' }}>
                         <th style={{ padding: '0.65rem 0.9rem' }}>Código</th>
                         <th style={{ padding: '0.65rem 0.9rem' }}>Cuenta / Acreedor</th>
                         <th style={{ padding: '0.65rem 0.9rem' }}>Cta. Contable</th>
@@ -988,38 +1284,44 @@ export default function PasivosView({
                     </thead>
                     <tbody>
                       {otherLiabilityAccounts.map((acc) => (
-                        <tr key={acc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          <td style={{ padding: '0.7rem 0.9rem', fontWeight: 700, color: '#0f172a' }}>{acc.codigo}</td>
+                        <tr key={acc.id}>
+                          <td style={{ padding: '0.7rem 0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{acc.codigo}</td>
                           <td style={{ padding: '0.7rem 0.9rem' }}>
-                            <div style={{ fontWeight: 600, color: '#0f172a' }}>{acc.nombre}</div>
-                            <div style={{ fontSize: '0.73rem', color: '#64748b' }}>Acreedor: {acc.acreedor}</div>
+                            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{acc.nombre}</div>
+                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>Acreedor: {acc.acreedor}</div>
                           </td>
-                          <td style={{ padding: '0.7rem 0.9rem', fontFamily: 'monospace', color: '#334155' }}>{acc.codigoContable}</td>
-                          <td style={{ padding: '0.7rem 0.9rem', fontSize: '0.76rem', color: '#475569' }}>
+                          <td style={{ padding: '0.7rem 0.9rem', fontFamily: 'monospace', color: 'var(--neon-cyan)' }}>{acc.codigoContable}</td>
+                          <td style={{ padding: '0.7rem 0.9rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
                             {PASIVO_SUBGROUP_LABELS[acc.subgrupo] || acc.subgrupo}
                           </td>
                           <td style={{ padding: '0.7rem 0.9rem', textAlign: 'right' }}>
-                            <div style={{ fontWeight: 700, color: '#312e81' }}>{formatUsd(acc.saldoUsd || 0)}</div>
-                            <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{formatBs(acc.saldoBs || 0)}</div>
+                            <div style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>{formatUsd(acc.saldoUsd || 0)}</div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{formatBs(acc.saldoBs || 0)}</div>
                           </td>
                           <td style={{ padding: '0.7rem 0.9rem', textAlign: 'right' }}>
-                            <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center' }}>
+                            <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <button
+                                type="button"
+                                onClick={() => setViewingLiabilityModal({ kind: 'OTHER', account: acc })}
+                                className="pasivos-btn-secondary"
+                                title="Ver ficha contable de esta cuenta"
+                              >
+                                <Eye size={12} />
+                                Ver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handlePrintLiabilityAccount(acc, 'OTHER', { downloadOnly: false })}
+                                className="pasivos-btn-secondary"
+                                title="Imprimir ficha de esta cuenta de pasivo"
+                              >
+                                <Printer size={12} />
+                                Imprimir
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleOpenEditOther(acc)}
-                                style={{
-                                  padding: '0.3rem 0.55rem',
-                                  borderRadius: '6px',
-                                  border: '1px solid #cbd5e1',
-                                  background: '#fff',
-                                  color: '#334155',
-                                  cursor: 'pointer',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.25rem'
-                                }}
+                                className="pasivos-btn-secondary"
                               >
                                 <Edit2 size={12} />
                                 Editar
@@ -1045,15 +1347,7 @@ export default function PasivosView({
                                   <button
                                     type="button"
                                     onClick={() => setConfirmDeleteOtherId(null)}
-                                    style={{
-                                      padding: '0.3rem 0.5rem',
-                                      borderRadius: '6px',
-                                      border: '1px solid #cbd5e1',
-                                      background: '#fff',
-                                      color: '#64748b',
-                                      cursor: 'pointer',
-                                      fontSize: '0.74rem'
-                                    }}
+                                    className="pasivos-btn-secondary"
                                   >
                                     No
                                   </button>
@@ -1062,19 +1356,7 @@ export default function PasivosView({
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeleteOtherId(acc.id)}
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    borderRadius: '6px',
-                                    border: '1px solid #fecaca',
-                                    background: '#fef2f2',
-                                    color: '#b91c1c',
-                                    cursor: 'pointer',
-                                    fontSize: '0.74rem',
-                                    fontWeight: 600,
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.25rem'
-                                  }}
+                                  className="pasivos-btn-danger"
                                 >
                                   <Trash2 size={12} />
                                   Eliminar
@@ -1092,12 +1374,12 @@ export default function PasivosView({
               {/* Plan de Cuentas Oficial Grupo 2 (27 cuentas) */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.65rem' }}>
-                  <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: '#0f172a' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: 'var(--text-heading)' }}>
                     Plan de Cuentas Oficial — Grupo 2: Pasivos ({filteredPlanRows.length})
                   </h3>
                   <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
                     <div style={{ position: 'relative' }}>
-                      <Search size={14} style={{ position: 'absolute', left: '0.6rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                      <Search size={14} style={{ position: 'absolute', left: '0.6rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                       <input
                         type="text"
                         value={planSearch}
@@ -1121,10 +1403,10 @@ export default function PasivosView({
                   </div>
                 </div>
 
-                <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #e2e8f0', maxHeight: '420px', overflowY: 'auto' }}>
+                <div className="pasivos-table-wrap" style={{ maxHeight: '420px', overflowY: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                     <thead>
-                      <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569', position: 'sticky', top: 0 }}>
+                      <tr style={{ textAlign: 'left', position: 'sticky', top: 0, zIndex: 2 }}>
                         <th style={{ padding: '0.6rem 0.85rem' }}>Código</th>
                         <th style={{ padding: '0.6rem 0.85rem' }}>Nombre de la Cuenta</th>
                         <th style={{ padding: '0.6rem 0.85rem' }}>Nivel</th>
@@ -1137,11 +1419,10 @@ export default function PasivosView({
                         <tr
                           key={row.codigo}
                           style={{
-                            borderBottom: '1px solid #f1f5f9',
-                            background: row.imputable ? '#fff' : '#f8fafc'
+                            background: row.imputable ? 'transparent' : 'var(--bg-glass-accent)'
                           }}
                         >
-                          <td style={{ padding: '0.55rem 0.85rem', fontFamily: 'monospace', fontWeight: row.imputable ? 600 : 800, color: '#0f172a' }}>
+                          <td style={{ padding: '0.55rem 0.85rem', fontFamily: 'monospace', fontWeight: row.imputable ? 600 : 800, color: row.imputable ? 'var(--neon-cyan)' : 'var(--text-primary)' }}>
                             {row.codigo}
                           </td>
                           <td
@@ -1149,13 +1430,13 @@ export default function PasivosView({
                               padding: '0.55rem 0.85rem',
                               paddingLeft: `${0.85 + Math.max(0, (row.nivel || 1) - 1) * 0.75}rem`,
                               fontWeight: row.imputable ? 500 : 800,
-                              color: row.imputable ? '#1e293b' : '#002b7a'
+                              color: row.imputable ? 'var(--text-primary)' : 'var(--accent-primary)'
                             }}
                           >
                             {row.nombre}
                           </td>
-                          <td style={{ padding: '0.55rem 0.85rem', color: '#64748b' }}>Nivel {row.nivel}</td>
-                          <td style={{ padding: '0.55rem 0.85rem', fontSize: '0.75rem', color: '#475569' }}>
+                          <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)' }}>Nivel {row.nivel}</td>
+                          <td style={{ padding: '0.55rem 0.85rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                             {row.imputable ? (PASIVO_SUBGROUP_LABELS[row.subgrupo] || 'Imputable') : 'Agrupación Contable'}
                           </td>
                           <td style={{ padding: '0.55rem 0.85rem', textAlign: 'right' }}>
@@ -1163,16 +1444,8 @@ export default function PasivosView({
                               <button
                                 type="button"
                                 onClick={() => handleOpenCreateOther(row)}
-                                style={{
-                                  padding: '0.25rem 0.55rem',
-                                  borderRadius: '6px',
-                                  border: '1px solid #cbd5e1',
-                                  background: '#fff',
-                                  color: '#1e293b',
-                                  fontSize: '0.72rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer'
-                                }}
+                                className="pasivos-btn-secondary"
+                                style={{ fontSize: '0.72rem' }}
                               >
                                 + Crear Auxiliar
                               </button>
@@ -1184,9 +1457,9 @@ export default function PasivosView({
                                 style={{
                                   padding: '0.25rem 0.55rem',
                                   borderRadius: '6px',
-                                  border: '1px solid #fcd34d',
-                                  background: '#fffbeb',
-                                  color: '#92400e',
+                                  border: '1px solid rgba(245, 158, 11, 0.45)',
+                                  background: 'var(--semaforo-amarillo-bg)',
+                                  color: 'var(--accent-amber)',
                                   fontSize: '0.72rem',
                                   fontWeight: 700,
                                   cursor: 'pointer'
@@ -1211,7 +1484,7 @@ export default function PasivosView({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
                   <div style={{ position: 'relative' }}>
-                    <Search size={14} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                    <Search size={14} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                     <input
                       type="text"
                       value={movSearch}
@@ -1259,10 +1532,10 @@ export default function PasivosView({
                 </button>
               </div>
 
-              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+              <div className="pasivos-table-wrap">
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                   <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
+                    <tr style={{ textAlign: 'left' }}>
                       <th style={{ padding: '0.65rem 0.85rem' }}>Fecha</th>
                       <th style={{ padding: '0.65rem 0.85rem' }}>Tipo / Origen</th>
                       <th style={{ padding: '0.65rem 0.85rem' }}>Cuenta Pasivo Socio</th>
@@ -1275,7 +1548,7 @@ export default function PasivosView({
                   <tbody>
                     {filteredMovements.length === 0 ? (
                       <tr>
-                        <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>
+                        <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                           No hay movimientos registrados aún en Cuentas de Pasivo Socio.
                         </td>
                       </tr>
@@ -1283,8 +1556,8 @@ export default function PasivosView({
                       filteredMovements.map((mov) => {
                         const isAbono = mov.tipo === 'ABONO_SOCIO';
                         return (
-                          <tr key={mov.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                            <td style={{ padding: '0.65rem 0.85rem', whiteSpace: 'nowrap', fontWeight: 600, color: '#334155' }}>
+                          <tr key={mov.id}>
+                            <td style={{ padding: '0.65rem 0.85rem', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--text-secondary)' }}>
                               {mov.fecha || '—'}
                             </td>
                             <td style={{ padding: '0.65rem 0.85rem' }}>
@@ -1295,8 +1568,9 @@ export default function PasivosView({
                                   gap: '0.25rem',
                                   padding: '0.2rem 0.55rem',
                                   borderRadius: '999px',
-                                  background: isAbono ? '#dcfce7' : '#fef3c7',
-                                  color: isAbono ? '#166534' : '#92400e',
+                                  background: isAbono ? 'var(--semaforo-verde-bg)' : 'var(--semaforo-amarillo-bg)',
+                                  color: isAbono ? 'var(--accent-emerald)' : 'var(--accent-amber)',
+                                  border: isAbono ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(245, 158, 11, 0.35)',
                                   fontWeight: 700,
                                   fontSize: '0.73rem'
                                 }}
@@ -1305,46 +1579,41 @@ export default function PasivosView({
                                 {isAbono ? 'ABONO A SOCIO' : (mov.origen === 'CXP_PAGO_PROVEEDOR' ? 'PAGO CXP SOCIO' : 'CARGO PASIVO')}
                               </span>
                             </td>
-                            <td style={{ padding: '0.65rem 0.85rem', fontWeight: 600, color: '#0f172a' }}>
+                            <td style={{ padding: '0.65rem 0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                               {mov.cuentaNombre}
                             </td>
                             <td style={{ padding: '0.65rem 0.85rem' }}>
-                              <div style={{ color: '#0f172a' }}>{mov.concepto}</div>
+                              <div style={{ color: 'var(--text-primary)' }}>{mov.concepto}</div>
+                              {mov.treasuryAccountLabel && (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--accent-sky, #0284c7)', fontWeight: 600 }}>
+                                  Tesorería origen: {mov.treasuryAccountLabel}
+                                </div>
+                              )}
                               {mov.referencia && (
-                                <div style={{ fontSize: '0.72rem', color: '#64748b' }}>Ref: {mov.referencia}</div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Ref: {mov.referencia}</div>
                               )}
                             </td>
-                            <td style={{ padding: '0.65rem 0.85rem', textAlign: 'right', fontWeight: 700, color: isAbono ? '#15803d' : '#b45309' }}>
+                            <td style={{ padding: '0.65rem 0.85rem', textAlign: 'right', fontWeight: 700, color: isAbono ? 'var(--accent-emerald)' : 'var(--accent-amber)' }}>
                               {isAbono ? '-' : '+'}{formatUsd(mov.montoUsd || 0)}
                             </td>
-                            <td style={{ padding: '0.65rem 0.85rem', textAlign: 'right', color: '#475569' }}>
+                            <td style={{ padding: '0.65rem 0.85rem', textAlign: 'right', color: 'var(--text-secondary)' }}>
                               {formatBs(mov.montoBs || 0)}
                             </td>
                             <td style={{ padding: '0.65rem 0.85rem', textAlign: 'right' }}>
-                              {mov.origen === 'MANUAL_PASIVOS' ? (
+                              {(mov.origen === 'MANUAL_PASIVOS' || (mov.origen === 'CAJA_BANCOS' && mov.cashMovementId && onDeleteCashMovement)) ? (
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteManualMovement(mov)}
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    borderRadius: '6px',
-                                    border: '1px solid #fecaca',
-                                    background: '#fef2f2',
-                                    color: '#b91c1c',
-                                    fontSize: '0.73rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.2rem'
-                                  }}
-                                  title="Revertir movimiento manual"
+                                  className="pasivos-btn-danger"
+                                  title="Revertir movimiento y conciliar saldos"
                                 >
                                   <Trash2 size={12} />
                                   Revertir
                                 </button>
                               ) : (
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Desde CxP</span>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                  {mov.origen === 'CAJA_BANCOS' ? 'Desde Caja/Bancos' : 'Desde CxP'}
+                                </span>
                               )}
                             </td>
                           </tr>
@@ -1360,590 +1629,813 @@ export default function PasivosView({
       </div>
 
       {/* MODAL CREAR / EDITAR CUENTA POR PAGAR SOCIO */}
-      {showPartnerModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.58)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.25rem'
-          }}
-        >
+      {showPartnerModal && (() => {
+        const modalNode = (
           <div
+            className="modal-overlay"
             style={{
-              background: '#fff',
-              borderRadius: '16px',
-              width: '100%',
-              maxWidth: '680px',
-              maxHeight: '90vh',
-              overflowY: 'auto',
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.28)'
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 99999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1.25rem'
             }}
+            onClick={() => setShowPartnerModal(false)}
           >
             <div
-              style={{
-                padding: '1.1rem 1.4rem',
-                borderBottom: '1px solid #e2e8f0',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: 'linear-gradient(135deg, #fffbeb 0%, #ffffff 100%)'
-              }}
+              className="pasivos-modal-card"
+              style={{ maxWidth: '680px' }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 800, color: '#0f172a' }}>
-                  {editingPartnerAccId ? 'Editar Cuenta por Pagar Socio' : 'Nueva Cuenta por Pagar Socio'}
-                </h3>
-                <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
-                  Código Contable <strong>2.02.01.001</strong> · Sincronizada con dropdown Origen en CxP
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowPartnerModal(false)}
-                style={{
-                  border: '1px solid #e2e8f0',
-                  background: '#fff',
-                  borderRadius: '8px',
-                  width: '32px',
-                  height: '32px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  color: '#475569'
-                }}
-              >
-                <X size={17} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmitPartnerAccount} style={{ padding: '1.25rem 1.4rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+              <div className="pasivos-modal-header">
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Código *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={partnerForm.codigo}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, codigo: e.target.value.toUpperCase() }))}
-                    placeholder="SOC-01"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
+                  <h3 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                    {editingPartnerAccId ? 'Editar Cuenta por Pagar Socio' : 'Nueva Cuenta por Pagar Socio'}
+                  </h3>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                    Código Contable <strong>2.02.01.001</strong> · Sincronizada con dropdown Origen en CxP
+                  </div>
                 </div>
-
-                <div style={{ gridColumn: 'span 2' }}>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Nombre de la Cuenta *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={partnerForm.nombre}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, nombre: e.target.value }))}
-                    placeholder="Ej: Cuenta por Pagar Socio Principal"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Socio / Titular
-                  </label>
-                  <input
-                    type="text"
-                    value={partnerForm.titular}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, titular: e.target.value }))}
-                    placeholder="Nombre del socio"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Moneda Principal
-                  </label>
-                  <select
-                    value={partnerForm.moneda}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, moneda: e.target.value }))}
-                    className="select-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  >
-                    <option value="USD">Dólares ($ USD)</option>
-                    <option value="BS">Bolívares (Bs.)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Saldo Pasivo USD ($)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={partnerForm.saldoUsd}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, saldoUsd: e.target.value }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Saldo Pasivo Bs.
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={partnerForm.saldoBs}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, saldoBs: e.target.value }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Estado
-                  </label>
-                  <select
-                    value={partnerForm.activa ? 'true' : 'false'}
-                    onChange={(e) => setPartnerForm((f) => ({ ...f, activa: e.target.value === 'true' }))}
-                    className="select-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  >
-                    <option value="true">Activa (Visible en CxP)</option>
-                    <option value="false">Inactiva (Oculta en CxP)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                  Observaciones
-                </label>
-                <input
-                  type="text"
-                  value={partnerForm.observaciones}
-                  onChange={(e) => setPartnerForm((f) => ({ ...f, observaciones: e.target.value }))}
-                  placeholder="Acuerdo o nota de respaldo con el socio..."
-                  className="input-modern"
-                  style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid #f1f5f9' }}>
                 <button
                   type="button"
                   onClick={() => setShowPartnerModal(false)}
-                  style={{
-                    padding: '0.5rem 0.95rem',
-                    borderRadius: '8px',
-                    border: '1px solid #cbd5e1',
-                    background: '#fff',
-                    color: '#475569',
-                    fontWeight: 600,
-                    fontSize: '0.83rem',
-                    cursor: 'pointer'
-                  }}
+                  className="pasivos-btn-secondary"
+                  style={{ width: '32px', height: '32px', justifyContent: 'center', padding: 0, borderRadius: '8px' }}
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  style={{
-                    padding: '0.5rem 1.1rem',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: '#b45309',
-                    color: '#fff',
-                    fontWeight: 700,
-                    fontSize: '0.83rem',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.4rem'
-                  }}
-                >
-                  <Save size={15} />
-                  {editingPartnerAccId ? 'Guardar Cambios' : 'Crear y Guardar Cuenta'}
+                  <X size={17} />
                 </button>
               </div>
-            </form>
+
+              <form onSubmit={handleSubmitPartnerAccount} style={{ padding: '1.25rem 1.4rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Código *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={partnerForm.codigo}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, codigo: e.target.value.toUpperCase() }))}
+                      placeholder="SOC-01"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Nombre de la Cuenta *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={partnerForm.nombre}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, nombre: e.target.value }))}
+                      placeholder="Ej: Cuenta por Pagar Socio Principal"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Socio / Titular
+                    </label>
+                    <input
+                      type="text"
+                      value={partnerForm.titular}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, titular: e.target.value }))}
+                      placeholder="Nombre del socio"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Moneda Principal
+                    </label>
+                    <select
+                      value={partnerForm.moneda}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, moneda: e.target.value }))}
+                      className="select-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    >
+                      <option value="USD">Dólares ($ USD)</option>
+                      <option value="BS">Bolívares (Bs.)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Saldo Pasivo USD ($)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={partnerForm.saldoUsd}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, saldoUsd: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Saldo Pasivo Bs.
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={partnerForm.saldoBs}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, saldoBs: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Estado
+                    </label>
+                    <select
+                      value={partnerForm.activa ? 'true' : 'false'}
+                      onChange={(e) => setPartnerForm((f) => ({ ...f, activa: e.target.value === 'true' }))}
+                      className="select-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    >
+                      <option value="true">Activa (Visible en CxP)</option>
+                      <option value="false">Inactiva (Oculta en CxP)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                    Observaciones
+                  </label>
+                  <input
+                    type="text"
+                    value={partnerForm.observaciones}
+                    onChange={(e) => setPartnerForm((f) => ({ ...f, observaciones: e.target.value }))}
+                    placeholder="Acuerdo o nota de respaldo con el socio..."
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-glass)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowPartnerModal(false)}
+                    className="pasivos-btn-secondary"
+                    style={{ padding: '0.5rem 0.95rem', borderRadius: '8px', fontSize: '0.83rem' }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      padding: '0.5rem 1.1rem',
+                      borderRadius: '8px',
+                      border: 'none',
+                      background: '#b45309',
+                      color: '#fff',
+                      fontWeight: 700,
+                      fontSize: '0.83rem',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem'
+                    }}
+                  >
+                    <Save size={15} />
+                    {editingPartnerAccId ? 'Guardar Cambios' : 'Crear y Guardar Cuenta'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
 
       {/* MODAL CARGO / ABONO DIRECTO A CUENTA SOCIO */}
-      {showMovModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.58)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.25rem'
-          }}
-        >
+      {showMovModal && (() => {
+        const modalNode = (
           <div
+            className="modal-overlay"
             style={{
-              background: '#fff',
-              borderRadius: '16px',
-              width: '100%',
-              maxWidth: '540px',
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.28)'
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 99999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1.25rem'
             }}
+            onClick={() => setShowMovModal(false)}
           >
-            <div style={{ padding: '1rem 1.35rem', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
-                Registrar Cargo / Abono a Cuenta Socio
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowMovModal(false)}
-                style={{ border: '1px solid #e2e8f0', background: '#fff', borderRadius: '8px', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#475569' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmitPartnerMovement} style={{ padding: '1.2rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                  Cuenta por Pagar Socio *
-                </label>
-                <select
-                  required
-                  value={movForm.cuentaId}
-                  onChange={(e) => setMovForm((f) => ({ ...f, cuentaId: e.target.value }))}
-                  className="select-modern"
-                  style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                >
-                  {effectivePartnerAccounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.codigo} · {acc.nombre} (Saldo: {formatUsd(acc.saldoUsd || 0)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Tipo de Operación *
-                  </label>
-                  <select
-                    value={movForm.tipo}
-                    onChange={(e) => setMovForm((f) => ({ ...f, tipo: e.target.value }))}
-                    className="select-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  >
-                    <option value="ABONO_SOCIO">Abono / Reembolso al Socio (- Pasivo)</option>
-                    <option value="CARGO_PASIVO">Nuevo Cargo / Compromiso (+ Pasivo)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Fecha *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={movForm.fecha}
-                    onChange={(e) => setMovForm((f) => ({ ...f, fecha: e.target.value }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Monto USD ($) *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={movForm.montoUsd}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      const num = Number(val || 0);
-                      setMovForm((f) => ({
-                        ...f,
-                        montoUsd: val,
-                        montoBs: num > 0 && tasaBcv > 0 ? String(round2(num * tasaBcv)) : '0'
-                      }));
-                    }}
-                    placeholder="0.00"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Equivalente Bs.
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={movForm.montoBs}
-                    onChange={(e) => setMovForm((f) => ({ ...f, montoBs: e.target.value }))}
-                    placeholder="0.00"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                  Referencia / Comprobante
-                </label>
-                <input
-                  type="text"
-                  value={movForm.referencia}
-                  onChange={(e) => setMovForm((f) => ({ ...f, referencia: e.target.value }))}
-                  placeholder="Ej: TRF-00412 / Recibo Socio"
-                  className="input-modern"
-                  style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                  Concepto / Detalle *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={movForm.concepto}
-                  onChange={(e) => setMovForm((f) => ({ ...f, concepto: e.target.value }))}
-                  placeholder="Ej: Reembolso parcial a socio por pago a proveedor..."
-                  className="input-modern"
-                  style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid #f1f5f9' }}>
+            <div
+              className="pasivos-modal-card"
+              style={{ maxWidth: '540px' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="pasivos-modal-header">
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                  Registrar Cargo / Abono a Cuenta Socio
+                </h3>
                 <button
                   type="button"
                   onClick={() => setShowMovModal(false)}
-                  style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#fff', color: '#475569', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer' }}
+                  className="pasivos-btn-secondary"
+                  style={{ width: '30px', height: '30px', justifyContent: 'center', padding: 0, borderRadius: '8px' }}
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  style={{ padding: '0.48rem 1.05rem', borderRadius: '8px', border: 'none', background: '#0369a1', color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <Save size={14} />
-                  Guardar Movimiento
+                  <X size={16} />
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* MODAL CREAR / EDITAR OTRA CUENTA DE PASIVO */}
-      {showOtherModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.58)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.25rem'
-          }}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: '16px',
-              width: '100%',
-              maxWidth: '640px',
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.28)'
-            }}
-          >
-            <div style={{ padding: '1rem 1.35rem', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
-                {editingOtherId ? 'Editar Cuenta de Pasivo' : 'Nueva Cuenta Auxiliar de Pasivo'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowOtherModal(false)}
-                style={{ border: '1px solid #e2e8f0', background: '#fff', borderRadius: '8px', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#475569' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmitOtherAccount} style={{ padding: '1.2rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '0.75rem' }}>
+              <form onSubmit={handleSubmitPartnerMovement} style={{ padding: '1.2rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Código Interno *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={otherForm.codigo}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, codigo: e.target.value.toUpperCase() }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Cuenta Contable (Grupo 2) *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={otherForm.codigoContable}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, codigoContable: e.target.value }))}
-                    placeholder="2.02.01.002"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Subgrupo Pasivo
+                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                    Cuenta por Pagar Socio *
                   </label>
                   <select
-                    value={otherForm.subgrupo}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, subgrupo: e.target.value }))}
+                    required
+                    value={movForm.cuentaId}
+                    onChange={(e) => setMovForm((f) => ({ ...f, cuentaId: e.target.value }))}
                     className="select-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
                   >
-                    {Object.entries(PASIVO_SUBGROUP_LABELS).map(([k, lbl]) => (
-                      <option key={k} value={k}>{lbl}</option>
+                    {effectivePartnerAccounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.codigo} · {acc.nombre} (Saldo: {formatUsd(acc.saldoUsd || 0)})
+                      </option>
                     ))}
                   </select>
                 </div>
 
-                <div style={{ gridColumn: 'span 2' }}>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Nombre de la Cuenta *
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Tipo de Operación *
+                    </label>
+                    <select
+                      value={movForm.tipo}
+                      onChange={(e) => setMovForm((f) => ({ ...f, tipo: e.target.value }))}
+                      className="select-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    >
+                      <option value="ABONO_SOCIO">Abono / Reembolso al Socio (- Pasivo)</option>
+                      <option value="CARGO_PASIVO">Nuevo Cargo / Compromiso (+ Pasivo)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Fecha *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={movForm.fecha}
+                      onChange={(e) => setMovForm((f) => ({ ...f, fecha: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+                </div>
+
+                {movForm.tipo === 'ABONO_SOCIO' && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Cuenta de Caja Chica / Banco de donde sale el pago *
+                    </label>
+                    <select
+                      value={movForm.treasuryAccountKey}
+                      onChange={(e) => setMovForm((f) => ({ ...f, treasuryAccountKey: e.target.value }))}
+                      className="select-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    >
+                      {treasuryAccountOptions.some((o) => o.kind === 'CAJA') && (
+                        <optgroup label="Cajas Chicas Operativas (1.01.01)">
+                          {treasuryAccountOptions.filter((o) => o.kind === 'CAJA').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {treasuryAccountOptions.some((o) => o.kind === 'BANCO') && (
+                        <optgroup label="Cuentas Bancarias (1.01.02)">
+                          {treasuryAccountOptions.filter((o) => o.kind === 'BANCO').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <option value="SOLO_CONTABLE">Ajuste Interno / Compensación (Sin salida de Caja ni Banco)</option>
+                    </select>
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Monto USD ($) *
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={movForm.montoUsd}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const num = Number(val || 0);
+                        setMovForm((f) => ({
+                          ...f,
+                          montoUsd: val,
+                          montoBs: num > 0 && tasaBcv > 0 ? String(round2(num * tasaBcv)) : '0'
+                        }));
+                      }}
+                      placeholder="0.00"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Equivalente Bs.
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={movForm.montoBs}
+                      onChange={(e) => setMovForm((f) => ({ ...f, montoBs: e.target.value }))}
+                      placeholder="0.00"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                    Referencia / Comprobante
+                  </label>
+                  <input
+                    type="text"
+                    value={movForm.referencia}
+                    onChange={(e) => setMovForm((f) => ({ ...f, referencia: e.target.value }))}
+                    placeholder="Ej: TRF-00412 / Recibo Socio"
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                    Concepto / Detalle *
                   </label>
                   <input
                     type="text"
                     required
-                    value={otherForm.nombre}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, nombre: e.target.value }))}
+                    value={movForm.concepto}
+                    onChange={(e) => setMovForm((f) => ({ ...f, concepto: e.target.value }))}
+                    placeholder="Ej: Reembolso parcial a socio por pago a proveedor..."
                     className="input-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.84rem' }}
                   />
                 </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Acreedor / Ente
-                  </label>
-                  <input
-                    type="text"
-                    value={otherForm.acreedor}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, acreedor: e.target.value }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Moneda
-                  </label>
-                  <select
-                    value={otherForm.moneda}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, moneda: e.target.value }))}
-                    className="select-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-glass)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowMovModal(false)}
+                    className="pasivos-btn-secondary"
+                    style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', fontSize: '0.82rem' }}
                   >
-                    <option value="USD">Dólares ($ USD)</option>
-                    <option value="BS">Bolívares (Bs.)</option>
-                  </select>
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    style={{ padding: '0.48rem 1.05rem', borderRadius: '8px', border: 'none', background: '#0369a1', color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                  >
+                    <Save size={14} />
+                    Guardar Movimiento
+                  </button>
                 </div>
+              </form>
+            </div>
+          </div>
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Saldo Pasivo USD ($)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={otherForm.saldoUsd}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, saldoUsd: e.target.value }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>
-                    Saldo Pasivo Bs.
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={otherForm.saldoBs}
-                    onChange={(e) => setOtherForm((f) => ({ ...f, saldoBs: e.target.value }))}
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid #f1f5f9' }}>
+      {/* MODAL CREAR / EDITAR OTRA CUENTA DE PASIVO */}
+      {showOtherModal && (() => {
+        const modalNode = (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 99999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1.25rem'
+            }}
+            onClick={() => setShowOtherModal(false)}
+          >
+            <div
+              className="pasivos-modal-card"
+              style={{ maxWidth: '640px' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="pasivos-modal-header">
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                  {editingOtherId ? 'Editar Cuenta de Pasivo' : 'Nueva Cuenta Auxiliar de Pasivo'}
+                </h3>
                 <button
                   type="button"
                   onClick={() => setShowOtherModal(false)}
-                  style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#fff', color: '#475569', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer' }}
+                  className="pasivos-btn-secondary"
+                  style={{ width: '30px', height: '30px', justifyContent: 'center', padding: 0, borderRadius: '8px' }}
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  style={{ padding: '0.48rem 1.05rem', borderRadius: '8px', border: 'none', background: 'var(--brand-blue, #002b7a)', color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <Save size={14} />
-                  {editingOtherId ? 'Guardar Cambios' : 'Crear Cuenta de Pasivo'}
+                  <X size={16} />
                 </button>
               </div>
-            </form>
+
+              <form onSubmit={handleSubmitOtherAccount} style={{ padding: '1.2rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Código Interno *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={otherForm.codigo}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, codigo: e.target.value.toUpperCase() }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Cuenta Contable (Grupo 2) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={otherForm.codigoContable}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, codigoContable: e.target.value }))}
+                      placeholder="2.02.01.002"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Subgrupo Pasivo
+                    </label>
+                    <select
+                      value={otherForm.subgrupo}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, subgrupo: e.target.value }))}
+                      className="select-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    >
+                      {Object.entries(PASIVO_SUBGROUP_LABELS).map(([k, lbl]) => (
+                        <option key={k} value={k}>{lbl}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Nombre de la Cuenta *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={otherForm.nombre}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, nombre: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Acreedor / Ente
+                    </label>
+                    <input
+                      type="text"
+                      value={otherForm.acreedor}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, acreedor: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Moneda
+                    </label>
+                    <select
+                      value={otherForm.moneda}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, moneda: e.target.value }))}
+                      className="select-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    >
+                      <option value="USD">Dólares ($ USD)</option>
+                      <option value="BS">Bolívares (Bs.)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Saldo Pasivo USD ($)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={otherForm.saldoUsd}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, saldoUsd: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      Saldo Pasivo Bs.
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={otherForm.saldoBs}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, saldoBs: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.48rem 0.65rem', fontSize: '0.83rem' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-glass)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowOtherModal(false)}
+                    className="pasivos-btn-secondary"
+                    style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', fontSize: '0.82rem' }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    style={{ padding: '0.48rem 1.05rem', borderRadius: '8px', border: 'none', background: 'var(--motorven-navy, #002b7a)', color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                  >
+                    <Save size={14} />
+                    {editingOtherId ? 'Guardar Cambios' : 'Crear Cuenta de Pasivo'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
+
+      {/* MODAL VER FICHA Y ESTADO DE CUENTA DETALLADO (PARTNER / OTHER) */}
+      {viewingLiabilityModal?.account && (() => {
+        const acc = viewingLiabilityModal.account;
+        const kind = viewingLiabilityModal.kind || 'PARTNER';
+        const { isPartner, movs, cargosUsd, abonosUsd, saldoUsd, saldoBs } = buildAccountSummaryStats(acc, kind);
+        const codeContable = acc.codigoContable || (isPartner ? '2.02.01.001' : '2.06.01.001');
+        const holderLabel = isPartner ? (acc.titular || 'Socio Principal') : (acc.acreedor || 'Acreedor');
+
+        const modalNode = (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 99999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1.25rem'
+            }}
+            onClick={() => setViewingLiabilityModal(null)}
+          >
+            <div
+              className="pasivos-modal-card"
+              style={{ maxWidth: '820px', maxHeight: '90vh', overflowY: 'auto' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="pasivos-modal-header">
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                      {acc.codigo} · {acc.nombre}
+                    </h3>
+                    <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: 'rgba(14, 165, 233, 0.14)', color: 'var(--neon-cyan)', border: '1px solid rgba(14, 165, 233, 0.3)' }}>
+                      {codeContable}
+                    </span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: acc.activa !== false ? 'var(--semaforo-verde-bg)' : 'var(--bg-pill)', color: acc.activa !== false ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+                      {acc.activa !== false ? 'Activa' : 'Inactiva'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                    {isPartner ? 'Socio / Titular' : 'Acreedor / Ente'}: <strong style={{ color: 'var(--text-primary)' }}>{holderLabel}</strong> · Moneda base: {acc.moneda || 'USD'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingLiabilityModal(null)}
+                  className="pasivos-modal-close"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div style={{ padding: '1.25rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: '0.75rem' }}>
+                  <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-glass)', borderRadius: '10px', padding: '0.75rem 0.9rem' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Saldo Pasivo Actual</div>
+                    <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-amber)', marginTop: '0.2rem' }}>{formatUsd(saldoUsd)}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{formatBs(saldoBs)}</div>
+                  </div>
+                  {isPartner ? (
+                    <>
+                      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-glass)', borderRadius: '10px', padding: '0.75rem 0.9rem' }}>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total Cargos (+ Pasivo)</div>
+                        <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--neon-cyan)', marginTop: '0.2rem' }}>{formatUsd(cargosUsd)}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{movs.filter((m) => m.tipo !== 'ABONO_SOCIO').length} cargo(s)</div>
+                      </div>
+                      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-glass)', borderRadius: '10px', padding: '0.75rem 0.9rem' }}>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total Abonos (- Pasivo)</div>
+                        <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-emerald)', marginTop: '0.2rem' }}>{formatUsd(abonosUsd)}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{movs.filter((m) => m.tipo === 'ABONO_SOCIO').length} abono(s)</div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-glass)', borderRadius: '10px', padding: '0.75rem 0.9rem', gridColumn: 'span 2' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Subgrupo BA VEN-NIF 2</div>
+                      <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.25rem' }}>
+                        {PASIVO_SUBGROUP_LABELS[acc.subgrupo] || acc.subgrupo || 'Otros Pasivos'}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Cuenta {codeContable}</div>
+                    </div>
+                  )}
+                </div>
+
+                {acc.observaciones && (
+                  <div style={{ padding: '0.65rem 0.9rem', borderRadius: '10px', background: 'var(--bg-surface)', border: '1px solid var(--border-glass)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    <strong style={{ color: 'var(--text-primary)' }}>Observaciones:</strong> {acc.observaciones}
+                  </div>
+                )}
+
+                {isPartner && (
+                  <div>
+                    <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.86rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                      Movimientos e Imputaciones de esta Cuenta ({movs.length})
+                    </h4>
+                    <div className="pasivos-table-wrap" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.79rem' }}>
+                        <thead>
+                          <tr style={{ textAlign: 'left', position: 'sticky', top: 0, zIndex: 2 }}>
+                            <th style={{ padding: '0.55rem 0.75rem' }}>Fecha</th>
+                            <th style={{ padding: '0.55rem 0.75rem' }}>Tipo / Origen</th>
+                            <th style={{ padding: '0.55rem 0.75rem' }}>Concepto / Tesorería</th>
+                            <th style={{ padding: '0.55rem 0.75rem', textAlign: 'right' }}>USD</th>
+                            <th style={{ padding: '0.55rem 0.75rem', textAlign: 'right' }}>Bs.</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {movs.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} style={{ padding: '1.35rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                No hay movimientos registrados para esta cuenta todavía.
+                              </td>
+                            </tr>
+                          ) : (
+                            movs.map((m) => {
+                              const isAb = m.tipo === 'ABONO_SOCIO';
+                              return (
+                                <tr key={m.id}>
+                                  <td style={{ padding: '0.55rem 0.75rem', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{m.fecha || '—'}</td>
+                                  <td style={{ padding: '0.55rem 0.75rem', fontWeight: 700, color: isAb ? 'var(--accent-emerald)' : 'var(--accent-amber)' }}>
+                                    {isAb ? 'ABONO A SOCIO' : (m.origen === 'CXP_PAGO_PROVEEDOR' ? 'PAGO CXP SOCIO' : 'CARGO PASIVO')}
+                                  </td>
+                                  <td style={{ padding: '0.55rem 0.75rem' }}>
+                                    <div style={{ color: 'var(--text-primary)' }}>{m.concepto}</div>
+                                    {m.treasuryAccountLabel && (
+                                      <div style={{ fontSize: '0.7rem', color: 'var(--neon-cyan)' }}>Tesorería: {m.treasuryAccountLabel}</div>
+                                    )}
+                                    {m.referencia && (
+                                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Ref: {m.referencia}</div>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: '0.55rem 0.75rem', textAlign: 'right', fontWeight: 700, color: isAb ? 'var(--accent-emerald)' : 'var(--accent-amber)' }}>
+                                    {isAb ? '-' : '+'}{formatUsd(m.montoUsd || 0)}
+                                  </td>
+                                  <td style={{ padding: '0.55rem 0.75rem', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                                    {formatBs(m.montoBs || 0)}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem', paddingTop: '0.6rem', borderTop: '1px solid var(--border-glass)' }}>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintLiabilityAccount(acc, kind, { downloadOnly: false })}
+                      style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', border: 'none', background: '#0284c7', color: '#fff', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                    >
+                      <Printer size={14} />
+                      Imprimir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintLiabilityAccount(acc, kind, { downloadOnly: true })}
+                      className="pasivos-btn-secondary"
+                      style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', fontSize: '0.8rem' }}
+                    >
+                      <Download size={14} />
+                      Descargar PDF
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {isPartner && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setViewingLiabilityModal(null);
+                          handleOpenPartnerMovementModal(acc, 'ABONO_SOCIO');
+                        }}
+                        className="pasivos-btn-info"
+                        style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', fontSize: '0.8rem' }}
+                      >
+                        <ArrowRightLeft size={14} />
+                        Cargo/Abono
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setViewingLiabilityModal(null);
+                        if (isPartner) handleOpenEditPartner(acc);
+                        else handleOpenEditOther(acc);
+                      }}
+                      className="pasivos-btn-secondary"
+                      style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', fontSize: '0.8rem' }}
+                    >
+                      <Edit2 size={14} />
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewingLiabilityModal(null)}
+                      className="pasivos-btn-secondary"
+                      style={{ padding: '0.48rem 0.9rem', borderRadius: '8px', fontSize: '0.8rem' }}
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
     </section>
   );
 }

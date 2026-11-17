@@ -14,7 +14,10 @@ import {
   Filter,
   ChevronUp,
   Layers,
-  Edit2
+  Edit2,
+  SlidersHorizontal,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { formatUsd, formatBs, formatNumberUs, round2 } from '../services/formatService';
 import {
@@ -26,7 +29,11 @@ import {
   setCxcMovementReportCorrelativo,
   commitCxcMovementReportCorrelativo
 } from '../services/fiscalService';
-import { saveSupabaseProfitCollection, fetchEuroRateDetails } from '../services/supabaseService';
+import {
+  saveSupabaseProfitCollection,
+  deleteSupabaseProfitCollection,
+  fetchEuroRateDetails
+} from '../services/supabaseService';
 import { REAL_PROFIT_SELLERS } from '../data/supabaseRealData';
 import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
 import {
@@ -41,7 +48,7 @@ import {
   isDirectCurrencyRateType,
   inferDirectCurrencyFromAccountOrMethod
 } from '../utils/rateClassificationUtils';
-import { generateCollectionReceiptPDF, generateCreditDebitNotePDF } from '../services/pdfReportService';
+import { generateCollectionReceiptPDF, outputCreditDebitNoteDocument } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 
 const getTodayIso = () => {
@@ -234,6 +241,8 @@ const buildInvoiceMovementsList = ({
         horaDisplay: extractDisplayTime(fechaRaw),
         factNum,
         tipoDoc,
+        isFiscal: h.isFiscal,
+        numeroControl: String(h.numeroControl || '').trim(),
         clienteId: doc.clienteId || '',
         clienteNombre: doc.cliente || doc.clienteNombre || 'Cliente General',
         clienteRif: doc.rif || doc.clienteRif || '',
@@ -420,6 +429,7 @@ export function CxcMovementsModal({
   onRegisterCollection,
   onSaveDocument,
   onUpdateCollection,
+  onDeleteCollection,
   onUpdateLocalDoc
 }) {
   let notify = { success: () => {}, error: () => {}, warning: () => {}, info: () => {} };
@@ -506,6 +516,22 @@ export function CxcMovementsModal({
   const [editMovFechaInput, setEditMovFechaInput] = useState('');
   const [editMovCobradorId, setEditMovCobradorId] = useState('');
   const [isSavingEditMovCorr, setIsSavingEditMovCorr] = useState(false);
+
+  // Edición de datos financieros/método/cuenta del cobro (distinto al editor de correlativo/fecha)
+  const [editingPaymentData, setEditingPaymentData] = useState(null);
+  const [editPayFormaPago, setEditPayFormaPago] = useState('TRANSFERENCIA');
+  const [editPayCuentaKey, setEditPayCuentaKey] = useState('');
+  const [editPayTipoTasa, setEditPayTipoTasa] = useState('BCV');
+  const [editPayTasa, setEditPayTasa] = useState('');
+  const [editPayMontoUsd, setEditPayMontoUsd] = useState('');
+  const [editPayMontoBs, setEditPayMontoBs] = useState('');
+  const [editPayReferencia, setEditPayReferencia] = useState('');
+  const [editPayObservaciones, setEditPayObservaciones] = useState('');
+  const [isSavingEditPayment, setIsSavingEditPayment] = useState(false);
+
+  // Confirmación de eliminación de cobro
+  const [deletingMovement, setDeletingMovement] = useState(null);
+  const [isDeletingMovement, setIsDeletingMovement] = useState(false);
 
   // Formulario para insertar nuevo movimiento / abono directamente desde el modal
   const [showInsertPanel, setShowInsertPanel] = useState(true);
@@ -1157,6 +1183,605 @@ export function CxcMovementsModal({
     setEditingMovementCorr(mov);
   };
 
+  const doesHistMatchMovement = (h, doc, mov) => {
+    if (!h || !mov) return false;
+    if (mov.histId && h.id && String(h.id) === String(mov.histId)) return true;
+
+    const oldCorrDigits = String(mov.correlativo || '').replace(/[^0-9]/g, '');
+    const oldCorrNormalized = oldCorrDigits ? oldCorrDigits.padStart(6, '0') : '';
+    const targetCanon = canonicalDocKey(mov.factNum, mov.tipoDoc);
+    const targetAmount = round2(mov.montoUsd || 0);
+
+    const hCorrRaw = String(h.correlativo ?? h.cobNum ?? '').replace(/[^0-9]/g, '');
+    const hCorrNorm = hCorrRaw ? hCorrRaw.padStart(6, '0') : '';
+    const hDate = toIsoDateOnly(h.fecha || doc?.fechaEmision || doc?.fechaEmisionIso || '');
+    const hTasa = Number(h.tasa || doc?.tasa || tasaBcv) || tasaBcv;
+    const hUsd = round2(h.montoUsd ?? (Number(h.montoBs || 0) > 0 && hTasa > 0 ? Number(h.montoBs) / hTasa : 0));
+    const hCanon = canonicalDocKey(h.factNum || doc?.factNum || doc?.factura || '', h.tipoDoc || doc?.tipoDoc);
+
+    return (
+      hCanon === targetCanon &&
+      hDate === mov.fechaIso &&
+      Math.abs(hUsd - targetAmount) <= 0.02 &&
+      (!oldCorrNormalized || !hCorrNorm || hCorrNorm === oldCorrNormalized)
+    );
+  };
+
+  const buildUpdatedDocPayload = (doc, nextHist, nextAbonosUsd, nextRestanteUsd) => {
+    const cleanAbonos = round2(Math.max(0, nextAbonosUsd));
+    const cleanRestante = round2(Math.max(0, nextRestanteUsd));
+    return {
+      ...doc,
+      factNum: String(doc.factNum),
+      tipoDoc: doc.tipoDoc,
+      fechaEmision: doc.fechaEmisionIso || doc.fechaEmision,
+      fechaVencimiento: doc.fechaVencimientoIso || doc.fechaVencimiento,
+      clienteId: doc.clienteId,
+      clienteNombre: doc.cliente || doc.clienteNombre,
+      clienteRif: doc.rif || doc.clienteRif,
+      vendedorId: doc.vendedorId,
+      vendedorNombre: doc.vendedorNombre,
+      diasCredito: doc.diasCredito,
+      diasVencidoCustom: doc.diasVencidoCustom,
+      totBrutoUsd: doc.subtotalUsd ?? doc.totBrutoUsd,
+      ivaUsd: doc.tipoDoc === 'NOTA_ENTREGA' ? 0 : (doc.ivaUsd ?? 0),
+      totNetoUsd: doc.montoFacturaUsd ?? doc.totNetoUsd,
+      abonosUsd: cleanAbonos,
+      saldoUsd: cleanRestante,
+      restanteUsd: cleanRestante,
+      status: cleanRestante <= 0.01 ? 'COBRADA' : 'PENDIENTE',
+      estado: cleanRestante <= 0.01 ? 'PAGADO' : 'PENDIENTE',
+      tasa: Number(doc.tasa || tasaBcv),
+      historialCobros: nextHist
+    };
+  };
+
+  const findMatchingCollectionsForMovement = (mov) => {
+    if (!mov) return [];
+    const oldCorrDigits = String(mov.correlativo || '').replace(/[^0-9]/g, '');
+    const oldCorrNormalized = oldCorrDigits ? oldCorrDigits.padStart(6, '0') : '';
+    const targetCanon = canonicalDocKey(mov.factNum, mov.tipoDoc);
+    const targetAmount = round2(mov.montoUsd || 0);
+    const matched = [];
+    const seen = new Set();
+
+    (collections || []).forEach((col) => {
+      if (!col || col.anulado) return;
+      const colIdStr = String(col.id || '');
+      if (!colIdStr || seen.has(colIdStr)) return;
+
+      const byColId = Boolean(
+        (mov.collectionId && colIdStr === String(mov.collectionId)) ||
+        (mov.source === 'PROFIT_COLLECTION' && mov.rawId && String(mov.rawId).startsWith(colIdStr))
+      );
+
+      const colCorrRaw = String(col.correlativo ?? col.cobNum ?? col.cob_num ?? '').replace(/[^0-9]/g, '');
+      const colCorrNorm = colCorrRaw ? colCorrRaw.padStart(6, '0') : '';
+      const colDate = toIsoDateOnly(col.fecha || col.fec_cob || col.fechaCobro || col.fechaSincronizacion || '');
+      const { usdVal: colUsd } = resolveCollectionAmounts(col, tasaBcv);
+      const affected = Array.isArray(col.documentosAfectados) ? col.documentosAfectados : [];
+      const matchesDocAffected = affected.some((aff) => {
+        const affNum = String(aff?.numDoc || '').trim();
+        const affType = String(aff?.tipoDoc || '').toUpperCase().includes('N/E') || affNum.toUpperCase().startsWith('NE-')
+          ? 'NOTA_ENTREGA'
+          : 'FACTURA';
+        const affCanon = canonicalDocKey(affNum, affType);
+        const affUsd = round2(Number(aff?.montoCobradoUsd || 0));
+        return affCanon === targetCanon && (affUsd <= 0 || Math.abs(affUsd - targetAmount) <= 0.05 || Math.abs(colUsd - targetAmount) <= 0.05);
+      });
+
+      const bySignature =
+        colDate === mov.fechaIso &&
+        (!oldCorrNormalized || !colCorrNorm || colCorrNorm === oldCorrNormalized) &&
+        (matchesDocAffected || (mov.factNum === 'GENERAL' && Math.abs(colUsd - targetAmount) <= 0.05));
+
+      if (byColId || bySignature) {
+        seen.add(colIdStr);
+        matched.push(col);
+      }
+    });
+
+    return matched;
+  };
+
+  const resolveCatalogAccountForMov = (mov) => {
+    if (!mov || !Array.isArray(catalogCuentas) || catalogCuentas.length === 0) return null;
+    const norm = (v) => String(v || '').trim().toUpperCase();
+    const stripPref = (v) => norm(v).replace(/^(CAJA:|BANCO:|CAJA-|CTA-)/, '');
+    const movId = stripPref(mov.cuentaId);
+    const movName = norm(mov.cuentaNombre);
+
+    return (
+      catalogCuentas.find((c) => {
+        const cid = stripPref(c.rawId || c.id || c.key);
+        const cKey = stripPref(c.key);
+        if (movId && (cid === movId || cKey === movId)) return true;
+        if (movName && (norm(c.nombre) === movName || norm(c.label) === movName)) return true;
+        return false;
+      }) || null
+    );
+  };
+
+  const normalizeFormaPagoForSelect = (rawForma) => {
+    const u = String(rawForma || '').trim().toUpperCase();
+    if (u === 'PAGO MÓVIL' || u === 'PAGO MOVIL' || u === 'PM') return 'PAGO_MOVIL';
+    if (u === 'DEPÓSITO' || u === 'DEPOSITO' || u === 'DEPO') return 'DEPOSITO';
+    if (u === 'NOTA DE CRÉDITO' || u === 'NOTA DE CREDITO' || u === 'N/CR' || u === 'NCR') return 'NOTA_CREDITO';
+    if (['EFECTIVO', 'TRANSFERENCIA', 'PAGO_MOVIL', 'ZELLE', 'USDT', 'DEPOSITO', 'CHEQUE', 'OTRO', 'NOTA_CREDITO'].includes(u)) {
+      return u;
+    }
+    if (u.includes('EFEC')) return 'EFECTIVO';
+    if (u.includes('TRANS')) return 'TRANSFERENCIA';
+    if (u.includes('ZELLE')) return 'ZELLE';
+    if (u.includes('USDT')) return 'USDT';
+    return 'TRANSFERENCIA';
+  };
+
+  const isEditPaymentDocFiscal = useMemo(() => {
+    if (!editingPaymentData) return false;
+    return String(editingPaymentData.tipoDoc || '').toUpperCase() !== 'NOTA_ENTREGA';
+  }, [editingPaymentData]);
+
+  const handleOpenEditPaymentData = (mov) => {
+    if (!mov) return;
+    const formaKey = normalizeFormaPagoForSelect(mov.formaPago);
+    const matchedAcct = resolveCatalogAccountForMov(mov);
+    const hasLegacyAcct = !matchedAcct && Boolean(mov.cuentaNombre || mov.cuentaId);
+    const initialCuentaKey = matchedAcct?.key || (hasLegacyAcct ? '__KEEP__' : (catalogCuentas?.[0]?.key || ''));
+
+    const rawTipoTasa = normalizeCxcRateType(mov.tipoTasa);
+    const isFiscal = String(mov.tipoDoc || '').toUpperCase() !== 'NOTA_ENTREGA';
+    const resolvedTipo = isFiscal && rawTipoTasa === 'EURO' ? 'BCV' : (rawTipoTasa || 'BCV');
+    const isDirect = isDirectCurrencyRateType(resolvedTipo);
+    const initialUsd = round2(Number(mov.montoUsd || 0));
+    const rawRate = Number(mov.tasa || 0);
+    const initialRateStr = isDirect
+      ? '0'
+      : (rawRate > 1 ? round2(rawRate).toFixed(2) : resolvePresetRateValue(resolvedTipo));
+    const initialRateNum = Number(initialRateStr) || 0;
+    const initialBsStr = isDirect
+      ? '0'
+      : round2(Number(mov.montoBs || 0) > 0 ? Number(mov.montoBs) : initialUsd * initialRateNum).toFixed(2);
+
+    setEditPayFormaPago(formaKey);
+    setEditPayCuentaKey(initialCuentaKey);
+    setEditPayTipoTasa(resolvedTipo);
+    setEditPayTasa(initialRateStr);
+    setEditPayMontoUsd(initialUsd > 0 ? initialUsd.toFixed(2) : '');
+    setEditPayMontoBs(initialBsStr);
+    setEditPayReferencia(mov.referencia || '');
+    setEditPayObservaciones(mov.observaciones || '');
+    setEditingPaymentData({
+      ...mov,
+      _initialMatchedAccount: matchedAcct
+    });
+  };
+
+  const handleEditPayTipoTasaChange = (nextTipo) => {
+    const nextIsDirect = isDirectCurrencyRateType(nextTipo);
+    if (isEditPaymentDocFiscal && nextTipo === 'EURO') {
+      setEditPayTipoTasa('BCV');
+      const bcvStr = round2(effectiveTasaBcv).toFixed(2);
+      setEditPayTasa(bcvStr);
+      const u = Number(editPayMontoUsd);
+      if (!isNaN(u) && editPayMontoUsd !== '') {
+        setEditPayMontoBs(round2(u * Number(bcvStr)).toFixed(2));
+      }
+      notify.info('Los documentos fiscales no permiten Tasa Euro; use BCV, Keystone, Personalizada o moneda directa.');
+      return;
+    }
+    setEditPayTipoTasa(nextTipo);
+    if (nextTipo === 'PERSONALIZADA') {
+      if (!Number(editPayTasa) || Number(editPayTasa) <= 1) {
+        const bcvStr = round2(effectiveTasaBcv).toFixed(2);
+        setEditPayTasa(bcvStr);
+        const u = Number(editPayMontoUsd);
+        if (!isNaN(u) && editPayMontoUsd !== '') {
+          setEditPayMontoBs(round2(u * Number(bcvStr)).toFixed(2));
+        }
+      }
+      return;
+    }
+    if (nextIsDirect) {
+      setEditPayTasa('0');
+      setEditPayMontoBs('0');
+      return;
+    }
+    const presetStr = resolvePresetRateValue(nextTipo);
+    setEditPayTasa(presetStr);
+    const r = Number(presetStr);
+    const u = Number(editPayMontoUsd);
+    if (r > 0 && !isNaN(u) && editPayMontoUsd !== '') {
+      setEditPayMontoBs(round2(u * r).toFixed(2));
+    }
+  };
+
+  const handleEditPayTasaChange = (val) => {
+    setEditPayTasa(val);
+    const r = Number(val);
+    const u = Number(editPayMontoUsd);
+    if (r > 0 && !isNaN(u) && editPayMontoUsd !== '') {
+      setEditPayMontoBs(round2(u * r).toFixed(2));
+    }
+  };
+
+  const handleEditPayUsdChange = (val) => {
+    setEditPayMontoUsd(val);
+    if (isDirectCurrencyRateType(editPayTipoTasa)) {
+      setEditPayMontoBs('0');
+      return;
+    }
+    const r = Number(editPayTasa);
+    const u = Number(val);
+    if (r > 0 && !isNaN(u) && val !== '') {
+      setEditPayMontoBs(round2(u * r).toFixed(2));
+    } else if (val === '') {
+      setEditPayMontoBs('');
+    }
+  };
+
+  const handleEditPayBsChange = (val) => {
+    setEditPayMontoBs(val);
+    const r = Number(editPayTasa);
+    const b = Number(val);
+    if (r > 0 && !isNaN(b) && val !== '') {
+      setEditPayMontoUsd(round2(b / r).toFixed(2));
+    } else if (val === '') {
+      setEditPayMontoUsd('');
+    }
+  };
+
+  const handleSavePaymentDataEdit = async (e) => {
+    e.preventDefault();
+    if (!editingPaymentData) return;
+
+    const isDirectCurrency = isDirectCurrencyRateType(editPayTipoTasa);
+    const parsedUsd = round2(Number(editPayMontoUsd || 0));
+    const parsedRate = isDirectCurrency ? 0 : Number(editPayTasa || 0);
+    if (!parsedUsd || isNaN(parsedUsd) || parsedUsd <= 0) {
+      notify.warning('Ingrese un monto en USD válido mayor a 0.');
+      return;
+    }
+    if (!isDirectCurrency && (!parsedRate || isNaN(parsedRate) || parsedRate <= 0)) {
+      notify.warning('Ingrese una tasa de cambio válida mayor a 0.');
+      return;
+    }
+
+    const computedBs = isDirectCurrency ? 0 : round2(parsedUsd * parsedRate);
+    const parsedBs = isDirectCurrency
+      ? 0
+      : (editPayMontoBs !== '' && Number(editPayMontoBs) > 0 ? round2(Number(editPayMontoBs)) : computedBs);
+    const persistedRate = isDirectCurrency ? 1 : parsedRate;
+    const monedaPagoVal = isDirectCurrency ? 'USD' : 'BS';
+
+    const targetCanon = canonicalDocKey(editingPaymentData.factNum, editingPaymentData.tipoDoc);
+    const oldMovUsd = round2(Number(editingPaymentData.montoUsd || 0));
+    const oldMovBs = round2(Number(editingPaymentData.montoBs || 0));
+
+    // Validar que el nuevo abono no exceda el total del documento afectado
+    const targetDocObj = (documents || []).find(
+      (d) => d && canonicalDocKey(d.factNum || d.factura || '', d.tipoDoc) === targetCanon
+    );
+    if (targetDocObj) {
+      const maxAllowedUsd = round2(Number(targetDocObj.restanteUsd || 0) + oldMovUsd);
+      if (parsedUsd > maxAllowedUsd + 0.05) {
+        notify.warning(
+          `El monto (${formatUsd(parsedUsd)}) excede el saldo máximo disponible para este documento (${formatUsd(maxAllowedUsd)}).`
+        );
+        return;
+      }
+    }
+
+    const isNewCreditNote = editPayFormaPago === 'NOTA_CREDITO';
+    const selectedAcct = !isNewCreditNote && editPayCuentaKey && editPayCuentaKey !== '__KEEP__'
+      ? (catalogCuentas || []).find((c) => c.key === editPayCuentaKey) || null
+      : null;
+    const newCuentaId = isNewCreditNote
+      ? ''
+      : (selectedAcct ? (selectedAcct.rawId || selectedAcct.id) : (editingPaymentData.cuentaId || ''));
+    const newCuentaNombre = isNewCreditNote
+      ? `N/CR #${editingPaymentData.referencia || editingPaymentData.correlativo}`
+      : (selectedAcct ? selectedAcct.nombre : (editingPaymentData.cuentaNombre || 'Tesorería'));
+    const newAccountType = isNewCreditNote
+      ? 'NOTA_CREDITO'
+      : (selectedAcct ? selectedAcct.accountType : (editingPaymentData.accountType || 'BANCO'));
+
+    const cleanRef = String(editPayReferencia || '').trim();
+    const cleanObs = String(editPayObservaciones || '').trim();
+    const editedAtIso = new Date().toISOString();
+
+    setIsSavingEditPayment(true);
+    try {
+      const updatedDocPayloads = [];
+
+      // 1. Actualizar documento(s) afectado(s) (historialCobros, abonosUsd, saldoUsd)
+      (documents || []).forEach((doc) => {
+        if (!doc) return;
+        const docCanon = canonicalDocKey(doc.factNum || doc.factura || '', doc.tipoDoc);
+        const hist = Array.isArray(doc.historialCobros) ? doc.historialCobros : [];
+        let matchedHist = false;
+        const nextHist = hist.map((h) => {
+          if (!doesHistMatchMovement(h, doc, editingPaymentData)) return h;
+          matchedHist = true;
+          return {
+            ...h,
+            formaPago: editPayFormaPago,
+            cuentaId: newCuentaId,
+            cuentaNombre: newCuentaNombre,
+            accountType: newAccountType,
+            tipoTasa: editPayTipoTasa,
+            tasa: persistedRate,
+            tasaPago: persistedRate,
+            monedaPago: monedaPagoVal,
+            moneda: isDirectCurrency ? 'US$' : (selectedAcct?.moneda || h.moneda || 'BS'),
+            isDirectCurrency,
+            montoUsd: parsedUsd,
+            montoBs: parsedBs,
+            referencia: cleanRef,
+            observaciones: cleanObs,
+            descrip: cleanObs
+          };
+        });
+
+        const shouldUpdateDocByCanon =
+          matchedHist || (targetCanon && docCanon === targetCanon && editingPaymentData.source === 'PROFIT_COLLECTION');
+        if (!shouldUpdateDocByCanon) return;
+
+        const docTotalUsd = round2(Number(doc.montoFacturaUsd ?? doc.totNetoUsd ?? 0));
+        const deltaDocUsd = round2(parsedUsd - oldMovUsd);
+        const currentAbonos = Number(doc.abonosUsd || 0);
+        const newAbonosUsd = round2(
+          Math.min(docTotalUsd > 0 ? docTotalUsd : Math.max(0, currentAbonos + deltaDocUsd), Math.max(0, currentAbonos + deltaDocUsd))
+        );
+        const newRestanteUsd = round2(Math.max(0, docTotalUsd - newAbonosUsd));
+        const updatedDocPayload = buildUpdatedDocPayload(doc, nextHist, newAbonosUsd, newRestanteUsd);
+        updatedDocPayloads.push(updatedDocPayload);
+
+        if (onUpdateLocalDoc) {
+          onUpdateLocalDoc(String(doc.factNum), updatedDocPayload, newRestanteUsd);
+        }
+      });
+
+      // 2. Actualizar registro(s) coincidentes en profit_collections
+      const matchedCollections = findMatchingCollectionsForMovement(editingPaymentData);
+      const updatedCollections = matchedCollections.map((col) => {
+        const affected = Array.isArray(col.documentosAfectados) ? col.documentosAfectados : [];
+        const isMultiDoc = affected.length > 1;
+        const nextAffected = affected.map((aff) => {
+          const affNum = String(aff?.numDoc || '').trim();
+          const affType = String(aff?.tipoDoc || '').toUpperCase().includes('N/E') || affNum.toUpperCase().startsWith('NE-')
+            ? 'NOTA_ENTREGA'
+            : 'FACTURA';
+          if (canonicalDocKey(affNum, affType) !== targetCanon) return aff;
+          return {
+            ...aff,
+            montoCobradoUsd: parsedUsd,
+            montoCobrado: isDirectCurrency ? parsedUsd : parsedBs
+          };
+        });
+
+        const { usdVal: prevColUsd, bsVal: prevColBs } = resolveCollectionAmounts(col, tasaBcv);
+        const nextTotalUsd = isMultiDoc ? round2(Math.max(0, prevColUsd - oldMovUsd + parsedUsd)) : parsedUsd;
+        const nextTotalBs = isMultiDoc
+          ? (isDirectCurrency && prevColBs <= 0 ? 0 : round2(Math.max(0, prevColBs - oldMovBs + parsedBs)))
+          : parsedBs;
+
+        const existingFormas = Array.isArray(col.formasPago) && col.formasPago.length > 0 ? col.formasPago : [{}];
+        const nextFormas = existingFormas.map((fp, idx) =>
+          idx === 0
+            ? {
+                ...fp,
+                formaPago: editPayFormaPago,
+                tipo: editPayFormaPago,
+                moneda: monedaPagoVal,
+                montoUsd: nextTotalUsd,
+                montoBs: nextTotalBs,
+                tasa: persistedRate,
+                tipoTasa: editPayTipoTasa,
+                cuentaId: newCuentaId,
+                cuentaNombre: newCuentaNombre,
+                codCta: newAccountType === 'BANCO' ? newCuentaId : '',
+                codCaja: newAccountType === 'CAJA' ? newCuentaId : '',
+                banco: newCuentaNombre,
+                referencia: cleanRef
+              }
+            : fp
+        );
+
+        return {
+          ...col,
+          montoUsd: nextTotalUsd,
+          monto_usd: nextTotalUsd,
+          montoBs: nextTotalBs,
+          monto_bs: nextTotalBs,
+          tasa: persistedRate,
+          tasaPago: persistedRate,
+          tasa_pago: persistedRate,
+          tipoTasa: editPayTipoTasa,
+          tipo_tasa: editPayTipoTasa,
+          monedaPago: monedaPagoVal,
+          moneda_pago: monedaPagoVal,
+          cuentaId: newCuentaId,
+          cuenta_id: newCuentaId,
+          cuentaNombre: newCuentaNombre,
+          cuenta_nombre: newCuentaNombre,
+          formaPago: editPayFormaPago,
+          referencia: cleanRef,
+          descrip: cleanObs || col.descrip || '',
+          formasPago: nextFormas,
+          formas_pago: nextFormas,
+          documentosAfectados: nextAffected,
+          documentos_afectados: nextAffected,
+          _localEditedAt: editedAtIso
+        };
+      });
+
+      const reconcileMeta = {
+        updatedDocs: updatedDocPayloads,
+        oldMontoUsd: oldMovUsd,
+        newMontoUsd: parsedUsd,
+        oldMontoBs: oldMovBs,
+        newMontoBs: parsedBs,
+        oldAccount: editingPaymentData._initialMatchedAccount || null,
+        oldCuentaId: editingPaymentData.cuentaId || '',
+        oldCuentaNombre: editingPaymentData.cuentaNombre || '',
+        oldFormaPago: editingPaymentData.formaPago || '',
+        newAccount: selectedAcct || editingPaymentData._initialMatchedAccount || null,
+        newCuentaId,
+        newCuentaNombre,
+        newFormaPago: editPayFormaPago,
+        newTipoTasa: editPayTipoTasa,
+        newTasa: persistedRate,
+        monedaPago: monedaPagoVal,
+        newReferencia: cleanRef,
+        oldReferencia: editingPaymentData.referencia || '',
+        oldFecha: editingPaymentData.fechaIso || editingPaymentData.fechaRaw || '',
+        factNum: editingPaymentData.factNum || '',
+        tipoDoc: editingPaymentData.tipoDoc || 'FACTURA',
+        cobNum: editingPaymentData.correlativo || '',
+        correlativo: editingPaymentData.correlativo || '',
+        clienteId: editingPaymentData.clienteId || targetDocObj?.clienteId || '',
+        clienteRif: editingPaymentData.clienteRif || targetDocObj?.rif || '',
+        clienteNombre: editingPaymentData.clienteNombre || targetDocObj?.cliente || '',
+        observaciones: cleanObs
+      };
+
+      if (onUpdateCollection) {
+        if (updatedCollections.length > 0) {
+          for (let i = 0; i < updatedCollections.length; i += 1) {
+            await onUpdateCollection(updatedCollections[i], i === 0 ? reconcileMeta : null);
+          }
+        } else {
+          await onUpdateCollection(null, reconcileMeta);
+        }
+      } else {
+        for (const docPayload of updatedDocPayloads) {
+          if (onSaveDocument) await onSaveDocument(docPayload);
+        }
+        for (const uCol of updatedCollections) {
+          await saveSupabaseProfitCollection(uCol);
+        }
+      }
+
+      setCorrelativoRefreshKey((k) => k + 1);
+      notify.success(`Datos del cobro #${editingPaymentData.correlativo} actualizados correctamente (${formatUsd(parsedUsd)}).`);
+      setEditingPaymentData(null);
+    } catch (err) {
+      console.error('Error editando datos del cobro CxC:', err);
+      notify.error('No se pudieron actualizar los datos del cobro: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsSavingEditPayment(false);
+    }
+  };
+
+  const handleConfirmDeleteMovement = async () => {
+    if (!deletingMovement) return;
+    setIsDeletingMovement(true);
+    try {
+      const targetMov = deletingMovement;
+      const targetCanon = canonicalDocKey(targetMov.factNum, targetMov.tipoDoc);
+      const oldMovUsd = round2(Number(targetMov.montoUsd || 0));
+      const oldMovBs = round2(Number(targetMov.montoBs || 0));
+      const oldAccount = resolveCatalogAccountForMov(targetMov);
+      const editedAtIso = new Date().toISOString();
+
+      // 1. Revertir historialCobros, abonosUsd y saldoUsd en los documentos afectados
+      const updatedDocs = [];
+      (documents || []).forEach((doc) => {
+        if (!doc) return;
+        const docCanon = canonicalDocKey(doc.factNum || doc.factura || '', doc.tipoDoc);
+        const hist = Array.isArray(doc.historialCobros) ? doc.historialCobros : [];
+        const nextHist = hist.filter((h) => !doesHistMatchMovement(h, doc, targetMov));
+        const histRemoved = nextHist.length < hist.length;
+        const shouldUpdateDoc =
+          histRemoved || (targetCanon && docCanon === targetCanon && targetMov.source === 'PROFIT_COLLECTION');
+        if (!shouldUpdateDoc) return;
+
+        const docTotalUsd = round2(Number(doc.montoFacturaUsd ?? doc.totNetoUsd ?? 0));
+        const newAbonosUsd = round2(Math.max(0, Number(doc.abonosUsd || 0) - oldMovUsd));
+        const newRestanteUsd = round2(Math.min(docTotalUsd > 0 ? docTotalUsd : 999999999, Math.max(0, docTotalUsd - newAbonosUsd)));
+        const updatedDocPayload = buildUpdatedDocPayload(doc, nextHist, newAbonosUsd, newRestanteUsd);
+        updatedDocs.push(updatedDocPayload);
+
+        if (onUpdateLocalDoc) {
+          onUpdateLocalDoc(String(doc.factNum), updatedDocPayload, newRestanteUsd);
+        }
+      });
+
+      // 2. Separar profit_collections afectados entre eliminación completa o reducción (cobros multi-documento)
+      const matchedCollections = findMatchingCollectionsForMovement(targetMov);
+      const updatedCollections = [];
+      const deletedCollectionIds = [];
+
+      matchedCollections.forEach((col) => {
+        const colIdStr = String(col.id || '').trim();
+        if (!colIdStr) return;
+        const affected = Array.isArray(col.documentosAfectados) ? col.documentosAfectados : [];
+        if (affected.length > 1) {
+          const remainingAffected = affected.filter((aff) => {
+            const affNum = String(aff?.numDoc || '').trim();
+            const affType = String(aff?.tipoDoc || '').toUpperCase().includes('N/E') || affNum.toUpperCase().startsWith('NE-')
+              ? 'NOTA_ENTREGA'
+              : 'FACTURA';
+            return canonicalDocKey(affNum, affType) !== targetCanon;
+          });
+          if (remainingAffected.length > 0 && remainingAffected.length < affected.length) {
+            const { usdVal: prevColUsd, bsVal: prevColBs } = resolveCollectionAmounts(col, tasaBcv);
+            const nextUsd = round2(Math.max(0, prevColUsd - oldMovUsd));
+            const nextBs = round2(Math.max(0, prevColBs - oldMovBs));
+            const existingFormas = Array.isArray(col.formasPago) ? col.formasPago : [];
+            const nextFormas = existingFormas.map((fp, idx) =>
+              idx === 0 ? { ...fp, montoUsd: nextUsd, montoBs: nextBs } : fp
+            );
+            updatedCollections.push({
+              ...col,
+              montoUsd: nextUsd,
+              monto_usd: nextUsd,
+              montoBs: nextBs,
+              monto_bs: nextBs,
+              formasPago: nextFormas,
+              formas_pago: nextFormas,
+              documentosAfectados: remainingAffected,
+              documentos_afectados: remainingAffected,
+              _localEditedAt: editedAtIso
+            });
+            return;
+          }
+        }
+        deletedCollectionIds.push(colIdStr);
+      });
+
+      if (onDeleteCollection) {
+        await onDeleteCollection({
+          movement: targetMov,
+          updatedDocs,
+          updatedCollections,
+          deletedCollectionIds,
+          oldAccount
+        });
+      } else {
+        for (const docPayload of updatedDocs) {
+          if (onSaveDocument) await onSaveDocument(docPayload);
+        }
+        for (const colPayload of updatedCollections) {
+          await saveSupabaseProfitCollection(colPayload);
+        }
+        for (const delId of deletedCollectionIds) {
+          await deleteSupabaseProfitCollection(delId);
+        }
+      }
+
+      setCorrelativoRefreshKey((k) => k + 1);
+      notify.success(`Cobro #${targetMov.correlativo} (${formatUsd(oldMovUsd)}) eliminado y saldos actualizados.`);
+      setDeletingMovement(null);
+    } catch (err) {
+      console.error('Error eliminando cobro CxC:', err);
+      notify.error('No se pudo eliminar el cobro: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsDeletingMovement(false);
+    }
+  };
+
   const handleSaveMovementCorrelativoEdit = async (e) => {
     e.preventDefault();
     if (!editingMovementCorr) return;
@@ -1184,41 +1809,19 @@ export function CxcMovementsModal({
         ? editingMovementCorr.fechaRaw
         : `${newFechaIso}T12:00:00.000Z`;
 
-    const oldCorrDigits = String(editingMovementCorr.correlativo || '').replace(/[^0-9]/g, '');
-    const oldCorrNormalized = oldCorrDigits ? oldCorrDigits.padStart(6, '0') : '';
-    const targetCanon = canonicalDocKey(editingMovementCorr.factNum, editingMovementCorr.tipoDoc);
-    const targetAmount = round2(editingMovementCorr.montoUsd || 0);
     const editedAtIso = new Date().toISOString();
 
     setIsSavingEditMovCorr(true);
     try {
       const updatedDocPromises = [];
       const updatedColPromises = [];
-      const touchedColIds = new Set();
 
       // 1. Actualizar entradas coincidentes en historialCobros de documentos
       (documents || []).forEach((doc) => {
         if (!doc || !Array.isArray(doc.historialCobros) || doc.historialCobros.length === 0) return;
         let docModified = false;
-        const docCanon = canonicalDocKey(doc.factNum || doc.factura || '', doc.tipoDoc);
         const nextHist = doc.historialCobros.map((h) => {
-          if (!h) return h;
-          const byHistId = Boolean(editingMovementCorr.histId && h.id && String(h.id) === String(editingMovementCorr.histId));
-          const hCorrRaw = String(h.correlativo ?? h.cobNum ?? '').replace(/[^0-9]/g, '');
-          const hCorrNorm = hCorrRaw ? hCorrRaw.padStart(6, '0') : '';
-          const hDate = toIsoDateOnly(h.fecha || doc.fechaEmision || doc.fechaEmisionIso || '');
-          const hTasa = Number(h.tasa || doc.tasa || tasaBcv) || tasaBcv;
-          const hUsd = round2(h.montoUsd ?? (Number(h.montoBs || 0) > 0 && hTasa > 0 ? Number(h.montoBs) / hTasa : 0));
-          const hCanon = canonicalDocKey(h.factNum || doc.factNum || doc.factura || '', h.tipoDoc || doc.tipoDoc);
-
-          const bySignature =
-            hCanon === targetCanon &&
-            hDate === editingMovementCorr.fechaIso &&
-            Math.abs(hUsd - targetAmount) <= 0.02 &&
-            (!oldCorrNormalized || hCorrNorm === oldCorrNormalized);
-
-          const isMatch = byHistId || (docCanon === targetCanon && bySignature) || bySignature;
-          if (!isMatch) return h;
+          if (!doesHistMatchMovement(h, doc, editingMovementCorr)) return h;
           docModified = true;
           return {
             ...h,
@@ -1233,27 +1836,12 @@ export function CxcMovementsModal({
         });
 
         if (docModified) {
-          const updatedDocPayload = {
-            ...doc,
-            factNum: String(doc.factNum),
-            tipoDoc: doc.tipoDoc,
-            fechaEmision: doc.fechaEmisionIso || doc.fechaEmision,
-            fechaVencimiento: doc.fechaVencimientoIso || doc.fechaVencimiento,
-            clienteId: doc.clienteId,
-            clienteNombre: doc.cliente || doc.clienteNombre,
-            clienteRif: doc.rif || doc.clienteRif,
-            vendedorId: doc.vendedorId,
-            vendedorNombre: doc.vendedorNombre,
-            diasCredito: doc.diasCredito,
-            diasVencidoCustom: doc.diasVencidoCustom,
-            totBrutoUsd: doc.subtotalUsd ?? doc.totBrutoUsd,
-            ivaUsd: doc.tipoDoc === 'NOTA_ENTREGA' ? 0 : (doc.ivaUsd ?? 0),
-            totNetoUsd: doc.montoFacturaUsd ?? doc.totNetoUsd,
-            abonosUsd: doc.abonosUsd ?? 0,
-            saldoUsd: doc.restanteUsd ?? doc.saldoUsd ?? 0,
-            tasa: Number(doc.tasa || tasaBcv),
-            historialCobros: nextHist
-          };
+          const updatedDocPayload = buildUpdatedDocPayload(
+            doc,
+            nextHist,
+            doc.abonosUsd ?? 0,
+            doc.restanteUsd ?? doc.saldoUsd ?? 0
+          );
           if (onUpdateLocalDoc) {
             onUpdateLocalDoc(String(doc.factNum), updatedDocPayload, Number(doc.restanteUsd ?? 0));
           }
@@ -1264,55 +1852,25 @@ export function CxcMovementsModal({
       });
 
       // 2. Actualizar registros coincidentes en profit_collections para evitar duplicados o desincronización
-      (collections || []).forEach((col) => {
-        if (!col || col.anulado) return;
-        const colIdStr = String(col.id || '');
-        const byColId = Boolean(
-          (editingMovementCorr.collectionId && colIdStr === String(editingMovementCorr.collectionId)) ||
-          (editingMovementCorr.source === 'PROFIT_COLLECTION' && colIdStr && editingMovementCorr.rawId && String(editingMovementCorr.rawId).startsWith(colIdStr))
-        );
-
-        const colCorrRaw = String(col.correlativo ?? col.cobNum ?? col.cob_num ?? '').replace(/[^0-9]/g, '');
-        const colCorrNorm = colCorrRaw ? colCorrRaw.padStart(6, '0') : '';
-        const colDate = toIsoDateOnly(col.fecha || col.fec_cob || col.fechaCobro || col.fechaSincronizacion || '');
-        const { usdVal: colUsd } = resolveCollectionAmounts(col, tasaBcv);
-        const affected = Array.isArray(col.documentosAfectados) ? col.documentosAfectados : [];
-        const matchesDocAffected = affected.some((aff) => {
-          const affNum = String(aff?.numDoc || '').trim();
-          const affType = String(aff?.tipoDoc || '').toUpperCase().includes('N/E') || affNum.toUpperCase().startsWith('NE-')
-            ? 'NOTA_ENTREGA'
-            : 'FACTURA';
-          const affCanon = canonicalDocKey(affNum, affType);
-          const affUsd = round2(Number(aff?.montoCobradoUsd || 0));
-          return affCanon === targetCanon && (affUsd <= 0 || Math.abs(affUsd - targetAmount) <= 0.05 || Math.abs(colUsd - targetAmount) <= 0.05);
-        });
-
-        const bySignature =
-          colDate === editingMovementCorr.fechaIso &&
-          (!oldCorrNormalized || colCorrNorm === oldCorrNormalized) &&
-          (matchesDocAffected || (editingMovementCorr.factNum === 'GENERAL' && Math.abs(colUsd - targetAmount) <= 0.05));
-
-        if ((byColId || bySignature) && colIdStr && !touchedColIds.has(colIdStr)) {
-          touchedColIds.add(colIdStr);
-          const updatedCol = {
-            ...col,
-            correlativo: newCorr,
-            cobNum: newCorr,
-            cob_num: newCorr,
-            fecha: newFechaFull,
-            fec_cob: newFechaFull,
-            vendedorId: newSellerCode,
-            vendedor_id: newSellerCode,
-            vendedorNombre: newSellerName,
-            cobradorId: newSellerCode,
-            cobradorNombre: newSellerName,
-            _localEditedAt: editedAtIso
-          };
-          if (onUpdateCollection) {
-            updatedColPromises.push(onUpdateCollection(updatedCol));
-          } else {
-            updatedColPromises.push(saveSupabaseProfitCollection(updatedCol));
-          }
+      findMatchingCollectionsForMovement(editingMovementCorr).forEach((col) => {
+        const updatedCol = {
+          ...col,
+          correlativo: newCorr,
+          cobNum: newCorr,
+          cob_num: newCorr,
+          fecha: newFechaFull,
+          fec_cob: newFechaFull,
+          vendedorId: newSellerCode,
+          vendedor_id: newSellerCode,
+          vendedorNombre: newSellerName,
+          cobradorId: newSellerCode,
+          cobradorNombre: newSellerName,
+          _localEditedAt: editedAtIso
+        };
+        if (onUpdateCollection) {
+          updatedColPromises.push(onUpdateCollection(updatedCol));
+        } else {
+          updatedColPromises.push(saveSupabaseProfitCollection(updatedCol));
         }
       });
 
@@ -1527,7 +2085,16 @@ export function CxcMovementsModal({
           overflowY: 'auto'
         }}
         onClick={(e) => {
-          if (e.target === e.currentTarget && !showCorrelativoModal && !editingMovementCorr && onClose) onClose();
+          if (
+            e.target === e.currentTarget &&
+            !showCorrelativoModal &&
+            !editingMovementCorr &&
+            !editingPaymentData &&
+            !deletingMovement &&
+            onClose
+          ) {
+            onClose();
+          }
         }}
       >
         <div
@@ -2428,7 +2995,7 @@ export function CxcMovementsModal({
                                 <th style={{ padding: '0.55rem 0.75rem', textAlign: 'right' }}>Tasa</th>
                                 <th style={{ padding: '0.55rem 0.75rem', textAlign: 'right' }}>Abono USD</th>
                                 <th style={{ padding: '0.55rem 0.75rem', textAlign: 'right' }}>Equiv. Bs.</th>
-                                <th style={{ padding: '0.55rem 0.75rem', textAlign: 'center' }}>Recibo / Correl.</th>
+                                <th style={{ padding: '0.55rem 0.75rem', textAlign: 'center' }}>Recibo / Acciones</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -2527,12 +3094,15 @@ export function CxcMovementsModal({
                                             String(mov.accountType || '').toUpperCase() === 'NOTA_CREDITO' ||
                                             /^NC-/i.test(String(mov.correlativo || ''));
                                           if (isCreditNoteMov) {
-                                            generateCreditDebitNotePDF({
+                                            outputCreditDebitNoteDocument({
                                               docData: {
                                                 tipoDoc: 'NOTA_CREDITO',
+                                                isFiscal: mov.isFiscal,
                                                 numeroDoc: mov.correlativo,
+                                                numeroControl: mov.numeroControl || '',
                                                 documentoAfectado: mov.factNum,
                                                 fecha: mov.fechaRaw || mov.fechaIso,
+                                                clienteId: mov.clienteId,
                                                 clienteNombre: mov.clienteNombre,
                                                 clienteRif: mov.clienteRif,
                                                 tasaDolar: mov.tasa,
@@ -2612,6 +3182,38 @@ export function CxcMovementsModal({
                                         title={`Editar correlativo, fecha y cobrador de este movimiento (#${mov.correlativo})`}
                                       >
                                         <Edit2 size={13} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenEditPaymentData(mov)}
+                                        className="btn"
+                                        style={{
+                                          padding: '0.32rem 0.5rem',
+                                          borderRadius: '6px',
+                                          background: 'rgba(14, 165, 233, 0.16)',
+                                          color: '#38bdf8',
+                                          border: '1px solid rgba(14, 165, 233, 0.45)',
+                                          cursor: 'pointer'
+                                        }}
+                                        title={`Editar datos del cobro #${mov.correlativo} (método, cuenta, tasa, monto USD/Bs, ref.)`}
+                                      >
+                                        <SlidersHorizontal size={13} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletingMovement(mov)}
+                                        className="btn"
+                                        style={{
+                                          padding: '0.32rem 0.5rem',
+                                          borderRadius: '6px',
+                                          background: 'rgba(239, 68, 68, 0.16)',
+                                          color: '#f87171',
+                                          border: '1px solid rgba(239, 68, 68, 0.45)',
+                                          cursor: 'pointer'
+                                        }}
+                                        title={`Eliminar cobro #${mov.correlativo}`}
+                                      >
+                                        <Trash2 size={13} />
                                       </button>
                                     </div>
                                   </td>
@@ -3346,6 +3948,444 @@ export function CxcMovementsModal({
               </div>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* ================================================================== */}
+      {/* MODAL CYAN: EDITAR DATOS DEL COBRO (MÉTODO, CUENTA, TASA, MONTOS)  */}
+      {/* ================================================================== */}
+      {editingPaymentData && (
+        <div
+          className="no-print"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(3, 7, 18, 0.85)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 10065,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+            overflowY: 'auto'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isSavingEditPayment) setEditingPaymentData(null);
+          }}
+        >
+          <form
+            onSubmit={handleSavePaymentDataEdit}
+            style={{
+              width: '100%',
+              maxWidth: '580px',
+              background: 'var(--bg-card, #111827)',
+              border: '1px solid rgba(14, 165, 233, 0.48)',
+              borderRadius: '16px',
+              overflow: 'hidden',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.88)'
+            }}
+          >
+            <div style={{
+              padding: '1rem 1.25rem',
+              background: 'linear-gradient(135deg, rgba(14,165,233,0.22), rgba(16,185,129,0.12))',
+              borderBottom: '1px solid var(--border-glass)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <SlidersHorizontal size={17} color="#38bdf8" />
+                <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 800, color: '#ffffff' }}>
+                  Editar Datos del Cobro #{editingPaymentData.correlativo}
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={isSavingEditPayment}
+                onClick={() => setEditingPaymentData(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.15rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+              <div style={{
+                background: 'rgba(14, 165, 233, 0.08)',
+                border: '1px solid rgba(14, 165, 233, 0.25)',
+                borderRadius: '10px',
+                padding: '0.7rem 0.9rem',
+                fontSize: '0.78rem',
+                color: 'var(--text-secondary)'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                  <span>
+                    Documento: <strong style={{ color: '#38bdf8', fontFamily: 'var(--font-code)' }}>#{editingPaymentData.factNum}</strong>
+                    {' '}({editingPaymentData.tipoDoc === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'})
+                  </span>
+                  <span>Fecha: <strong style={{ color: '#e2e8f0' }}>{editingPaymentData.fechaDisplay}</strong></span>
+                </div>
+                <div style={{ marginTop: '4px', fontWeight: 700, color: '#ffffff' }}>
+                  {editingPaymentData.clienteNombre}
+                </div>
+                <div style={{ marginTop: '4px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', color: 'var(--text-muted)' }}>
+                  <span>Original: <strong style={{ color: '#34d399' }}>{formatUsd(editingPaymentData.montoUsd)}</strong> | {editingPaymentData.isDirectCurrency ? '0' : formatBs(editingPaymentData.montoBs)}</span>
+                  <span>Cuenta actual: <strong style={{ color: '#cbd5e1' }}>{editingPaymentData.cuentaNombre}</strong></span>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.8rem' }}>
+                {/* Método de Pago */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Método de Pago *
+                  </label>
+                  <select
+                    value={editPayFormaPago}
+                    onChange={(e) => setEditPayFormaPago(e.target.value)}
+                    disabled={isSavingEditPayment}
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.82rem' }}
+                  >
+                    <option value="EFECTIVO">Efectivo ($ / Bs.)</option>
+                    <option value="TRANSFERENCIA">Transferencia Bancaria</option>
+                    <option value="PAGO_MOVIL">Pago Móvil</option>
+                    <option value="ZELLE">Zelle</option>
+                    <option value="USDT">USDT / Cripto</option>
+                    <option value="DEPOSITO">Depósito Bancario</option>
+                    <option value="CHEQUE">Cheque</option>
+                    <option value="OTRO">Otro</option>
+                    {normalizeFormaPagoForSelect(editingPaymentData.formaPago) === 'NOTA_CREDITO' && (
+                      <option value="NOTA_CREDITO">Nota de Crédito (N/CR)</option>
+                    )}
+                  </select>
+                </div>
+
+                {/* Caja o Banco Destino */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Caja / Banco Destino *
+                  </label>
+                  {editPayFormaPago === 'NOTA_CREDITO' ? (
+                    <div className="input-modern" style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.8rem', color: '#34d399', fontWeight: 700 }}>
+                      N/CR (Sin movimiento de caja/banco)
+                    </div>
+                  ) : (
+                    <select
+                      value={editPayCuentaKey}
+                      onChange={(e) => setEditPayCuentaKey(e.target.value)}
+                      disabled={isSavingEditPayment}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.8rem' }}
+                    >
+                      {editPayCuentaKey === '__KEEP__' && editingPaymentData.cuentaNombre && (
+                        <option value="__KEEP__">Mantener: {editingPaymentData.cuentaNombre}</option>
+                      )}
+                      {(catalogCuentas || []).map((c) => (
+                        <option key={c.key} value={c.key}>
+                          {c.label || c.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Tipo de Tasa / Moneda */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
+                      Tipo de Tasa / Divisa *
+                    </label>
+                    {isEditPaymentDocFiscal && (
+                      <span style={{ fontSize: '0.62rem', fontWeight: 700, color: '#34d399' }}>Fiscal</span>
+                    )}
+                  </div>
+                  <select
+                    value={isEditPaymentDocFiscal && editPayTipoTasa === 'EURO' ? 'BCV' : editPayTipoTasa}
+                    onChange={(e) => handleEditPayTipoTasaChange(e.target.value)}
+                    disabled={isSavingEditPayment}
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700 }}
+                  >
+                    <option value="BCV">Tasa BCV — {formatBs(effectiveTasaBcv)}</option>
+                    <option value="EURO" disabled={isEditPaymentDocFiscal}>
+                      Tasa Euro — {formatBs(liveEuroRate)}{isEditPaymentDocFiscal ? ' (Solo N.E.)' : ''}
+                    </option>
+                    <option value="KEYSTONE">Tasa Keystone — {formatBs(effectiveTasaKeystone)}</option>
+                    <option value="PERSONALIZADA">Personalizada (Manual)</option>
+                    <option value="USD">Divisa Efectivo USD (Directa)</option>
+                    <option value="ZELLE">Divisa Zelle (USD) (Directa)</option>
+                    <option value="USDT">Divisa Binance (USDT) (Directa)</option>
+                    <option value="USDC">Divisas Kontigo (USDC) (Directa)</option>
+                  </select>
+                </div>
+
+                {/* Valor Tasa */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    {isDirectCurrencyRateType(editPayTipoTasa) ? 'Tasa Bs (Moneda Directa)' : 'Valor Tasa (Bs/USD) *'}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={isDirectCurrencyRateType(editPayTipoTasa) ? '0' : '0.01'}
+                    value={isDirectCurrencyRateType(editPayTipoTasa) ? '0' : editPayTasa}
+                    readOnly={isDirectCurrencyRateType(editPayTipoTasa) || editPayTipoTasa !== 'PERSONALIZADA'}
+                    disabled={isSavingEditPayment}
+                    onChange={(e) => {
+                      if (editPayTipoTasa !== 'PERSONALIZADA') return;
+                      handleEditPayTasaChange(e.target.value);
+                    }}
+                    className="input-modern"
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem 0.65rem',
+                      fontSize: '0.82rem',
+                      fontFamily: 'var(--font-code)',
+                      fontWeight: 700,
+                      opacity: editPayTipoTasa === 'PERSONALIZADA' ? 1 : 0.85
+                    }}
+                  />
+                </div>
+
+                {/* Monto USD */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#34d399', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Monto Abono USD ($) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={editPayMontoUsd}
+                    onChange={(e) => handleEditPayUsdChange(e.target.value)}
+                    disabled={isSavingEditPayment}
+                    required
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.88rem', fontFamily: 'var(--font-code)', fontWeight: 800, color: '#34d399' }}
+                  />
+                </div>
+
+                {/* Equiv. Bs */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Equivalente en Bolívares (Bs.)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={isDirectCurrencyRateType(editPayTipoTasa) ? '0' : editPayMontoBs}
+                    readOnly={isDirectCurrencyRateType(editPayTipoTasa)}
+                    onChange={(e) => {
+                      if (isDirectCurrencyRateType(editPayTipoTasa)) return;
+                      handleEditPayBsChange(e.target.value);
+                    }}
+                    disabled={isSavingEditPayment}
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.86rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                  />
+                </div>
+
+                {/* Referencia */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Referencia / Nro. Operación
+                  </label>
+                  <input
+                    type="text"
+                    value={editPayReferencia}
+                    onChange={(e) => setEditPayReferencia(e.target.value)}
+                    disabled={isSavingEditPayment}
+                    placeholder="Ej. 89258 / Comprobante"
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.82rem' }}
+                  />
+                </div>
+
+                {/* Observaciones */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Observación / Concepto
+                  </label>
+                  <input
+                    type="text"
+                    value={editPayObservaciones}
+                    onChange={(e) => setEditPayObservaciones(e.target.value)}
+                    disabled={isSavingEditPayment}
+                    placeholder="Detalle adicional del cobro..."
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.82rem' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                Al guardar, se actualizarán automáticamente el saldo del documento, el saldo de Caja/Banco seleccionado, el Flujo de Caja y el saldo deudor del cliente.
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '0.2rem' }}>
+                <button
+                  type="button"
+                  disabled={isSavingEditPayment}
+                  onClick={() => setEditingPaymentData(null)}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.55rem 0.9rem', borderRadius: '8px' }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEditPayment}
+                  className="btn"
+                  style={{
+                    padding: '0.55rem 1.05rem',
+                    background: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Check size={16} />
+                  <span>{isSavingEditPayment ? 'Guardando...' : 'Guardar Datos del Cobro'}</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ================================================================== */}
+      {/* MODAL ROJO: CONFIRMAR ELIMINACIÓN DE COBRO                         */}
+      {/* ================================================================== */}
+      {deletingMovement && (
+        <div
+          className="no-print"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(3, 7, 18, 0.85)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 10070,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeletingMovement) setDeletingMovement(null);
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '470px',
+              background: 'var(--bg-card, #111827)',
+              border: '1px solid rgba(239, 68, 68, 0.5)',
+              borderRadius: '16px',
+              overflow: 'hidden',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.88)'
+            }}
+          >
+            <div style={{
+              padding: '1rem 1.25rem',
+              background: 'linear-gradient(135deg, rgba(239,68,68,0.22), rgba(127,29,29,0.2))',
+              borderBottom: '1px solid var(--border-glass)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertTriangle size={18} color="#f87171" />
+                <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 800, color: '#ffffff' }}>
+                  Eliminar Cobro #{deletingMovement.correlativo}
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={isDeletingMovement}
+                onClick={() => setDeletingMovement(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.15rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+              <div style={{
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                borderRadius: '10px',
+                padding: '0.75rem 0.9rem',
+                fontSize: '0.8rem',
+                color: 'var(--text-secondary)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                  <span>Documento: <strong style={{ color: '#38bdf8', fontFamily: 'var(--font-code)' }}>#{deletingMovement.factNum}</strong></span>
+                  <span>Fecha: <strong style={{ color: '#e2e8f0' }}>{deletingMovement.fechaDisplay}</strong></span>
+                </div>
+                <div style={{ fontWeight: 700, color: '#ffffff' }}>{deletingMovement.clienteNombre}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', marginTop: '2px' }}>
+                  <span>Método: <strong style={{ color: '#e2e8f0' }}>{deletingMovement.formaPago}</strong></span>
+                  <span>Cuenta: <strong style={{ color: '#e2e8f0' }}>{deletingMovement.cuentaNombre}</strong></span>
+                </div>
+                <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#f87171', marginTop: '4px' }}>
+                  Monto a reversar: {formatUsd(deletingMovement.montoUsd)}
+                  {deletingMovement.isDirectCurrency ? '' : ` | ${formatBs(deletingMovement.montoBs)}`}
+                </div>
+              </div>
+
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Esta acción eliminará el cobro de CxC, devolverá el saldo pendiente al documento, restará el ingreso de Caja/Banco (excepto Notas de Crédito) y restaurará el saldo deudor del cliente.
+                {Number(deletingMovement.affectedDocsCount || 0) > 1 && (
+                  <div style={{ marginTop: '4px', color: '#fbbf24' }}>
+                    Nota: Este recibo afecta {deletingMovement.affectedDocsCount} documentos; únicamente se descontará la porción correspondiente al documento #{deletingMovement.factNum}.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  disabled={isDeletingMovement}
+                  onClick={() => setDeletingMovement(null)}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.55rem 0.9rem', borderRadius: '8px' }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingMovement}
+                  onClick={handleConfirmDeleteMovement}
+                  className="btn"
+                  style={{
+                    padding: '0.55rem 1.05rem',
+                    background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Trash2 size={15} />
+                  <span>{isDeletingMovement ? 'Eliminando...' : 'Confirmar Eliminación'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </>

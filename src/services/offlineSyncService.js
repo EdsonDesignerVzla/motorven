@@ -363,6 +363,18 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           syncSuccess = true;
           break;
 
+        case 'stock_delta':
+          if (handlers.applyStockDeltaForWarehouseLines && Array.isArray(item.data?.lines)) {
+            await handlers.applyStockDeltaForWarehouseLines(item.data.lines, {
+              validateStrict: Boolean(item.data.validateStrict),
+              idempotencyKey: item.data.idempotencyKey || item.id,
+              skipLocalStoragePatch: Boolean(item.data.alreadyAppliedLocally),
+              throwOnRemoteError: true
+            });
+          }
+          syncSuccess = true;
+          break;
+
         case 'client':
           if (item.action === 'DELETE') {
             if (handlers.deleteSupabaseClientDirect) {
@@ -518,7 +530,10 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
 
         case 'profit_collection':
         case 'profit_collections':
-          if (handlers.pushProfitCollectionToSupabase) {
+          if (item.action === 'DELETE' && handlers.deleteProfitCollectionDirect) {
+            await handlers.deleteProfitCollectionDirect(item.data);
+            syncSuccess = true;
+          } else if (handlers.pushProfitCollectionToSupabase) {
             await handlers.pushProfitCollectionToSupabase(item.data);
             syncSuccess = true;
           }

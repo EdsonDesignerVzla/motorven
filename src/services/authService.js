@@ -360,23 +360,30 @@ const STORAGE_USERS_KEY = 'signum_users_list';
 const STORAGE_ACTIVE_USER_KEY = 'signum_active_user';
 
 export const SYSTEM_MODULES = [
-  { id: 'dashboard', label: 'Dashboard Ejecutivo', badge: 'Métricas & KPIs' },
-  { id: 'preventa', label: 'Preventa Móvil (Vendedor)', badge: 'POS Móvil & Pedidos' },
-  { id: 'pedidos', label: 'Pedidos & Preventa', badge: 'Pipeline & Despachos' },
-  { id: 'inventario', label: 'Inventario / Catálogo', badge: 'Stock & Lubricantes' },
-  { id: 'ventas', label: 'Ventas & POS Mostrador', badge: 'Facturación & Cobros' },
-  { id: 'vendedores', label: 'Fuerza de Ventas', badge: 'Metas & Comisiones' },
-  { id: 'rentabilidad', label: 'Rentabilidad & BI', badge: 'Márgenes & Pareto ABC' },
-  { id: 'compras', label: 'Compras & Proveedores', badge: 'Recepción & Gastos' },
-  { id: 'caja', label: 'Caja Chica & Bancos', badge: 'Arqueo & Tesorería' },
-  { id: 'cxc', label: 'Cuentas por Cobrar (CxC)', badge: 'Aging & Cobranzas' },
-  { id: 'cxp', label: 'Cuentas por Pagar (CxP)', badge: 'Proveedores & Deudas' },
-  { id: 'pasivos', label: 'Cuentas de Pasivo', badge: 'Socios & Pasivos Contables' },
-  { id: 'reportes', label: 'Libros Fiscales SENIAT', badge: 'Ventas/Compras IVA' },
-  { id: 'auditoria', label: 'Auditoría & Contabilidad', badge: 'Libro Diario & Trazabilidad' },
-  { id: 'usuarios', label: 'Usuarios & Accesos', badge: 'Gestión Operadores' },
-  { id: 'notificaciones', label: 'Notificaciones & Alertas', badge: 'Alertas & Eventos' },
-  { id: 'configuracion', label: 'Configuración General', badge: 'Parámetros del Sistema' }
+  // I. SÍNTESIS EJECUTIVA (CONSOLIDADO GRUPOS 1 AL 6)
+  { id: 'dashboard', label: 'Dashboard Ejecutivo', badge: 'Estructural • Consolidado Grupos 1–6' },
+
+  // II. CUENTAS REALES (BALANCE GENERAL / SITUACIÓN FINANCIERA)
+  { id: 'caja', label: 'Caja Chica & Bancos', badge: 'Cuenta Real • 1.01 Activo Disponible' },
+  { id: 'cxc', label: 'Cuentas por Cobrar (CxC)', badge: 'Cuenta Real • 1.01.03 Activo Exigible' },
+  { id: 'inventario', label: 'Inventario de Lubricantes', badge: 'Cuenta Real • 1.04 Activo Realizable' },
+  { id: 'compras', label: 'Compras & Proveedores', badge: 'Cuenta Real • 2.02 Pasivo / 1.04 Compra' },
+  { id: 'cxp', label: 'Cuentas por Pagar (CxP)', badge: 'Cuenta Real • 2.02.02 Pasivo Comercial' },
+  { id: 'pasivos', label: 'Cuentas de Pasivo', badge: 'Cuenta Real • 2.01–2.06 Pasivo General' },
+  { id: 'auditoria', label: 'Auditoría & Contable', badge: 'Cuenta Real • 3. Patrimonio & Cierre' },
+
+  // III. CUENTAS NOMINALES (ESTADO DE RESULTADOS / GANANCIAS Y PÉRDIDAS)
+  { id: 'ventas', label: 'Ventas & POS Mostrador', badge: 'Cuenta Nominal • 4.01 Ingresos' },
+  { id: 'rentabilidad', label: 'Rentabilidad & BI', badge: 'Cuenta Nominal • 5.01 Costos & Kardex' },
+  { id: 'vendedores', label: 'Fuerza de Ventas', badge: 'Cuenta Nominal • 6.01 Egresos Comisiones' },
+
+  // IV. MÓDULOS ESTRUCTURALES (PRE-ASIENTO, TRIBUTARIO SENIAT & GOBIERNO)
+  { id: 'preventa', label: 'Preventa Móvil (Vendedor)', badge: 'Estructural • Pre-Asiento Comercial' },
+  { id: 'pedidos', label: 'Flujo Comercial & Pedidos', badge: 'Estructural • Pre-Asiento & Despacho' },
+  { id: 'reportes', label: 'Libros Fiscales SENIAT', badge: 'Estructural • Fiscal 1.05 vs 2.03' },
+  { id: 'usuarios', label: 'Gestión de Usuarios', badge: 'Estructural • Control Interno RBAC' },
+  { id: 'notificaciones', label: 'Notificaciones & Alertas', badge: 'Estructural • Supervisión Preventiva' },
+  { id: 'configuracion', label: 'Configuración General', badge: 'Estructural • Parámetros & Tasas BCV' }
 ];
 
 // Módulos permitidos por cada rol por defecto
@@ -988,5 +995,52 @@ export function isClientApproved(client) {
   if (!client) return false;
   return getClientApprovalStatus(client) === 'APROBADO';
 }
+
+/**
+ * Indica si el usuario o rol puede editar y eliminar documentos en el listado de facturas.
+ * Autorizados: Administrador Master, Gerencia, Administración, Tecnología & Informática (TI)
+ * y Caja Principal (Vanesa Sánchez, id 'usr-caja' / username 'caja').
+ */
+export function canManageInvoices(userOrRole) {
+  if (!userOrRole) return false;
+  if (isMasterOrGerencia(userOrRole)) return true;
+
+  const isObj = typeof userOrRole === 'object';
+  const role = isObj ? (userOrRole.rol || userOrRole.role || '') : userOrRole;
+  const r = normalizeRole(role);
+  if (
+    r === 'ADMINISTRADOR MASTER' ||
+    r === 'GERENCIA' ||
+    r === 'ADMINISTRACIÓN' ||
+    r === 'TECNOLOGÍA & INFORMÁTICA'
+  ) {
+    return true;
+  }
+
+  if (!isObj) return false;
+  const id = String(userOrRole.id || '').trim().toLowerCase();
+  const username = String(userOrRole.username || userOrRole.usuario || '').trim().toLowerCase();
+  const normNombre = String(userOrRole.nombre || userOrRole.name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+  if (
+    id === 'usr-caja' ||
+    username === 'edson designer' ||
+    username === 'manuel' ||
+    username === 'gerencia' ||
+    username === 'admin' ||
+    username === 'caja' ||
+    normNombre === 'vanesa sanchez' ||
+    normNombre === 'vanessa sanchez'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 
 

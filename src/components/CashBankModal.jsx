@@ -51,8 +51,13 @@ import {
   loadCajaFiscalSplitOverrides,
   saveCajaFiscalSplitOverride,
   computeCashDeskFiscalBreakdown,
-  computeCashDesksFiscalTotals
+  computeCashDesksFiscalTotals,
+  loadPartnerPayableAccounts
 } from '../utils/treasuryAccountUtils';
+import {
+  loadPartnerLiabilityMovements,
+  recordPartnerLiabilityMovement
+} from '../utils/liabilityAccountUtils';
 import { useNotification } from '../context/NotificationContext';
 
 // Calcula el siguiente código correlativo CAJA-XX comenzando desde CAJA-01
@@ -97,6 +102,8 @@ export default function CashBankModal({
   onDeleteCashDesk,
   onUpdateBankAccount,
   onDeleteBankAccount,
+  partnerPayableAccounts = null,
+  onAdjustPartnerPayableBalance,
   config = {},
   currentUser,
   initialTab = 'cajas'
@@ -157,7 +164,13 @@ export default function CashBankModal({
   const [movMontoBs, setMovMontoBs] = useState('');
   const [movMetodo, setMovMetodo] = useState('EFECTIVO_USD');
   const [movFiscalScope, setMovFiscalScope] = useState('NO_FISCAL'); // 'FISCAL' | 'NO_FISCAL'
+  const [movPartnerAccountId, setMovPartnerAccountId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const effectivePartnerPayables = useMemo(
+    () => (Array.isArray(partnerPayableAccounts) ? partnerPayableAccounts : loadPartnerPayableAccounts()).filter((p) => p && p.activa !== false),
+    [partnerPayableAccounts]
+  );
 
   const expenseAccountOptions = useMemo(
     () => buildExpenseAccountOptions(profitIncomeExpenseAccounts),
@@ -1386,6 +1399,25 @@ export default function CashBankModal({
       }
     }
 
+    const isPartnerAbono = movType === 'EGRESO' && String(movCategoria || '').toUpperCase() === 'ABONO_PASIVO_SOCIO';
+    const targetPartnerAccId = movPartnerAccountId || effectivePartnerPayables[0]?.id || '';
+    const selectedPartnerAcc = isPartnerAbono
+      ? effectivePartnerPayables.find((p) => String(p.id || '') === String(targetPartnerAccId) || String(p.codigo || '') === String(targetPartnerAccId))
+      : null;
+
+    if (isPartnerAbono) {
+      if (!selectedPartnerAcc) {
+        notify.warning('Seleccione la Cuenta Pasiva Socio (2.02.01.001) a la cual se imputará el abono.');
+        return;
+      }
+      if (effectiveUsd > Number(selectedPartnerAcc.saldoUsd || 0) + 0.01) {
+        notify.warning(
+          `El abono (${formatUsd(effectiveUsd)}) supera el saldo pasivo actual de "${selectedPartnerAcc.nombre}" (${formatUsd(selectedPartnerAcc.saldoUsd || 0)}).`
+        );
+        return;
+      }
+    }
+
     try {
       setIsSubmitting(true);
       const nowIso = new Date().toISOString();
@@ -1402,11 +1434,20 @@ export default function CashBankModal({
         fecha: nowIso,
         tipo: movType,
         categoria: movType === 'INGRESO' ? 'DEPOSITO_MANUAL' : (movCategoria || 'GASTO_OPERATIVO'),
-        cuentaGasto: selectedProfitAcc?.code || null,
-        cuentaGastoDesc: selectedProfitAcc?.descrip || '',
+        cuentaGasto: isPartnerAbono
+          ? (selectedPartnerAcc?.codigoContable || '2.02.01.001')
+          : (selectedProfitAcc?.code || null),
+        cuentaGastoDesc: isPartnerAbono
+          ? `${selectedPartnerAcc?.codigo || 'SOC'} - ${selectedPartnerAcc?.nombre || 'Cuentas por Pagar Socio'}`
+          : (selectedProfitAcc?.descrip || ''),
         concepto: taggedConcepto,
         fiscalScope: movAccountKind === 'CAJA' ? movFiscalScope : undefined,
-        referenciaTipo: movAccountKind === 'CAJA' ? movFiscalScope : undefined,
+        referenciaTipo: isPartnerAbono
+          ? 'PASIVO_SOCIO'
+          : (movAccountKind === 'CAJA' ? movFiscalScope : undefined),
+        referenciaId: isPartnerAbono ? selectedPartnerAcc?.id : undefined,
+        partnerAccountId: isPartnerAbono ? selectedPartnerAcc?.id : undefined,
+        accountKind: movAccountKind,
         montoUsd: effectiveUsd,
         monto_usd: effectiveUsd,
         montoBs: effectiveBs,
@@ -1435,12 +1476,43 @@ export default function CashBankModal({
         await onAddMovement(newMov);
       }
 
+      if (isPartnerAbono && selectedPartnerAcc) {
+        if (onAdjustPartnerPayableBalance) {
+          await onAdjustPartnerPayableBalance({
+            targetRef: selectedPartnerAcc.id || selectedPartnerAcc.codigo,
+            deltaUsd: -effectiveUsd,
+            deltaBs: -effectiveBs,
+            skipTreasuryDeduction: true
+          });
+        }
+        recordPartnerLiabilityMovement(loadPartnerLiabilityMovements(), {
+          fecha: nowIso.split('T')[0],
+          tipo: 'ABONO_SOCIO',
+          cuentaId: selectedPartnerAcc.id,
+          cuentaCodigo: selectedPartnerAcc.codigo,
+          cuentaNombre: `${selectedPartnerAcc.codigo} - ${selectedPartnerAcc.nombre}`,
+          montoUsd: effectiveUsd,
+          montoBs: effectiveBs,
+          concepto: rawConceptTrimmed,
+          referencia: newMov.id,
+          cashMovementId: newMov.id,
+          treasuryAccountId: targetId,
+          treasuryAccountLabel: targetLabel,
+          origen: 'CAJA_BANCOS',
+          usuario: operatorName
+        });
+      }
+
       setMovConcept('');
       setMovCuentaGasto('');
       setMovMontoUsd('');
       setMovMontoBs('');
       setShowNewMovForm(false);
-      notify.success('Movimiento registrado correctamente');
+      notify.success(
+        isPartnerAbono && selectedPartnerAcc
+          ? `Abono por ${formatUsd(effectiveUsd)} registrado en ${targetLabel} y rebajado de ${selectedPartnerAcc.codigo}.`
+          : 'Movimiento registrado correctamente'
+      );
     } catch (err) {
       console.error(err);
       notify.error('Error al registrar movimiento: ' + (err.message || 'Error desconocido'));
@@ -2598,6 +2670,40 @@ export default function CashBankModal({
                               <option key={acc.id} value={acc.code}>{acc.label}</option>
                             ))}
                           </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {movType === 'EGRESO' && String(movCategoria || '').toUpperCase() === 'ABONO_PASIVO_SOCIO' && (
+                      <div style={{
+                        marginBottom: '1rem',
+                        padding: '0.85rem 1rem',
+                        borderRadius: '10px',
+                        background: 'rgba(14, 165, 233, 0.08)',
+                        border: '1px solid rgba(14, 165, 233, 0.35)'
+                      }}>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                          Cuenta Pasiva Socio a Abonar (2.02.01.001) *
+                        </label>
+                        <select
+                          className="filter-select"
+                          value={movPartnerAccountId || effectivePartnerPayables[0]?.id || ''}
+                          onChange={(e) => setMovPartnerAccountId(e.target.value)}
+                          style={{ width: '100%' }}
+                          required
+                        >
+                          {effectivePartnerPayables.length === 0 ? (
+                            <option value="">No hay cuentas pasivas de socio activas</option>
+                          ) : (
+                            effectivePartnerPayables.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                [{p.codigo} • {p.codigoContable || '2.02.01.001'}] {p.nombre} ({p.titular || 'Socio'}) • Pasivo Actual: {formatUsd(p.saldoUsd || 0)}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                          Este egreso rebajará automáticamente el saldo de la Cuenta por Pagar Socio seleccionada y generará el asiento <strong>Debe 2.02.01.001 / Haber Tesorería</strong>.
                         </div>
                       </div>
                     )}

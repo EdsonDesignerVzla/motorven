@@ -24,6 +24,8 @@ import TaxReportsView from '../../views/TaxReportsView';
 import UsersManagementView from '../../views/UsersManagementView';
 import SellersView from '../../views/SellersView';
 import ProfitabilityView from '../../views/ProfitabilityView';
+import PasivosView from '../../views/PasivosView';
+import AuditLedgerView from '../../views/AuditLedgerView';
 import CashBankModal from '../CashBankModal';
 import AppConfigModal from '../AppConfigModal';
 import { formatBs } from '../../services/formatService';
@@ -106,6 +108,11 @@ export default function MobileAppLayout({
   onDeleteEmployee,
   onSavePayroll,
   onDeletePayroll,
+  partnerPayableAccounts = null,
+  onSavePartnerPayableAccount,
+  onDeletePartnerPayableAccount,
+  onAdjustPartnerPayableBalance,
+  profitAuditTrails = [],
   onLogout
 }) {
   const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'cxc' | 'inventario' | 'menu' | <module_id>
@@ -375,8 +382,47 @@ export default function MobileAppLayout({
               onDeleteCashDesk={onDeleteCashDesk}
               onUpdateBankAccount={onUpdateBankAccount}
               onDeleteBankAccount={onDeleteBankAccount}
+              partnerPayableAccounts={partnerPayableAccounts}
+              onAdjustPartnerPayableBalance={onAdjustPartnerPayableBalance}
               config={config}
               currentUser={currentUser}
+            />
+          )}
+
+          {mobileTab === 'pasivos' && (
+            <PasivosView
+              partnerPayableAccounts={partnerPayableAccounts}
+              onSavePartnerPayableAccount={onSavePartnerPayableAccount}
+              onDeletePartnerPayableAccount={onDeletePartnerPayableAccount}
+              onAdjustPartnerPayableBalance={onAdjustPartnerPayableBalance}
+              accountsPayable={profitAccountsPayable}
+              profitAccountsPayable={profitAccountsPayable}
+              supplierPayments={profitSupplierPayments}
+              cashDesks={profitCashDesks}
+              bankAccounts={profitBankAccounts}
+              onDeleteCashMovement={onDeleteCashMovement}
+              config={config}
+              currentUser={currentUser}
+              onNavigate={handleNavigateSubmodule}
+            />
+          )}
+
+          {mobileTab === 'auditoria' && (
+            <AuditLedgerView
+              profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              profitPurchases={profitPurchases}
+              profitSupplierPayments={profitSupplierPayments}
+              profitBankAccounts={profitBankAccounts}
+              profitCashDesks={profitCashDesks}
+              cashDesks={profitCashDesks}
+              profitAuditTrails={profitAuditTrails}
+              cashMovements={cashMovements}
+              usersList={usersList}
+              config={config}
+              onSyncProfit={onSyncProfit}
+              currentUser={currentUser}
+              onNavigate={handleNavigateSubmodule}
             />
           )}
 

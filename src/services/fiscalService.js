@@ -1925,3 +1925,46 @@ export const formatSaleInvoiceTicketText = (sale, config = {}) => {
 
   return lines.join('\n');
 };
+
+/**
+ * Recalcula los subtotales por renglón y los totales de cabecera (Subtotal, IVA 16%, Total USD y Total Bs.)
+ * para el modal de edición de Facturas y Notas de Entrega.
+ */
+export const recalculateEditableInvoiceAmounts = ({
+  items = [],
+  tipoDoc = 'FACTURA',
+  tasaDolar = 0,
+  fallbackTasa = 1
+} = {}) => {
+  const normalizedItems = (Array.isArray(items) ? items : []).map((row) => {
+    const cantidad = Math.max(0, Number(row?.cantidad) || 0);
+    const precioUsd = Math.max(0, Number(row?.precioUsd) || 0);
+    const subtotalUsd = round2(cantidad * precioUsd);
+    return {
+      ...row,
+      cantidad,
+      precioUsd,
+      subtotalUsd,
+      totalUsd: subtotalUsd
+    };
+  });
+
+  const subtotalUsdNum = round2(
+    normalizedItems.reduce((acc, it) => acc + (Number(it.subtotalUsd) || 0), 0)
+  );
+  const isNotaEntrega = String(tipoDoc || '').trim().toUpperCase() === 'NOTA_ENTREGA';
+  const ivaUsdNum = isNotaEntrega ? 0 : round2(subtotalUsdNum * 0.16);
+  const totalUsdNum = round2(subtotalUsdNum + ivaUsdNum);
+  const parsedTasa = Number(tasaDolar);
+  const resolvedTasa = parsedTasa > 0 ? parsedTasa : (Number(fallbackTasa) > 0 ? Number(fallbackTasa) : 1);
+  const totalBsNum = round2(totalUsdNum * resolvedTasa);
+
+  return {
+    items: normalizedItems,
+    subtotalUsd: subtotalUsdNum.toFixed(2),
+    ivaUsd: ivaUsdNum.toFixed(2),
+    totalUsd: totalUsdNum.toFixed(2),
+    totalBs: totalBsNum.toFixed(2)
+  };
+};
+

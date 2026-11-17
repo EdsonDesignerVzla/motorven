@@ -2,6 +2,8 @@ import assert from 'assert';
 import fs from 'fs';
 import {
   PLAN_DE_CUENTAS_MOTORVEN,
+  PLAN_DE_CUENTAS_MAP,
+  STRUCTURAL_MODULES_VEN_NIF,
   getCuentasImputables,
   mapCashDeskToAccount,
   mapBankAccountToAccount,
@@ -230,5 +232,143 @@ assert.strictEqual(posCashGl.accountsByCode['1.01.03.001'], undefined, 'Venta PO
 assert.strictEqual(posCashGl.accountsByCode['1.01.01.002']?.saldoFinalUsd, 116, 'Venta POS contado debe cargar $116 a Caja Divisas');
 assert.strictEqual(posCashGl.accountsByCode['4.01.01.001']?.saldoFinalUsd, 100, 'Ventas debe quedar en $100 sin duplicarse');
 console.log('  ✓ Regresión contable: Venta POS contado debita Caja directo sin inflar CxC ni duplicar Ventas.');
+
+// 7. Matriz Estructural VEN-NIF (17 Módulos) y Subcuentas de Auditoría PDF
+assert.strictEqual(STRUCTURAL_MODULES_VEN_NIF.length, 17, 'La Matriz Estructural debe contener exactamente los 17 módulos del sistema');
+assert.strictEqual(STRUCTURAL_MODULES_VEN_NIF.filter(m => m.bloqueId === 'CUENTAS_REALES').length, 7, 'Deben existir 7 módulos en Cuentas Reales (Balance General)');
+assert.strictEqual(STRUCTURAL_MODULES_VEN_NIF.filter(m => m.bloqueId === 'CUENTAS_NOMINALES').length, 3, 'Deben existir 3 módulos en Cuentas Nominales (Estado de Resultados)');
+assert.strictEqual(STRUCTURAL_MODULES_VEN_NIF.filter(m => m.bloqueId === 'ESTRUCTURAL').length, 7, 'Deben existir 7 módulos en Módulos Estructurales / Fiscal / Gobierno');
+STRUCTURAL_MODULES_VEN_NIF.forEach(m => {
+  (m.codigosPrincipales || []).forEach(code => {
+    assert.ok(PLAN_DE_CUENTAS_MAP[code], `El código ${code} en el módulo ${m.modulo} debe existir en PLAN_DE_CUENTAS_MOTORVEN`);
+  });
+});
+assert.strictEqual(mapMovementToAccount({ tipo: 'EGRESO', concepto: 'Cobro de IGTF 2% bancario' }).codigo, '6.01.10.002');
+assert.strictEqual(mapMovementToAccount({ tipo: 'EGRESO', concepto: 'Comision bancaria punto de venta' }).codigo, '6.01.10.001');
+console.log('  ✓ Matriz Estructural de 17 Módulos (Cuentas Reales, Nominales y Estructurales) y subcuentas PDF verificadas.');
+
+// 8. Integración CxP <-> Cuentas de Pasivo Socio (2.02.01.001) <-> Caja Chica & Bancos
+{
+  const desksMock = [
+    { id: 'caja-usd', coCaja: 'CAJA-01', descripcion: 'Caja Principal Divisas', moneda: 'USD' },
+    { id: 'caja-bs', coCaja: 'CAJA-03', descripcion: 'Caja Moneda Nacional', moneda: 'BS' }
+  ];
+  const banksMock = [
+    { id: 'CTA-01', codCta: '01', numCta: '01050027311027479197', bancoNombre: 'BANCO MERCANTIL' }
+  ];
+
+  // 8.1 Pago CxP asumido por Socio (PASIVO_SOCIO) debe acreditar 2.02.01.001 y NO 1.01.02.001
+  const socioEntries = buildAccountingEntries({
+    profitSupplierPayments: [
+      {
+        pagoNum: 'PG-SOC-1',
+        fechaPago: '2026-11-17',
+        montoUsd: 500,
+        provNombre: 'Keystone, C.A.',
+        cuentaId: 'cta-socio-01',
+        partnerAccountId: 'cta-socio-01',
+        cuentaNombre: 'SOC-01 - Cuenta por Pagar Socio',
+        accountType: 'PASIVO_SOCIO',
+        cuentaContable: '2.02.01.001',
+        tasa: 915.74
+      }
+    ],
+    profitBankAccounts: banksMock,
+    desksList: desksMock,
+    tasa: 915.74
+  });
+  assert.strictEqual(socioEntries.length, 1);
+  assert.strictEqual(socioEntries[0].lines[0].cuentaCodigo, '2.02.02.002');
+  assert.strictEqual(socioEntries[0].lines[1].cuentaCodigo, '2.02.01.001', 'Pago PASIVO_SOCIO debe acreditar 2.02.01.001');
+  assert.strictEqual(
+    socioEntries[0].lines.some(l => l.cuentaCodigo === '1.01.02.001'),
+    false,
+    'Pago PASIVO_SOCIO NO debe acreditar Banco de Venezuela'
+  );
+
+  // 8.2 Pago CxP desde Caja Divisas + egreso espejo en cash_movements (PAGO_PROVEEDOR) no debe duplicar asiento
+  const cajaPayEntries = buildAccountingEntries({
+    profitSupplierPayments: [
+      {
+        pagoNum: 'PG-CAJ-1',
+        fechaPago: '2026-11-17',
+        montoUsd: 250,
+        provNombre: 'Keystone, C.A.',
+        cuentaId: 'caja-usd',
+        cajaId: 'caja-usd',
+        cuentaNombre: 'CAJA-01 - Caja Principal Divisas',
+        accountType: 'CAJA',
+        moneda: 'US$',
+        tasa: 915.74
+      }
+    ],
+    cashMovements: [
+      {
+        id: 'MOV-CXP-1',
+        fecha: '2026-11-17',
+        tipo: 'EGRESO',
+        categoria: 'PAGO_PROVEEDOR',
+        concepto: 'Pago a proveedor Keystone, C.A.',
+        montoUsd: 250,
+        cuentaId: 'caja-usd',
+        cajaId: 'caja-usd',
+        tasa: 915.74
+      }
+    ],
+    profitBankAccounts: banksMock,
+    desksList: desksMock,
+    tasa: 915.74
+  });
+  assert.strictEqual(cajaPayEntries.length, 1, 'cash_movement PAGO_PROVEEDOR no debe generar un segundo asiento duplicado');
+  assert.strictEqual(cajaPayEntries[0].lines[1].cuentaCodigo, '1.01.01.002', 'Pago CxP desde CAJA USD debe acreditar 1.01.01.002');
+
+  // 8.3 Pago CxP desde Caja Moneda Nacional acredita 1.01.01.001
+  const cajaBsEntries = buildAccountingEntries({
+    profitSupplierPayments: [
+      {
+        pagoNum: 'PG-CAJ-BS',
+        fechaPago: '2026-11-17',
+        montoUsd: 100,
+        provNombre: 'Proveedor Local',
+        cuentaId: 'caja-bs',
+        cajaId: 'caja-bs',
+        accountType: 'CAJA',
+        moneda: 'BS',
+        tasa: 915.74
+      }
+    ],
+    desksList: desksMock,
+    tasa: 915.74
+  });
+  assert.strictEqual(cajaBsEntries[0].lines[1].cuentaCodigo, '1.01.01.001', 'Pago CxP desde CAJA BS debe acreditar 1.01.01.001');
+
+  // 8.4 Abono / Reembolso al Socio desde Banco o Caja (ABONO_PASIVO_SOCIO) debe debitar 2.02.01.001 y acreditar Banco/Caja
+  const abonoSocioEntries = buildAccountingEntries({
+    cashMovements: [
+      {
+        id: 'MOV-SOC-1',
+        fecha: '2026-11-17',
+        tipo: 'EGRESO',
+        categoria: 'ABONO_PASIVO_SOCIO',
+        cuentaGasto: '2.02.01.001',
+        concepto: 'Reembolso parcial a Socio Principal',
+        montoUsd: 200,
+        cuentaId: 'CTA-01',
+        accountKind: 'BANCO',
+        partnerAccountId: 'cta-socio-01',
+        referenciaTipo: 'PASIVO_SOCIO',
+        referenciaId: 'cta-socio-01',
+        tasa: 915.74
+      }
+    ],
+    profitBankAccounts: banksMock,
+    desksList: desksMock,
+    tasa: 915.74
+  });
+  assert.strictEqual(abonoSocioEntries.length, 1);
+  assert.strictEqual(abonoSocioEntries[0].lines[0].cuentaCodigo, '2.02.01.001', 'ABONO_PASIVO_SOCIO debe debitar 2.02.01.001');
+  assert.strictEqual(abonoSocioEntries[0].lines[1].cuentaCodigo, '1.01.02.002', 'ABONO_PASIVO_SOCIO desde Banco Mercantil debe acreditar 1.01.02.002');
+  console.log('  ✓ Integración contable CxP <-> Pasivo Socio (2.02.01.001) <-> Caja/Banco y anti-duplicación verificadas.');
+}
 
 console.log('\n--- TODAS LAS PRUEBAS DEL PLAN DE CUENTAS Y PARTIDA DOBLE FINALIZADAS CON ÉXITO ---');

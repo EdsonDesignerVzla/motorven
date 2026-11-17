@@ -12,6 +12,12 @@ import {
   supabase
 } from '../services/supabaseService.js';
 import {
+  getSyncQueue,
+  clearSyncQueue,
+  enqueueSyncAction,
+  flushSyncQueue
+} from '../services/offlineSyncService.js';
+import {
   buildConsolidatedKardex,
   isDocumentAnnulled,
   resolveKardexLineCosts,
@@ -307,6 +313,31 @@ assert.strictEqual(formatKardexDocCode(14, 'AJU'), 'AJU-000014');
 assert.strictEqual(formatKardexDocCode('AJU-991122', 'AJU'), 'AJU-991122');
 assert.strictEqual(formatKardexDocCode(4, 'TRA'), 'TRA-000004');
 assert.strictEqual(formatKardexDocCode('TRAS-881100', 'TRA'), 'TRAS-881100');
+
+// 6. Cola offline por delta atómico (stock_delta) en lugar de sobrescribir stock absoluto
+clearSyncQueue();
+enqueueSyncAction('stock_delta', 'UPDATE', {
+  id: 'sale_FAC-TEST-DELTA_deduct',
+  idempotencyKey: 'sale_FAC-TEST-DELTA_deduct',
+  lines: [{ codigo: 'TEST-SKU-01', delta01: -2, delta02: 0 }],
+  validateStrict: false,
+  alreadyAppliedLocally: true
+});
+assert.strictEqual(getSyncQueue().some(q => q.entity === 'stock_delta'), true, 'Debe encolar acción stock_delta');
+assert.strictEqual(getSyncQueue().some(q => q.entity === 'product'), false, 'No debe encolar product absoluto');
+
+let replayedDeltaArgs = null;
+const flushRes = await flushSyncQueue({
+  applyStockDeltaForWarehouseLines: async (lines, opts) => {
+    replayedDeltaArgs = { lines, opts };
+    return [];
+  }
+});
+assert.strictEqual(flushRes.success, true, 'flushSyncQueue debe sincronizar stock_delta sin fallos');
+assert.strictEqual(replayedDeltaArgs?.lines?.[0]?.delta01, -2, 'Debe reproducir exactamente delta01 = -2');
+assert.strictEqual(replayedDeltaArgs?.opts?.idempotencyKey, 'sale_FAC-TEST-DELTA_deduct');
+assert.strictEqual(replayedDeltaArgs?.opts?.skipLocalStoragePatch, true, 'No debe doble-descontar en localStorage');
+assert.strictEqual(getSyncQueue().length, 0, 'La cola debe quedar vacía tras sincronizar');
 
 console.log('✅ TODAS LAS PRUEBAS DE INVENTARIO, ALMACENES Y COMPRAS FINALIZADAS CON ÉXITO.');
 } finally {

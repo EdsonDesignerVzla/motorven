@@ -65,7 +65,7 @@ import {
 import MotorvenLogo from './MotorvenLogo';
 import OilstoneProductImage from './OilstoneProductImage';
 import SalesInvoiceModal from './SalesInvoiceModal';
-import { isMasterOrGerencia, isClientApproved, canApproveClients, normalizeRole } from '../services/authService';
+import { isMasterOrGerencia, isClientApproved, canApproveClients, canManageInvoices } from '../services/authService';
 import {
   generateOrdersPDF,
   generateSellerOrderPDF,
@@ -76,7 +76,7 @@ import {
   pickPreferredLineItems
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
-import { calculateFiscalTaxes, resolveConfigIgtfOptions, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts, getEraScopedCanonicalDocKey, isLegacyPreNovInvoice } from '../services/fiscalService';
+import { calculateFiscalTaxes, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts, getEraScopedCanonicalDocKey, isLegacyPreNovInvoice, recalculateEditableInvoiceAmounts } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
 import ClientsDirectoryModal from './ClientsDirectoryModal';
@@ -256,24 +256,8 @@ export default function OrdersSalesModal({
   const [customCorrelativoInput, setCustomCorrelativoInput] = useState('');
   const [correlativoRefreshKey, setCorrelativoRefreshKey] = useState(0);
 
-  // Verificación de rol administrativo para privilegios de edición y eliminación
-  const isAdmin = useMemo(() => {
-    if (!currentUser) return false;
-    if (isMasterOrGerencia(currentUser)) return true;
-    const normRole = normalizeRole(currentUser.rol || currentUser.role || '');
-    const username = String(currentUser.username || currentUser.usuario || '').toLowerCase().trim();
-    return (
-      normRole === 'ADMINISTRADOR MASTER' ||
-      normRole === 'GERENCIA' ||
-      normRole === 'ADMINISTRACIÓN' ||
-      normRole === 'TECNOLOGÍA & INFORMÁTICA' ||
-      normRole === 'TI' ||
-      username === 'edson designer' ||
-      username === 'manuel' ||
-      username === 'gerencia' ||
-      username === 'admin'
-    );
-  }, [currentUser]);
+  // Verificación de privilegios de edición y eliminación en el listado de facturas
+  const isAdmin = useMemo(() => canManageInvoices(currentUser), [currentUser]);
 
   const userCanGrantCreditOverride = useMemo(
     () => canUserGrantCreditOverride(currentUser),
@@ -398,7 +382,9 @@ export default function OrdersSalesModal({
       metodoPago: isCredit && metodoResolved === 'CREDITO' ? 'CREDITO' : metodoResolved,
       condicionPago: isCredit ? 'CREDITO' : 'CONTADO',
       tasaBcv: Number(tasa) || tasaBcv,
-      ...resolveConfigIgtfOptions(config)
+      // La factura no se cobra al momento de emitirse (pasa a CxC), por lo que no aplica IGTF en emisión
+      esSujetoPasivoEspecial: false,
+      porcentajeIgtf: 0
     });
     return { isOrdNE, isCredit, effectiveCondicion, metodoResolved, items, taxes };
   };
@@ -1266,7 +1252,9 @@ export default function OrdersSalesModal({
         metodoPago: paymentTerm === 'CONTADO' ? 'EFECTIVO_USD' : 'CREDITO',
         condicionPago: paymentTerm === 'CONTADO' ? 'CONTADO' : 'CREDITO',
         tasaBcv,
-        ...resolveConfigIgtfOptions(config)
+        // No calcular IGTF en generación de pedido/factura (el cobro se gestiona en CxC)
+        esSujetoPasivoEspecial: false,
+        porcentajeIgtf: 0
       });
 
       const nowIso = new Date().toISOString();
@@ -2082,6 +2070,22 @@ export default function OrdersSalesModal({
     };
   }, [allInvoices]);
 
+  // Recalcula automáticamente Subtotal, IVA 16% (exento en N.E.), Total USD y Total Bs. al editar renglones
+  const applyRecalculatedEditingInvoice = (prev, nextItems, nextTipoDoc = prev?.tipoDoc) => {
+    if (!prev) return prev;
+    const recalc = recalculateEditableInvoiceAmounts({
+      items: nextItems,
+      tipoDoc: nextTipoDoc,
+      tasaDolar: prev.tasaDolar,
+      fallbackTasa: tasaBcv
+    });
+    return {
+      ...prev,
+      tipoDoc: nextTipoDoc,
+      ...recalc
+    };
+  };
+
   // Abrir modal de edición de datos de Factura o Nota de Entrega (solo roles administrativos)
   const handleOpenEditInvoice = (inv) => {
     if (!inv) return;
@@ -2240,7 +2244,7 @@ export default function OrdersSalesModal({
     const cleanItems = (editingInvoice.items || []).map((it) => {
       const cant = Math.max(0, Number(it.cantidad) || 0);
       const precio = Math.max(0, Number(it.precioUsd) || 0);
-      const sub = Number(it.subtotalUsd) > 0 ? Number(it.subtotalUsd) : Number((cant * precio).toFixed(2));
+      const sub = Number((cant * precio).toFixed(2));
       return {
         ...it,
         cantidad: cant,
@@ -2367,9 +2371,13 @@ export default function OrdersSalesModal({
     }
   };
 
-  // Eliminación con doble seguridad de factura para administradores
+  // Eliminación con doble seguridad de factura para usuarios autorizados
   const handleDeleteInvoiceConfirm = async () => {
     if (!invoiceToDelete) return;
+    if (!isAdmin) {
+      notify.error('No posee permisos autorizados para eliminar facturas emitidas.');
+      return;
+    }
     const factNum = formatInvoiceCorrelativo(invoiceToDelete);
     const isValid = deleteConfirmKeyword.trim().toUpperCase() === 'ELIMINAR' || deleteConfirmKeyword.trim() === factNum;
     if (!isValid) return;
@@ -4620,6 +4628,7 @@ export default function OrdersSalesModal({
                                     if (onProcessSale) {
                                       saleResult = await onProcessSale({
                                         preserveOriginOrderOnSale: true,
+                                        markOriginOrderBilled: true,
                                         orderId: selectedOrder.id,
                                         pedidoOrigenId: selectedOrder.id,
                                         pedidoOrigenDoc: selectedOrder.numeroDoc || selectedOrder.id,
@@ -6899,7 +6908,10 @@ export default function OrdersSalesModal({
                           <select
                             className="form-control"
                             value={editingInvoice.tipoDoc}
-                            onChange={(e) => setEditingInvoice(prev => ({ ...prev, tipoDoc: e.target.value }))}
+                            onChange={(e) => {
+                              const nextTipo = e.target.value;
+                              setEditingInvoice(prev => applyRecalculatedEditingInvoice(prev, prev.items || [], nextTipo));
+                            }}
                             style={{ fontSize: '0.82rem' }}
                           >
                             <option value="FACTURA">FACTURA FISCAL</option>
@@ -7239,16 +7251,7 @@ export default function OrdersSalesModal({
                           <button
                             type="button"
                             onClick={() => {
-                              const itemsSub = (editingInvoice.items || []).reduce((acc, it) => acc + (Number(it.cantidad || 0) * Number(it.precioUsd || 0)), 0);
-                              const iva = Number(editingInvoice.ivaUsd) || 0;
-                              const tasa = Number(editingInvoice.tasaDolar) || tasaBcv;
-                              const tot = itemsSub + iva;
-                              setEditingInvoice(prev => ({
-                                ...prev,
-                                subtotalUsd: itemsSub.toFixed(2),
-                                totalUsd: tot.toFixed(2),
-                                totalBs: (tot * tasa).toFixed(2)
-                              }));
+                              setEditingInvoice(prev => applyRecalculatedEditingInvoice(prev, prev.items || [], prev.tipoDoc));
                             }}
                             style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid var(--border-glass)', background: 'rgba(56,189,248,0.12)', color: '#38bdf8', fontSize: '0.70rem', fontWeight: 700, cursor: 'pointer' }}
                           >
@@ -7416,13 +7419,12 @@ export default function OrdersSalesModal({
                         <button
                           type="button"
                           onClick={() => {
-                            setEditingInvoice(prev => ({
-                              ...prev,
-                              items: [
+                            setEditingInvoice(prev =>
+                              applyRecalculatedEditingInvoice(prev, [
                                 ...(prev.items || []),
                                 { id: `ITEM-${Date.now()}`, codigo: '', articuloId: '', descripcion: 'Artículo Lubricante', cantidad: 1, precioUsd: 0, subtotalUsd: 0, litros: 0 }
-                              ]
-                            }));
+                              ])
+                            );
                           }}
                           style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.4)', background: 'rgba(16,185,129,0.14)', color: '#10b981', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}
                         >
@@ -7468,10 +7470,12 @@ export default function OrdersSalesModal({
                               value={it.cantidad}
                               onChange={(e) => {
                                 const q = Number(e.target.value) || 0;
-                                setEditingInvoice(prev => ({
-                                  ...prev,
-                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, cantidad: q, subtotalUsd: Number((q * (Number(row.precioUsd) || 0)).toFixed(2)) } : row)
-                                }));
+                                setEditingInvoice(prev =>
+                                  applyRecalculatedEditingInvoice(
+                                    prev,
+                                    (prev.items || []).map((row, i) => i === rIdx ? { ...row, cantidad: q } : row)
+                                  )
+                                );
                               }}
                               placeholder="Cant"
                               style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
@@ -7484,10 +7488,12 @@ export default function OrdersSalesModal({
                               value={it.precioUsd}
                               onChange={(e) => {
                                 const p = Number(e.target.value) || 0;
-                                setEditingInvoice(prev => ({
-                                  ...prev,
-                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, precioUsd: p, subtotalUsd: Number(((Number(row.cantidad) || 0) * p).toFixed(2)) } : row)
-                                }));
+                                setEditingInvoice(prev =>
+                                  applyRecalculatedEditingInvoice(
+                                    prev,
+                                    (prev.items || []).map((row, i) => i === rIdx ? { ...row, precioUsd: p } : row)
+                                  )
+                                );
                               }}
                               placeholder="Precio $"
                               style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
@@ -7497,7 +7503,14 @@ export default function OrdersSalesModal({
                             </div>
                             <button
                               type="button"
-                              onClick={() => setEditingInvoice(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== rIdx) }))}
+                              onClick={() =>
+                                setEditingInvoice(prev =>
+                                  applyRecalculatedEditingInvoice(
+                                    prev,
+                                    (prev.items || []).filter((_, i) => i !== rIdx)
+                                  )
+                                )
+                              }
                               style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: '6px', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
                               title="Quitar renglón"
                             >

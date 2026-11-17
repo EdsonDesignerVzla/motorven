@@ -23,6 +23,7 @@ export const CHART_OF_ACCOUNTS = [
   { codigo: '1.01.02.008', nombre: 'Banco Activo (0378)', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'BANCOS' },
   { codigo: '1.01.03.', nombre: 'DOCUMENTOS Y CUENTAS POR COBRAR', nivel: 3, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
   { codigo: '1.01.03.001', nombre: 'Cuentas por Cobrar Comerciales', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
+  { codigo: '1.01.03.002', nombre: 'Provisión para Cuentas Incobrables', nivel: 4, imputable: true, naturaleza: 'ACREEDORA', grupo: 'ACTIVO', subgrupo: 'VALUACION_CXC' },
   { codigo: '1.02.', nombre: 'ANTICIPOS', nivel: 2, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
   { codigo: '1.02.01.', nombre: 'ANTICIPO PROVEEDORES', nivel: 3, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
   { codigo: '1.02.01.001', nombre: 'Anticipo Proveedores', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
@@ -32,6 +33,7 @@ export const CHART_OF_ACCOUNTS = [
   { codigo: '1.03.01.002', nombre: 'Otras Cuentas por Cobrar', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
   { codigo: '1.03.01.003', nombre: 'Cuentas por Cobrar Socio', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
   { codigo: '1.03.01.004', nombre: 'Cuentas por Cobrar Intercompañías', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
+  { codigo: '1.03.01.005', nombre: 'Depósitos en Garantía', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
   { codigo: '1.03.01.006', nombre: 'Otras cuentas por cobrar vehículos', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'EXIGIBLE' },
   { codigo: '1.04.', nombre: 'INVENTARIOS', nivel: 2, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
   { codigo: '1.04.01.', nombre: 'INVENTARIO', nivel: 3, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
@@ -53,6 +55,8 @@ export const CHART_OF_ACCOUNTS = [
   { codigo: '1.06.02.001', nombre: 'Deprec. Acum. Mobiliario y Equipo', nivel: 4, imputable: true, naturaleza: 'ACREEDORA', grupo: 'ACTIVO', subgrupo: 'DEPRECIACION' },
   { codigo: '1.06.02.002', nombre: 'Deprec. Acum. Vehiculos', nivel: 4, imputable: true, naturaleza: 'ACREEDORA', grupo: 'ACTIVO', subgrupo: 'DEPRECIACION' },
   { codigo: '1.06.02.003', nombre: 'Deprec. Acum. Equipos de Computación', nivel: 4, imputable: true, naturaleza: 'ACREEDORA', grupo: 'ACTIVO', subgrupo: 'DEPRECIACION' },
+  { codigo: '1.06.03.', nombre: 'ACTIVOS INTANGIBLES', nivel: 3, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
+  { codigo: '1.06.03.001', nombre: 'Licencias y Software Contable', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'INTANGIBLES' },
   { codigo: '1.07.', nombre: 'AJUSTE POR INFLACIÓN', nivel: 2, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
   { codigo: '1.07.01.', nombre: 'AJUSTE POR INFLACION ACTIVO FIJO', nivel: 3, imputable: false, naturaleza: 'DEUDORA', grupo: 'ACTIVO' },
   { codigo: '1.07.01.001', nombre: 'Ajuste por Inflación Activo Fijo', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'ACTIVO', subgrupo: 'AJUSTE_INFLACION' },
@@ -161,9 +165,16 @@ export const CHART_OF_ACCOUNTS = [
   { codigo: '6.01.09.002', nombre: 'Medicinas y Gastos Médicos', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'MISCELANEOS' },
   { codigo: '6.01.09.003', nombre: 'Gastos de Seguridad', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'MISCELANEOS' },
   { codigo: '6.01.09.004', nombre: 'Gastos Varios', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'MISCELANEOS' },
+  { codigo: '6.01.10.', nombre: 'GASTOS FINANCIEROS Y TRIBUTARIOS', nivel: 3, imputable: false, naturaleza: 'DEUDORA', grupo: 'EGRESOS' },
+  { codigo: '6.01.10.001', nombre: 'Comisiones y Gastos Bancarios', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'FINANCIEROS' },
+  { codigo: '6.01.10.002', nombre: 'IGTF y Tributos Financieros (2%)', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'FINANCIEROS' },
+  { codigo: '6.01.10.003', nombre: 'Intereses y Recargos Financieros', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'FINANCIEROS' },
+  { codigo: '6.01.10.004', nombre: 'Multas y Sanciones Fiscales', nivel: 4, imputable: true, naturaleza: 'DEUDORA', grupo: 'EGRESOS', subgrupo: 'FINANCIEROS' },
 ];
 
 import { round2 } from './formatService.js';
+import { STRUCTURAL_MODULES_VEN_NIF } from '../data/planDeCuentasMotorven.js';
+export { STRUCTURAL_MODULES_VEN_NIF };
 
 export const CHART_OF_ACCOUNTS_MAP = CHART_OF_ACCOUNTS.reduce((acc, item) => {
   acc[item.codigo] = item;
@@ -230,6 +241,24 @@ export function resolveCashMovementAccount(movement) {
   if (!movement) return { codigo: '6.01.09.004', nombre: 'Gastos Varios' };
   const desc = String(movement.concepto || movement.descripcion || movement.motivo || '').toUpperCase();
   const tipo = String(movement.tipo || 'EGRESO').toUpperCase();
+  const catUpper = String(movement.categoria || '').toUpperCase().trim();
+  const cuentaGasto = String(movement.cuentaGasto || movement.cuenta_gasto || '').trim();
+  const refTipo = String(movement.referenciaTipo || movement.referencia_tipo || '').toUpperCase().trim();
+
+  if (
+    catUpper === 'ABONO_PASIVO_SOCIO' ||
+    cuentaGasto.startsWith('2.02.01') ||
+    refTipo === 'PASIVO_SOCIO' ||
+    desc.includes('ABONO A SOCIO') ||
+    desc.includes('REEMBOLSO A SOCIO') ||
+    desc.includes('ABONO PASIVO SOCIO')
+  ) {
+    const targetCode = CHART_OF_ACCOUNTS_MAP[cuentaGasto] ? cuentaGasto : '2.02.01.001';
+    return {
+      codigo: targetCode,
+      nombre: CHART_OF_ACCOUNTS_MAP[targetCode]?.nombre || 'Cuentas por Pagar Socio'
+    };
+  }
 
   if (tipo === 'INGRESO') {
     if (desc.includes('TRASPASO') || desc.includes('TRANSFERENCIA')) return { codigo: '1.01.01.003', nombre: 'Traspaso de Fondos' };
@@ -242,6 +271,16 @@ export function resolveCashMovementAccount(movement) {
   }
   if (desc.includes('BONO') || desc.includes('ALIMENT') || desc.includes('CESTA')) return { codigo: '6.01.01.003', nombre: 'Bono Alimentación' };
   if (desc.includes('SOBRETIEMPO') || desc.includes('HORA EXTRA') || desc.includes('HORAS EXTRA')) return { codigo: '6.01.01.004', nombre: 'Sobretiempo' };
+  if (desc.includes('IGTF')) return { codigo: '6.01.10.002', nombre: 'IGTF y Tributos Financieros (2%)' };
+  if (desc.includes('COMISION BANC') || desc.includes('COMISIÓN BANC') || desc.includes('GASTO BANC') || desc.includes('PUNTO DE VENTA')) {
+    return { codigo: '6.01.10.001', nombre: 'Comisiones y Gastos Bancarios' };
+  }
+  if (desc.includes('INTERES BANC') || desc.includes('INTERÉS BANC') || desc.includes('RECARGO FINANC')) {
+    return { codigo: '6.01.10.003', nombre: 'Intereses y Recargos Financieros' };
+  }
+  if (desc.includes('MULTA') || desc.includes('SANCION') || desc.includes('SANCIÓN')) {
+    return { codigo: '6.01.10.004', nombre: 'Multas y Sanciones Fiscales' };
+  }
   if (desc.includes('COMISION') || desc.includes('COMISIÓN')) return { codigo: '6.01.01.011', nombre: 'Comisiones Vendedores' };
   if (desc.includes('LUZ') || desc.includes('CORPOELEC') || desc.includes('ELECTRIC') || desc.includes('ASEO URBANO')) return { codigo: '6.01.02.001', nombre: 'Electricidad y Aseo Urbano' };
   if (desc.includes('TELEF') || desc.includes('CELULAR') || desc.includes('MOVISTAR') || desc.includes('DIGITEL') || desc.includes('CANTV')) return { codigo: '6.01.02.002', nombre: 'Teléfono Celular' };
@@ -571,14 +610,55 @@ export function generateAccountingEntries({
 
     const montoBs = round2(montoUsd * rate);
     const cxpCuenta = resolveSupplierPayableAccount(pay);
-    let bancoCuenta = { codigo: '1.01.02.001', nombre: 'Banco de Venezuela' };
-    const bankId = pay.cuentaBancariaId || pay.bancoId || pay.cuentaId;
-    const deskId = pay.cajaId;
+    const accType = String(pay.accountType || pay.account_type || '').trim().toUpperCase();
+    const rawCuentaId = String(pay.partnerAccountId || pay.partner_account_id || pay.cuentaId || pay.cuenta_id || '').trim();
+    const cuentaContableCode = String(pay.cuentaContable || pay.cuenta_contable || '').trim();
+    const isPartnerPayable =
+      accType === 'PASIVO_SOCIO' ||
+      rawCuentaId.toUpperCase().startsWith('SOC') ||
+      cuentaContableCode.startsWith('2.02.01');
 
-    if (bankId) {
-      bancoCuenta = resolveBankAccount(profitBankAccounts.find((b) => b.id === bankId || b.codCta === bankId) || { id: bankId });
-    } else if (deskId) {
-      bancoCuenta = resolveCashAccount(desksList.find((d) => d.id === deskId) || { id: deskId });
+    const deskTarget = pay.cajaId || pay.caja_id || (accType === 'CAJA' ? (pay.cuentaId || pay.cuenta_id) : '');
+    const matchedDesk = !isPartnerPayable && deskTarget
+      ? desksList.find((d) =>
+          d && (
+            String(d.id || '') === String(deskTarget) ||
+            String(d.coCaja || d.co_caja || '') === String(deskTarget)
+          )
+        )
+      : null;
+    const isCashDesk = !isPartnerPayable && (accType === 'CAJA' || Boolean(pay.cajaId || pay.caja_id) || Boolean(matchedDesk));
+
+    const bankTarget =
+      pay.cuentaBancariaId ||
+      pay.cuenta_bancaria_id ||
+      pay.bancoId ||
+      (!isPartnerPayable && !isCashDesk ? (pay.cuentaId || pay.cuenta_id) : '');
+
+    let bancoCuenta = { codigo: '1.01.02.001', nombre: 'Banco de Venezuela' };
+    let conceptText = `Pago / Abono a proveedor: ${pay.provNombre || 'Proveedor'}`;
+
+    if (isPartnerPayable) {
+      const targetPasivoCode = CHART_OF_ACCOUNTS_MAP[cuentaContableCode] ? cuentaContableCode : '2.02.01.001';
+      bancoCuenta = {
+        codigo: targetPasivoCode,
+        nombre: CHART_OF_ACCOUNTS_MAP[targetPasivoCode]?.nombre || 'Cuentas por Pagar Socio'
+      };
+      conceptText = `Pago / Abono a proveedor asumido por Socio (${pay.cuentaNombre || bancoCuenta.nombre}): ${pay.provNombre || 'Proveedor'}`;
+    } else if (isCashDesk) {
+      bancoCuenta = resolveCashAccount(
+        matchedDesk || {
+          id: deskTarget,
+          coCaja: deskTarget,
+          descripcion: pay.cuentaNombre || '',
+          moneda: String(pay.moneda || '').toUpperCase().includes('BS') ? 'BS' : 'USD'
+        }
+      );
+    } else if (bankTarget) {
+      const matchedBank = profitBankAccounts.find((b) =>
+        b && (String(b.id || '') === String(bankTarget) || String(b.codCta || b.cod_cta || '') === String(bankTarget))
+      );
+      bancoCuenta = resolveBankAccount(matchedBank || { id: bankTarget, bancoNombre: pay.cuentaNombre || '' });
     }
 
     entries.push({
@@ -590,7 +670,7 @@ export function generateAccountingEntries({
       documentoReferencia: `PAG-${payNum}`,
       usuario: pay.co_us_in || 'TESORERÍA',
       tasa: rate,
-      concepto: `Pago / Abono a proveedor: ${pay.provNombre || 'Proveedor'}`,
+      concepto: conceptText,
       montoTotalUsd: montoUsd,
       lines: [
         { cuentaCodigo: cxpCuenta.codigo, cuentaNombre: cxpCuenta.nombre, debeUsd: montoUsd, haberUsd: 0, debeBs: montoBs, haberBs: 0 },
@@ -602,6 +682,9 @@ export function generateAccountingEntries({
   cashMovements.forEach((mov, idx) => {
     const movId = mov.id || `mov-${idx + 1}`;
     if (consumedSaleCashMovIds.has(movId)) return;
+    if (mov.anulado || mov.anulada) return;
+    const cat = String(mov.categoria || '').toUpperCase().trim();
+    if (cat === 'PAGO_PROVEEDOR' || cat === 'COBRO_CXC' || cat === 'VENTA_POS') return;
     const montoUsd = round2(mov.montoUsd || 0);
     if (montoUsd <= 0) return;
     const rate = Number(mov.tasa || tasa || 827.73);
@@ -609,8 +692,30 @@ export function generateAccountingEntries({
     const isEgreso = (mov.tipo || 'EGRESO').toUpperCase() === 'EGRESO';
     const fecha = mov.fecha || mov.createdAt || new Date().toISOString();
 
+    const movDeskId = mov.cajaId || mov.caja_id || '';
+    const movCuentaId = mov.cuentaId || mov.cuenta_id || '';
+    const movKind = String(mov.accountKind || mov.account_kind || '').toUpperCase().trim();
+    const matchedDesk = desksList.find((d) =>
+      d && (
+        (movDeskId && (String(d.id || '') === String(movDeskId) || String(d.coCaja || d.co_caja || '') === String(movDeskId))) ||
+        (movCuentaId && (String(d.id || '') === String(movCuentaId) || String(d.coCaja || d.co_caja || '') === String(movCuentaId)))
+      )
+    );
+    const matchedBank = !matchedDesk && movCuentaId
+      ? profitBankAccounts.find((b) =>
+          b && (String(b.id || '') === String(movCuentaId) || String(b.codCta || b.cod_cta || '') === String(movCuentaId))
+        )
+      : null;
+
     let cashCuenta = { codigo: '1.01.01.002', nombre: 'Caja Divisas' };
-    if (mov.metodo === 'BS' || mov.moneda === 'BS') {
+    if (matchedBank || (!movDeskId && movKind === 'BANCO')) {
+      cashCuenta = resolveBankAccount(matchedBank || { id: movCuentaId, bancoNombre: mov.cuentaNombre || mov.cajaOBanco || '' });
+    } else if (matchedDesk) {
+      const metodoUpper = String(mov.metodo || mov.metodoPago || '').toUpperCase();
+      cashCuenta = metodoUpper.includes('ZELLE')
+        ? { codigo: '1.01.01.004', nombre: 'Zelle' }
+        : resolveCashAccount(matchedDesk);
+    } else if (mov.metodo === 'BS' || mov.moneda === 'BS') {
       cashCuenta = { codigo: '1.01.01.001', nombre: 'Caja Moneda Nacional' };
     } else if (mov.metodo === 'ZELLE') {
       cashCuenta = { codigo: '1.01.01.004', nombre: 'Zelle' };

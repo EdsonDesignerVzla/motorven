@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Building2,
   Search,
@@ -25,7 +26,7 @@ import {
   Wallet
 } from 'lucide-react';
 import { formatUsd, formatBs, formatNumberUs } from '../services/formatService';
-import { generateAccountsPayablePDF, generateThirdPartyStatementPDF } from '../services/pdfReportService';
+import { generateAccountsPayablePDF, generateThirdPartyStatementPDF, outputCreditDebitNoteDocument, isCreditDebitDocumentFiscal } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import { soundFX } from '../services/soundService';
 import {
@@ -34,7 +35,10 @@ import {
   dedupePayablesList,
   dedupeSupplierPaymentsList,
   doesPayableMatchDocument,
-  doesSupplierPaymentMatchPayable
+  doesSupplierPaymentMatchPayable,
+  getNextCxpCreditDebitNoteCorrelativo,
+  buildCxpCreditDebitNoteResult,
+  suggestCreditDebitControlNumber
 } from '../utils/cxpUtils';
 import { loadPartnerPayableAccounts } from '../utils/treasuryAccountUtils';
 import {
@@ -51,7 +55,11 @@ import {
 // Helpers de fechas y redondeo
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
-const isFiscalInvoiceType = (tipo) => String(tipo || '').toUpperCase().trim() === 'FACT';
+const isFiscalInvoiceType = (tipo, isFiscalFlag = undefined) => {
+  if (isFiscalFlag !== undefined) return Boolean(isFiscalFlag);
+  const t = String(tipo || '').toUpperCase().trim();
+  return t === 'FACT' || t === 'FACTURA';
+};
 
 const getDocTypeLabel = (tipo) => {
   const t = String(tipo || '').toUpperCase().trim();
@@ -68,7 +76,7 @@ const getDocTypeLabel = (tipo) => {
 const syncPayableAmounts = (next, changedField, rawValue, fallbackRate) => {
   const parsedRate = Number(next.tasaCambio || 0);
   const rate = parsedRate > 0 ? parsedRate : Math.max(0.0001, Number(fallbackRate || 1));
-  const isFact = isFiscalInvoiceType(next.tipoDoc);
+  const isFact = isFiscalInvoiceType(next.tipoDoc, next.isFiscal);
   const appliesIva = isFact && !next.exentoIva;
 
   const setFromTotalUsd = (totalU, keepRawField = null) => {
@@ -111,8 +119,8 @@ const syncPayableAmounts = (next, changedField, rawValue, fallbackRate) => {
     }
   };
 
-  if (changedField === 'tipoDoc' || changedField === 'exentoIva') {
-    if (!isFact) next.exentoIva = false;
+  if (changedField === 'tipoDoc' || changedField === 'exentoIva' || changedField === 'isFiscal') {
+    if (!isFact) next.exentoIva = true;
     if (next.monedaIngreso === 'BS') {
       setFromTotalBs(next.montoNetBs);
     } else {
@@ -412,6 +420,8 @@ export default function AccountsPayableModal({
   const [editingPayable, setEditingPayable] = useState(null);
   const [isCreatingPayable, setIsCreatingPayable] = useState(false);
   const [isSavingPayable, setIsSavingPayable] = useState(false);
+  const [creditDebitModal, setCreditDebitModal] = useState(null);
+  const [isSavingCreditDebit, setIsSavingCreditDebit] = useState(false);
 
   // Catálogo unificado de Caja y Bancos para pagar a proveedores
   const catalogCuentas = useMemo(() => {
@@ -591,6 +601,10 @@ export default function AccountsPayableModal({
         const matchingPayments = uniqueSupplierPayments.filter(pay =>
           !pay?.anulado && doesSupplierPaymentMatchPayable(pay, docContext)
         );
+        const inlineDocNotes = Array.isArray(resolved.historialPagos)
+          ? resolved.historialPagos.filter((hp) => hp && (hp.formaPago === 'NOTA_CREDITO' || hp.tipo === 'NOTA_CREDITO'))
+          : [];
+        const combinedHistory = [...inlineDocNotes, ...matchingPayments];
 
         const docTasa = Number(resolved.tasa || 0) > 10 ? Number(resolved.tasa) : tasaKeystone;
         const resolvedNetBs = Number(resolved.montoNetBs || resolved.monto_net_bs || 0);
@@ -612,7 +626,7 @@ export default function AccountsPayableModal({
           fechaVencimientoIso: toIsoDateInput(fecVenc),
           diasCredito: Number(resolved.diasCredito ?? resolved.dias_credito ?? 15),
           tasa: docTasa,
-          tipoTasa: resolveRecordRateType(resolved, isFiscalInvoiceType(tipoDoc) ? 'BCV' : 'KEYSTONE'),
+          tipoTasa: resolveRecordRateType(resolved, isFiscalInvoiceType(tipoDoc, resolved.isFiscal) ? 'BCV' : 'KEYSTONE'),
           tasaPago: resolveEffectiveRateNumber(resolved, docTasa),
           monedaPago: resolved.monedaPago || resolved.moneda_pago || (String(resolved.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
           montoNetUsd: round2(montoNetUsd),
@@ -621,13 +635,13 @@ export default function AccountsPayableModal({
           abonosBs: round2(abonosUsd * docTasa),
           saldoUsd,
           saldoBs: round2(saldoUsd * docTasa),
-          baseImponibleUsd: resolved.baseImponibleUsd !== undefined ? round2(resolved.baseImponibleUsd) : (isFiscalInvoiceType(tipoDoc) ? round2(montoNetUsd / 1.16) : round2(montoNetUsd)),
-          ivaUsd: resolved.ivaUsd !== undefined ? round2(resolved.ivaUsd) : (isFiscalInvoiceType(tipoDoc) ? round2(montoNetUsd - round2(montoNetUsd / 1.16)) : 0),
+          baseImponibleUsd: resolved.baseImponibleUsd !== undefined ? round2(resolved.baseImponibleUsd) : (isFiscalInvoiceType(tipoDoc, resolved.isFiscal) && !resolved.exentoIva ? round2(montoNetUsd / 1.16) : round2(montoNetUsd)),
+          ivaUsd: resolved.ivaUsd !== undefined ? round2(resolved.ivaUsd) : (isFiscalInvoiceType(tipoDoc, resolved.isFiscal) && !resolved.exentoIva ? round2(montoNetUsd - round2(montoNetUsd / 1.16)) : 0),
           isSolvente,
           isVencido,
           diffDays,
           tramo,
-          historialPagos: matchingPayments
+          historialPagos: combinedHistory
         };
       });
   }, [targetPayables, localDocOverrides, tasaKeystone, uniqueSupplierPayments]);
@@ -960,6 +974,10 @@ export default function AccountsPayableModal({
         cuentaId: cuentaObj.id,
         cuentaNombre: cuentaObj.nombre,
         accountType: cuentaObj.accountType,
+        cajaId: cuentaObj.accountType === 'CAJA' ? cuentaObj.id : null,
+        cuentaBancariaId: cuentaObj.accountType === 'BANCO' ? cuentaObj.id : null,
+        partnerAccountId: cuentaObj.accountType === 'PASIVO_SOCIO' ? cuentaObj.id : null,
+        cuentaContable: cuentaObj.codigoContable || cuentaObj.cuentaContable || (cuentaObj.accountType === 'PASIVO_SOCIO' ? '2.02.01.001' : ''),
         referencia: pagoReferencia.trim(),
         descrip: pagoObservaciones.trim() || `Pago ${selectedPagoDoc.tipoDoc} #${selectedPagoDoc.nroDoc} - ${selectedPagoDoc.provNombre}`,
         documentosAfectados: [{
@@ -1048,7 +1066,10 @@ export default function AccountsPayableModal({
       id: null,
       originalNroDoc: null,
       tipoDoc: 'FACT',
+      isFiscal: true,
       nroDoc: String(randomNum),
+      numeroControl: suggestCreditDebitControlNumber(String(randomNum), false),
+      numeroControlManual: false,
       provNombre: '',
       provRif: '',
       fechaEmisionIso: todayIso,
@@ -1074,14 +1095,14 @@ export default function AccountsPayableModal({
   const handleOpenEditPayableModal = (p) => {
     setIsCreatingPayable(false);
     const tipo = String(p.tipoDoc || 'FACT').toUpperCase().trim();
-    const isFact = isFiscalInvoiceType(tipo);
+    const isFact = isFiscalInvoiceType(tipo, p.isFiscal);
     const docRate = Number(p.tasa || 0) > 10 ? round2(p.tasa) : round2(isFact ? tasaBcv : tasaKeystone);
     const monedaIngreso = String(p.moneda || '').toUpperCase().includes('BS') ? 'BS' : 'US$';
     const totalUsd = round2(p.montoNetUsd || 0);
     const totalBs = Number(p.montoNetBs || 0) > 0 && monedaIngreso === 'BS'
       ? round2(p.montoNetBs)
       : round2(totalUsd * docRate);
-    const exentoIva = isFact && (Boolean(p.exentoIva) || (p.ivaUsd !== undefined && Number(p.ivaUsd) === 0 && totalUsd > 0));
+    const exentoIva = !isFact || Boolean(p.exentoIva) || (p.ivaUsd !== undefined && Number(p.ivaUsd) === 0 && totalUsd > 0);
     const baseUsd = isFact && !exentoIva
       ? (p.baseImponibleUsd !== undefined ? round2(p.baseImponibleUsd) : round2(totalUsd / 1.16))
       : totalUsd;
@@ -1103,7 +1124,10 @@ export default function AccountsPayableModal({
       id: p.id,
       originalNroDoc: p.nroDoc,
       tipoDoc: tipo,
+      isFiscal: isFact,
       nroDoc: p.nroDoc,
+      numeroControl: p.numeroControl || (isFact ? suggestCreditDebitControlNumber(p.nroDoc, false) : ''),
+      numeroControlManual: Boolean(p.numeroControl),
       provNombre: p.provNombre,
       provRif: p.provRif,
       fechaEmisionIso: p.fechaEmisionIso || getTodayIso(),
@@ -1132,6 +1156,35 @@ export default function AccountsPayableModal({
       if (!prev) return prev;
       let next = { ...prev, [field]: value };
 
+      if (field === 'numeroControl') {
+        next.numeroControlManual = true;
+      }
+
+      if (field === 'nroDoc' && !prev.numeroControlManual && Boolean(next.isFiscal)) {
+        next.numeroControl = suggestCreditDebitControlNumber(value, false);
+      }
+
+      if (field === 'tipoDoc') {
+        const upTipo = String(value || '').toUpperCase().trim();
+        const inferredFiscal = upTipo === 'FACT' || ((upTipo === 'N/DB' || upTipo === 'N/CR') && Boolean(prev.isFiscal));
+        next.isFiscal = inferredFiscal;
+        next.exentoIva = !inferredFiscal;
+        if (!prev.numeroControlManual) {
+          next.numeroControl = inferredFiscal ? suggestCreditDebitControlNumber(next.nroDoc, false) : '';
+        }
+      }
+
+      if (field === 'isFiscal') {
+        const nextFiscal = Boolean(value);
+        next.isFiscal = nextFiscal;
+        next.exentoIva = !nextFiscal;
+        if (next.tipoDoc === 'FACT' && !nextFiscal) next.tipoDoc = 'NE';
+        else if (next.tipoDoc === 'NE' && nextFiscal) next.tipoDoc = 'FACT';
+        if (!prev.numeroControlManual) {
+          next.numeroControl = nextFiscal ? suggestCreditDebitControlNumber(next.nroDoc, false) : '';
+        }
+      }
+
       if (field === 'provNombre') {
         const match = suppliers.find(s => (s.nombre || s.razonSocial || '').toLowerCase() === String(value).toLowerCase());
         if (match && match.rif) {
@@ -1155,7 +1208,7 @@ export default function AccountsPayableModal({
       }
 
       const numericOrTaxFields = [
-        'tipoDoc', 'exentoIva', 'tasaCambio',
+        'tipoDoc', 'isFiscal', 'exentoIva', 'tasaCambio',
         'baseImponibleUsd', 'baseImponibleBs',
         'ivaUsd', 'ivaBs',
         'montoNetUsd', 'montoNetBs',
@@ -1184,7 +1237,8 @@ export default function AccountsPayableModal({
     }
 
     const docTasa = Math.max(0.0001, round2(Number(editingPayable.tasaCambio || tasaBcv || tasaKeystone)));
-    const isFact = isFiscalInvoiceType(editingPayable.tipoDoc);
+    const isFact = isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal);
+    const numeroControl = String(editingPayable.numeroControl || '').trim() || (isFact ? suggestCreditDebitControlNumber(nroDoc, false) : '');
     const montoNetUsd = round2(Math.max(0, Number(editingPayable.montoNetUsd || 0)));
     const montoNetBs = editingPayable.monedaIngreso === 'BS' && Number(editingPayable.montoNetBs || 0) > 0
       ? round2(Number(editingPayable.montoNetBs))
@@ -1208,7 +1262,9 @@ export default function AccountsPayableModal({
     const payload = {
       id: payloadId,
       tipoDoc: editingPayable.tipoDoc,
+      isFiscal: isFact,
       nroDoc,
+      numeroControl,
       coProv: provRif,
       provNombre: String(editingPayable.provNombre || '').trim(),
       provRif,
@@ -1275,6 +1331,297 @@ export default function AccountsPayableModal({
       notify.error('No se pudo guardar el documento: ' + (err.message || 'Error del servidor'));
     } finally {
       setIsSavingPayable(false);
+    }
+  };
+
+  // ========================================================================
+  // Handlers de Emisión de Nota de Crédito / Nota de Débito en CxP
+  // ========================================================================
+  const syncCxpCreditDebitAmounts = (next, sourceField) => {
+    const effIva = Boolean(next.isFiscal) && Boolean(next.aplicaIva);
+    const rateNum = Number(next.tasa) > 0 ? Number(next.tasa) : (tasaBcv || tasaKeystone);
+    const safeRate = rateNum > 0 ? rateNum : 1;
+
+    if (sourceField === 'subtotalUsd') {
+      const sub = Number(next.subtotalUsd);
+      if (next.subtotalUsd === '' || isNaN(sub) || sub <= 0) {
+        next.subtotalBs = '';
+        next.totalUsd = '';
+        next.totalBs = '';
+        return;
+      }
+      const tot = effIva ? round2(sub * 1.16) : round2(sub);
+      next.subtotalBs = round2(sub * safeRate).toFixed(2);
+      next.totalUsd = String(tot);
+      next.totalBs = round2(tot * safeRate).toFixed(2);
+      return;
+    }
+
+    if (sourceField === 'subtotalBs') {
+      const subBs = Number(next.subtotalBs);
+      if (next.subtotalBs === '' || isNaN(subBs) || subBs <= 0) {
+        next.subtotalUsd = '';
+        next.totalUsd = '';
+        next.totalBs = '';
+        return;
+      }
+      const subUsd = round2(subBs / safeRate);
+      const totUsd = effIva ? round2(subUsd * 1.16) : subUsd;
+      next.subtotalUsd = subUsd > 0 ? String(subUsd) : '';
+      next.totalUsd = totUsd > 0 ? String(totUsd) : '';
+      next.totalBs = totUsd > 0 ? round2(totUsd * safeRate).toFixed(2) : '';
+      return;
+    }
+
+    if (sourceField === 'totalUsd') {
+      const tot = Number(next.totalUsd);
+      if (next.totalUsd === '' || isNaN(tot) || tot <= 0) {
+        next.subtotalUsd = '';
+        next.subtotalBs = '';
+        next.totalBs = '';
+        return;
+      }
+      const subUsd = effIva ? round2(tot / 1.16) : round2(tot);
+      next.subtotalUsd = String(subUsd);
+      next.subtotalBs = round2(subUsd * safeRate).toFixed(2);
+      next.totalBs = round2(tot * safeRate).toFixed(2);
+      return;
+    }
+
+    if (sourceField === 'totalBs') {
+      const totBs = Number(next.totalBs);
+      if (next.totalBs === '' || isNaN(totBs) || totBs <= 0) {
+        next.subtotalUsd = '';
+        next.subtotalBs = '';
+        next.totalUsd = '';
+        return;
+      }
+      const totUsd = round2(totBs / safeRate);
+      const subUsd = effIva ? round2(totUsd / 1.16) : totUsd;
+      next.totalUsd = totUsd > 0 ? String(totUsd) : '';
+      next.subtotalUsd = subUsd > 0 ? String(subUsd) : '';
+      next.subtotalBs = subUsd > 0 ? round2(subUsd * safeRate).toFixed(2) : '';
+      return;
+    }
+
+    const sub = round2(Number(next.subtotalUsd || 0));
+    if (!(sub > 0)) {
+      next.subtotalUsd = '';
+      next.subtotalBs = '';
+      next.totalUsd = '';
+      next.totalBs = '';
+      return;
+    }
+    const tot = effIva ? round2(sub * 1.16) : sub;
+    next.subtotalBs = round2(sub * safeRate).toFixed(2);
+    next.totalUsd = String(tot);
+    next.totalBs = round2(tot * safeRate).toFixed(2);
+  };
+
+  const handleOpenCreditDebitModal = (noteType = 'NOTA_CREDITO', docOverride = null) => {
+    const targetDoc = docOverride || selectedPagoDoc || payableDocsWithBalance[0] || processedPayables[0] || null;
+    if (!targetDoc) {
+      notify.warning('Seleccione una obligación en la Parte A o Parte B para emitir la nota.');
+      return;
+    }
+    const normalizedType = String(noteType || '').toUpperCase().includes('DEB') ? 'NOTA_DEBITO' : 'NOTA_CREDITO';
+    const targetIsFiscal = isFiscalInvoiceType(targetDoc.tipoDoc, targetDoc.isFiscal);
+    const suggestedNum = getNextCxpCreditDebitNoteCorrelativo(normalizedType, processedPayables);
+    const rateNum = Number(pagoTasa) > 1 ? Number(pagoTasa) : (targetIsFiscal ? tasaBcv : tasaKeystone);
+    const safeRate = rateNum > 0 ? rateNum : 1;
+    const typedPagoUsd = round2(Number(pagoMontoUsd || 0));
+    const defaultTotal = normalizedType === 'NOTA_CREDITO'
+      ? (typedPagoUsd > 0 && typedPagoUsd <= round2(targetDoc.saldoUsd + 0.01) ? typedPagoUsd : round2(targetDoc.saldoUsd))
+      : (typedPagoUsd > 0 ? typedPagoUsd : 0);
+    const defaultAplicaIva = targetIsFiscal;
+    const defaultSub = defaultTotal > 0
+      ? (defaultAplicaIva ? round2(defaultTotal / 1.16) : defaultTotal)
+      : '';
+
+    setCreditDebitModal({
+      noteType: normalizedType,
+      doc: targetDoc,
+      isFiscal: targetIsFiscal,
+      noteNum: suggestedNum,
+      numeroControl: suggestCreditDebitControlNumber(suggestedNum, !targetIsFiscal),
+      numeroControlManual: false,
+      fechaEmision: pagoFecha || getTodayIso(),
+      tasa: round2(rateNum).toFixed(2),
+      aplicaIva: defaultAplicaIva,
+      subtotalUsd: defaultSub === '' ? '' : String(defaultSub),
+      subtotalBs: defaultSub === '' ? '' : round2(Number(defaultSub) * safeRate).toFixed(2),
+      totalUsd: defaultTotal > 0 ? String(defaultTotal) : '',
+      totalBs: defaultTotal > 0 ? round2(defaultTotal * safeRate).toFixed(2) : '',
+      motivo: '',
+      autoPrintPdf: true
+    });
+  };
+
+  const handleCreditDebitFieldChange = (field, value) => {
+    setCreditDebitModal((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [field]: value };
+
+      if (field === 'numeroControl') {
+        next.numeroControlManual = true;
+      }
+
+      if (field === 'isFiscal') {
+        const nextFiscal = Boolean(value);
+        next.isFiscal = nextFiscal;
+        next.aplicaIva = nextFiscal;
+        if (!prev.numeroControlManual) {
+          next.numeroControl = suggestCreditDebitControlNumber(next.noteNum, !nextFiscal);
+        }
+        syncCxpCreditDebitAmounts(next, 'aplicaIva');
+      }
+
+      if (field === 'noteNum' && !prev.numeroControlManual) {
+        next.numeroControl = suggestCreditDebitControlNumber(value, !next.isFiscal);
+      }
+
+      if (field === 'noteType') {
+        next.noteNum = getNextCxpCreditDebitNoteCorrelativo(value, processedPayables);
+        if (!prev.numeroControlManual) {
+          next.numeroControl = suggestCreditDebitControlNumber(next.noteNum, !next.isFiscal);
+        }
+        if (value === 'NOTA_CREDITO' && next.doc) {
+          const rest = round2(next.doc.saldoUsd || 0);
+          const total = rest > 0 ? rest : 0;
+          const sub = (Boolean(next.isFiscal) && next.aplicaIva) ? round2(total / 1.16) : total;
+          next.totalUsd = total > 0 ? String(total) : '';
+          next.subtotalUsd = total > 0 ? String(sub) : '';
+          syncCxpCreditDebitAmounts(next, 'totalUsd');
+        }
+      }
+
+      if (field === 'aplicaIva') {
+        next.aplicaIva = Boolean(next.isFiscal) && Boolean(value);
+        syncCxpCreditDebitAmounts(next, 'aplicaIva');
+      }
+
+      if (field === 'tasa') {
+        syncCxpCreditDebitAmounts(next, 'tasa');
+      }
+
+      if (field === 'subtotalUsd' || field === 'subtotalBs' || field === 'totalUsd' || field === 'totalBs') {
+        syncCxpCreditDebitAmounts(next, field);
+      }
+
+      return next;
+    });
+  };
+
+  const handleSubmitCreditDebitNote = async (e) => {
+    e.preventDefault();
+    if (!creditDebitModal?.doc) return;
+
+    const doc = creditDebitModal.doc;
+    const subVal = round2(Number(creditDebitModal.subtotalUsd || 0));
+    const totVal = round2(Number(creditDebitModal.totalUsd || 0));
+    const tasaVal = Number(creditDebitModal.tasa) > 1 ? Number(creditDebitModal.tasa) : (tasaBcv || tasaKeystone);
+    if (!(totVal > 0)) {
+      notify.warning('Ingrese un monto válido mayor a $0.00 para la nota.');
+      return;
+    }
+    if (creditDebitModal.noteType === 'NOTA_CREDITO' && totVal > round2((doc.saldoUsd || 0) + 0.01)) {
+      notify.warning(`La Nota de Crédito ($${formatNumberUs(totVal)}) no puede superar el saldo pendiente por pagar ($${formatNumberUs(doc.saldoUsd)}).`);
+      return;
+    }
+
+    setIsSavingCreditDebit(true);
+    try {
+      const res = buildCxpCreditDebitNoteResult({
+        noteType: creditDebitModal.noteType,
+        affectedDoc: doc,
+        noteNum: creditDebitModal.noteNum,
+        numeroControl: String(creditDebitModal.numeroControl || '').trim(),
+        isFiscal: Boolean(creditDebitModal.isFiscal),
+        fechaEmision: creditDebitModal.fechaEmision || getTodayIso(),
+        subtotalUsd: subVal > 0 ? subVal : totVal,
+        aplicaIva: Boolean(creditDebitModal.isFiscal) && Boolean(creditDebitModal.aplicaIva),
+        tasa: tasaVal,
+        motivo: creditDebitModal.motivo
+      });
+
+      const savedAtIso = new Date().toISOString();
+      if (res.updatedAffectedDoc) {
+        if (onSaveDocument) {
+          await onSaveDocument(res.updatedAffectedDoc);
+        }
+        const compKey = buildCxpCompositeKey(res.updatedAffectedDoc);
+        setLocalDocOverrides((prev) => ({
+          ...prev,
+          [res.updatedAffectedDoc.id]: {
+            ...res.updatedAffectedDoc,
+            fechaSincronizacion: savedAtIso,
+            updated_at: savedAtIso,
+            _localSavedAt: savedAtIso
+          },
+          ...(compKey ? {
+            [compKey]: {
+              ...res.updatedAffectedDoc,
+              fechaSincronizacion: savedAtIso,
+              updated_at: savedAtIso,
+              _localSavedAt: savedAtIso
+            }
+          } : {})
+        }));
+      }
+
+      if (res.createdDebitDoc) {
+        if (onSaveDocument) {
+          await onSaveDocument(res.createdDebitDoc);
+        }
+        const ndCompKey = buildCxpCompositeKey(res.createdDebitDoc);
+        setLocalDocOverrides((prev) => ({
+          ...prev,
+          [res.createdDebitDoc.id]: {
+            ...res.createdDebitDoc,
+            fechaSincronizacion: savedAtIso,
+            updated_at: savedAtIso,
+            _localSavedAt: savedAtIso
+          },
+          ...(ndCompKey ? {
+            [ndCompKey]: {
+              ...res.createdDebitDoc,
+              fechaSincronizacion: savedAtIso,
+              updated_at: savedAtIso,
+              _localSavedAt: savedAtIso
+            }
+          } : {})
+        }));
+      }
+
+      if (creditDebitModal.autoPrintPdf && res.notePdfData) {
+        outputCreditDebitNoteDocument({
+          docData: res.notePdfData,
+          config,
+          currentUser,
+          autoPrint: true
+        });
+      }
+
+      const isDebit = creditDebitModal.noteType === 'NOTA_DEBITO';
+      const msg = isDebit
+        ? `Nota de Débito CxP #${res.noteNum} emitida sobre #${doc.nroDoc} por ${formatUsd(totVal)} (${formatBs(round2(totVal * tasaVal))}).`
+        : `Nota de Crédito CxP #${res.noteNum} aplicada a #${doc.nroDoc} por ${formatUsd(totVal)} (${formatBs(round2(totVal * tasaVal))}).`;
+      setPagoFeedback({
+        type: 'success',
+        message: msg,
+        creditDebitPdfData: res.notePdfData || null
+      });
+      soundFX.success();
+      notify.success(msg);
+      setPagoMontoUsd('');
+      setPagoMontoBs('');
+      setCreditDebitModal(null);
+    } catch (err) {
+      console.error('Error emitiendo nota CxP:', err);
+      soundFX.error();
+      notify.error(err?.message || 'Error al emitir la Nota de Crédito / Débito en CxP.');
+    } finally {
+      setIsSavingCreditDebit(false);
     }
   };
 
@@ -1435,6 +1782,47 @@ export default function AccountsPayableModal({
           >
             <Plus size={16} />
             <span>+ Nueva Cuenta por Pagar</span>
+          </button>
+
+          {/* Botones Nota de Crédito y Nota de Débito CxP */}
+          <button
+            type="button"
+            onClick={() => handleOpenCreditDebitModal('NOTA_CREDITO')}
+            className="btn btn-secondary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.55rem 0.85rem',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              color: '#c084fc',
+              borderColor: 'rgba(168, 85, 247, 0.45)'
+            }}
+            title="Emitir Nota de Crédito (N/CR) sobre obligación CxP"
+          >
+            <FileText size={14} />
+            <span>+ Nota Crédito</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleOpenCreditDebitModal('NOTA_DEBITO')}
+            className="btn btn-secondary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.55rem 0.85rem',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              color: '#fbbf24',
+              borderColor: 'rgba(245, 158, 11, 0.45)'
+            }}
+            title="Emitir Nota de Débito (N/DB) vinculada a documento CxP"
+          >
+            <FileText size={14} />
+            <span>+ Nota Débito</span>
           </button>
 
           {/* Botón Exportar CSV */}
@@ -1956,13 +2344,36 @@ export default function AccountsPayableModal({
               fontSize: '0.82rem',
               display: 'flex',
               alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
               gap: '0.5rem',
               background: pagoFeedback.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
               color: pagoFeedback.type === 'success' ? '#10b981' : '#ef4444',
               border: `1px solid ${pagoFeedback.type === 'success' ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)'}`
             }}>
-              {pagoFeedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-              <span>{pagoFeedback.message}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {pagoFeedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                <span>{pagoFeedback.message}</span>
+              </div>
+              {pagoFeedback.creditDebitPdfData && (
+                <button
+                  type="button"
+                  onClick={() => outputCreditDebitNoteDocument({
+                    docData: pagoFeedback.creditDebitPdfData,
+                    config,
+                    currentUser
+                  })}
+                  className="btn btn-sm btn-print-report"
+                  style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Printer size={12} color="#ffffff" />
+                  <span>
+                    {pagoFeedback.creditDebitPdfData.tipoDoc === 'NOTA_DEBITO'
+                      ? (isCreditDebitDocumentFiscal(pagoFeedback.creditDebitPdfData) ? 'Imprimir N/DB (Forma Libre)' : 'Nota Débito PDF')
+                      : (isCreditDebitDocumentFiscal(pagoFeedback.creditDebitPdfData) ? 'Imprimir N/CR (Forma Libre)' : 'Nota Crédito PDF')}
+                  </span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -2318,8 +2729,9 @@ export default function AccountsPayableModal({
                               #{p.nroDoc}
                             </span>
                           </div>
-                          <div style={{ fontSize: '0.7rem', color: isFiscalInvoiceType(p.tipoDoc) ? 'var(--brand-blue)' : 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>
+                          <div style={{ fontSize: '0.7rem', color: isFiscalInvoiceType(p.tipoDoc, p.isFiscal) ? 'var(--brand-blue)' : 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>
                             {p.tipoDocLabel || getDocTypeLabel(p.tipoDoc)}
+                            {p.numeroControl ? ` • Ctrl: ${p.numeroControl}` : ''}
                           </div>
                         </td>
 
@@ -2470,6 +2882,70 @@ export default function AccountsPayableModal({
                               </button>
                             )}
 
+                            {/* Botón Emitir NC / ND CxP */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCreditDebitModal(p.saldoUsd > 0.01 ? 'NOTA_CREDITO' : 'NOTA_DEBITO', p)}
+                              className="btn"
+                              style={{
+                                padding: '0.35rem 0.5rem',
+                                borderRadius: '7px',
+                                background: 'rgba(168, 85, 247, 0.15)',
+                                color: '#c084fc',
+                                border: '1px solid rgba(168, 85, 247, 0.35)',
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                              title={`Emitir Nota de Crédito o Débito sobre #${p.nroDoc}`}
+                            >
+                              NC/ND
+                            </button>
+
+                            {(p.tipoDoc === 'N/CR' || p.tipoDoc === 'N/DB' || /^(NC-|ND-|NE-ND-)/i.test(String(p.nroDoc || ''))) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const isNd = p.tipoDoc === 'N/DB' || /^(ND-|NE-ND-)/i.test(String(p.nroDoc || ''));
+                                  const noteFiscal = isFiscalInvoiceType(p.tipoDoc, p.isFiscal);
+                                  outputCreditDebitNoteDocument({
+                                    docData: {
+                                      isPayableNote: true,
+                                      tipoDoc: isNd ? 'NOTA_DEBITO' : 'NOTA_CREDITO',
+                                      isFiscal: noteFiscal,
+                                      isExento: Boolean(p.exentoIva) || !noteFiscal,
+                                      numeroDoc: p.nroDoc,
+                                      numeroControl: p.numeroControl || '',
+                                      documentoAfectado: p.documentoAfectado || p.nroDoc,
+                                      fechaEmision: p.fechaEmisionIso || p.fechaEmision,
+                                      clienteNombre: p.provNombre,
+                                      clienteRif: p.provRif,
+                                      tasaDolar: p.tasa || tasaBcv,
+                                      subtotalUsd: p.baseImponibleUsd ?? p.montoNetUsd,
+                                      ivaUsd: p.ivaUsd ?? 0,
+                                      totalUsd: p.montoNetUsd,
+                                      motivo: p.observaciones || 'Documento de ajuste CxP',
+                                      observaciones: p.observaciones || 'Documento de ajuste CxP'
+                                    },
+                                    config,
+                                    currentUser
+                                  });
+                                }}
+                                className="btn"
+                                style={{
+                                  padding: '0.35rem 0.5rem',
+                                  borderRadius: '7px',
+                                  background: 'rgba(56, 189, 248, 0.15)',
+                                  color: '#38bdf8',
+                                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                                  cursor: 'pointer'
+                                }}
+                                title={isFiscalInvoiceType(p.tipoDoc, p.isFiscal) ? 'Imprimir en Formato Forma Libre SENIAT' : 'Descargar PDF (No Fiscal)'}
+                              >
+                                <Printer size={14} />
+                              </button>
+                            )}
+
                             {/* Botón Ver Detalle */}
                             <button
                               type="button"
@@ -2551,28 +3027,38 @@ export default function AccountsPayableModal({
       {/* ========================================================
           MODAL 1: VER DETALLE DEL DOCUMENTO CXP
       ======================================================== */}
-      {selectedPayableDetail && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '1rem'
-        }}>
-          <div style={{
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border-glass)',
-            borderRadius: '16px',
-            width: '100%',
-            maxWidth: '620px',
-            maxHeight: '90vh',
-            overflowY: 'auto',
-            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)'
-          }}>
+      {selectedPayableDetail && (() => {
+        const modalNode = (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 99999,
+              padding: '1rem'
+            }}
+            onClick={() => setSelectedPayableDetail(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: 'var(--bg-modal)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '16px',
+                width: '100%',
+                maxWidth: '620px',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+                boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)',
+                margin: 'auto'
+              }}
+            >
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
@@ -2591,14 +3077,15 @@ export default function AccountsPayableModal({
                     fontWeight: 700,
                     padding: '2px 8px',
                     borderRadius: '999px',
-                    background: isFiscalInvoiceType(selectedPayableDetail.tipoDoc) ? 'rgba(2, 132, 199, 0.16)' : 'rgba(245, 158, 11, 0.16)',
-                    color: isFiscalInvoiceType(selectedPayableDetail.tipoDoc) ? '#38bdf8' : '#fbbf24'
+                    background: isFiscalInvoiceType(selectedPayableDetail.tipoDoc, selectedPayableDetail.isFiscal) ? 'rgba(2, 132, 199, 0.16)' : 'rgba(245, 158, 11, 0.16)',
+                    color: isFiscalInvoiceType(selectedPayableDetail.tipoDoc, selectedPayableDetail.isFiscal) ? '#38bdf8' : '#fbbf24'
                   }}>
                     {selectedPayableDetail.tipoDocLabel || getDocTypeLabel(selectedPayableDetail.tipoDoc)}
                   </span>
                 </div>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                   Proveedor: {selectedPayableDetail.provNombre} • RIF: {selectedPayableDetail.provRif}
+                  {selectedPayableDetail.numeroControl ? ` • N° Control: ${selectedPayableDetail.numeroControl}` : ''}
                 </span>
               </div>
               <button
@@ -2663,7 +3150,7 @@ export default function AccountsPayableModal({
                 gap: '0.5rem',
                 fontSize: '0.85rem'
               }}>
-                {isFiscalInvoiceType(selectedPayableDetail.tipoDoc) && (
+                {isFiscalInvoiceType(selectedPayableDetail.tipoDoc, selectedPayableDetail.isFiscal) && (
                   <>
                     <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                       <span>Base Imponible / Subtotal:</span>
@@ -2811,33 +3298,41 @@ export default function AccountsPayableModal({
             </div>
           </div>
         </div>
-      )}
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
 
       {/* ========================================================
           MODAL 2: CREAR / EDITAR DOCUMENTO DE CUENTA POR PAGAR
       ======================================================== */}
-      {editingPayable && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '1rem'
-        }}>
-          <div style={{
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border-glass)',
-            borderRadius: '16px',
-            width: '100%',
-            maxWidth: '720px',
-            maxHeight: '92vh',
-            overflowY: 'auto',
-            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)'
-          }}>
+      {editingPayable && (() => {
+        const modalNode = (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 99999,
+              padding: '1rem'
+            }}
+          >
+            <div style={{
+              background: 'var(--bg-modal)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-glass)',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '720px',
+              maxHeight: '92vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)',
+              margin: 'auto'
+            }}>
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
@@ -2856,11 +3351,13 @@ export default function AccountsPayableModal({
                   fontWeight: 800,
                   padding: '2px 9px',
                   borderRadius: '999px',
-                  background: isFiscalInvoiceType(editingPayable.tipoDoc) ? 'rgba(2, 132, 199, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                  color: isFiscalInvoiceType(editingPayable.tipoDoc) ? '#38bdf8' : '#fbbf24',
-                  border: isFiscalInvoiceType(editingPayable.tipoDoc) ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(251, 191, 36, 0.4)'
+                  background: isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? 'rgba(2, 132, 199, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                  color: isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '#38bdf8' : '#fbbf24',
+                  border: isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(251, 191, 36, 0.4)'
                 }}>
-                  {isFiscalInvoiceType(editingPayable.tipoDoc) ? 'FACTURA FISCAL • CON IVA' : `${getDocTypeLabel(editingPayable.tipoDoc).toUpperCase()} • SIN IVA`}
+                  {isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal)
+                    ? `${getDocTypeLabel(editingPayable.tipoDoc).toUpperCase()} • FISCAL`
+                    : `${getDocTypeLabel(editingPayable.tipoDoc).toUpperCase()} • NO FISCAL`}
                 </span>
               </div>
               <button
@@ -2873,45 +3370,45 @@ export default function AccountsPayableModal({
             </div>
 
             <form onSubmit={handleSaveEditedPayable} style={{ padding: '1.35rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.95rem' }}>
-              {/* Selector Claro: Factura Fiscal vs Nota de Entrega + Otros + N° Doc */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 0.85fr', gap: '1rem', alignItems: 'start' }}>
+              {/* Selector Claro: Fiscal vs No Fiscal + Tipo + N° Doc + N° Control */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '1rem', alignItems: 'start' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
-                    Tipo de Documento * (Factura Fiscal o Nota de Entrega)
+                    Naturaleza y Tipo de Documento *
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.45rem' }}>
                     <button
                       type="button"
-                      onClick={() => handleEditFieldChange('tipoDoc', 'FACT')}
+                      onClick={() => handleEditFieldChange('isFiscal', true)}
                       style={{
                         padding: '0.5rem 0.65rem',
                         borderRadius: '9px',
-                        border: isFiscalInvoiceType(editingPayable.tipoDoc) ? '1.5px solid #38bdf8' : '1px solid var(--border-glass)',
-                        background: isFiscalInvoiceType(editingPayable.tipoDoc) ? 'rgba(2, 132, 199, 0.18)' : 'var(--bg-surface)',
-                        color: isFiscalInvoiceType(editingPayable.tipoDoc) ? '#38bdf8' : 'var(--text-secondary)',
+                        border: isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '1.5px solid #38bdf8' : '1px solid var(--border-glass)',
+                        background: isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? 'rgba(2, 132, 199, 0.18)' : 'var(--bg-surface)',
+                        color: isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '#38bdf8' : 'var(--text-secondary)',
                         cursor: 'pointer',
                         textAlign: 'left',
                         transition: 'all 0.15s ease'
                       }}
                     >
-                      <div style={{ fontSize: '0.8rem', fontWeight: 800 }}>Factura Fiscal (FACT)</div>
-                      <div style={{ fontSize: '0.67rem', opacity: 0.85 }}>SENIAT • Desglosa IVA 16%</div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 800 }}>Fiscal (SENIAT)</div>
+                      <div style={{ fontSize: '0.67rem', opacity: 0.85 }}>Forma Libre • Desglosa IVA</div>
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleEditFieldChange('tipoDoc', 'NE')}
+                      onClick={() => handleEditFieldChange('isFiscal', false)}
                       style={{
                         padding: '0.5rem 0.65rem',
                         borderRadius: '9px',
-                        border: editingPayable.tipoDoc === 'NE' ? '1.5px solid #fbbf24' : '1px solid var(--border-glass)',
-                        background: editingPayable.tipoDoc === 'NE' ? 'rgba(245, 158, 11, 0.18)' : 'var(--bg-surface)',
-                        color: editingPayable.tipoDoc === 'NE' ? '#fbbf24' : 'var(--text-secondary)',
+                        border: !isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '1.5px solid #fbbf24' : '1px solid var(--border-glass)',
+                        background: !isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? 'rgba(245, 158, 11, 0.18)' : 'var(--bg-surface)',
+                        color: !isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '#fbbf24' : 'var(--text-secondary)',
                         cursor: 'pointer',
                         textAlign: 'left',
                         transition: 'all 0.15s ease'
                       }}
                     >
-                      <div style={{ fontSize: '0.8rem', fontWeight: 800 }}>Nota de Entrega (NE)</div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 800 }}>No Fiscal (PDF)</div>
                       <div style={{ fontSize: '0.67rem', opacity: 0.85 }}>Control interno • Sin IVA</div>
                     </button>
                   </div>
@@ -2923,28 +3420,42 @@ export default function AccountsPayableModal({
                   >
                     <option value="FACT">FACTURA FISCAL (FACT) — Con IVA</option>
                     <option value="NE">NOTA DE ENTREGA (NE) — Sin IVA</option>
-                    <option value="ADEL">ADELANTO / ANTICIPO (ADEL)</option>
+                    <option value="N/CR">NOTA DE CRÉDITO (N/CR)</option>
                     <option value="N/DB">NOTA DE DÉBITO (N/DB)</option>
+                    <option value="ADEL">ADELANTO / ANTICIPO (ADEL)</option>
                     <option value="OC">ORDEN DE COMPRA (OC)</option>
                   </select>
                 </div>
 
-                {/* Número de Documento */}
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
-                    N° de Documento *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={editingPayable.nroDoc}
-                    onChange={(e) => handleEditFieldChange('nroDoc', e.target.value)}
-                    placeholder="Ej. 516"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
-                  />
-                  <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                    Documento activo: <strong style={{ color: 'var(--text-primary)' }}>{getDocTypeLabel(editingPayable.tipoDoc)}</strong>
+                {/* Número de Documento y N° Control */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      N° de Documento *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editingPayable.nroDoc}
+                      onChange={(e) => handleEditFieldChange('nroDoc', e.target.value)}
+                      placeholder="Ej. 516"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.8rem', fontSize: '0.88rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      N° de Control {isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? '(SENIAT) *' : '(Opcional)'}
+                    </label>
+                    <input
+                      type="text"
+                      required={isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal)}
+                      value={editingPayable.numeroControl || ''}
+                      onChange={(e) => handleEditFieldChange('numeroControl', e.target.value)}
+                      placeholder={isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? 'Ej. 00-001134' : 'Opcional (No Fiscal)'}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.8rem', fontSize: '0.86rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
+                    />
                   </div>
                 </div>
               </div>
@@ -3081,8 +3592,8 @@ export default function AccountsPayableModal({
                   </div>
                 </div>
 
-                {/* Desglose Fiscal de IVA solo si es Factura Fiscal (FACT) */}
-                {isFiscalInvoiceType(editingPayable.tipoDoc) ? (
+                {/* Desglose Fiscal de IVA si el documento es Fiscal */}
+                {isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? (
                   <>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0.65rem', borderRadius: '8px', background: 'rgba(2, 132, 199, 0.1)', border: '1px solid rgba(56, 189, 248, 0.25)' }}>
                       <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#38bdf8' }}>
@@ -3174,7 +3685,7 @@ export default function AccountsPayableModal({
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#fbbf24', marginBottom: '0.28rem' }}>
-                      {isFiscalInvoiceType(editingPayable.tipoDoc) ? 'Total Factura con IVA ($ USD) *' : 'Monto Original ($ USD) *'}
+                      {isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? 'Total Documento con IVA ($ USD) *' : 'Monto Original ($ USD) *'}
                     </label>
                     <input
                       type="number"
@@ -3189,7 +3700,7 @@ export default function AccountsPayableModal({
                   </div>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#fbbf24', marginBottom: '0.28rem' }}>
-                      {isFiscalInvoiceType(editingPayable.tipoDoc) ? 'Total Factura con IVA (Bs.) *' : 'Monto Original (Bs.) *'}
+                      {isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) ? 'Total Documento con IVA (Bs.) *' : 'Monto Original (Bs.) *'}
                     </label>
                     <input
                       type="number"
@@ -3257,26 +3768,15 @@ export default function AccountsPayableModal({
                 </div>
 
                 {/* Banda de equivalencia multimoneda */}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: '0.5rem',
-                  padding: '0.5rem 0.75rem',
-                  borderRadius: '8px',
-                  background: 'rgba(15, 23, 42, 0.45)',
-                  border: '1px solid var(--border-glass)',
-                  fontSize: '0.72rem'
-                }}>
+                <div className="ncnd-dual-summary">
                   <span style={{ color: 'var(--text-muted)' }}>
-                    Moneda de ingreso: <strong style={{ color: editingPayable.monedaIngreso === 'BS' ? '#38bdf8' : '#34d399' }}>
+                    Moneda de ingreso: <strong style={{ color: editingPayable.monedaIngreso === 'BS' ? 'var(--neon-cyan)' : 'var(--accent-emerald)' }}>
                       {editingPayable.monedaIngreso === 'BS' ? 'Bolívares (Bs.)' : 'Divisas ($ USD)'}
                     </strong>
                   </span>
                   <span style={{ fontFamily: 'var(--font-code)', color: 'var(--text-secondary)', fontWeight: 700 }}>
                     Equivalente Total: {formatUsd(Number(editingPayable.montoNetUsd || 0))} ⇄ {formatBs(Number(editingPayable.montoNetBs || 0))}
-                    {isFiscalInvoiceType(editingPayable.tipoDoc) && ` • IVA: ${formatUsd(Number(editingPayable.ivaUsd || 0))} / ${formatBs(Number(editingPayable.ivaBs || 0))}`}
+                    {isFiscalInvoiceType(editingPayable.tipoDoc, editingPayable.isFiscal) && ` • IVA: ${formatUsd(Number(editingPayable.ivaUsd || 0))} / ${formatBs(Number(editingPayable.ivaBs || 0))}`}
                   </span>
                 </div>
               </div>
@@ -3333,7 +3833,364 @@ export default function AccountsPayableModal({
             </form>
           </div>
         </div>
-      )}
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
+
+      {/* ============================================================
+          MODAL DE EMISIÓN DE NOTA DE CRÉDITO / NOTA DE DÉBITO (CxP)
+      ============================================================ */}
+      {creditDebitModal && creditDebitModal.doc && (() => {
+        const isDebit = creditDebitModal.noteType === 'NOTA_DEBITO';
+        const doc = creditDebitModal.doc;
+        const isFiscalNote = Boolean(creditDebitModal.isFiscal);
+        const rateVal = Number(creditDebitModal.tasa) > 1 ? Number(creditDebitModal.tasa) : (tasaBcv || tasaKeystone);
+        const subVal = round2(Number(creditDebitModal.subtotalUsd || 0));
+        const subBsVal = round2(subVal * rateVal);
+        const effIva = isFiscalNote && Boolean(creditDebitModal.aplicaIva);
+        const ivaVal = effIva ? round2(subVal * 0.16) : 0;
+        const ivaBsVal = round2(ivaVal * rateVal);
+        const totVal = round2(Number(creditDebitModal.totalUsd || (subVal + ivaVal)));
+        const bsVal = round2(totVal * rateVal);
+        const saldoBsVal = round2(Number(doc.saldoUsd || 0) * rateVal);
+
+        const modalNode = (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'var(--bg-modal-overlay)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 99999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1rem'
+            }}
+            onClick={() => !isSavingCreditDebit && setCreditDebitModal(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="ncnd-modal-card"
+              style={{
+                border: `1px solid ${isDebit ? 'rgba(245, 158, 11, 0.5)' : 'rgba(168, 85, 247, 0.5)'}`
+              }}
+            >
+              <div className={`ncnd-modal-header ${isDebit ? 'is-debit' : 'is-credit'}`}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-heading)' }}>
+                    {isDebit ? 'Emitir Nota de Débito CxP (N/DB)' : 'Emitir Nota de Crédito CxP (N/CR)'}
+                  </h3>
+                  <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                    {isDebit
+                      ? `Genera un cargo adicional por pagar vinculado a #${doc.nroDoc}`
+                      : `Aplica rebaja / descuento que disminuye el saldo pendiente de #${doc.nroDoc}`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !isSavingCreditDebit && setCreditDebitModal(null)}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', display: 'flex' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitCreditDebitNote} style={{ padding: '1.25rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '0.95rem' }}>
+                {/* Selector NC / ND */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleCreditDebitFieldChange('noteType', 'NOTA_CREDITO')}
+                    className={`ncnd-choice-btn ${!isDebit ? 'active-credit' : ''}`}
+                  >
+                    <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>Nota de Crédito (N/CR)</div>
+                    <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Rebaja saldo pendiente por pagar</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCreditDebitFieldChange('noteType', 'NOTA_DEBITO')}
+                    className={`ncnd-choice-btn ${isDebit ? 'active-debit' : ''}`}
+                  >
+                    <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>Nota de Débito (N/DB)</div>
+                    <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Aumenta obligación / cargo adicional</div>
+                  </button>
+                </div>
+
+                {/* Selector Fiscal (Forma Libre SENIAT) vs No Fiscal (PDF) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleCreditDebitFieldChange('isFiscal', true)}
+                    className={`ncnd-choice-btn ${isFiscalNote ? 'active-fiscal' : ''}`}
+                  >
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800 }}>Fiscal (Forma Libre SENIAT)</div>
+                    <div style={{ fontSize: '0.66rem', opacity: 0.85 }}>Imprime en hoja preimpresa • Con IVA</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCreditDebitFieldChange('isFiscal', false)}
+                    className={`ncnd-choice-btn ${!isFiscalNote ? 'active-nofiscal' : ''}`}
+                  >
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800 }}>No Fiscal (Comprobante PDF)</div>
+                    <div style={{ fontSize: '0.66rem', opacity: 0.85 }}>Genera PDF interno • Sin IVA</div>
+                  </button>
+                </div>
+
+                {/* Documento Afectado Info */}
+                <div style={{
+                  padding: '0.7rem 0.9rem',
+                  borderRadius: '10px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-glass)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  fontSize: '0.78rem'
+                }}>
+                  <div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Documento CxP Afectado ({doc.tipoDocLabel || getDocTypeLabel(doc.tipoDoc)})</div>
+                    <strong style={{ color: 'var(--text-primary)' }}>#{doc.nroDoc} • {doc.provNombre}</strong>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>RIF: {doc.provRif}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Saldo Pendiente Actual</div>
+                    <strong style={{ color: 'var(--semaforo-rojo)', fontFamily: 'var(--font-code)', fontSize: '0.95rem', display: 'block' }}>{formatUsd(doc.saldoUsd)}</strong>
+                    <span style={{ color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontSize: '0.72rem', fontWeight: 600 }}>{formatBs(saldoBsVal)}</span>
+                  </div>
+                </div>
+
+                {/* Correlativo, N° Control, Fecha y Tasa */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.65rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      N° Nota ({isDebit ? 'ND' : 'NC'}) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={creditDebitModal.noteNum}
+                      onChange={(e) => handleCreditDebitFieldChange('noteNum', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      N° Control {isFiscalNote ? '*' : '(Opcional)'}
+                    </label>
+                    <input
+                      type="text"
+                      required={isFiscalNote}
+                      value={creditDebitModal.numeroControl || ''}
+                      onChange={(e) => handleCreditDebitFieldChange('numeroControl', e.target.value)}
+                      placeholder={isFiscalNote ? '00-001134' : 'Opcional (No Fiscal)'}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      Fecha Emisión *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={creditDebitModal.fechaEmision}
+                      onChange={(e) => handleCreditDebitFieldChange('fechaEmision', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      Tasa (Bs/USD) *
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={creditDebitModal.tasa}
+                      onChange={(e) => handleCreditDebitFieldChange('tasa', e.target.value)}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                    />
+                  </div>
+                </div>
+
+                {/* Base Imponible ($ y Bs.) + IVA 16% ($ y Bs.) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.65rem', alignItems: 'end' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      Base Imponible ($) *
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={creditDebitModal.subtotalUsd}
+                      onChange={(e) => handleCreditDebitFieldChange('subtotalUsd', e.target.value)}
+                      placeholder="0.00"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--neon-cyan)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      Base Imponible (Bs.)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={creditDebitModal.subtotalBs ?? ''}
+                      onChange={(e) => handleCreditDebitFieldChange('subtotalBs', e.target.value)}
+                      placeholder="0.00"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 700, color: 'var(--neon-cyan)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.72rem', fontWeight: 700, color: !isFiscalNote ? 'var(--text-muted)' : 'var(--neon-cyan)', textTransform: 'uppercase', marginBottom: '0.35rem', cursor: !isFiscalNote ? 'not-allowed' : 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        disabled={!isFiscalNote}
+                        checked={effIva}
+                        onChange={(e) => handleCreditDebitFieldChange('aplicaIva', e.target.checked)}
+                      />
+                      <span>{!isFiscalNote ? 'Exento (No Fiscal)' : 'Aplica IVA 16%'}</span>
+                    </label>
+                    <div className="input-modern" style={{ width: '100%', padding: '0.45rem 0.75rem', fontFamily: 'var(--font-code)', lineHeight: 1.3 }}>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        IVA: {formatUsd(ivaVal)}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--neon-cyan)' }}>
+                        {formatBs(ivaBsVal)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Total Nota en Divisas ($) y Bolívares (Bs.) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: isDebit ? 'var(--accent-amber)' : '#9333ea', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      Total Nota Divisas ($) *
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={creditDebitModal.totalUsd}
+                      onChange={(e) => handleCreditDebitFieldChange('totalUsd', e.target.value)}
+                      placeholder="0.00"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 800, color: isDebit ? 'var(--accent-amber)' : 'var(--accent-emerald)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--neon-cyan)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                      Total Nota Bolívares (Bs.) *
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={creditDebitModal.totalBs ?? ''}
+                      onChange={(e) => handleCreditDebitFieldChange('totalBs', e.target.value)}
+                      placeholder="0.00"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontFamily: 'var(--font-code)', fontWeight: 800, color: 'var(--neon-cyan)' }}
+                    />
+                  </div>
+                </div>
+
+                {/* Resumen dual USD / Bs */}
+                <div className="ncnd-dual-summary">
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    Divisas: <strong style={{ color: isDebit ? 'var(--accent-amber)' : 'var(--accent-emerald)' }}>{formatUsd(subVal)} + {formatUsd(ivaVal)} IVA = {formatUsd(totVal)}</strong>
+                  </span>
+                  <span style={{ color: 'var(--neon-cyan)' }}>
+                    Bolívares: <strong>{formatBs(subBsVal)} + {formatBs(ivaBsVal)} IVA = {formatBs(bsVal)}</strong>
+                  </span>
+                </div>
+
+                {/* Motivo */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+                    Motivo / Concepto *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={creditDebitModal.motivo}
+                    onChange={(e) => handleCreditDebitFieldChange('motivo', e.target.value)}
+                    placeholder={isDebit ? 'Ej. Cargo por flete / Ajuste diferencial / Intereses' : 'Ej. Descuento pronto pago / Devolución parcial'}
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.55rem 0.75rem' }}
+                  />
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(creditDebitModal.autoPrintPdf)}
+                    onChange={(e) => handleCreditDebitFieldChange('autoPrintPdf', e.target.checked)}
+                  />
+                  <span>
+                    {isFiscalNote
+                      ? 'Imprimir automáticamente en formato Forma Libre SENIAT al emitir'
+                      : 'Descargar automáticamente el comprobante PDF (No Fiscal) al emitir'}
+                  </span>
+                </label>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)' }}>
+                  <button
+                    type="button"
+                    disabled={isSavingCreditDebit}
+                    onClick={() => setCreditDebitModal(null)}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.55rem 1.15rem' }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingCreditDebit}
+                    className="btn btn-primary"
+                    style={{
+                      padding: '0.55rem 1.3rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      color: '#ffffff',
+                      background: isDebit
+                        ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)'
+                        : 'linear-gradient(135deg, #9333ea 0%, #6d28d9 100%)'
+                    }}
+                  >
+                    <Check size={16} />
+                    <span>
+                      {isSavingCreditDebit
+                        ? 'Emitiendo...'
+                        : (isFiscalNote
+                            ? (isDebit ? 'Emitir e Imprimir N/DB Fiscal' : 'Aplicar e Imprimir N/CR Fiscal')
+                            : (isDebit ? 'Emitir N/DB y Descargar PDF' : 'Aplicar N/CR y Descargar PDF'))}
+                    </span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+        return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
     </section>
   );
 }

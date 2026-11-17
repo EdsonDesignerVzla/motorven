@@ -914,7 +914,9 @@ const factContadoSale = saveStorageSale({
   items: [{ articuloId: 'TEST-SKU-ALM01', codigo: 'SKU-ONLY-01', cantidad: 1, precioUsd: 100, aplicaIva: true, litrosPorUnidad: 12 }]
 });
 assert.strictEqual(factContadoSale.estado, 'PENDIENTE');
-assert.ok(factContadoSale.saldoUsd > 100, 'Factura contado debe conservar saldo pendiente (incl. IVA/IGTF)');
+assert.strictEqual(factContadoSale.igtfUsd, 0, 'Al generar factura contado NO debe calcular IGTF (no se cobra al emitir)');
+assert.strictEqual(factContadoSale.totalUsd, 116, 'Factura contado de $100 + 16% IVA debe totalizar $116 sin IGTF');
+assert.ok(factContadoSale.saldoUsd > 100, 'Factura contado debe conservar saldo pendiente (incl. IVA)');
 assert.strictEqual(getStorageCashMovements().length, cashBeforeContadoCxc, 'Factura contado no debe generar cash_movement directo');
 
 const neContadoSale = saveStorageSale({

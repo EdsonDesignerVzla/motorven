@@ -20,7 +20,6 @@ import {
 } from '../data/supabaseRealData.js';
 import {
   calculateFiscalTaxes,
-  resolveConfigIgtfOptions,
   generateFiscalControlNumber,
   generateVatRetentionVoucherNumber,
   getNextInvoiceCorrelativo,
@@ -500,7 +499,9 @@ export const saveSale = (saleData, options = {}) => {
     condicionPago: saleData.condicionPago || 'CONTADO',
     tasaBcv: config.tasaDolar,
     porcentajeRetencionIva: saleData.porcentajeRetencionIva ?? 0,
-    ...resolveConfigIgtfOptions(config)
+    // La factura no se cobra al momento de emitirse (pasa a CxC), por lo que no aplica IGTF en emisión
+    esSujetoPasivoEspecial: false,
+    porcentajeIgtf: 0
   });
 
   const effectiveDiasCredito = saleData.diasCredito || (isCredit ? (resolveCreditDaysFromTerm(saleData.condicionPago) || 15) : 0);

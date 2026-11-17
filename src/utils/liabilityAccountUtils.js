@@ -141,7 +141,10 @@ export const recordPartnerLiabilityMovement = (list = [], movPayload = {}) => {
     concepto: String(movPayload.concepto || '').trim() || (tipo === 'ABONO_SOCIO' ? 'Abono / Reembolso a Socio' : 'Cargo / Compromiso Pasivo Socio'),
     referencia: String(movPayload.referencia || '').trim(),
     usuario: String(movPayload.usuario || 'ADMINISTRACION').trim(),
-    origen: 'MANUAL_PASIVOS',
+    origen: String(movPayload.origen || 'MANUAL_PASIVOS').trim() || 'MANUAL_PASIVOS',
+    cashMovementId: String(movPayload.cashMovementId || '').trim(),
+    treasuryAccountId: String(movPayload.treasuryAccountId || '').trim(),
+    treasuryAccountLabel: String(movPayload.treasuryAccountLabel || '').trim(),
     createdAt: movPayload.createdAt || new Date().toISOString()
   };
   return savePartnerLiabilityMovements([entry, ...base]);
@@ -150,6 +153,14 @@ export const recordPartnerLiabilityMovement = (list = [], movPayload = {}) => {
 export const deletePartnerLiabilityMovementFromList = (list = [], movId) => {
   const target = String(movId || '').trim();
   const next = (Array.isArray(list) ? list : []).filter(m => m && String(m.id || '').trim() !== target);
+  return savePartnerLiabilityMovements(next);
+};
+
+export const removePartnerLiabilityMovementByCashId = (cashMovementId) => {
+  const targetCashId = String(cashMovementId || '').trim();
+  if (!targetCashId) return loadPartnerLiabilityMovements();
+  const current = loadPartnerLiabilityMovements();
+  const next = current.filter(m => m && String(m.cashMovementId || '').trim() !== targetCashId);
   return savePartnerLiabilityMovements(next);
 };
 

@@ -9,6 +9,7 @@ import {
   canViewCosts,
   canManageProducts,
   canModifyRates,
+  canManageInvoices,
   sortUsersByHierarchy,
   DEFAULT_USERS,
   ROLE_PERMISSIONS,
@@ -85,6 +86,30 @@ assert.strictEqual(defaultAdminMaster.rol, 'ADMINISTRADOR MASTER');
 assert.strictEqual(DEFAULT_TABS_BY_ROLE['ADMINISTRADOR MASTER'], 'dashboard');
 assert.strictEqual(ROLE_PERMISSIONS['ADMINISTRADOR MASTER'].length, SYSTEM_MODULES.length);
 console.log('  OK Usuario por defecto Administrador Master configurado correctamente.');
+
+// 7. Privilegios de edicion y acciones en el listado de facturas
+console.log('7. Verificando privilegios de edicion/eliminacion en listado de facturas...');
+assert.strictEqual(
+  canManageInvoices({ id: 'usr-muyb8kga', username: 'manuel', nombre: 'Manuel Rosales', rol: 'TECNOLOGÍA & INFORMÁTICA' }),
+  true,
+  'Manuel Rosales debe poder editar y eliminar en el listado de facturas'
+);
+assert.strictEqual(
+  canManageInvoices({ id: 'usr-caja', username: 'caja', nombre: 'Vanesa Sánchez', rol: 'CAJA' }),
+  true,
+  'Vanesa Sánchez (caja) debe tener habilitadas las acciones de editar y eliminar facturas'
+);
+assert.strictEqual(
+  canManageInvoices({ nombre: 'Vanessa Sanchez', rol: 'CAJA' }),
+  true,
+  'Variante ortografica Vanessa Sanchez debe estar habilitada'
+);
+assert.strictEqual(
+  canManageInvoices({ id: 'usr-seller-cm', username: 'carlosm', nombre: 'Carlos Machado', rol: 'VENTAS' }),
+  false,
+  'Usuarios de ventas regulares no deben editar ni eliminar facturas emitidas'
+);
+console.log('  OK Privilegios en listado de facturas verificados.');
 
 console.log('\n================================================================');
 console.log('--- ROLES ADMINISTRADOR MASTER Y TI COMPLETAMENTE FUNCIONALES (100% OK) ---');
