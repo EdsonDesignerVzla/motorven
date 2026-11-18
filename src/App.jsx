@@ -2477,6 +2477,7 @@ function MainApp() {
       return newSale;
     } catch (err) {
       console.error(err);
+      if (err && typeof err === 'object') err._notifiedByApp = true;
       notify.error(err?.isValidationError ? err.message : "Error al procesar la venta en el servidor");
       throw err;
     }
@@ -3165,8 +3166,58 @@ function MainApp() {
         return false;
       };
 
+      const matchedSales = (sales || []).filter(doesEntryMatchDeletedTarget);
+      const originOrderKeys = new Set();
+      const deletedSaleKeysUpper = new Set(
+        [cleanId, rawNum, cleanNum].filter(Boolean).map(v => v.toUpperCase())
+      );
+      matchedSales.forEach(s => {
+        [s?.pedidoOrigenId, s?.pedido_origen_id, s?.pedidoOrigenDoc, s?.pedido_origen_doc].forEach(val => {
+          const t = String(val || '').trim();
+          if (t) originOrderKeys.add(t);
+        });
+        [s?.id, s?.numeroDoc, s?.numero_doc, s?.factNum].forEach(val => {
+          const t = String(val || '').trim().toUpperCase();
+          if (t) deletedSaleKeysUpper.add(t);
+        });
+      });
+      if (isObj) {
+        [saleIdOrDoc?.pedidoOrigenId, saleIdOrDoc?.pedido_origen_id, saleIdOrDoc?.pedidoOrigenDoc, saleIdOrDoc?.pedido_origen_doc].forEach(val => {
+          const t = String(val || '').trim();
+          if (t) originOrderKeys.add(t);
+        });
+      }
+      const isTargetNe = targetTipo === 'NOTA_ENTREGA';
+
       setSalesState(prev => (prev || []).filter(s => !doesEntryMatchDeletedTarget(s)));
       setProfitInvoices(prev => (prev || []).filter(p => !doesEntryMatchDeletedTarget(p)));
+      setOrdersState(prev => (prev || []).map(ord => {
+        if (!ord || String(ord.status || ord.estado || '').toUpperCase().trim() !== 'FACTURADO') {
+          return ord;
+        }
+        const ordId = String(ord.id || '').trim();
+        const ordDoc = String(ord.numeroDoc || ord.numero_doc || ord.numeroPedido || ord.numero_pedido || '').trim();
+        const matchesOrigin = (ordId && originOrderKeys.has(ordId)) || (ordDoc && originOrderKeys.has(ordDoc));
+        const ordFacId = String(ord.facturaId || ord.factura_id || '').trim().toUpperCase();
+        const ordNroFac = String(ord.nroFactura || ord.nro_factura || '').trim().toUpperCase();
+        const ordIsNe = /^(NE-|NDE-)/i.test(ordNroFac) || String(ord.tipoDoc || ord.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA';
+        const ordCleanNro = ordNroFac.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+        const matchesInvoice =
+          (ordFacId && deletedSaleKeysUpper.has(ordFacId)) ||
+          (ordNroFac && ordIsNe === isTargetNe && (deletedSaleKeysUpper.has(ordNroFac) || (ordCleanNro && deletedSaleKeysUpper.has(ordCleanNro))));
+        if (!matchesOrigin && !matchesInvoice) return ord;
+        return {
+          ...ord,
+          status: 'APROBADO',
+          estado: 'APROBADO',
+          nroFactura: null,
+          nro_factura: null,
+          facturaId: null,
+          factura_id: null,
+          fechaFactura: null,
+          fecha_factura: null
+        };
+      }));
       notify.success('Documento eliminado y saldo actualizado con éxito');
       return true;
     } catch (err) {

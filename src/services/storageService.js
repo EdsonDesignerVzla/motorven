@@ -407,8 +407,61 @@ const adjustLocalProductsStockForSale = (saleRecord, { reverse = false } = {}) =
   return touched;
 };
 
+const readCxcDeletedTombstones = () => {
+  try {
+    if (typeof localStorage === 'undefined') return { set: new Set(), meta: {} };
+    const rawDel = localStorage.getItem('signum_cxc_deleted_docs_v1');
+    const rawMeta = localStorage.getItem('signum_cxc_deleted_meta_v1');
+    const delList = rawDel ? JSON.parse(rawDel) : [];
+    const meta = rawMeta ? JSON.parse(rawMeta) : {};
+    const now = Date.now();
+    const active = (Array.isArray(delList) ? delList : []).filter(k => {
+      const m = meta && typeof meta === 'object' ? meta[k] : null;
+      return !(m && m.deletedAt && (now - m.deletedAt) > 7 * 24 * 60 * 60 * 1000);
+    });
+    return {
+      set: new Set(active.map(String)),
+      meta: meta && typeof meta === 'object' ? meta : {}
+    };
+  } catch (_) {
+    return { set: new Set(), meta: {} };
+  }
+};
+
+const isCxcTombstonedLocal = (docOrId, tombstones, defaultTipo = 'FACTURA') => {
+  if (!docOrId || !tombstones || tombstones.set.size === 0) return false;
+  const isObj = typeof docOrId === 'object';
+  const rawId = isObj ? String(docOrId.id || '').trim() : String(docOrId || '').trim();
+  const rawNum = isObj
+    ? String(docOrId.numeroDoc || docOrId.numero_doc || docOrId.nroFactura || docOrId.factNum || docOrId.id || '').trim()
+    : String(docOrId || '').trim();
+  const rawTipo = String((isObj && (docOrId.tipoDoc || docOrId.tipo_doc)) || defaultTipo || 'FACTURA').toUpperCase().trim();
+  const isNe = rawTipo === 'NOTA_ENTREGA' || /^(NE-|NDE-)/i.test(rawId) || /^(NE-|NDE-)/i.test(rawNum);
+  const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+  const effectiveTipo = isNe ? 'NOTA_ENTREGA' : rawTipo;
+  const canon = getEraScopedCanonicalDocKey(
+    isObj ? docOrId : { numeroDoc: rawNum, tipoDoc: effectiveTipo },
+    effectiveTipo
+  );
+  const keys = isNe
+    ? [canon, rawId, rawNum, cleanNum ? `NE-${cleanNum}` : ''].filter(Boolean)
+    : [canon, rawId, rawNum, cleanNum, cleanNum ? `FAC-${cleanNum}` : ''].filter(Boolean);
+  const era = canon && canon.endsWith(':LEGACY') ? 'LEGACY' : (canon ? 'MODERN' : '');
+
+  return keys.some(k => {
+    if (!tombstones.set.has(k)) return false;
+    const m = tombstones.meta[k];
+    if (!m) {
+      return !(effectiveTipo === 'NOTA_ENTREGA' && !/^(NE:|NE-|NDE-)/i.test(String(k)));
+    }
+    if (m.tipoDoc && effectiveTipo && m.tipoDoc !== effectiveTipo) return false;
+    if (m.era && era && m.era !== era) return false;
+    return true;
+  });
+};
+
 export const saveSale = (saleData, options = {}) => {
-  const { skipStockAdjustment = false } = options || {};
+  const { skipStockAdjustment = false, skipDuplicateOrderCheck = false } = options || {};
   const sales = getSales();
   const config = getConfig();
 
@@ -428,10 +481,27 @@ export const saveSale = (saleData, options = {}) => {
 
   const originOrderId = String(saleData.pedidoOrigenId || saleData.orderId || saleData.pedido_origen_id || '').trim();
   const originOrderDoc = String(saleData.pedidoOrigenDoc || saleData.pedido_origen_doc || '').trim();
-  if (originOrderId || originOrderDoc) {
+  if ((originOrderId || originOrderDoc) && !skipStockAdjustment && !skipDuplicateOrderCheck) {
+    const incomingCanon = getEraScopedCanonicalDocKey(saleData);
+    const incomingIdUpper = String(saleData.id || '').trim().toUpperCase();
+    const incomingNumUpper = String(saleData.numeroDoc || saleData.numero_doc || '').trim().toUpperCase();
+    const isSameDoc = (existing) => {
+      if (!existing) return false;
+      const exIdUpper = String(existing.id || '').trim().toUpperCase();
+      const exNumUpper = String(existing.numeroDoc || existing.numero_doc || '').trim().toUpperCase();
+      if ((incomingIdUpper && exIdUpper && incomingIdUpper === exIdUpper) ||
+          (incomingNumUpper && exNumUpper && incomingNumUpper === exNumUpper)) {
+        return true;
+      }
+      const exCanon = getEraScopedCanonicalDocKey(existing);
+      return Boolean(incomingCanon && exCanon && incomingCanon === exCanon);
+    };
+    const tombstones = readCxcDeletedTombstones();
+
     const alreadyInvoiced = sales.find(s => {
       if (!s) return false;
       if (['ANULADA', 'ANULADO'].includes(String(s.estado || '').toUpperCase().trim())) return false;
+      if (isSameDoc(s) || isCxcTombstonedLocal(s, tombstones)) return false;
       const sOriginId = String(s.pedidoOrigenId || s.pedido_origen_id || '').trim();
       const sOriginDoc = String(s.pedidoOrigenDoc || s.pedido_origen_doc || '').trim();
       return (originOrderId && sOriginId === originOrderId) ||
@@ -451,7 +521,21 @@ export const saveSale = (saleData, options = {}) => {
       if (!o) return false;
       const matchesId = originOrderId && (String(o.id || '').trim() === originOrderId || String(o.numeroDoc || '').trim() === originOrderId);
       const matchesDoc = originOrderDoc && (String(o.numeroDoc || '').trim() === originOrderDoc || String(o.id || '').trim() === originOrderDoc);
-      return (matchesId || matchesDoc) && String(o.status || '').toUpperCase().trim() === 'FACTURADO';
+      if (!(matchesId || matchesDoc) || String(o.status || '').toUpperCase().trim() !== 'FACTURADO') {
+        return false;
+      }
+      const ordNro = String(o.nroFactura || o.nro_factura || '').trim();
+      const ordFacId = String(o.facturaId || o.factura_id || '').trim();
+      if (incomingNumUpper && ordNro && ordNro.toUpperCase() === incomingNumUpper) return false;
+      if (incomingIdUpper && ordFacId && ordFacId.toUpperCase() === incomingIdUpper) return false;
+      if ((ordNro || ordFacId) && isCxcTombstonedLocal({
+        id: ordFacId || ordNro,
+        numeroDoc: ordNro,
+        tipoDoc: o.tipoDoc || saleData.tipoDoc || 'FACTURA'
+      }, tombstones)) {
+        return false;
+      }
+      return true;
     });
     if (alreadyBilledOrder) {
       const dupErr = new Error(`El pedido ${alreadyBilledOrder.numeroDoc || alreadyBilledOrder.id} ya se encuentra en estado FACTURADO (#${alreadyBilledOrder.nroFactura || 'N/A'}).`);

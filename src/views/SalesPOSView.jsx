@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ShoppingCart,
   Plus,
@@ -166,6 +166,7 @@ export default function SalesPOSView({
   const [selectedCategory, setSelectedCategory] = useState('TODOS');
   const [selectedSpecProduct, setSelectedSpecProduct] = useState(null);
   const [isSubmittingSale, setIsSubmittingSale] = useState(false);
+  const saleSubmitLockRef = useRef(false);
 
   // Estados de Evaluación y Aprobación Excepcional de Crédito en POS Mostrador / Oficina
   const [showCreditApprovalModal, setShowCreditApprovalModal] = useState(false);
@@ -814,7 +815,7 @@ export default function SalesPOSView({
   );
 
   const handleFinalizeSale = async () => {
-    if (isSubmittingSale) return;
+    if (isSubmittingSale || saleSubmitLockRef.current) return;
 
     if (cartItems.length === 0) {
       notify.warning('El carrito de facturación está vacío. Agregue lubricantes para continuar.');
@@ -959,6 +960,7 @@ export default function SalesPOSView({
     };
 
     try {
+      saleSubmitLockRef.current = true;
       setIsSubmittingSale(true);
       const createdSale = await onProcessSale(salePayload);
       if (createdSale) {
@@ -998,8 +1000,11 @@ export default function SalesPOSView({
       }
     } catch (err) {
       console.error("Error al procesar la venta:", err);
-      notify.error("Error al emitir la factura en el sistema: " + (err.message || err));
+      if (!err?._notifiedByApp) {
+        notify.error("Error al emitir la factura en el sistema: " + (err.message || err));
+      }
     } finally {
+      saleSubmitLockRef.current = false;
       setIsSubmittingSale(false);
     }
   };

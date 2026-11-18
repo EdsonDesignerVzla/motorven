@@ -3144,19 +3144,29 @@ export const processSupabaseSale = async (saleData) => {
 
     const [config, salesRes, invoicesRes] = await Promise.all([
       getSupabaseConfig(),
-      withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc,fecha,fecha_emision,pedido_origen_id,pedido_origen_doc,estado')),
+      withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc,fecha,fecha_emision,pedido_origen_id,pedido_origen_doc,estado,created_at,updated_at')),
       withTimeout(supabase.from('profit_invoices').select('id,fact_num,factNum,tipo_doc,tipoDoc,fechaEmision,fec_emis')).catch(() => ({ data: [] }))
     ]);
     if (salesRes?.error) throw salesRes.error;
     const dbSales = salesRes?.data || [];
+    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
+    const activeDbSales = dbSales.filter(s => s && !isCxcEntryDeleted(s, delSet));
     const count = Array.isArray(dbSales) ? dbSales.length : 0;
     const originOrderId = String(saleData.pedidoOrigenId || saleData.orderId || saleData.pedido_origen_id || '').trim();
     const originOrderDoc = String(saleData.pedidoOrigenDoc || saleData.pedido_origen_doc || '').trim();
+    const incomingIdUpper = String(saleData.id || '').trim().toUpperCase();
+    const incomingNumUpper = String(saleData.numeroDoc || saleData.numero_doc || '').trim().toUpperCase();
     if (originOrderId || originOrderDoc) {
-      const alreadyInvoicedSale = dbSales.find(
+      const alreadyInvoicedSale = activeDbSales.find(
         s => {
           if (!s) return false;
           if (['ANULADA', 'ANULADO'].includes(String(s.estado || '').toUpperCase().trim())) return false;
+          const sIdUpper = String(s.id || '').trim().toUpperCase();
+          const sNumUpper = String(s.numero_doc || s.numeroDoc || '').trim().toUpperCase();
+          if ((incomingIdUpper && sIdUpper === incomingIdUpper) ||
+              (incomingNumUpper && sNumUpper === incomingNumUpper)) {
+            return false;
+          }
           const sOriginId = String(s.pedido_origen_id || s.pedidoOrigenId || '').trim();
           const sOriginDoc = String(s.pedido_origen_doc || s.pedidoOrigenDoc || '').trim();
           return (originOrderId && sOriginId === originOrderId) ||
@@ -3183,11 +3193,22 @@ export const processSupabaseSale = async (saleData) => {
         ].filter(Boolean).join(',');
         if (queryFilter) {
           const { data: matchedOrders } = await withTimeout(
-            supabase.from('orders').select('id,numero_doc,status,nro_factura').or(queryFilter)
+            supabase.from('orders').select('id,numero_doc,status,nro_factura,factura_id').or(queryFilter)
           );
-          const alreadyBilledOrder = (matchedOrders || []).find(
-            o => String(o.status || '').toUpperCase().trim() === 'FACTURADO'
-          );
+          const alreadyBilledOrder = (matchedOrders || []).find(o => {
+            if (!o || String(o.status || '').toUpperCase().trim() !== 'FACTURADO') return false;
+            const ordNro = String(o.nro_factura || o.nroFactura || '').trim();
+            const ordFacId = String(o.factura_id || o.facturaId || '').trim();
+            if ((ordNro || ordFacId) && isCxcEntryDeleted({
+              id: ordFacId || ordNro,
+              numeroDoc: ordNro,
+              factNum: ordNro,
+              tipoDoc: effectiveTipoDoc
+            }, delSet)) {
+              return false;
+            }
+            return true;
+          });
           if (alreadyBilledOrder) {
             const dupErr = new Error(
               `El pedido ${alreadyBilledOrder.numero_doc || alreadyBilledOrder.id} ya se encuentra en estado FACTURADO (#${alreadyBilledOrder.nro_factura || 'N/A'}).`
@@ -3340,20 +3361,77 @@ export const processSupabaseSale = async (saleData) => {
     let newSale = buildSaleCandidate(resolvedNumeroDoc, true);
     let savedSale = null;
     let saleErr = null;
+    const attemptedIds = new Set();
+    const attemptedDocNums = new Set();
     for (let attempt = 0; attempt < 3; attempt++) {
-      const insertRes = await withTimeout(
-        supabase
-          .from('sales')
-          .insert(mapSaleToDb(newSale))
-          .select()
-          .single()
-      );
+      if (newSale?.id) attemptedIds.add(String(newSale.id).trim());
+      if (newSale?.numeroDoc) attemptedDocNums.add(String(newSale.numeroDoc).trim());
+      let insertRes = null;
+      try {
+        insertRes = await withTimeout(
+          supabase
+            .from('sales')
+            .insert(mapSaleToDb(newSale))
+            .select()
+            .single()
+        );
+      } catch (insertThrowErr) {
+        const lookupParts = [
+          newSale?.id ? `id.eq.${newSale.id}` : null,
+          originOrderId ? `pedido_origen_id.eq.${originOrderId}` : null
+        ].filter(Boolean).join(',');
+        if (lookupParts) {
+          const { data: recoveredRows } = await withTimeout(
+            supabase.from('sales').select('*').or(lookupParts),
+            5000
+          ).catch(() => ({ data: null }));
+          const recovered = Array.isArray(recoveredRows)
+            ? recoveredRows.find(r =>
+                r &&
+                !['ANULADA', 'ANULADO'].includes(String(r.estado || '').toUpperCase().trim()) &&
+                (attemptedIds.has(String(r.id || '').trim()) || attemptedDocNums.has(String(r.numero_doc || r.numeroDoc || '').trim()))
+              )
+            : null;
+          if (recovered) {
+            savedSale = recovered;
+            saleErr = null;
+            break;
+          }
+        }
+        throw insertThrowErr;
+      }
       savedSale = insertRes?.data || null;
       saleErr = insertRes?.error || null;
       if (!saleErr) break;
 
       const isOrderDup = saleErr?.errorCode === 'ORDER_ALREADY_INVOICED' || String(saleErr?.message || '').includes('ya fue facturado previamente');
       if (isOrderDup) {
+        const existingId = String(saleErr?.existingId || '').trim();
+        const existingNumeroDoc = String(saleErr?.existingNumeroDoc || '').trim();
+        if (attempt > 0 || (existingId && attemptedIds.has(existingId)) || (existingNumeroDoc && attemptedDocNums.has(existingNumeroDoc))) {
+          const lookupParts = [
+            existingId ? `id.eq.${existingId}` : null,
+            originOrderId ? `pedido_origen_id.eq.${originOrderId}` : null
+          ].filter(Boolean).join(',');
+          if (lookupParts) {
+            const { data: recoveredRows } = await withTimeout(
+              supabase.from('sales').select('*').or(lookupParts),
+              5000
+            ).catch(() => ({ data: null }));
+            const recovered = Array.isArray(recoveredRows)
+              ? recoveredRows.find(r =>
+                  r &&
+                  !['ANULADA', 'ANULADO'].includes(String(r.estado || '').toUpperCase().trim()) &&
+                  (attemptedIds.has(String(r.id || '').trim()) || attemptedDocNums.has(String(r.numero_doc || r.numeroDoc || '').trim()))
+                )
+              : null;
+            if (recovered) {
+              savedSale = recovered;
+              saleErr = null;
+              break;
+            }
+          }
+        }
         const orderDupErr = new Error(saleErr.message || 'El pedido ya fue facturado previamente.');
         orderDupErr.isValidationError = true;
         orderDupErr.code = 'ORDER_ALREADY_INVOICED';
@@ -3371,8 +3449,8 @@ export const processSupabaseSale = async (saleData) => {
       if (nextReserved?.correlativo) {
         resolvedNumeroDoc = nextReserved.correlativo;
       } else {
-        const retrySalesRes = await withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc,fecha,fecha_emision')).catch(() => ({ data: dbSales }));
-        const retryList = (retrySalesRes?.data || dbSales).map(s => ({
+        const retrySalesRes = await withTimeout(supabase.from('sales').select('id,numero_doc,tipo_doc,fecha,fecha_emision')).catch(() => ({ data: activeDbSales }));
+        const retryList = (retrySalesRes?.data || activeDbSales).map(s => ({
           id: s.id,
           numeroDoc: s.numero_doc,
           tipoDoc: s.tipo_doc,
@@ -3395,6 +3473,21 @@ export const processSupabaseSale = async (saleData) => {
     const stockPromise = adjustSupabaseProductsStockForSale(newSale, {
       reverse: false,
       idempotencyKey: `sale_${newSale.id || newSale.numeroDoc}_deduct`
+    }).catch(stockErr => {
+      console.warn('[processSupabaseSale] Aviso ajustando inventario tras venta confirmada:', stockErr?.message || stockErr);
+      try {
+        const deltaLines = buildSaleStockDeltaLines(newSale, { reverse: false });
+        if (deltaLines.length > 0) {
+          const stockKey = `sale_${newSale.id || newSale.numeroDoc}_deduct`;
+          enqueueSyncAction('stock_delta', 'UPDATE', {
+            id: stockKey,
+            idempotencyKey: stockKey,
+            lines: deltaLines,
+            validateStrict: false,
+            alreadyAppliedLocally: false
+          });
+        }
+      } catch (_) {}
     });
 
     const accountOrCashPromise = !sendToReceivables
@@ -3408,6 +3501,8 @@ export const processSupabaseSale = async (saleData) => {
               montoBs: newSale.totalBs,
               metodo: newSale.metodoPago,
               usuario: newSale.vendedor
+            }).catch(cashErr => {
+              console.warn('[processSupabaseSale] Aviso registrando movimiento de caja NC:', cashErr?.message || cashErr);
             })
           : Promise.resolve(null))
       : (async () => {
@@ -3446,7 +3541,9 @@ export const processSupabaseSale = async (saleData) => {
               item: { id: newSale.clienteId, saldoDeudorUsd: newDebit }
             });
           }
-        })();
+        })().catch(cliErr => {
+          console.warn('[processSupabaseSale] Aviso actualizando saldo cliente tras venta confirmada:', cliErr?.message || cliErr);
+        });
 
     await Promise.all([stockPromise, accountOrCashPromise]);
     isSupabaseAvailable = true;
@@ -3457,7 +3554,11 @@ export const processSupabaseSale = async (saleData) => {
       commitNotaEntregaCorrelativo(mapped.numeroDoc || resolvedNumeroDoc);
     }
     // Sincronizar en almacenamiento local (el stock ya fue ajustado arriba desde Supabase)
-    saveStorageSale(mapped, { skipStockAdjustment: true });
+    try {
+      saveStorageSale(mapped, { skipStockAdjustment: true, skipDuplicateOrderCheck: true });
+    } catch (cacheErr) {
+      console.warn('[processSupabaseSale] Aviso sincronizando venta en caché local:', cacheErr?.message || cacheErr);
+    }
 
     broadcastReconcileChange({
       tableId: 'sales',
@@ -3481,6 +3582,9 @@ export const processSupabaseSale = async (saleData) => {
 
     return mapped;
   } catch (err) {
+    if (savedSale) {
+      return mapSaleFromDb(savedSale);
+    }
     if (err?.isValidationError || err?.code === 'INSUFFICIENT_WAREHOUSE_STOCK') {
       throw err;
     }
@@ -4397,6 +4501,134 @@ export const deleteSupabaseSale = async (saleId) => {
 
     // 3. Limpiar almacenamiento local sin duplicar ajuste de inventario
     candidateKeys.forEach(k => deleteStorageSale(k, { skipStockAdjustment: true }));
+
+    // 3b. Revertir pedidos de origen que estaban en estado FACTURADO vinculados a esta factura/NE
+    const originOrderKeys = new Set();
+    const deletedSaleKeysUpper = new Set(
+      [cleanId, rawNum, cleanNum].filter(Boolean).map(v => String(v).trim().toUpperCase())
+    );
+    salesToRevert.forEach(s => {
+      if (!s) return;
+      [s.pedidoOrigenId, s.pedido_origen_id, s.pedidoOrigenDoc, s.pedido_origen_doc].forEach(val => {
+        const t = String(val || '').trim();
+        if (t) originOrderKeys.add(t);
+      });
+      [s.id, s.numeroDoc, s.numero_doc, s.factNum].forEach(val => {
+        const t = String(val || '').trim().toUpperCase();
+        if (t) deletedSaleKeysUpper.add(t);
+      });
+    });
+    if (typeof saleId === 'object' && saleId) {
+      [saleId.pedidoOrigenId, saleId.pedido_origen_id, saleId.pedidoOrigenDoc, saleId.pedido_origen_doc].forEach(val => {
+        const t = String(val || '').trim();
+        if (t) originOrderKeys.add(t);
+      });
+    }
+
+    const doesOrderMatchDeletedSale = (ord) => {
+      if (!ord || String(ord.status || ord.estado || '').toUpperCase().trim() !== 'FACTURADO') {
+        return false;
+      }
+      const ordId = String(ord.id || '').trim();
+      const ordDoc = String(ord.numeroDoc || ord.numero_doc || ord.numeroPedido || ord.numero_pedido || '').trim();
+      if ((ordId && originOrderKeys.has(ordId)) || (ordDoc && originOrderKeys.has(ordDoc))) {
+        return true;
+      }
+      const ordFacId = String(ord.facturaId || ord.factura_id || '').trim().toUpperCase();
+      const ordNroFac = String(ord.nroFactura || ord.nro_factura || '').trim().toUpperCase();
+      if (ordFacId && deletedSaleKeysUpper.has(ordFacId)) return true;
+      const ordIsNe = /^(NE-|NDE-)/i.test(ordNroFac) || String(ord.tipoDoc || ord.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA';
+      if (ordNroFac && ordIsNe === isTargetNe) {
+        const ordCleanNro = ordNroFac.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+        if (deletedSaleKeysUpper.has(ordNroFac) || (ordCleanNro && deletedSaleKeysUpper.has(ordCleanNro))) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const nowOrderIso = new Date().toISOString();
+    try {
+      getStorageOrders().filter(doesOrderMatchDeletedSale).forEach(ord => {
+        const revertedOrder = {
+          ...ord,
+          status: 'APROBADO',
+          estado: 'APROBADO',
+          nroFactura: null,
+          nro_factura: null,
+          facturaId: null,
+          factura_id: null,
+          fechaFactura: null,
+          fecha_factura: null,
+          updatedAt: nowOrderIso
+        };
+        saveStorageOrder(revertedOrder, { skipStockValidation: true });
+        broadcastReconcileChange({
+          tableId: 'orders',
+          action: 'RECONCILE',
+          key: revertedOrder.id || revertedOrder.numeroPedido,
+          item: revertedOrder
+        });
+      });
+    } catch (_) {}
+
+    try {
+      const orOrderParts = [];
+      originOrderKeys.forEach(k => {
+        orOrderParts.push(`id.eq.${k}`, `numero_doc.eq.${k}`, `numero_pedido.eq.${k}`);
+      });
+      if (cleanId) orOrderParts.push(`factura_id.eq.${cleanId}`);
+      if (cleanNum) {
+        const nroFilterVal = isTargetNe ? `NE-${cleanNum}` : cleanNum;
+        orOrderParts.push(`nro_factura.eq.${nroFilterVal}`);
+      }
+      if (orOrderParts.length > 0) {
+        const { data: matchedOrders } = await withTimeout(
+          supabase.from('orders').select('*').or(Array.from(new Set(orOrderParts)).join(',')),
+          5000
+        ).catch(() => ({ data: null }));
+        const ordersToRevert = (matchedOrders || []).filter(doesOrderMatchDeletedSale);
+        for (const ord of ordersToRevert) {
+          const fullUpdate = {
+            status: 'APROBADO',
+            estado: 'APROBADO',
+            nro_factura: null,
+            nroFactura: null,
+            factura_id: null,
+            facturaId: null,
+            fecha_factura: null,
+            fechaFactura: null,
+            updated_at: nowOrderIso
+          };
+          const { error: ordUpdateErr } = await withTimeout(
+            supabase.from('orders').update(fullUpdate).eq('id', ord.id),
+            5000
+          ).catch(() => ({ error: null }));
+          if (ordUpdateErr && (String(ordUpdateErr.code || '') === 'PGRST204' || /column .* does not exist/i.test(String(ordUpdateErr.message || '')))) {
+            await withTimeout(
+              supabase.from('orders').update({ status: 'APROBADO', estado: 'APROBADO', updated_at: nowOrderIso }).eq('id', ord.id),
+              5000
+            ).catch(() => {});
+          }
+          const revertedMapped = {
+            ...mapOrderFromDb(ord),
+            status: 'APROBADO',
+            estado: 'APROBADO',
+            nroFactura: null,
+            facturaId: null,
+            fechaFactura: null,
+            updatedAt: nowOrderIso
+          };
+          saveStorageOrder(revertedMapped, { skipStockValidation: true });
+          broadcastReconcileChange({
+            tableId: 'orders',
+            action: 'RECONCILE',
+            key: revertedMapped.id || revertedMapped.numeroPedido,
+            item: revertedMapped
+          });
+        }
+      }
+    } catch (_) {}
 
     // 4. Eliminar en Supabase (profit_invoices y sales en paralelo), respetando era/serie para no borrar histórico por error
     const isTargetLegacy = typeof saleId === 'object' ? isLegacyPreNovInvoice(saleId) : /^fac-[1-9]\d{0,3}$/i.test(cleanId);
