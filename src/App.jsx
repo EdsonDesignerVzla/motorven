@@ -95,6 +95,7 @@ import {
 
 import {
   seedDatabaseIfEmpty,
+  ensureInventoryReconcileEpoch,
   getSupabaseConfig,
   updateSupabaseConfig,
   getSupabaseProducts,
@@ -332,6 +333,7 @@ function MainApp() {
     }
   }, [config]);
   const [products, setProductsState] = useState(() => {
+    ensureInventoryReconcileEpoch();
     const sortAsc = (arr) =>
       Array.isArray(arr)
         ? [...arr].sort((a, b) =>
@@ -538,29 +540,49 @@ function MainApp() {
           isPreReadFlush = false;
         }
 
-        // Obtener datos iniciales en paralelo sin esperas secuenciales
-        const [
-          cfg, prods, clis, ords, bnks, cdesks, cobs, facs, sups, sls, cash, purs, closures, usrs,
-          pSups, pPurs, pCxp, pPays, pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers,
-          pIslr, pBen, pOrders, pWithholdings, pAuditTrails,
-          pWarehouses, pLines, pCategories, pSublines, pCurrs,
-          pReqs, pPOs, pRecs,
-          pIncExpAccounts, pSettlements, pExpenses, pEmployees, pPayroll
-        ] = await Promise.all([
+        // Ola 1 (prioritaria): datos operativos críticos antes de saturar el túnel con históricos extensos
+        const [cfg, prods, clis, ords, facs, sls, usrs, pWarehouses] = await Promise.all([
           getSupabaseConfig(),
           getSupabaseProducts(),
           getSupabaseClients(),
           getSupabaseOrders(),
+          getSupabaseProfitInvoices(),
+          getSupabaseSales(),
+          getSupabaseUsers(),
+          getSupabaseProfitWarehouses()
+        ]);
+
+        if (isMounted) {
+          let activeConfig = cfg;
+          if (!cfg) {
+            await seedDatabaseIfEmpty();
+            activeConfig = await getSupabaseConfig();
+          }
+          setConfigState(activeConfig);
+          setProductsState(prods || []);
+          setClientsState(clis || []);
+          setOrdersState(ords || []);
+          setProfitInvoices(facs || []);
+          setSalesState(sls || []);
+          setProfitWarehouses(pWarehouses || []);
+        }
+
+        // Ola 2: módulos financieros, históricos y catálogos auxiliares
+        const [
+          bnks, cdesks, cobs, sups, cash, purs, closures,
+          pSups, pPurs, pCxp, pPays, pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers,
+          pIslr, pBen, pOrders, pWithholdings, pAuditTrails,
+          pLines, pCategories, pSublines, pCurrs,
+          pReqs, pPOs, pRecs,
+          pIncExpAccounts, pSettlements, pExpenses, pEmployees, pPayroll
+        ] = await Promise.all([
           getSupabaseProfitBankAccounts(),
           getSupabaseProfitCashDesks(),
           getSupabaseProfitCollections(),
-          getSupabaseProfitInvoices(),
           getSupabaseSuppliers(),
-          getSupabaseSales(),
           getSupabaseCashMovements(),
           getSupabasePurchases(),
           getSupabaseFiscalClosures(),
-          getSupabaseUsers(),
           getSupabaseProfitSuppliers(),
           getSupabaseProfitPurchases(),
           getSupabaseProfitAccountsPayable(),
@@ -576,7 +598,6 @@ function MainApp() {
           getSupabaseProfitPaymentOrdersMerged(),
           getSupabaseProfitIslrWithholdings(),
           getSupabaseProfitAuditTrails(),
-          getSupabaseProfitWarehouses(),
           getSupabaseProfitProductLines(),
           getSupabaseProfitProductCategories(),
           getSupabaseProfitProductSublines(),
@@ -592,14 +613,8 @@ function MainApp() {
         ]);
         
         if (isMounted) {
-          let activeConfig = cfg;
-          // Solo si la base está completamente virgen se ejecuta el seed de respaldo
-          if (!cfg) {
-            await seedDatabaseIfEmpty();
-            activeConfig = await getSupabaseConfig();
-          }
-
-          setConfigState(activeConfig);
+          const activeConfig = cfg || await getSupabaseConfig();
+          if (cfg) setConfigState(activeConfig);
           setProductsState(prods || []);
           setClientsState(clis || []);
           setOrdersState(ords || []);

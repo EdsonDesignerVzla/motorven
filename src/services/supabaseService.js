@@ -808,7 +808,7 @@ const mapProductToDb = (p) => {
     aplicaIva: p.aplicaIva !== undefined ? p.aplicaIva : (p.aplica_iva !== undefined ? p.aplica_iva : true),
     color_etiqueta: p.colorEtiqueta || p.color_etiqueta || '#002b7a',
     colorEtiqueta: p.colorEtiqueta || p.color_etiqueta || '#002b7a',
-    imagen: p.imagen || '',
+    imagen: resolveFallbackProductImage(p),
     especificaciones: p.especificaciones || {},
     linea: hierarchy.linea,
     linea_descripcion: hierarchy.linea_descripcion,
@@ -829,6 +829,77 @@ const mapProductToDb = (p) => {
     ubicacion: p.ubicacion || '01: Almacén Principal • 02: Almacén Central',
     updated_at: p.updated_at || new Date().toISOString()
   };
+};
+
+const INVENTORY_RECONCILE_EPOCH_KEY = 'signum_inventory_reconcile_epoch';
+const INVENTORY_RECONCILE_EPOCH = '2026-11-18_reconciled_v1';
+const INVENTORY_RECONCILE_CUTOFF_ISO = '2026-11-18T21:00:00.000Z';
+
+// Invalida cachés de inventario y deltas pre-conciliación para evitar que pestañas previas muestren/reapliquen saldos inflados
+export const ensureInventoryReconcileEpoch = () => {
+  if (isTestEnv || typeof localStorage === 'undefined') return false;
+  try {
+    if (localStorage.getItem(INVENTORY_RECONCILE_EPOCH_KEY) === INVENTORY_RECONCILE_EPOCH) {
+      return false;
+    }
+    localStorage.removeItem('sm_products_v4_fiscal');
+    try {
+      const rawQueue = localStorage.getItem('signum_offline_sync_queue');
+      if (rawQueue) {
+        const parsed = JSON.parse(rawQueue);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter(item => {
+            if (!item || item.entity !== 'stock_delta') return true;
+            const ts = String(item.timestamp || item.createdAt || '');
+            return ts >= INVENTORY_RECONCILE_CUTOFF_ISO;
+          });
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem('signum_offline_sync_queue', JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch (_) {}
+    localStorage.setItem(INVENTORY_RECONCILE_EPOCH_KEY, INVENTORY_RECONCILE_EPOCH);
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
+const PRODUCT_LIGHT_COLUMNS = [
+  'id', 'codigo', 'co_art', 'sku', 'oem', 'descripcion', 'nombre', 'marca', 'categoria',
+  'viscosidad', 'norma_api', 'normaApi', 'presentaciones_disponibles', 'presentacionesDisponibles',
+  'unidad', 'litros_por_unidad', 'litrosPorUnidad',
+  'stock', 'stock_almacen_01', 'stockAlmacen01', 'stock_almacen_02', 'stockAlmacen02', 'stock_alm_01', 'stock_alm_02',
+  'comprometido', 'stock_minimo', 'stockMinimo',
+  'costo_usd', 'costoUsd', 'costo', 'costo_usd_01', 'costoUsd01', 'costo_usd_02', 'costoUsd02',
+  'precio_usd_detal', 'precioUsdDetal', 'precio_usd_detal_01', 'precioUsdDetal01', 'precio_usd_detal_02', 'precioUsdDetal02',
+  'precio_usd_mayor', 'precioUsdMayor', 'precio_usd_mayor_01', 'precioUsdMayor01', 'precio_usd_mayor_02', 'precioUsdMayor02',
+  'precio', 'precioUsd', 'precioVenta', 'aplica_iva', 'aplicaIva', 'color_etiqueta', 'colorEtiqueta',
+  'especificaciones', 'linea', 'linea_descripcion', 'lineaDescripcion', 'co_lin', 'coLin',
+  'familia', 'familia_descripcion', 'familiaDescripcion', 'co_sub', 'coSub', 'co_cat', 'coCat', 'co_subl', 'coSubl',
+  'almacen', 'co_alm', 'coAlm', 'almacenes', 'ubicacion', 'anulado', 'inactivo', 'updated_at'
+].join(',');
+
+const REAL_PRODUCT_IMAGE_BY_KEY = (() => {
+  const map = new Map();
+  if (Array.isArray(REAL_PRODUCTS)) {
+    for (const rp of REAL_PRODUCTS) {
+      if (!rp || !rp.imagen) continue;
+      if (rp.id) map.set(String(rp.id).trim().toUpperCase(), rp.imagen);
+      if (rp.codigo) map.set(String(rp.codigo).trim().toUpperCase(), rp.imagen);
+    }
+  }
+  return map;
+})();
+
+const resolveFallbackProductImage = (p) => {
+  if (p?.imagen) return p.imagen;
+  const kId = String(p?.id || '').trim().toUpperCase();
+  const kCode = String(p?.codigo || p?.co_art || '').trim().toUpperCase();
+  if (kCode && REAL_PRODUCT_IMAGE_BY_KEY.has(kCode)) return REAL_PRODUCT_IMAGE_BY_KEY.get(kCode);
+  if (kId && REAL_PRODUCT_IMAGE_BY_KEY.has(kId)) return REAL_PRODUCT_IMAGE_BY_KEY.get(kId);
+  return '';
 };
 
 const mapProductFromDb = (p) => {
@@ -903,7 +974,7 @@ const mapProductFromDb = (p) => {
     aplica_iva: p.aplica_iva !== undefined ? p.aplica_iva : (p.aplicaIva !== undefined ? p.aplicaIva : true),
     colorEtiqueta: p.color_etiqueta || p.colorEtiqueta || '#002b7a',
     color_etiqueta: p.color_etiqueta || p.colorEtiqueta || '#002b7a',
-    imagen: p.imagen || '',
+    imagen: resolveFallbackProductImage(p),
     especificaciones: p.especificaciones || {},
     linea: hierarchy.linea,
     linea_descripcion: hierarchy.linea_descripcion,
@@ -2148,11 +2219,12 @@ export const getSupabaseProducts = async () => {
       : [];
 
   // 1. FUENTE MAESTRA DE DATOS: Supabase Cloud (DB_SIGNUM_MOTORVEN)
-  // Almacena productos íntegros con imágenes en Base64, viscosidades y especificaciones completas
+  // Solicita columnas livianas (sin imagen Base64) y reconstituye imagen local para evitar timeouts en túnel HTTPS
   if (isNetworkOnline()) {
     try {
       const { data, error } = await withTimeout(
-        supabase.from('products').select('*').order('codigo', { ascending: true })
+        supabase.from('products').select(PRODUCT_LIGHT_COLUMNS).order('codigo', { ascending: true }),
+        45000
       );
 
       if (!error && Array.isArray(data) && data.length > 0) {
@@ -9432,9 +9504,11 @@ export const getSupabaseProfitTaxRates = async () => {
 
 export const getSupabaseProfitStockByWarehouse = async (coArt = null) => {
   try {
-    let query = supabase.from('profit_stock_by_warehouse').select('*');
+    let query = supabase
+      .from('profit_stock_by_warehouse')
+      .select('id,co_art,co_alma,codigo,oem,descripcion,nombre,unidad,litros_por_unidad,stock_act,stock_com,stock_lle,stock_des,stock_disp,updated_at,des_alma,alma_des,costo_usd,precio_usd_detal,precio_usd_mayor');
     if (coArt) query = query.eq('co_art', coArt);
-    const { data, error } = await query;
+    const { data, error } = await withTimeout(query, 30000);
     if (error) throw error;
     return data || [];
   } catch (err) {

@@ -2049,6 +2049,24 @@ const server = http.createServer(async (req, res) => {
         filtered = filtered.slice(offsetParam, offsetParam + limitParam);
       }
 
+      // Proyección de columnas (?select=id,codigo,...) para omitir blobs base64 pesados cuando no se piden
+      const selectParam = String(url.searchParams.get('select') || '').trim();
+      if (selectParam && !selectParam.includes('*') && !selectParam.includes('(') && !selectParam.includes(':')) {
+        const cols = selectParam.split(',').map(c => c.trim()).filter(Boolean);
+        if (cols.length > 0) {
+          filtered = filtered.map(row => {
+            if (!row || typeof row !== 'object') return row;
+            const projected = {};
+            for (const col of cols) {
+              if (Object.prototype.hasOwnProperty.call(row, col)) {
+                projected[col] = row[col];
+              }
+            }
+            return projected;
+          });
+        }
+      }
+
       // Headers de rango
       const endRange = filtered.length > 0 ? offsetParam + filtered.length - 1 : 0;
       const rangeHeader = `${offsetParam}-${endRange}/${totalCount}`;

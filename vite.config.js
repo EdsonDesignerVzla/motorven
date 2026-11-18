@@ -7,11 +7,11 @@ import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 let localSupabaseProc = null;
-const COMPANY_SERVER_HOST = process.env.COMPANY_SERVER_HOST || '192.168.0.6';
+const COMPANY_SERVER_HOST = process.env.COMPANY_SERVER_HOST || '192.168.0.3';
 
 function ensureLocalSupabaseRunning() {
   if (localSupabaseProc) return;
-  // Verificar primero si el servidor central de la empresa (SVR-MOTORVEN 192.168.0.6) está activo
+  // Verificar primero si el servidor central de la empresa (SVR-MOTORVEN 192.168.0.3) está activo
   const srvSocket = new net.Socket();
   srvSocket.setTimeout(800);
   srvSocket.once('connect', () => {

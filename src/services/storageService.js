@@ -126,11 +126,17 @@ export const initStorage = () => {
     const parsedOrders = rawOrders ? JSON.parse(rawOrders) : [];
     const hasOrphanedOilOrderItems =
       Array.isArray(parsedOrders) &&
-      parsedOrders.some(o =>
-        !Array.isArray(o?.items) ||
-        o.items.length === 0 ||
-        o.items.some(it => String(it?.articuloId || it?.productoId || it?.codigo || '').startsWith('OIL-'))
-      );
+      parsedOrders.some(o => {
+        const isClientReq =
+          String(o?.id || '').startsWith('SOL-CLI-') ||
+          String(o?.tipoDoc || o?.tipo_doc || '').toUpperCase() === 'SOLICITUD_CLIENTE';
+        if (isClientReq) return false;
+        return (
+          !Array.isArray(o?.items) ||
+          o.items.length === 0 ||
+          o.items.some(it => String(it?.articuloId || it?.productoId || it?.codigo || '').startsWith('OIL-'))
+        );
+      });
     if (!Array.isArray(parsedOrders) || parsedOrders.length < 1 || hasOrphanedOilOrderItems) {
       localStorage.setItem(KEYS.ORDERS, JSON.stringify(REAL_ORDERS));
     }
