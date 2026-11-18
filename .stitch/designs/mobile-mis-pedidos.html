@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+
+<html lang="es"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_tab" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;family=JetBrains+Mono:wght@700&amp;family=Orbitron:wght@700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "surface-variant": "#e3e2e9", "on-secondary-container": "#fffbff", "dark-surface": "#0a1326", "surface-container": "#f1f5f9", "dark-background": "#060913", "surface-container-low": "#f8fafc", "on-error-container": "#dc2626", "outline-variant": "#c4c6d3", "surface-tint": "#3d5aa9", "surface-bright": "#ffffff", "on-secondary-fixed-variant": "#930007", "on-background": "#090d16", "on-tertiary-fixed-variant": "#004b73", "on-error": "#ffffff", "inverse-primary": "#b4c5ff", "outline": "#94a3b8", "tertiary-container": "#e0f2fe", "surface-container-high": "#e2e8f0", "error-container": "#ffdad6", "on-primary-fixed": "#00174b", "secondary-fixed": "#ffdad5", "surface": "#ffffff", "surface-container-highest": "#e3e2e9", "inverse-surface": "#2f3036", "on-primary": "#ffffff", "surface-dim": "#dad9e0", "inverse-on-surface": "#f1f0f7", "on-surface-variant": "#444651", "primary-container": "#002b7a", "tertiary-fixed-dim": "#93ccff", "on-secondary": "#ffffff", "on-tertiary-container": "#0369a1", "surface-container-lowest": "#ffffff", "dark-surface-elevated": "#0c1427", "on-surface": "#1a1b21", "on-primary-container": "#7b96ea", "on-tertiary": "#ffffff", "error": "#ef4444", "tertiary-fixed": "#cce5ff", "secondary": "#bc000c", "on-tertiary-fixed": "#001d31", "on-primary-fixed-variant": "#224290", "tertiary": "#001f34", "background": "#f1f5f9", "success": "#10b981", "secondary-container": "#e90614", "primary": "#00184d", "on-secondary-fixed": "#410001", "dark-accent-cyan": "#38bdf8", "warning": "#ffb703", "primary-fixed": "#dbe1ff", "secondary-fixed-dim": "#ffb4aa", "primary-fixed-dim": "#b4c5ff" }, borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" }, spacing: { "margin-desktop": "24px", "space-md": "16px", "space-xl": "32px", "margin-mobile": "16px", "space-sm": "8px", "space-lg": "24px", "gutter": "16px", "space-xs": "4px" }, fontFamily: { "headline-md": ["Orbitron"], "body-base": ["Inter"], "data-mono": ["JetBrains Mono"], "label-caps": ["Orbitron"], "display-tech": ["Orbitron"], "body-bold": ["Inter"] }, fontSize: { "headline-md": ["16px", { lineHeight: "22px", letterSpacing: "0.03em", fontWeight: "700" }], "body-base": ["14px", { lineHeight: "21px", letterSpacing: "0", fontWeight: "400" }], "data-mono": ["13px", { lineHeight: "18px", letterSpacing: "0", fontWeight: "700" }], "label-caps": ["11px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "800" }], "display-tech": ["20px", { lineHeight: "26px", letterSpacing: "0.04em", fontWeight: "800" }], "body-bold": ["14px", { lineHeight: "20px", letterSpacing: "0", fontWeight: "700" }] } } } };</script><style>@layer base{html,body{width:100vw;margin:0;padding:0;}body{overscroll-behavior:none;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-background font-body-base text-body-base text-on-surface antialiased flex flex-col min-h-screen"><header class="fixed top-0 w-full z-50 pt-safe bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]"><div class="h-[52px] px-margin-mobile flex items-center justify-between gap-space-xs"><div class="flex items-center gap-space-xs min-w-0 shrink-0"><div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-sm"><span class="material-symbols-outlined text-on-primary text-[18px]">oil_barrel</span></div><div class="flex flex-col leading-none"><span class="font-label-caps text-label-caps text-primary tracking-wider">SIGNUM</span><span class="font-label-caps text-[9px] font-extrabold text-secondary tracking-widest leading-none">MOTORVEN</span></div></div><div class="flex items-center justify-center px-space-xs"><div class="flex items-center gap-1 bg-surface-container px-space-xs py-0.5 rounded-lg border-none shadow-[0_1px_4px_rgba(0,0,0,0.02)]"><span class="font-data-mono text-[11px] leading-[14px] font-bold text-on-surface-variant">BCV:</span><span class="font-data-mono text-[11px] leading-[14px] font-bold text-primary">911,62 Bs.</span></div></div><div class="flex items-center gap-1 shrink-0"><button aria-label="Cambiar tema" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-on-surface active:scale-95 transition-transform"><span class="material-symbols-outlined text-[20px]">light_mode</span></button><button aria-label="Modo PC Escritorio" class="min-h-[44px] min-w-[44px] px-2 py-1 flex items-center justify-center gap-1 rounded-lg bg-surface-container-high text-primary hover:bg-surface-variant active:scale-95 transition-all"><span class="material-symbols-outlined text-[16px]">desktop_windows</span><span class="font-label-caps text-[10px] font-bold">PC</span></button><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0 ml-0.5"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div></header><main class="flex flex-col relative w-full pt-[52px] pb-[58px] bg-background min-h-screen"><div class="flex flex-col w-full pb-16">
+<!-- Top Switcher: Mis Pedidos vs Nuevo Pedido -->
+<section class="px-margin-mobile pt-space-sm pb-space-xs">
+<div class="bg-surface-container p-1 rounded-xl flex items-center shadow-sm">
+<button class="flex-1 py-2 px-3 rounded-lg bg-surface text-primary shadow-sm flex items-center justify-center gap-1.5 transition-all" id="tab-orders">
+<span class="material-symbols-outlined text-[17px] text-primary" style="font-variation-settings: 'FILL' 1;">receipt_long</span>
+<span class="font-label-caps text-label-caps tracking-wider font-bold">Mis Pedidos</span>
+<span class="bg-secondary-container text-on-secondary px-1.5 py-0.2 rounded-full font-data-mono text-[10px] leading-tight">12</span>
+</button>
+<button class="flex-1 py-2 px-3 rounded-lg text-on-surface-variant hover:text-on-surface flex items-center justify-center gap-1.5 transition-all active:scale-95" id="tab-new-order">
+<span class="material-symbols-outlined text-[17px]">post_add</span>
+<span class="font-label-caps text-label-caps tracking-wider">Nuevo Pedido</span>
+<span class="material-symbols-outlined text-[14px] text-secondary">add_circle</span>
+</button>
+</div>
+</section>
+<!-- Live Telemetry KPI Metrics -->
+<section class="px-margin-mobile py-space-xs">
+<div class="grid grid-cols-3 gap-2">
+<!-- KPI 1 -->
+<div class="bg-surface p-2.5 rounded-xl shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="absolute -right-2 -bottom-2 w-10 h-10 rounded-full bg-surface-container-high opacity-40 pointer-events-none"></div>
+<div class="flex items-center justify-between mb-1">
+<span class="font-label-caps text-[9px] text-on-surface-variant leading-none uppercase">Preventa Activa</span>
+<span class="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></span>
+</div>
+<div>
+<span class="font-data-mono text-data-mono text-primary block leading-tight">$9,420.00</span>
+<span class="font-data-mono text-[9px] text-on-surface-variant block mt-0.5 truncate">Bs. 8.587.460</span>
+</div>
+</div>
+<!-- KPI 2 -->
+<div class="bg-surface p-2.5 rounded-xl shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="absolute -right-2 -bottom-2 w-10 h-10 rounded-full bg-warning/10 pointer-events-none"></div>
+<div class="flex items-center justify-between mb-1">
+<span class="font-label-caps text-[9px] text-on-surface-variant leading-none uppercase">Por Aprobar</span>
+<span class="material-symbols-outlined text-[12px] text-warning">pending_actions</span>
+</div>
+<div>
+<span class="font-data-mono text-data-mono text-on-surface block leading-tight">3 Docs</span>
+<span class="font-data-mono text-[9px] text-secondary font-bold block mt-0.5 truncate">$3,150.00</span>
+</div>
+</div>
+<!-- KPI 3 -->
+<div class="bg-surface p-2.5 rounded-xl shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="absolute -right-2 -bottom-2 w-10 h-10 rounded-full bg-tertiary-fixed-dim/20 pointer-events-none"></div>
+<div class="flex items-center justify-between mb-1">
+<span class="font-label-caps text-[9px] text-on-surface-variant leading-none uppercase">En Almacén</span>
+<span class="material-symbols-outlined text-[13px] text-tertiary-fixed-dim">local_shipping</span>
+</div>
+<div>
+<span class="font-data-mono text-data-mono text-primary block leading-tight">2 Camiones</span>
+<span class="font-data-mono text-[9px] text-success block mt-0.5 truncate">En Logística</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Search & Fast Filters -->
+<section class="px-margin-mobile pt-space-xs pb-space-sm space-y-2">
+<!-- Input box -->
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-on-surface-variant text-[18px]">search</span>
+<input class="w-full bg-surface py-2.5 pl-9 pr-10 rounded-xl text-body-base font-body-base text-on-surface placeholder:text-outline focus:outline-none shadow-sm" id="order-search" placeholder="Buscar cliente, N° PED o RIF..." type="text"/>
+<button class="absolute right-2 w-7 h-7 rounded-lg bg-surface-container flex items-center justify-center text-on-surface-variant hover:text-primary active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[16px]">tune</span>
+</button>
+</div>
+<!-- Filter Pills Carousel -->
+<div class="flex items-center gap-1.5 overflow-x-auto pb-1 -mx-margin-mobile px-margin-mobile scrollbar-none">
+<button class="filter-pill shrink-0 px-2.5 py-1.5 rounded-lg bg-primary text-on-primary font-label-caps text-[10px] tracking-wider flex items-center gap-1 shadow-sm active:scale-95 transition-transform" data-filter="all">
+<span>Todos</span>
+<span class="font-data-mono text-[9px] opacity-80">(12)</span>
+</button>
+<button class="filter-pill shrink-0 px-2.5 py-1.5 rounded-lg bg-surface text-on-surface font-label-caps text-[10px] tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition-transform hover:bg-surface-container" data-filter="pending">
+<span class="w-2 h-2 rounded-full bg-warning"></span>
+<span>Pendiente Crédito</span>
+<span class="font-data-mono text-[9px] text-on-surface-variant">(3)</span>
+</button>
+<button class="filter-pill shrink-0 px-2.5 py-1.5 rounded-lg bg-surface text-on-surface font-label-caps text-[10px] tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition-transform hover:bg-surface-container" data-filter="approved">
+<span class="w-2 h-2 rounded-full bg-success"></span>
+<span>Aprobado Crédito</span>
+<span class="font-data-mono text-[9px] text-on-surface-variant">(6)</span>
+</button>
+<button class="filter-pill shrink-0 px-2.5 py-1.5 rounded-lg bg-surface text-on-surface font-label-caps text-[10px] tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition-transform hover:bg-surface-container" data-filter="dispatch">
+<span class="w-2 h-2 rounded-full bg-dark-accent-cyan"></span>
+<span>En Almacén</span>
+<span class="font-data-mono text-[9px] text-on-surface-variant">(2)</span>
+</button>
+<button class="filter-pill shrink-0 px-2.5 py-1.5 rounded-lg bg-surface text-on-surface font-label-caps text-[10px] tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition-transform hover:bg-surface-container" data-filter="billed">
+<span class="w-2 h-2 rounded-full bg-surface-tint"></span>
+<span>Facturado</span>
+<span class="font-data-mono text-[9px] text-on-surface-variant">(1)</span>
+</button>
+</div>
+</section>
+<!-- Document Card Stream -->
+<section class="px-margin-mobile space-y-3" id="orders-list">
+<!-- Card 1: Pendiente por Crédito -->
+<article class="bg-surface rounded-xl p-3.5 shadow-sm flex flex-col gap-2.5 relative overflow-hidden transition-all" data-status="pending">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-7 h-7 rounded-lg bg-warning/15 flex items-center justify-center text-warning">
+<span class="material-symbols-outlined text-[16px]">hourglass_top</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-md text-headline-md text-primary tracking-wide leading-none">PED-0145</span>
+<span class="font-data-mono text-[10px] text-on-surface-variant mt-0.5">Hoy • 10:15 AM</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-warning/20 text-on-surface font-label-caps text-[9px] font-extrabold tracking-wider flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-warning animate-ping"></span>
+          PENDIENTE CRÉDITO
+        </span>
+</div>
+<!-- Customer Details -->
+<div class="bg-surface-container-low p-2.5 rounded-lg space-y-1">
+<div class="flex items-center justify-between">
+<span class="font-body-bold text-body-bold text-on-surface flex items-center gap-1 truncate">
+            Lubricantes Centro C.A.
+          </span>
+<span class="font-data-mono text-[10px] text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded">Alm 01</span>
+</div>
+<p class="font-data-mono text-[10px] text-on-surface-variant flex items-center gap-1">
+<span>RIF: J-30981234-1</span>
+<span>•</span>
+<span class="truncate">Valencia, Carabobo</span>
+</p>
+<div class="pt-1 flex items-start gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-secondary shrink-0 mt-0.5">inventory</span>
+<span class="font-body-base text-[12px] text-on-surface leading-tight">4 Cjs Oilstone 15W-40 + 2 Pails 20W-50 <span class="font-data-mono text-[11px] text-primary font-bold">(86 Lts)</span></span>
+</div>
+</div>
+<!-- Financial Calculation -->
+<div class="flex items-end justify-between px-1">
+<div>
+<span class="font-label-caps text-[9px] text-on-surface-variant block uppercase">Total Documento</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-data-mono text-[16px] font-bold text-primary">$317.00</span>
+<span class="font-data-mono text-[11px] text-on-surface-variant font-bold">/ Bs. 288.983,54</span>
+</div>
+</div>
+<div class="text-right">
+<span class="font-data-mono text-[9px] text-outline block">TASA BCV: 911,62</span>
+</div>
+</div>
+<!-- Action Button Grid -->
+<div class="grid grid-cols-5 gap-2 pt-1">
+<button class="col-span-4 bg-primary text-on-primary py-2 px-3 rounded-lg font-label-caps text-label-caps tracking-wider flex items-center justify-center gap-1.5 active:scale-98 transition-transform shadow-sm">
+<span class="material-symbols-outlined text-[15px]">visibility</span>
+<span>Ver Detalle Preventa</span>
+</button>
+<button aria-label="WhatsApp Cliente" class="col-span-1 bg-surface-container-high text-success hover:bg-success/10 py-2 rounded-lg flex items-center justify-center active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[18px]">chat</span>
+</button>
+</div>
+</article>
+<!-- Card 2: Aprobado en Preparación de Almacén -->
+<article class="bg-surface rounded-xl p-3.5 shadow-sm flex flex-col gap-2.5 relative overflow-hidden transition-all" data-status="dispatch">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-7 h-7 rounded-lg bg-dark-accent-cyan/15 flex items-center justify-center text-dark-accent-cyan">
+<span class="material-symbols-outlined text-[16px]">forklift</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-md text-headline-md text-primary tracking-wide leading-none">PED-0144</span>
+<span class="font-data-mono text-[10px] text-on-surface-variant mt-0.5">Ayer • 04:30 PM</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-dark-accent-cyan/15 text-primary font-label-caps text-[9px] font-extrabold tracking-wider flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-dark-accent-cyan"></span>
+          EN ALMACÉN / DESPACHO
+        </span>
+</div>
+<!-- Customer Details -->
+<div class="bg-surface-container-low p-2.5 rounded-lg space-y-1">
+<div class="flex items-center justify-between">
+<span class="font-body-bold text-body-bold text-on-surface flex items-center gap-1 truncate">
+            Auto Repuestos Lara C.A.
+          </span>
+<span class="font-data-mono text-[10px] text-success bg-success/10 px-1.5 py-0.5 rounded font-bold">Crédito 15D</span>
+</div>
+<p class="font-data-mono text-[10px] text-on-surface-variant flex items-center gap-1">
+<span>RIF: J-30445120-8</span>
+<span>•</span>
+<span class="truncate">Barquisimeto, Lara</span>
+</p>
+<div class="pt-1 flex items-start gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-secondary shrink-0 mt-0.5">oil_barrel</span>
+<span class="font-body-base text-[12px] text-on-surface leading-tight">12 Cjs Oilstone 20W-50 Min + 1 Tambor Hidráulico AW68 <span class="font-data-mono text-[11px] text-primary font-bold">(352 Lts)</span></span>
+</div>
+</div>
+<!-- Financial Calculation -->
+<div class="flex items-end justify-between px-1">
+<div>
+<span class="font-label-caps text-[9px] text-on-surface-variant block uppercase">Monto Por Facturar</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-data-mono text-[16px] font-bold text-primary">$1,160.00</span>
+<span class="font-data-mono text-[11px] text-on-surface-variant font-bold">/ Bs. 1.057.479,20</span>
+</div>
+</div>
+<div class="text-right">
+<span class="font-data-mono text-[9px] text-success block font-bold">APROB. ADMIN</span>
+</div>
+</div>
+<!-- Action Button Grid -->
+<div class="grid grid-cols-2 gap-2 pt-1">
+<button class="bg-primary text-on-primary py-2 px-3 rounded-lg font-label-caps text-[10px] tracking-wider flex items-center justify-center gap-1 active:scale-98 transition-transform">
+<span class="material-symbols-outlined text-[15px]">local_shipping</span>
+<span>Rastrear Despacho</span>
+</button>
+<button class="bg-surface-container-high text-primary hover:bg-surface-variant py-2 px-3 rounded-lg font-label-caps text-[10px] tracking-wider flex items-center justify-center gap-1 active:scale-98 transition-transform">
+<span class="material-symbols-outlined text-[15px]">description</span>
+<span>Profit 2K8</span>
+</button>
+</div>
+</article>
+<!-- Card 3: Aprobado Crédito Listo -->
+<article class="bg-surface rounded-xl p-3.5 shadow-sm flex flex-col gap-2.5 relative overflow-hidden transition-all" data-status="approved">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-7 h-7 rounded-lg bg-success/15 flex items-center justify-center text-success">
+<span class="material-symbols-outlined text-[16px]">verified</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-md text-headline-md text-primary tracking-wide leading-none">PED-0143</span>
+<span class="font-data-mono text-[10px] text-on-surface-variant mt-0.5">Ayer • 11:20 AM</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-success/15 text-success font-label-caps text-[9px] font-extrabold tracking-wider flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+          APROBADO CRÉDITO
+        </span>
+</div>
+<!-- Customer Details -->
+<div class="bg-surface-container-low p-2.5 rounded-lg space-y-1">
+<div class="flex items-center justify-between">
+<span class="font-body-bold text-body-bold text-on-surface flex items-center gap-1 truncate">
+            Serviteca Los Próceres
+          </span>
+<span class="font-data-mono text-[10px] text-primary bg-primary-fixed px-1.5 py-0.5 rounded font-bold">Contado Verif.</span>
+</div>
+<p class="font-data-mono text-[10px] text-on-surface-variant flex items-center gap-1">
+<span>RIF: J-29837461-0</span>
+<span>•</span>
+<span class="truncate">Caracas, Dtto. Capital</span>
+</p>
+<div class="pt-1 flex items-start gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-secondary shrink-0 mt-0.5">two_wheeler</span>
+<span class="font-body-base text-[12px] text-on-surface leading-tight">6 Cjs Oilstone Moto 4T 20W-50 <span class="font-data-mono text-[11px] text-primary font-bold">(72 Litros)</span></span>
+</div>
+</div>
+<!-- Financial Calculation -->
+<div class="flex items-end justify-between px-1">
+<div>
+<span class="font-label-caps text-[9px] text-on-surface-variant block uppercase">Liquidación Total</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-data-mono text-[16px] font-bold text-primary">$252.00</span>
+<span class="font-data-mono text-[11px] text-on-surface-variant font-bold">/ Bs. 229.728,24</span>
+</div>
+</div>
+<div class="text-right">
+<span class="font-data-mono text-[9px] text-outline block">BANCO MERCANTIL</span>
+</div>
+</div>
+<!-- Action Button Grid -->
+<div class="grid grid-cols-5 gap-2 pt-1">
+<button class="col-span-4 bg-primary text-on-primary py-2 px-3 rounded-lg font-label-caps text-label-caps tracking-wider flex items-center justify-center gap-1.5 active:scale-98 transition-transform shadow-sm">
+<span class="material-symbols-outlined text-[15px]">receipt</span>
+<span>Ver Detalle</span>
+</button>
+<button aria-label="Descargar PDF" class="col-span-1 bg-surface-container-high text-primary hover:bg-surface-variant py-2 rounded-lg flex items-center justify-center active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+</button>
+</div>
+</article>
+<!-- Card 4: Facturado / Despachado -->
+<article class="bg-surface rounded-xl p-3.5 shadow-sm flex flex-col gap-2.5 relative overflow-hidden transition-all opacity-90" data-status="billed">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-7 h-7 rounded-lg bg-surface-container-high flex items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">check_circle</span>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center gap-1.5">
+<span class="font-headline-md text-headline-md text-primary tracking-wide leading-none">PED-0142</span>
+<span class="font-data-mono text-[9px] bg-primary text-on-primary px-1 rounded">FAC-000138</span>
+</div>
+<span class="font-data-mono text-[10px] text-on-surface-variant mt-0.5">23/02/2025 • Completado</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-surface-container-high text-on-surface-variant font-label-caps text-[9px] font-extrabold tracking-wider">
+          FACTURADO
+        </span>
+</div>
+<!-- Customer Details -->
+<div class="bg-surface-container-low p-2.5 rounded-lg space-y-1">
+<div class="flex items-center justify-between">
+<span class="font-body-bold text-body-bold text-on-surface flex items-center gap-1 truncate">
+            Distribuidora Oriental de Filtros C.A.
+          </span>
+<span class="font-data-mono text-[10px] text-on-surface-variant">Barcelona</span>
+</div>
+<div class="flex items-baseline justify-between pt-0.5">
+<span class="font-data-mono text-[15px] font-bold text-primary">$1,240.00</span>
+<span class="font-data-mono text-[11px] text-on-surface-variant font-bold">Bs. 1.130.408,80</span>
+</div>
+</div>
+<!-- Action Button Grid -->
+<div class="flex items-center justify-between pt-1">
+<span class="font-data-mono text-[10px] text-success flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]">done_all</span> Entrega certificada
+        </span>
+<button class="bg-surface-container px-3 py-1.5 rounded-lg font-label-caps text-[10px] text-primary tracking-wider flex items-center gap-1 hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-[14px]">receipt_long</span>
+<span>Ver Factura</span>
+</button>
+</div>
+</article>
+</section>
+<!-- Industrial Empty Search State (Hidden by default) -->
+<div class="hidden px-margin-mobile py-8 flex flex-col items-center justify-center text-center" id="search-empty">
+<div class="w-14 h-14 rounded-2xl bg-surface-container flex items-center justify-center mb-3 text-on-surface-variant">
+<span class="material-symbols-outlined text-[28px]">manage_search</span>
+</div>
+<span class="font-headline-md text-headline-md text-primary">Sin coincidencias</span>
+<p class="font-body-base text-body-base text-on-surface-variant max-w-[240px] mt-1">No se encontraron pedidos con los términos introducidos.</p>
+<button class="mt-3 px-3 py-1.5 rounded-lg bg-surface-container-high text-primary font-label-caps text-[10px]" id="reset-search-btn">Restablecer filtros</button>
+</div>
+<!-- Floating Quick CTA Button -->
+<div class="fixed right-4 bottom-20 z-40">
+<button aria-label="Crear Nuevo Pedido" class="flex items-center gap-2 bg-secondary text-on-secondary px-4 py-3 rounded-full shadow-lg active:scale-95 transition-transform hover:shadow-xl">
+<span class="material-symbols-outlined text-[20px]">add</span>
+<span class="font-label-caps text-[11px] tracking-wider font-extrabold uppercase pr-1">Nuevo Pedido</span>
+</button>
+</div>
+</div>
+<script>
+  // Tab Switcher feedback
+  const tabOrders = document.getElementById('tab-orders');
+  const tabNewOrder = document.getElementById('tab-new-order');
+
+  if (tabOrders && tabNewOrder) {
+    tabNewOrder.addEventListener('click', () => {
+      tabNewOrder.classList.add('bg-surface', 'text-primary', 'shadow-sm');
+      tabNewOrder.classList.remove('text-on-surface-variant');
+      tabOrders.classList.remove('bg-surface', 'text-primary', 'shadow-sm');
+      tabOrders.classList.add('text-on-surface-variant');
+    });
+
+    tabOrders.addEventListener('click', () => {
+      tabOrders.classList.add('bg-surface', 'text-primary', 'shadow-sm');
+      tabOrders.classList.remove('text-on-surface-variant');
+      tabNewOrder.classList.remove('bg-surface', 'text-primary', 'shadow-sm');
+      tabNewOrder.classList.add('text-on-surface-variant');
+    });
+  }
+
+  // Filter Pills logic
+  const pills = document.querySelectorAll('.filter-pill');
+  const cards = document.querySelectorAll('#orders-list article');
+  const emptyState = document.getElementById('search-empty');
+  const searchInput = document.getElementById('order-search');
+  const resetBtn = document.getElementById('reset-search-btn');
+
+  let currentFilter = 'all';
+
+  function applyFilters() {
+    const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    let visibleCount = 0;
+
+    cards.forEach(card => {
+      const status = card.getAttribute('data-status');
+      const text = card.innerText.toLowerCase();
+
+      const matchesFilter = currentFilter === 'all' || status === currentFilter;
+      const matchesSearch = query === '' || text.includes(query);
+
+      if (matchesFilter && matchesSearch) {
+        card.style.display = 'flex';
+        visibleCount++;
+      } else {
+        card.style.display = 'none';
+      }
+    });
+
+    if (emptyState) {
+      if (visibleCount === 0) {
+        emptyState.classList.remove('hidden');
+      } else {
+        emptyState.classList.add('hidden');
+      }
+    }
+  }
+
+  pills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      pills.forEach(p => {
+        p.classList.remove('bg-primary', 'text-on-primary');
+        p.classList.add('bg-surface', 'text-on-surface');
+      });
+      pill.classList.remove('bg-surface', 'text-on-surface');
+      pill.classList.add('bg-primary', 'text-on-primary');
+
+      currentFilter = pill.getAttribute('data-filter') || 'all';
+      applyFilters();
+    });
+  });
+
+  if (searchInput) {
+    searchInput.addEventListener('input', applyFilters);
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      if (searchInput) searchInput.value = '';
+      currentFilter = 'all';
+      pills.forEach((p, idx) => {
+        if (idx === 0) {
+          p.classList.add('bg-primary', 'text-on-primary');
+          p.classList.remove('bg-surface', 'text-on-surface');
+        } else {
+          p.classList.remove('bg-primary', 'text-on-primary');
+          p.classList.add('bg-surface', 'text-on-surface');
+        }
+      });
+      applyFilters();
+    });
+  }
+</script></main><nav class="fixed bottom-0 w-full z-50 pb-safe bg-surface/90 backdrop-blur-xl shadow-[0_-2px_12px_rgba(0,0,0,0.05)]" data-active-classes="text-secondary"><div class="h-[58px] px-space-xs flex items-center justify-around"><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="inicio" href="#"><span class="material-symbols-outlined text-[20px]">grid_view</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Inicio</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="pedidos" href="#"><span class="material-symbols-outlined text-[20px]">receipt_long</span><span class="absolute top-1 right-2 w-4 h-4 rounded-full bg-secondary-container text-on-secondary flex items-center justify-center font-data-mono text-[9px] font-bold leading-none ring-2 ring-surface">3</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Pedidos</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all relative" data-path="cobranzas" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="absolute top-1 right-2 w-4 h-4 rounded-full bg-primary-container text-on-primary flex items-center justify-center font-data-mono text-[9px] font-bold leading-none ring-2 ring-surface">2</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Cobranzas</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="stock" href="#"><span class="material-symbols-outlined text-[20px]">inventory_2</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Stock</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="menu" href="#"><span class="material-symbols-outlined text-[20px]">menu</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Menú</span></a></div></nav></body></html>

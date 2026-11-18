@@ -1,0 +1,105 @@
+{
+  "appName": "SIGNUM MOTORVEN",
+  "company": "GRUPO MOTORVEN C.A.",
+  "brand": "OILSTONE ® por KEYSTONE, C.A.",
+  "stitchProjectId": "17692548586694665195",
+  "stitchProjectName": "projects/17692548586694665195",
+  "stitchDesignSystemId": "assets/aedd06a117d24acdb9e2e50a3de77862",
+  "stitchDesignSystemVersion": "1",
+  "designMdScreenInstance": {
+    "id": "14291128053803001510",
+    "sourceScreen": "projects/17692548586694665195/screens/14291128053803001510"
+  },
+  "designMdPath": ".stitch/DESIGN.md",
+  "specAntigravityPath": ".stitch/SPEC_ANTIGRAVITY.md",
+  "specInventarioPath": ".stitch/SPEC_INVENTARIO_ANTIGRAVITY.md",
+  "specScreenInstance": {
+    "id": "298340f68cd54539a5aa5050eb2c2ad2",
+    "sourceScreen": "projects/17692548586694665195/screens/298340f68cd54539a5aa5050eb2c2ad2"
+  },
+  "defaultTheme": "light",
+  "supportedThemes": ["light", "dark"],
+  "lastSyncTime": "2026-11-18T16:00:00Z",
+  "screens": {
+    "mobile-home": {
+      "id": "b477327771854b8c83d5576d6794a8a2",
+      "sourceScreen": "projects/17692548586694665195/screens/b477327771854b8c83d5576d6794a8a2",
+      "title": "SIGNUM MOTORVEN • Mobile PWA Telemetría",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-home-v2.html",
+      "screenshotPath": ".stitch/designs/mobile-home-v2.png"
+    },
+    "mobile-cxc": {
+      "id": "37d6a61fd51048ba8291d4723cb2dfda",
+      "sourceScreen": "projects/17692548586694665195/screens/37d6a61fd51048ba8291d4723cb2dfda",
+      "title": "SIGNUM MOTORVEN • Cobranzas CxC Móvil",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-cxc.html",
+      "screenshotPath": ".stitch/designs/mobile-cxc.png"
+    },
+    "mobile-stock": {
+      "id": "ccc43334b5c04af1aaa90bf3be2ba7e8",
+      "sourceScreen": "projects/17692548586694665195/screens/ccc43334b5c04af1aaa90bf3be2ba7e8",
+      "title": "SIGNUM MOTORVEN • Catálogo e Inventario de Stock",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-stock.html",
+      "screenshotPath": ".stitch/designs/mobile-stock.png"
+    },
+    "mobile-menu": {
+      "id": "6eff73304c17483faf4a79320aa88e5b",
+      "sourceScreen": "projects/17692548586694665195/screens/6eff73304c17483faf4a79320aa88e5b",
+      "title": "SIGNUM MOTORVEN • Menú Maestro PWA",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-menu.html",
+      "screenshotPath": ".stitch/designs/mobile-menu.png"
+    },
+    "mobile-pedidos": {
+      "id": "515de49db77044f796bed7a625359716",
+      "sourceScreen": "projects/17692548586694665195/screens/515de49db77044f796bed7a625359716",
+      "title": "SIGNUM MOTORVEN • Pedidos y Preventa Móvil",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-pedidos.html",
+      "screenshotPath": ".stitch/designs/mobile-pedidos.png"
+    },
+    "mobile-preventa-vendedor": {
+      "id": "a682b5c790764683a761706349fbec20",
+      "sourceScreen": "projects/17692548586694665195/screens/a682b5c790764683a761706349fbec20",
+      "title": "SIGNUM MOTORVEN • Preventa Móvil Vendedor",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-preventa-vendedor.html",
+      "screenshotPath": ".stitch/designs/mobile-preventa-vendedor.jpg"
+    },
+    "mobile-cartera-vendedor": {
+      "id": "f57b4747d8db44ccab7771e45c67bb9d",
+      "sourceScreen": "projects/17692548586694665195/screens/f57b4747d8db44ccab7771e45c67bb9d",
+      "title": "SIGNUM MOTORVEN • Cartera & Deuda CxC Vendedor",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-cartera-vendedor.html",
+      "screenshotPath": ".stitch/designs/mobile-cartera-vendedor.jpg"
+    },
+    "mobile-mis-pedidos": {
+      "id": "0c5813f2e8374245829af1fd17a1600b",
+      "sourceScreen": "projects/17692548586694665195/screens/0c5813f2e8374245829af1fd17a1600b",
+      "title": "SIGNUM MOTORVEN • Mis Pedidos Preventa",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-mis-pedidos.html",
+      "screenshotPath": ".stitch/designs/mobile-mis-pedidos.png"
+    },
+    "mobile-detalle-pedido": {
+      "id": "4b6627c2102c4ecf9b840771d5db173a",
+      "sourceScreen": "projects/17692548586694665195/screens/4b6627c2102c4ecf9b840771d5db173a",
+      "title": "SIGNUM MOTORVEN • Detalle de Pedido Móvil",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-detalle-pedido.html",
+      "screenshotPath": ".stitch/designs/mobile-detalle-pedido.png"
+    },
+    "mobile-inventario-consolidado": {
+      "id": "fbde07dd3b3f42abbdbbce27e606eb73",
+      "sourceScreen": "projects/17692548586694665195/screens/fbde07dd3b3f42abbdbbce27e606eb73",
+      "title": "SIGNUM MOTORVEN • Inventario y Stock Consolidado",
+      "deviceType": "MOBILE",
+      "htmlPath": ".stitch/designs/mobile-inventario-consolidado.html",
+      "screenshotPath": ".stitch/designs/mobile-inventario-consolidado.jpg"
+    }
+  }
+}

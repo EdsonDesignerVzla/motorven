@@ -1,315 +1,605 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
-  TrendingUp,
+  ArrowRight,
+  ClipboardList,
+  Droplets,
   Package,
-  DollarSign,
-  ShoppingCart,
-  MessageCircle,
+  PackageCheck,
+  Plus,
   ShieldCheck,
-  Zap,
   Smartphone,
-  Building2,
-  ShoppingBag,
-  FileSpreadsheet,
-  Users,
-  Award,
-  Settings
+  Wallet
 } from 'lucide-react';
-import { formatUsd, formatBs, getProductWarehouseStocks, resolveProductLitersPerUnit } from '../../services/formatService';
+import { canAccessModule } from '../../services/authService';
+import {
+  formatBs,
+  formatUnitVe,
+  formatUsd,
+  getProductWarehouseStocks,
+  resolveProductLitersPerUnit,
+  round2
+} from '../../services/formatService';
+import { consolidateClientReceivables } from '../../utils/cxcUtils';
 import { detectUserDevice } from './deviceDetection';
+import {
+  canAccessMobileCxC,
+  canAccessMobileInventory,
+  computeOrderMetrics,
+  getOrderNumber,
+  isCommercialPresaleOrder,
+  normalizeOrderStatus,
+  resolveDailyRate
+} from './mobileOrderHelpers';
 
 export default function MobileHomeView({
-  currentUser,
-  config = {},
   products = [],
-  clients = [],
   orders = [],
-  sales = [],
+  clients = [],
   profitInvoices = [],
-  profitBankAccounts = [],
-  profitPurchases = [],
-  profitSellers = [],
-  onNavigateTab
+  sales = [],
+  profitCollections = [],
+  config,
+  currentUser,
+  onNavigate,
+  onCreateOrder,
+  onOpenOrderDetail
 }) {
-  const deviceInfo = detectUserDevice();
-  const tasaBcv = Number(config?.tasaDolar || 827.73);
-  const tasaKeystone = Number(config?.tasaKeystone || 850.00);
+  const tasaBcv = resolveDailyRate(config);
+  const device = useMemo(() => detectUserDevice(), []);
 
-  // Cálculos consolidados para KPIs
-  const allInvoices = profitInvoices.length > 0 ? profitInvoices : sales;
-  const totalVentasUsd = allInvoices.reduce((acc, s) => acc + Number(s.totalUsd || s.total_usd || s.totalNetoUsd || 0), 0);
-  const totalVentasBs = totalVentasUsd * tasaBcv;
+  const userFullName = String(currentUser?.nombre || currentUser?.username || 'Equipo Motorven').trim();
+  const firstName = userFullName.split(/\s+/)[0] || 'Usuario';
+  const initials = userFullName
+    .split(/\s+/)
+    .map((n) => n[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'SM';
 
-  const clientesConSaldo = clients.filter(c => Number(c.saldoUsd || c.saldo_usd || 0) > 0);
-  const totalDeudaUsd = clientesConSaldo.reduce((acc, c) => acc + Number(c.saldoUsd || c.saldo_usd || 0), 0);
-  const clientesEnMora = clients.filter(c => Number(c.diasMora || c.dias_mora || 0) > 0).length;
+  const canPresale =
+    canAccessModule(currentUser?.rol, 'pedidos', currentUser) ||
+    canAccessModule(currentUser?.rol, 'preventa', currentUser);
+  const canInventory = canAccessMobileInventory(currentUser);
+  const canCxC = canAccessMobileCxC(currentUser);
 
-  const totalLitrosDisponibles = products.reduce(
-    (acc, p) => acc + (getProductWarehouseStocks(p).total * resolveProductLitersPerUnit(p)),
-    0
-  );
-  const totalOrdersCount = orders.length;
-  const lastOrder = orders[0] || null;
-
-  const userName = currentUser?.nombre?.split(' ')[0] || 'Operador';
-  const userInitial = userName.charAt(0).toUpperCase();
-
-  // Definición de todos los módulos del sistema (4 por línea en GridView)
-  const systemModules = [
-    // Fila 1: Operaciones Principales
-    {
-      id: 'pedidos',
-      label: 'Pedidos',
-      icon: ShoppingCart,
-      gradient: 'linear-gradient(135deg, #0284c7 0%, #002b7a 100%)',
-      accentColor: '#38bdf8',
-      kpi: `${totalOrdersCount} Docs`,
-      badge: totalOrdersCount > 0 ? totalOrdersCount : null
-    },
-    {
-      id: 'cxc',
-      label: 'Cobranzas',
-      icon: DollarSign,
-      gradient: 'linear-gradient(135deg, #10b981 0%, #065f46 100%)',
-      accentColor: clientesEnMora > 0 ? '#ef4444' : '#34d399',
-      kpi: formatUsd(totalDeudaUsd),
-      badge: clientesEnMora > 0 ? clientesEnMora : null
-    },
-    {
-      id: 'inventario',
-      label: 'Stock',
-      icon: Package,
-      gradient: 'linear-gradient(135deg, #f59e0b 0%, #b45309 100%)',
-      accentColor: '#fbbf24',
-      kpi: `${products.length} SKUs`
-    },
-    {
-      id: 'ventas',
-      label: 'Ventas POS',
-      icon: Zap,
-      gradient: 'linear-gradient(135deg, #e60012 0%, #991b1b 100%)',
-      accentColor: '#f87171',
-      kpi: formatUsd(totalVentasUsd)
-    },
-
-    // Fila 2: Finanzas, Tesorería & SENIAT
-    {
-      id: 'cxc',
-      label: 'Tasa BCV',
-      icon: ShieldCheck,
-      gradient: 'linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)',
-      accentColor: '#34d399',
-      kpi: formatBs(tasaBcv)
-    },
-    {
-      id: 'flujo_caja',
-      label: 'Caja/Bancos',
-      icon: Building2,
-      gradient: 'linear-gradient(135deg, #06b6d4 0%, #0e7490 100%)',
-      accentColor: '#22d3ee',
-      kpi: `${profitBankAccounts.length || 3} Ctas`
-    },
-    {
-      id: 'compras',
-      label: 'Compras',
-      icon: ShoppingBag,
-      gradient: 'linear-gradient(135deg, #eab308 0%, #854d0e 100%)',
-      accentColor: '#facc15',
-      kpi: `${profitPurchases.length || 0} Docs`
-    },
-    {
-      id: 'seniat',
-      label: 'SENIAT',
-      icon: FileSpreadsheet,
-      gradient: 'linear-gradient(135deg, #6366f1 0%, #4338ca 100%)',
-      accentColor: '#818cf8',
-      kpi: 'IVA / ISLR'
-    },
-
-    // Fila 3: Fuerza de Ventas, Analítica & Control
-    {
-      id: 'vendedores',
-      label: 'Vendedores',
-      icon: Award,
-      gradient: 'linear-gradient(135deg, #a855f7 0%, #6b21a8 100%)',
-      accentColor: '#c084fc',
-      kpi: `${profitSellers.length || 0} Asesores`
-    },
-    {
-      id: 'rentabilidad',
-      label: 'Rentabilidad',
-      icon: TrendingUp,
-      gradient: 'linear-gradient(135deg, #f97316 0%, #c2410c 100%)',
-      accentColor: '#fb923c',
-      kpi: 'BI Metas'
-    },
-    {
-      id: 'usuarios',
-      label: 'Usuarios',
-      icon: Users,
-      gradient: 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)',
-      accentColor: '#f472b6',
-      kpi: 'Seguridad'
-    },
-    {
-      id: 'config',
-      label: 'Ajustes',
-      icon: Settings,
-      gradient: 'linear-gradient(135deg, #64748b 0%, #334155 100%)',
-      accentColor: '#94a3b8',
-      kpi: 'General'
+  const cxcMetrics = useMemo(() => {
+    if (!canCxC) {
+      return { totalPorCobrarUsd: 0, totalPorCobrarBs: 0, clientesConSaldo: 0, clientesEnMora: 0 };
     }
-  ];
+    const list = consolidateClientReceivables({
+      clients,
+      profitInvoices,
+      profitCollections,
+      sales,
+      tasaBcv,
+      includePendingDocs: true
+    });
+    let totalUsd = 0;
+    let clientesConSaldo = 0;
+    let clientesEnMora = 0;
+    list.forEach((c) => {
+      const saldo = Number(c.saldoUsd || c.totalSaldoUsd || 0);
+      if (saldo > 0.01) {
+        totalUsd += saldo;
+        clientesConSaldo += 1;
+        if (c.isMora) clientesEnMora += 1;
+      }
+    });
+    return {
+      totalPorCobrarUsd: round2(totalUsd),
+      totalPorCobrarBs: round2(totalUsd * tasaBcv),
+      clientesConSaldo,
+      clientesEnMora
+    };
+  }, [canCxC, clients, profitInvoices, profitCollections, sales, tasaBcv]);
+
+  const metrics = useMemo(() => {
+    const commercialOrders = (Array.isArray(orders) ? orders : [])
+      .filter(isCommercialPresaleOrder)
+      .sort((a, b) => {
+        const da = new Date(a.fechaEmision || a.created_at || 0).getTime() || 0;
+        const db = new Date(b.fechaEmision || b.created_at || 0).getTime() || 0;
+        return db - da;
+      });
+
+    let activeOrdersCount = 0;
+    let approvedOrdersCount = 0;
+    let retainedOrdersCount = 0;
+    let billedOrdersCount = 0;
+    let activeOrdersUsd = 0;
+    let activeOrdersLiters = 0;
+
+    commercialOrders.forEach((o) => {
+      const st = normalizeOrderStatus(o);
+      if (st.isBilled) {
+        billedOrdersCount += 1;
+        return;
+      }
+      if (st.isCancelled) return;
+
+      activeOrdersCount += 1;
+      if (st.isRetained) retainedOrdersCount += 1;
+      else if (st.isApproved) approvedOrdersCount += 1;
+
+      const m = computeOrderMetrics(o, tasaBcv);
+      activeOrdersUsd += m.totalUsd;
+      activeOrdersLiters += m.totalLitros;
+    });
+
+    // BR-INV-001: solo existencias consolidadas (Alm 01 + Alm 02) > 0
+    let totalLitrosDisponibles = 0;
+    let totalBultosActivos = 0;
+    let skusConStock = 0;
+    let hiddenZeroCount = 0;
+
+    (Array.isArray(products) ? products : []).forEach((p) => {
+      const stocks = getProductWarehouseStocks(p);
+      const stockTotal = Math.max(0, Number(stocks.stock01 || 0)) + Math.max(0, Number(stocks.stock02 || 0));
+      if (stockTotal <= 0) {
+        hiddenZeroCount += 1;
+        return;
+      }
+      skusConStock += 1;
+      totalBultosActivos += stockTotal;
+      const lpu = resolveProductLitersPerUnit(p);
+      totalLitrosDisponibles += stockTotal * lpu;
+    });
+
+    const activeOrders = commercialOrders.filter((o) => {
+      const st = normalizeOrderStatus(o);
+      return !st.isBilled && !st.isCancelled;
+    });
+
+    return {
+      activeOrdersCount,
+      approvedOrdersCount,
+      retainedOrdersCount,
+      billedOrdersCount,
+      activeOrdersUsd: round2(activeOrdersUsd),
+      activeOrdersBs: round2(activeOrdersUsd * tasaBcv),
+      activeOrdersLiters: round2(activeOrdersLiters),
+      totalLitrosDisponibles: round2(totalLitrosDisponibles),
+      totalBultosActivos: round2(totalBultosActivos),
+      skusConStock,
+      hiddenZeroCount,
+      lastOrder: activeOrders[0] || commercialOrders[0] || null
+    };
+  }, [orders, products, tasaBcv]);
+
+  const lastOrderStatus = metrics.lastOrder ? normalizeOrderStatus(metrics.lastOrder) : null;
+  const lastOrderMetrics = metrics.lastOrder ? computeOrderMetrics(metrics.lastOrder, tasaBcv) : null;
+  const activeModulesCount = [canPresale, canCxC, canInventory].filter(Boolean).length;
 
   return (
     <div className="mobile-canvas-view">
-      
-      {/* 1. BARRA SUPERIOR DE BIENVENIDA Y DETECCIÓN INTELIGENTE DE DISPOSITIVO */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box', flexShrink: 0, paddingBottom: '2px', gap: '8px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              width: '28px',
-              height: '28px',
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #0284c7 0%, #001a4d 100%)',
-              border: '1.5px solid #38bdf8',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '0.78rem',
-              fontWeight: 900,
-              color: '#ffffff',
-              boxShadow: '0 0 10px rgba(56, 189, 248, 0.4)',
-              flexShrink: 0
-            }}
-          >
-            {userInitial}
+      {/* 1. Saludo y Dispositivo */}
+      <div className="mobile-greeting-card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+          <div className="mobile-user-avatar">
+            {initials}
+            <span className="mobile-online-dot" />
           </div>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <span style={{ fontSize: '0.88rem', fontWeight: 900, color: '#ffffff', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                Hola, {userName}
-              </span>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px #10b981', flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: '0.88rem',
+                fontWeight: 800,
+                color: 'var(--mob-text)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+            >
+              Hola, {firstName}
             </div>
-            <div style={{ fontSize: '0.60rem', color: '#94a3b8', lineHeight: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {currentUser?.cargo || currentUser?.rol || 'Administrador'}
+            <div
+              style={{
+                fontSize: '0.66rem',
+                fontWeight: 700,
+                color: 'var(--mob-text-muted)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+            >
+              {currentUser?.rol || 'ASESOR'} • Operaciones Móviles
             </div>
           </div>
         </div>
 
-        {/* Insignia del Dispositivo Detectado en Tiempo Real (iPhone / Android) */}
-        <div className="mobile-device-tag" title={`Dispositivo detectado: ${deviceInfo.model} (${deviceInfo.screenWidth}x${deviceInfo.screenHeight})`}>
-          {deviceInfo.isApple ? <span style={{ fontSize: '0.75rem' }}></span> : <Smartphone size={10} />}
-          <span>{deviceInfo.model}</span>
+        <span className="mobile-device-tag" title={`${device.model} (${device.screenWidth}x${device.screenHeight})`}>
+          <Smartphone size={11} />
+          {device.brand !== 'Generic' ? device.brand : device.model}
+        </span>
+      </div>
+
+      {/* 2. Telemetría Ejecutiva (Preventa + Inventario Consolidado) */}
+      <div className="mobile-telemetry-row">
+        <div
+          className="mobile-telemetry-card"
+          onClick={() => onNavigate?.(canPresale ? 'pedidos' : 'inventario')}
+          style={{ cursor: 'pointer' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="mobile-telemetry-label">Preventas Activas</span>
+            <ClipboardList size={13} color="var(--mob-navy)" />
+          </div>
+          <div className="mobile-telemetry-value" style={{ color: 'var(--mob-navy)' }}>
+            {formatUsd(metrics.activeOrdersUsd)}
+          </div>
+          <div className="mobile-telemetry-sub">
+            {metrics.activeOrdersCount} pedido(s) • {formatBs(metrics.activeOrdersBs)}
+          </div>
+        </div>
+
+        <div
+          className="mobile-telemetry-card"
+          onClick={() => onNavigate?.(canInventory ? 'inventario' : (canCxC ? 'cxc' : 'pedidos'))}
+          style={{ cursor: 'pointer' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="mobile-telemetry-label">Volumen Planta &gt;0</span>
+            <PackageCheck size={13} color="var(--mob-green)" />
+          </div>
+          <div className="mobile-telemetry-value" style={{ color: 'var(--mob-green)' }}>
+            {formatUnitVe(metrics.totalLitrosDisponibles, 0)} L
+          </div>
+          <div className="mobile-telemetry-sub">
+            {metrics.skusConStock} SKUs ({metrics.hiddenZeroCount} en 0 ocultos)
+          </div>
         </div>
       </div>
 
-      {/* 2. GRIDVIEW DE TODOS LOS MÓDULOS (4 KPIS MÁXIMO POR LÍNEA, FILAS SUCESIVAS) */}
-      <div style={{ width: '100%', boxSizing: 'border-box', flexShrink: 0 }}>
-        <div style={{ fontSize: '0.58rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '0.5px', marginBottom: '4px', paddingLeft: '2px' }}>
-          Módulos del Sistema (4 por línea)
-        </div>
-
-        <div className="mobile-modules-gridview">
-          {systemModules.map((mod, idx) => {
-            const IconComponent = mod.icon;
-            return (
+      {/* 3. Fichas de Módulos Activos: Preventa Móvil, Cobranzas (CxC) & Inventario Consolidado */}
+      <div
+        style={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          display: 'grid',
+          gridTemplateColumns:
+            activeModulesCount === 3
+              ? 'repeat(3, minmax(0, 1fr))'
+              : activeModulesCount === 2
+              ? '1fr 1fr'
+              : '1fr',
+          gap: '8px'
+        }}
+      >
+        {canPresale && (
+          <button
+            type="button"
+            onClick={() => onNavigate?.('pedidos')}
+            className="mobile-module-tile featured-navy"
+            style={{
+              height: '100%',
+              minHeight: 0,
+              padding: '12px 10px',
+              borderRadius: '16px',
+              textAlign: 'left'
+            }}
+          >
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
               <div
-                key={`${mod.id}-${idx}`}
-                className="mobile-module-tile"
-                style={{ '--mod-accent': mod.accentColor }}
-                onClick={() => onNavigateTab(mod.id)}
+                className="mobile-module-icon-wrap"
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '9px',
+                  background: 'rgba(56, 189, 248, 0.2)',
+                  color: '#38bdf8'
+                }}
               >
-                <div className="mobile-module-icon-wrap" style={{ background: mod.gradient }}>
-                  <IconComponent size={15} />
-                  {mod.badge && (
-                    <span className="mobile-module-badge">{mod.badge}</span>
-                  )}
-                </div>
-                <div className="mobile-module-title">{mod.label}</div>
-                <div className="mobile-module-kpi">{mod.kpi}</div>
+                <ClipboardList size={17} />
               </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 3. HUB DE ACCIÓN INMEDIATA CON BOTONES ERGONÓMICOS TÁCTILES */}
-      <div className="mobile-focus-widget" style={{ flexShrink: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-            ⚡ Actividad Comercial Reciente
-          </span>
-          <span style={{ fontSize: '0.58rem', color: '#38bdf8', fontWeight: 800, cursor: 'pointer' }} onClick={() => onNavigateTab('pedidos')}>
-            Ver todos ({totalOrdersCount}) →
-          </span>
-        </div>
-
-        {/* Resumen del último pedido */}
-        {lastOrder ? (
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              width: '100%',
-              boxSizing: 'border-box',
-              background: 'rgba(255, 255, 255, 0.04)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              borderRadius: '8px',
-              padding: '4px 8px',
-              gap: '8px',
-              cursor: 'pointer'
-            }}
-            onClick={() => onNavigateTab('pedidos')}
-          >
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: 800, fontSize: '0.72rem', color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {lastOrder.clienteNombre || 'Cliente General'}
-              </div>
-              <div style={{ fontSize: '0.56rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                Pedido #{lastOrder.numeroDoc || lastOrder.id} • {lastOrder.condicionPago || 'CONTADO'}
-              </div>
-            </div>
-            <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ fontWeight: 900, fontSize: '0.78rem', color: '#10b981', fontFamily: 'monospace' }}>
-                {formatUsd(lastOrder.totalUsd || lastOrder.totalNetoUsd || 0)}
-              </div>
-              <span style={{ fontSize: '0.52rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '1px 5px', borderRadius: '4px' }}>
-                {lastOrder.estatus || 'ACTIVO'}
+              <span
+                style={{
+                  background: metrics.activeOrdersCount > 0 ? '#e60012' : 'rgba(56, 189, 248, 0.22)',
+                  color: '#ffffff',
+                  fontFamily: 'var(--font-code)',
+                  fontSize: '0.62rem',
+                  fontWeight: 800,
+                  padding: '2px 7px',
+                  borderRadius: '9999px'
+                }}
+              >
+                {metrics.activeOrdersCount} act.
               </span>
             </div>
-          </div>
-        ) : (
-          <div style={{ fontSize: '0.64rem', color: '#64748b', textAlign: 'center', padding: '2px' }}>
-            Listo para crear pedidos de lubricantes Oilstone.
-          </div>
+
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.80rem', fontWeight: 800, color: '#ffffff' }}>
+                PREVENTA
+              </div>
+              <div style={{ fontSize: '0.62rem', color: '#bae6fd', fontWeight: 600, marginTop: '2px' }}>
+                ATP 72h
+              </div>
+            </div>
+
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                marginTop: '6px',
+                paddingTop: '7px',
+                borderTop: '1px solid rgba(255, 255, 255, 0.14)',
+                fontSize: '0.60rem',
+                color: '#e0f2fe'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Caja / Ret:</span>
+                <strong style={{ fontFamily: 'var(--font-code)' }}>
+                  {metrics.approvedOrdersCount} / {metrics.retainedOrdersCount}
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6ee7b7' }}>
+                <span>Facturados:</span>
+                <strong style={{ fontFamily: 'var(--font-code)' }}>{metrics.billedOrdersCount}</strong>
+              </div>
+            </div>
+          </button>
         )}
 
-        {/* Botones de acción directa rápida para el pulgar */}
-        <div className="mobile-quick-actions-bar">
+        {canCxC && (
           <button
             type="button"
-            className="mobile-quick-action-btn primary"
-            onClick={() => onNavigateTab('pedidos')}
+            onClick={() => onNavigate?.('cxc')}
+            className="mobile-module-tile"
+            style={{
+              width: '100%',
+              minWidth: 0,
+              height: '100%',
+              minHeight: 0,
+              padding: '12px 10px',
+              borderRadius: '16px',
+              textAlign: 'left',
+              borderColor: 'var(--mob-border-strong)'
+            }}
           >
-            <ShoppingCart size={13} />
-            <span>+ Crear Pedido</span>
-          </button>
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
+              <div
+                className="mobile-module-icon-wrap"
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '9px',
+                  background: 'var(--mob-cyan-soft)',
+                  color: 'var(--mob-cyan)'
+                }}
+              >
+                <Wallet size={17} />
+              </div>
+              <span
+                className={`mobile-pill-badge ${cxcMetrics.clientesEnMora > 0 ? 'warning' : 'success'}`}
+                style={{ fontSize: '0.52rem', padding: '2px 6px' }}
+              >
+                {cxcMetrics.clientesEnMora > 0 ? `${cxcMetrics.clientesEnMora} MORA` : 'AL DÍA'}
+              </span>
+            </div>
 
+            <div style={{ marginTop: '6px', width: '100%' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+                COBRANZAS / CXC
+              </div>
+              <div style={{ fontSize: '0.62rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '2px' }}>
+                Cartera & Cobros
+              </div>
+            </div>
+
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                marginTop: '6px',
+                paddingTop: '7px',
+                borderTop: '1px solid var(--mob-border)',
+                fontSize: '0.60rem',
+                color: 'var(--mob-text-secondary)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Por Cobrar:</span>
+                <strong style={{ fontFamily: 'var(--font-code)', color: 'var(--mob-navy)' }}>
+                  {formatUsd(cxcMetrics.totalPorCobrarUsd)}
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Con Saldo:</span>
+                <strong
+                  style={{
+                    fontFamily: 'var(--font-code)',
+                    color: cxcMetrics.clientesEnMora > 0 ? 'var(--mob-red)' : 'var(--mob-green)'
+                  }}
+                >
+                  {cxcMetrics.clientesConSaldo} cli.
+                </strong>
+              </div>
+            </div>
+          </button>
+        )}
+
+        {canInventory && (
           <button
             type="button"
-            className="mobile-quick-action-btn success"
-            onClick={() => onNavigateTab('cxc')}
+            onClick={() => onNavigate?.('inventario')}
+            className="mobile-module-tile"
+            style={{
+              width: '100%',
+              minWidth: 0,
+              height: '100%',
+              minHeight: 0,
+              padding: '12px 10px',
+              borderRadius: '16px',
+              textAlign: 'left',
+              borderColor: 'var(--mob-border-strong)'
+            }}
           >
-            <MessageCircle size={13} />
-            <span>💬 Enviar Cobro</span>
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
+              <div
+                className="mobile-module-icon-wrap"
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '9px',
+                  background: 'var(--mob-green-soft)',
+                  color: 'var(--mob-green)'
+                }}
+              >
+                <Package size={17} />
+              </div>
+              <span className="mobile-pill-badge info" style={{ fontSize: '0.52rem', padding: '2px 6px' }}>
+                SOLO LECTURA
+              </span>
+            </div>
+
+            <div style={{ marginTop: '6px', width: '100%' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+                ALMACÉN / STOCK
+              </div>
+              <div style={{ fontSize: '0.62rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '2px' }}>
+                Alm 01 + Alm 02
+              </div>
+            </div>
+
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                marginTop: '6px',
+                paddingTop: '7px',
+                borderTop: '1px solid var(--mob-border)',
+                fontSize: '0.60rem',
+                color: 'var(--mob-text-secondary)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>SKUs Activos:</span>
+                <strong style={{ fontFamily: 'var(--font-code)', color: 'var(--mob-red)' }}>
+                  {metrics.skusConStock} SKU
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Bultos Fís.:</span>
+                <strong style={{ fontFamily: 'var(--font-code)', color: 'var(--mob-navy)' }}>
+                  {formatUnitVe(metrics.totalBultosActivos, 0)}
+                </strong>
+              </div>
+            </div>
           </button>
-        </div>
+        )}
       </div>
 
+      {/* 4. Última Preventa Reciente + Botones Directos */}
+      <div className="mobile-focus-widget">
+        <div
+          onClick={() => {
+            if (metrics.lastOrder && onOpenOrderDetail && canPresale) {
+              onOpenOrderDetail(metrics.lastOrder);
+            } else {
+              onNavigate?.(canPresale ? 'pedidos' : 'inventario');
+            }
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            cursor: 'pointer',
+            padding: '2px 2px 4px'
+          }}
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="mobile-telemetry-label">Última Preventa</span>
+              {lastOrderStatus && (
+                <span className={`mobile-pill-badge ${lastOrderStatus.tone}`} style={{ fontSize: '0.54rem', padding: '1px 6px' }}>
+                  {lastOrderStatus.label}
+                </span>
+              )}
+            </div>
+            {metrics.lastOrder ? (
+              <div
+                style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 800,
+                  color: 'var(--mob-text)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  marginTop: '2px'
+                }}
+              >
+                {getOrderNumber(metrics.lastOrder)} • {metrics.lastOrder.clienteNombre || metrics.lastOrder.cliente || 'Cliente'}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.72rem', color: 'var(--mob-text-muted)', marginTop: '2px' }}>
+                Stock activo listo ({formatUnitVe(metrics.totalLitrosDisponibles, 0)} L)
+              </div>
+            )}
+          </div>
+
+          {metrics.lastOrder && lastOrderMetrics ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+                  {formatUsd(lastOrderMetrics.totalUsd)}
+                </div>
+                <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.62rem', fontWeight: 700, color: 'var(--mob-text-muted)' }}>
+                  {formatBs(lastOrderMetrics.totalBs)}
+                </div>
+              </div>
+              <ArrowRight size={14} color="var(--mob-text-muted)" />
+            </div>
+          ) : (
+            <span style={{ fontSize: '0.66rem', color: 'var(--mob-cyan)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <ShieldCheck size={12} /> ATP 72h
+            </span>
+          )}
+        </div>
+
+        <div className="mobile-quick-actions-bar">
+          {canPresale && (
+            <button
+              type="button"
+              className="mobile-quick-action-btn primary"
+              onClick={() => (onCreateOrder ? onCreateOrder() : onNavigate?.('pedidos'))}
+            >
+              <Plus size={15} /> Nueva Preventa
+            </button>
+          )}
+          {canCxC ? (
+            <button
+              type="button"
+              className="mobile-quick-action-btn success"
+              onClick={() => onNavigate?.('cxc')}
+            >
+              <Wallet size={15} /> Cobranzas CxC
+            </button>
+          ) : canInventory ? (
+            <button
+              type="button"
+              className="mobile-quick-action-btn success"
+              onClick={() => onNavigate?.('inventario')}
+            >
+              <Droplets size={15} /> Ver Inventario
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="mobile-quick-action-btn success"
+              onClick={() => onNavigate?.('pedidos')}
+            >
+              <ClipboardList size={15} /> Mis Pedidos
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

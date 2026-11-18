@@ -4548,6 +4548,8 @@ function MainApp() {
         onToggleTheme={handleToggleTheme}
         onSwitchToDesktop={handleSwitchToDesktop}
         onSaveOrder={handleSaveOrder}
+        onUpdateOrderStatus={handleUpdateOrderStatus}
+        onDeleteOrder={handleDeleteOrder}
         onProceedToPOS={handleProceedToInvoiceFromOrder}
         pendingOrderToBill={pendingOrderToBill}
         onClearPendingOrder={() => setPendingOrderToBill(null)}

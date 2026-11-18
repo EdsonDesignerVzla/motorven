@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+
+<html lang="es"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_tab" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;family=JetBrains+Mono:wght@700&amp;family=Orbitron:wght@700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "surface-variant": "#e3e2e9", "on-secondary-container": "#fffbff", "dark-surface": "#0a1326", "surface-container": "#f1f5f9", "dark-background": "#060913", "surface-container-low": "#f8fafc", "on-error-container": "#dc2626", "outline-variant": "#c4c6d3", "surface-tint": "#3d5aa9", "surface-bright": "#ffffff", "on-secondary-fixed-variant": "#930007", "on-background": "#090d16", "on-tertiary-fixed-variant": "#004b73", "on-error": "#ffffff", "inverse-primary": "#b4c5ff", "outline": "#94a3b8", "tertiary-container": "#e0f2fe", "surface-container-high": "#e2e8f0", "error-container": "#ffdad6", "on-primary-fixed": "#00174b", "secondary-fixed": "#ffdad5", "surface": "#ffffff", "surface-container-highest": "#e3e2e9", "inverse-surface": "#2f3036", "on-primary": "#ffffff", "surface-dim": "#dad9e0", "inverse-on-surface": "#f1f0f7", "on-surface-variant": "#444651", "primary-container": "#002b7a", "tertiary-fixed-dim": "#93ccff", "on-secondary": "#ffffff", "on-tertiary-container": "#0369a1", "surface-container-lowest": "#ffffff", "dark-surface-elevated": "#0c1427", "on-surface": "#1a1b21", "on-primary-container": "#7b96ea", "on-tertiary": "#ffffff", "error": "#ef4444", "tertiary-fixed": "#cce5ff", "secondary": "#bc000c", "on-tertiary-fixed": "#001d31", "on-primary-fixed-variant": "#224290", "tertiary": "#001f34", "background": "#f1f5f9", "success": "#10b981", "secondary-container": "#e90614", "primary": "#00184d", "on-secondary-fixed": "#410001", "dark-accent-cyan": "#38bdf8", "warning": "#ffb703", "primary-fixed": "#dbe1ff", "secondary-fixed-dim": "#ffb4aa", "primary-fixed-dim": "#b4c5ff" }, borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" }, spacing: { "margin-desktop": "24px", "space-md": "16px", "space-xl": "32px", "margin-mobile": "16px", "space-sm": "8px", "space-lg": "24px", "gutter": "16px", "space-xs": "4px" }, fontFamily: { "headline-md": ["Orbitron"], "body-base": ["Inter"], "data-mono": ["JetBrains Mono"], "label-caps": ["Orbitron"], "display-tech": ["Orbitron"], "body-bold": ["Inter"] }, fontSize: { "headline-md": ["16px", { lineHeight: "22px", letterSpacing: "0.03em", fontWeight: "700" }], "body-base": ["14px", { lineHeight: "21px", letterSpacing: "0", fontWeight: "400" }], "data-mono": ["13px", { lineHeight: "18px", letterSpacing: "0", fontWeight: "700" }], "label-caps": ["11px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "800" }], "display-tech": ["20px", { lineHeight: "26px", letterSpacing: "0.04em", fontWeight: "800" }], "body-bold": ["14px", { lineHeight: "20px", letterSpacing: "0", fontWeight: "700" }] } } } };</script><style>@layer base{html,body{width:100vw;margin:0;padding:0;}body{overscroll-behavior:none;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-background font-body-base text-body-base text-on-surface antialiased flex flex-col min-h-screen"><header class="fixed top-0 w-full z-50 pt-safe bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]"><div class="h-[52px] px-margin-mobile flex items-center justify-between gap-space-xs"><div class="flex items-center gap-space-xs min-w-0 shrink-0"><div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-sm"><span class="material-symbols-outlined text-on-primary text-[18px]">oil_barrel</span></div><div class="flex flex-col leading-none"><span class="font-label-caps text-label-caps text-primary tracking-wider">SIGNUM</span><span class="font-label-caps text-[9px] font-extrabold text-secondary tracking-widest leading-none">MOTORVEN</span></div></div><div class="flex items-center justify-center px-space-xs"><div class="flex items-center gap-1 bg-surface-container px-space-xs py-0.5 rounded-lg border-none shadow-[0_1px_4px_rgba(0,0,0,0.02)]"><span class="font-data-mono text-[11px] leading-[14px] font-bold text-on-surface-variant">BCV:</span><span class="font-data-mono text-[11px] leading-[14px] font-bold text-primary">911,62 Bs.</span></div></div><div class="flex items-center gap-1 shrink-0"><button aria-label="Cambiar tema" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-on-surface active:scale-95 transition-transform"><span class="material-symbols-outlined text-[20px]">light_mode</span></button><button aria-label="Modo PC Escritorio" class="min-h-[44px] min-w-[44px] px-2 py-1 flex items-center justify-center gap-1 rounded-lg bg-surface-container-high text-primary hover:bg-surface-variant active:scale-95 transition-all"><span class="material-symbols-outlined text-[16px]">desktop_windows</span><span class="font-label-caps text-[10px] font-bold">PC</span></button><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0 ml-0.5"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div></header><main class="flex flex-col relative w-full pt-[52px] pb-[58px] bg-background min-h-screen"><div class="flex flex-col w-full pb-36">
+<!-- Mode Switcher Pill -->
+<div class="px-margin-mobile pt-3 pb-2">
+<div class="p-1 rounded-xl bg-surface-container flex items-center shadow-sm">
+<button class="flex-1 py-2 px-3 rounded-lg bg-primary text-on-primary font-label-caps text-label-caps tracking-wider transition-all duration-150 flex items-center justify-center gap-1.5 shadow-sm active:scale-[0.98]" type="button">
+<span class="material-symbols-outlined text-[16px]">post_add</span>
+<span>Nuevo Pedido</span>
+</button>
+<button class="flex-1 py-2 px-3 rounded-lg text-on-surface-variant font-label-caps text-label-caps tracking-wider transition-all duration-150 flex items-center justify-center gap-1.5 active:scale-[0.98] hover:text-on-surface" type="button">
+<span class="material-symbols-outlined text-[16px]">folder_open</span>
+<span>Mis Pedidos (12)</span>
+</button>
+</div>
+</div>
+<!-- Client & Commercial Profile Bento -->
+<div class="px-margin-mobile py-2 flex flex-col gap-2">
+<div class="bg-surface rounded-xl p-3.5 shadow-sm flex flex-col gap-3">
+<!-- Client Header Line -->
+<div class="flex items-start justify-between gap-2">
+<div class="flex items-start gap-2.5 min-w-0">
+<div class="w-9 h-9 rounded-lg bg-primary-container/10 flex items-center justify-center shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-primary text-[20px]">storefront</span>
+</div>
+<div class="min-w-0 flex flex-col">
+<div class="flex items-center gap-1.5 flex-wrap">
+<h2 class="font-headline-md text-[14px] leading-5 text-on-surface tracking-wide truncate">Lubricantes Centro C.A.</h2>
+<span class="px-1.5 py-0.2 rounded bg-surface-container-high font-data-mono text-[10px] text-on-surface-variant leading-4">J-30981234-1</span>
+</div>
+<p class="font-body-base text-[12px] text-on-surface-variant flex items-center gap-1 mt-0.5 truncate">
+<span class="material-symbols-outlined text-[13px] text-outline">location_on</span>
+              Valencia, Edo. Carabobo • Zona Industrial Sur
+            </p>
+</div>
+</div>
+<button class="px-2.5 py-1 rounded-lg bg-surface-container hover:bg-surface-container-high text-primary active:scale-95 transition-all flex items-center gap-1 shrink-0" type="button">
+<span class="material-symbols-outlined text-[15px]">swap_horiz</span>
+<span class="font-label-caps text-[10px]">Cambiar</span>
+</button>
+</div>
+<!-- Credit Line Telemetry Badge -->
+<div class="flex items-center justify-between p-2 rounded-lg bg-emerald-500/10 gap-2">
+<div class="flex items-center gap-1.5 min-w-0">
+<span class="relative flex h-2 w-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+</span>
+<span class="font-body-bold text-[12px] text-success tracking-tight truncate">Crédito 15 Días • Disponible</span>
+</div>
+<span class="font-data-mono text-[13px] text-success font-bold shrink-0">$2,500.00</span>
+</div>
+<!-- Quick Selector Pills -->
+<div class="grid grid-cols-2 gap-2 pt-0.5">
+<button class="flex items-center justify-between p-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-left transition-colors" type="button">
+<div class="min-w-0">
+<span class="font-label-caps text-[9px] text-on-surface-variant block uppercase tracking-wider">Tipo Facturación</span>
+<span class="font-body-bold text-[11px] text-on-surface block truncate">Fiscal (Alm 01 - Prin.)</span>
+</div>
+<span class="material-symbols-outlined text-outline text-[16px]">expand_more</span>
+</button>
+<button class="flex items-center justify-between p-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-left transition-colors" type="button">
+<div class="min-w-0">
+<span class="font-label-caps text-[9px] text-on-surface-variant block uppercase tracking-wider">Condición Pago</span>
+<span class="font-body-bold text-[11px] text-secondary block truncate">Crédito 15D (Val.)</span>
+</div>
+<span class="material-symbols-outlined text-outline text-[16px]">expand_more</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Catalog Section & Quick Filter -->
+<div class="px-margin-mobile pt-3 pb-1 flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-label-caps text-[11px] text-on-surface-variant tracking-wider flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+        DESPACHO INMEDIATO • ALMACÉN 01
+      </span>
+<span class="font-data-mono text-[11px] text-on-surface-variant">3 Items en Orden</span>
+</div>
+<!-- Search & Barcode Scan Bar -->
+<div class="flex items-center gap-2">
+<div class="flex-1 flex items-center bg-surface rounded-xl px-3 py-2 shadow-sm gap-2">
+<span class="material-symbols-outlined text-outline text-[18px]">search</span>
+<input class="w-full bg-transparent font-body-base text-[13px] text-on-surface placeholder:text-outline focus:outline-none" placeholder="Código, viscosidad (ej. 15W-40, 20W-50)..." type="text"/>
+</div>
+<button aria-label="Escanear Código de Barras" class="w-10 h-10 rounded-xl bg-surface-container-high hover:bg-surface-variant text-primary flex items-center justify-center shrink-0 active:scale-95 transition-all shadow-sm" type="button">
+<span class="material-symbols-outlined text-[20px]">barcode_scanner</span>
+</button>
+</div>
+</div>
+<!-- Lubricants Bento List -->
+<div class="px-margin-mobile py-2 flex flex-col gap-2.5">
+<!-- Product 1 -->
+<div class="bg-surface rounded-xl p-3 shadow-sm flex flex-col gap-2.5 transition-all">
+<div class="flex items-start gap-3">
+<!-- Thumbnail / Badge -->
+<div class="w-14 h-14 rounded-lg bg-surface-container flex items-center justify-center shrink-0 relative overflow-hidden">
+<img class="w-full h-full object-cover rounded-lg" data-alt="High-contrast industrial close-up of a silver premium 1-liter motor oil bottle labeled OILSTONE 15W-40 Semi-Synthetic with crimson red accents on clean studio industrial surface" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDhMGQi6n7onyp7Qb7qXuJoxhC7wwRXLVtvbBaltT2-5Dg5vHPaNZ7hhvIiC3Oa_RMAqfpW3zMhx7grdLHYM9R_Owxmn23gB6rIvc4lzAFDwEx6GlcrZupTjK8J_MUIveRT1qsN_1OUX5naefXTar3UlD3u1ff_cjaozlYPG9n4YHq7Z3724YwmcA-W7mOxRaf3-IEYJecC9LgG5_egcyXNYk_fCeh3MuuOTbxoddWLniGbxdU9McChq9g2EtP7kkVYX7LsTOgQgOCC"/>
+<span class="absolute bottom-0 right-0 bg-primary text-on-primary font-data-mono text-[8px] px-1 py-0.2 rounded-tl">12x1L</span>
+</div>
+<!-- Info -->
+<div class="flex-1 min-w-0">
+<div class="flex items-start justify-between gap-1">
+<h3 class="font-headline-md text-[13px] leading-4 text-on-surface tracking-tight truncate">OILSTONE 15W-40 SEMI-SINTÉTICO</h3>
+</div>
+<div class="flex items-center gap-1.5 mt-0.5">
+<span class="font-data-mono text-[10px] text-on-surface-variant">CÓD: 000308</span>
+<span class="text-outline text-[10px]">•</span>
+<span class="font-body-base text-[11px] text-on-surface-variant">Caja 12x1 Litro</span>
+</div>
+<!-- Stock status -->
+<div class="flex items-center gap-1.5 mt-1">
+<span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+<span class="font-data-mono text-[11px] text-on-surface-variant">Disp: <span class="font-bold text-on-surface">107 cjs</span> (Alm 01)</span>
+</div>
+</div>
+</div>
+<!-- Action Row: Price & Touch Stepper -->
+<div class="flex items-center justify-between pt-1 bg-surface-container-low -mx-3 -mb-3 px-3 py-2 rounded-b-xl">
+<div class="flex flex-col">
+<span class="font-data-mono text-[10px] text-on-surface-variant leading-none">PRECIO UNITARIO</span>
+<span class="font-data-mono text-[14px] text-primary font-bold mt-0.5">$48.00 <span class="text-[10px] font-normal text-on-surface-variant">/ cja</span></span>
+</div>
+<div class="flex items-center gap-2">
+<!-- Stepper Component -->
+<div class="flex items-center bg-surface rounded-lg p-0.5 shadow-sm">
+<button aria-label="Disminuir" class="w-8 h-8 rounded-md bg-surface-container flex items-center justify-center text-primary active:scale-90 transition-transform font-headline-md text-base hover:bg-surface-variant" type="button">-</button>
+<span class="w-8 text-center font-data-mono text-[14px] font-bold text-on-surface">2</span>
+<button aria-label="Aumentar" class="w-8 h-8 rounded-md bg-primary text-on-primary flex items-center justify-center active:scale-90 transition-transform font-headline-md text-base shadow-sm" type="button">+</button>
+</div>
+<!-- Subtotal display -->
+<div class="text-right min-w-[62px]">
+<span class="font-label-caps text-[9px] text-on-surface-variant block leading-none">SUBTOTAL</span>
+<span class="font-data-mono text-[13px] font-bold text-secondary mt-0.5 block">$96.00</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Product 2 -->
+<div class="bg-surface rounded-xl p-3 shadow-sm flex flex-col gap-2.5 transition-all">
+<div class="flex items-start gap-3">
+<!-- Thumbnail / Badge -->
+<div class="w-14 h-14 rounded-lg bg-surface-container flex items-center justify-center shrink-0 relative overflow-hidden">
+<img class="w-full h-full object-cover rounded-lg" data-alt="Sturdy 19-liter heavy-duty industrial blue pail bucket container for OILSTONE 20W-50 Mineral lubricant with clean high-visibility typography and industrial workshop background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDuEcoG4eNsQl3IDDAqjccD4nUjcarwrLus1CrhMFgyA0aBKHUpNdH7LLLJSbMHqmWxSoc02JbQg50EIMYSZ9Y0nKb_NwzqJZcIjQz9jO-eZyTD5qr-5htm9OnLXfn4OkbzQ-X4J8XxrXyBY3u--QKdiF1CktUpmhc_axTWsJfAT9v9YVIqSO5XNR0TrfQ8DvLKUI9GQNdJoVgPoLoZKir0YpmAXTdL3V7ESt8RehMf9X5Th40xeHu0okX7vXu_LSwl7-RTMmaRg1oo"/>
+<span class="absolute bottom-0 right-0 bg-primary text-on-primary font-data-mono text-[8px] px-1 py-0.2 rounded-tl">19L</span>
+</div>
+<!-- Info -->
+<div class="flex-1 min-w-0">
+<div class="flex items-start justify-between gap-1">
+<h3 class="font-headline-md text-[13px] leading-4 text-on-surface tracking-tight truncate">OILSTONE 20W-50 MINERAL</h3>
+</div>
+<div class="flex items-center gap-1.5 mt-0.5">
+<span class="font-data-mono text-[10px] text-on-surface-variant">CÓD: 000704</span>
+<span class="text-outline text-[10px]">•</span>
+<span class="font-body-base text-[11px] text-on-surface-variant">Paila 19 Litros</span>
+</div>
+<!-- Stock status with caution -->
+<div class="flex items-center gap-1.5 mt-1">
+<span class="w-1.5 h-1.5 rounded-full bg-warning"></span>
+<span class="font-data-mono text-[11px] text-on-surface-variant">Disp: <span class="font-bold text-on-surface">7 pails</span> (Alm 01)</span>
+</div>
+</div>
+</div>
+<!-- Action Row: Price & Stepper -->
+<div class="flex items-center justify-between pt-1 bg-surface-container-low -mx-3 -mb-3 px-3 py-2 rounded-b-xl">
+<div class="flex flex-col">
+<span class="font-data-mono text-[10px] text-on-surface-variant leading-none">PRECIO UNITARIO</span>
+<span class="font-data-mono text-[14px] text-primary font-bold mt-0.5">$62.50 <span class="text-[10px] font-normal text-on-surface-variant">/ pail</span></span>
+</div>
+<div class="flex items-center gap-2">
+<!-- Stepper Component -->
+<div class="flex items-center bg-surface rounded-lg p-0.5 shadow-sm">
+<button aria-label="Disminuir" class="w-8 h-8 rounded-md bg-surface-container flex items-center justify-center text-primary active:scale-90 transition-transform font-headline-md text-base hover:bg-surface-variant" type="button">-</button>
+<span class="w-8 text-center font-data-mono text-[14px] font-bold text-on-surface">1</span>
+<button aria-label="Aumentar" class="w-8 h-8 rounded-md bg-primary text-on-primary flex items-center justify-center active:scale-90 transition-transform font-headline-md text-base shadow-sm" type="button">+</button>
+</div>
+<!-- Subtotal display -->
+<div class="text-right min-w-[62px]">
+<span class="font-label-caps text-[9px] text-on-surface-variant block leading-none">SUBTOTAL</span>
+<span class="font-data-mono text-[13px] font-bold text-secondary mt-0.5 block">$62.50</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Product 3 -->
+<div class="bg-surface rounded-xl p-3 shadow-sm flex flex-col gap-2.5 transition-all opacity-95">
+<div class="flex items-start gap-3">
+<!-- Thumbnail / Badge -->
+<div class="w-14 h-14 rounded-lg bg-surface-container flex items-center justify-center shrink-0 relative overflow-hidden">
+<img class="w-full h-full object-cover rounded-lg" data-alt="Sleek modern quart container for OILSTONE 4T 20W-50 motorcycle engine oil with red racing stripe detailing and industrial metallic finish" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAx8SjeZU-kW3iLhQslNjivtzb0YR60Dv7UKXp6I2pp4jZzBMaFhJAZNzXUa-Tpvb6kAFNId8tNE0CSh-ajr1HAitmHYMzCK_3kpEVlGYJf8RHwj_UmPyRQXFuUKR12A46XJwNcGWIgwpvmt0ndJihDGIpB8i_FV01ksXXp6TtqNoUne0zJfzBmM5cedb_DasHpEejkezoNZpH--T4c6sAsQ1_ujWUvvMJKTxvvA8RYTQXoIT-k-VZxUyNZCR9w_70rFK32Voa6cLPO"/>
+<span class="absolute bottom-0 right-0 bg-primary text-on-primary font-data-mono text-[8px] px-1 py-0.2 rounded-tl">12x1L</span>
+</div>
+<!-- Info -->
+<div class="flex-1 min-w-0">
+<div class="flex items-start justify-between gap-1">
+<h3 class="font-headline-md text-[13px] leading-4 text-on-surface tracking-tight truncate">OILSTONE MOTO 4T 20W-50</h3>
+</div>
+<div class="flex items-center gap-1.5 mt-0.5">
+<span class="font-data-mono text-[10px] text-on-surface-variant">CÓD: 000115</span>
+<span class="text-outline text-[10px]">•</span>
+<span class="font-body-base text-[11px] text-on-surface-variant">Caja 12x1 Litro</span>
+</div>
+<!-- Stock status -->
+<div class="flex items-center gap-1.5 mt-1">
+<span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+<span class="font-data-mono text-[11px] text-on-surface-variant">Disp: <span class="font-bold text-on-surface">205 cjs</span></span>
+</div>
+</div>
+</div>
+<!-- Action Row: Add CTA Button -->
+<div class="flex items-center justify-between pt-1 bg-surface-container-low -mx-3 -mb-3 px-3 py-2 rounded-b-xl">
+<div class="flex flex-col">
+<span class="font-data-mono text-[10px] text-on-surface-variant leading-none">PRECIO UNITARIO</span>
+<span class="font-data-mono text-[14px] text-primary font-bold mt-0.5">$42.00 <span class="text-[10px] font-normal text-on-surface-variant">/ cja</span></span>
+</div>
+<button class="px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-variant text-primary active:scale-95 transition-all flex items-center gap-1.5 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[17px] text-secondary">add_shopping_cart</span>
+<span class="font-label-caps text-[11px]">Agregar</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Operational Notes Accordion / Toggle -->
+<div class="px-margin-mobile py-1">
+<div class="p-2.5 rounded-xl bg-surface-container-low flex items-center justify-between text-on-surface-variant">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-outline">edit_note</span>
+<span class="font-body-base text-[12px]">Observaciones del despacho / Chofer...</span>
+</div>
+<span class="font-label-caps text-[10px] text-primary font-bold">OPCIONAL</span>
+</div>
+</div>
+<!-- Sticky Order Checkout Bar (Docked directly above bottom nav: bottom-[58px]) -->
+<div class="fixed bottom-[58px] left-0 right-0 z-40 bg-surface/95 backdrop-blur-xl shadow-[0_-4px_16px_rgba(0,0,0,0.08)] px-margin-mobile py-2.5">
+<div class="max-w-md mx-auto flex flex-col gap-2">
+<!-- Volume & Rate Telemetry Pill -->
+<div class="flex items-center justify-between text-[11px] leading-tight">
+<div class="flex items-center gap-1.5">
+<span class="px-2 py-0.5 rounded bg-surface-container-high font-data-mono text-[10px] font-bold text-on-surface">3 Unidades • 43 Litros</span>
+<span class="text-outline">•</span>
+<span class="font-data-mono text-[10px] text-on-surface-variant">Flete Incluido</span>
+</div>
+<div class="flex items-center gap-1 text-on-surface-variant font-data-mono text-[10px]">
+<span>Tasa BCV:</span>
+<span class="text-primary font-bold">911,62</span>
+</div>
+</div>
+<!-- Financial Totals and Primary Action -->
+<div class="flex items-center justify-between gap-3">
+<!-- Dual Currency Totals -->
+<div class="flex flex-col min-w-0">
+<div class="flex items-baseline gap-1">
+<span class="font-label-caps text-[10px] text-on-surface-variant">TOTAL:</span>
+<span class="font-data-mono text-[18px] leading-none font-extrabold text-primary tracking-tight">$158.50</span>
+</div>
+<span class="font-data-mono text-[12px] leading-tight font-bold text-secondary truncate mt-0.5">
+            Bs. 144.491,77
+          </span>
+</div>
+<!-- Submit Order Button -->
+<button class="flex-1 py-3 px-4 rounded-xl bg-secondary-container hover:bg-secondary text-on-secondary shadow-md active:scale-[0.98] transition-all flex items-center justify-center gap-2" type="button">
+<span class="font-label-caps text-[12px] tracking-wider font-extrabold">ENVIAR PEDIDO</span>
+<span class="material-symbols-outlined text-[18px]">send</span>
+</button>
+</div>
+</div>
+</div>
+</div></main><nav class="fixed bottom-0 w-full z-50 pb-safe bg-surface/90 backdrop-blur-xl shadow-[0_-2px_12px_rgba(0,0,0,0.05)]" data-active-classes="text-secondary"><div class="h-[58px] px-space-xs flex items-center justify-around"><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="inicio" href="#"><span class="material-symbols-outlined text-[20px]">grid_view</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Inicio</span></a><a aria-current="page" class="flex flex-col items-center justify-center w-14 h-11 active:scale-95 transition-all relative text-secondary" data-path="pedidos" href="#"><span class="material-symbols-outlined text-[20px]">receipt_long</span><span class="absolute top-1 right-2 w-4 h-4 rounded-full bg-secondary-container text-on-secondary flex items-center justify-center font-data-mono text-[9px] font-bold leading-none ring-2 ring-surface">3</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Pedidos</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all relative" data-path="cobranzas" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="absolute top-1 right-2 w-4 h-4 rounded-full bg-primary-container text-on-primary flex items-center justify-center font-data-mono text-[9px] font-bold leading-none ring-2 ring-surface">2</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Cobranzas</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="stock" href="#"><span class="material-symbols-outlined text-[20px]">inventory_2</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Stock</span></a><a class="flex flex-col items-center justify-center w-14 h-11 text-on-surface-variant hover:text-on-surface active:scale-95 transition-all" data-path="menu" href="#"><span class="material-symbols-outlined text-[20px]">menu</span><span class="font-label-caps text-[9px] tracking-tight leading-none mt-1">Menú</span></a></div></nav></body></html>

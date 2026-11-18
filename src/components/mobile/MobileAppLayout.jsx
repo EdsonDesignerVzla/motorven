@@ -1,309 +1,393 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './mobile.css';
 import {
-  Home,
-  ShoppingCart,
-  DollarSign,
-  Package,
-  Menu,
-  Monitor,
-  ShieldCheck,
   ArrowLeft,
-  RefreshCw
+  ClipboardList,
+  Home,
+  LayoutGrid,
+  Monitor,
+  Moon,
+  Package,
+  Sun,
+  Wallet
 } from 'lucide-react';
 import motorvenLogo from '../../assets/logo_motorven_limpio.png';
 import MobileHomeView from './MobileHomeView';
-import MobileCxCView from './MobileCxCView';
+import MobileOrdersView from './MobileOrdersView';
 import MobileInventoryView from './MobileInventoryView';
+import MobileCxCView from './MobileCxCView';
 import MobileMenuView from './MobileMenuView';
-import SellerOrderPOSView from '../../views/SellerOrderPOSView';
 import SalesPOSView from '../../views/SalesPOSView';
-import CashflowView from '../../views/CashflowView';
-import PurchasesView from '../../views/PurchasesView';
-import TaxReportsView from '../../views/TaxReportsView';
-import UsersManagementView from '../../views/UsersManagementView';
-import SellersView from '../../views/SellersView';
-import ProfitabilityView from '../../views/ProfitabilityView';
-import PasivosView from '../../views/PasivosView';
-import AuditLedgerView from '../../views/AuditLedgerView';
-import CashBankModal from '../CashBankModal';
 import AppConfigModal from '../AppConfigModal';
+import { canAccessModule } from '../../services/authService';
 import { formatBs } from '../../services/formatService';
+import {
+  canAccessMobileCxC,
+  canAccessMobileInventory,
+  isCommercialPresaleOrder,
+  normalizeOrderStatus,
+  resolveDailyRate
+} from './mobileOrderHelpers';
+
+const MODULE_LABELS = {
+  ventas: 'Facturación POS Caja',
+  cxc: 'Cuentas por Cobrar (CxC)'
+};
 
 export default function MobileAppLayout({
   products = [],
   clients = [],
-  suppliers = [],
-  purchases = [],
-  cashMovements = [],
-  fiscalClosures = [],
   orders = [],
   sales = [],
   profitInvoices = [],
   profitCollections = [],
-  profitBankAccounts = [],
-  profitCashDesks = [],
-  profitAccountsPayable = [],
-  profitSupplierPayments = [],
-  profitPurchases = [],
-  profitSuppliers = [],
-  profitIslrConcepts = [],
-  profitBeneficiaries = [],
-  profitPaymentOrders = [],
-  profitIslrWithholdings = [],
   profitReturns = [],
   profitSellers = [],
   profitZones = [],
-  purchaseRequisitions = [],
-  purchaseOrders = [],
-  goodsReceiptNotes = [],
-  onSaveRequisition,
-  onSavePurchaseOrder,
-  onSaveGoodsReceipt,
-  onSavePaymentOrder,
-  usersList = [],
   config = {},
   currentUser,
-  theme,
+  theme = 'light',
   onToggleTheme,
   onSwitchToDesktop,
   onSaveOrder,
+  onUpdateOrderStatus,
+  onDeleteOrder,
   onProceedToPOS,
   pendingOrderToBill = null,
   onClearPendingOrder,
   onProcessSale,
   onSaveConfig,
-  onSaveProduct,
   onSaveClient,
   onDeleteClient,
   onApproveClient,
   onRejectClient,
-  onRegisterPurchase,
-  onAddCashMovement,
-  onUpdateCashMovement,
-  onDeleteCashMovement,
-  onUpdateCashDesk,
-  onDeleteCashDesk,
-  onUpdateBankAccount,
-  onDeleteBankAccount,
-  onExecuteCierreZ,
   onOpenOrdersSalesModal,
-  onUsersUpdated,
-  onUpdateCurrentUser,
   onSyncProfit,
-  onUpdateSellerTarget,
-  onUpdateGlobalTarget,
-  onUpdateSellerPhoto,
-  onUpdateSellerZone,
-  onCommissionSettlementsChange,
-  profitIncomeExpenseAccounts = [],
-  profitInventoryAdjustments = [],
-  commissionSettlements = [],
-  expenses = [],
-  payroll = [],
-  employees = [],
-  onSaveExpense,
-  onDeleteExpense,
-  onSaveEmployee,
-  onDeleteEmployee,
-  onSavePayroll,
-  onDeletePayroll,
-  partnerPayableAccounts = null,
-  onSavePartnerPayableAccount,
-  onDeletePartnerPayableAccount,
-  onAdjustPartnerPayableBalance,
-  profitAuditTrails = [],
   onLogout
 }) {
-  const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'cxc' | 'inventario' | 'menu' | <module_id>
+  const [mobileTab, setMobileTab] = useState('home'); // 'home' | 'pedidos' | 'menu' | 'ventas'
   const [showConfigModal, setShowConfigModal] = useState(false);
 
-  // Si se solicita abrir un pedido en el POS desde móvil, navegar a 'ventas' automáticamente
+  // Estado para enrutamiento cruzado hacia Preventa o Detalle de Pedido
+  const [orderIntent, setOrderIntent] = useState({
+    key: 0,
+    subTab: 'mis_pedidos',
+    product: null,
+    client: null
+  });
+  const [selectedOrderForDetail, setSelectedOrderForDetail] = useState(null);
+
+  const tasaBcv = resolveDailyRate(config);
+
+  const userInitials = useMemo(() => {
+    const name = String(currentUser?.nombre || currentUser?.username || 'SM').trim();
+    return name
+      .split(/\s+/)
+      .map((n) => n[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || 'SM';
+  }, [currentUser]);
+
+  // Si se solicita facturar un pedido desde móvil, abrir POS Caja automáticamente
   useEffect(() => {
     if (pendingOrderToBill) {
       setMobileTab('ventas');
     }
   }, [pendingOrderToBill]);
 
-  // Contar solo pedidos activos pendientes o aprobados por facturar (excluyendo solicitudes de clientes, facturados, anulados y caducados)
-  const activePendingOrdersCount = useMemo(() => {
-    if (!Array.isArray(orders)) return 0;
-    const now = Date.now();
-    const HOURS_72_MS = 72 * 60 * 60 * 1000;
-    return orders.filter((o) => {
-      if (!o) return false;
-      const tDoc = String(o.tipoDoc || o.tipo_doc || '').toUpperCase();
-      if (tDoc === 'SOLICITUD_CLIENTE') return false;
-      const st = String(o.status || o.estado || '').toUpperCase();
-      if (!['PENDIENTE', 'APROBADO', 'EN_PROCESO', 'EMITIDO', 'RETENIDO_CREDITO'].includes(st)) return false;
-      const rawDate = o.fechaEmision || o.fecha || o.created_at;
-      if (rawDate) {
-        const orderTime = new Date(rawDate).getTime();
-        if (!isNaN(orderTime) && (now - orderTime) > HOURS_72_MS) return false;
-      }
-      return true;
-    }).length;
-  }, [orders]);
-
-  // Bloqueo total de desplazamiento en viewport del celular para Cero-Scroll garantizado
+  // Bloqueo estricto de documento en móvil (Cero elastic scroll en PWA Home)
   useEffect(() => {
-    document.documentElement.classList.add('mobile-screen-locked');
-    document.body.classList.add('mobile-screen-locked');
+    const html = document.documentElement;
+    const body = document.body;
+    html.classList.add('mobile-screen-locked');
+    body.classList.add('mobile-screen-locked');
 
-    const handleTouchMove = (e) => {
-      // Si está en la pantalla de inicio, bloquear cualquier intento de arrastre / rebote de Safari/Chrome
+    const preventGlobalScroll = (e) => {
       if (mobileTab === 'home') {
+        e.preventDefault();
+        return;
+      }
+      if (!e.target?.closest?.('.mobile-scroll-view')) {
         e.preventDefault();
       }
     };
 
-    window.addEventListener('touchmove', handleTouchMove, { passive: false });
-
+    document.addEventListener('touchmove', preventGlobalScroll, { passive: false });
     return () => {
-      document.documentElement.classList.remove('mobile-screen-locked');
-      document.body.classList.remove('mobile-screen-locked');
-      window.removeEventListener('touchmove', handleTouchMove);
+      html.classList.remove('mobile-screen-locked');
+      body.classList.remove('mobile-screen-locked');
+      document.removeEventListener('touchmove', preventGlobalScroll);
     };
   }, [mobileTab]);
 
-  const tasaBcv = Number(config?.tasaDolar || 827.73);
+  // Contar solo pedidos comerciales activos (excluye SOLICITUD_CLIENTE, facturados y anulados)
+  const activePendingOrdersCount = useMemo(() => {
+    return (Array.isArray(orders) ? orders : []).filter((o) => {
+      if (!isCommercialPresaleOrder(o)) return false;
+      const st = normalizeOrderStatus(o);
+      return !st.isBilled && !st.isCancelled;
+    }).length;
+  }, [orders]);
 
-  // Cantidad de clientes en mora para badge en bottom dock
-  const clientsInMoraCount = clients.filter(c => {
-    const s = Number(c.saldoUsd || c.saldo_usd || 0);
-    const m = Number(c.diasMora || c.dias_mora || 0);
-    return s > 0.01 && m > 0;
-  }).length;
-
-  const isMainTab = ['home', 'pedidos', 'cxc', 'inventario', 'menu'].includes(mobileTab);
-
-  const handleNavigateSubmodule = (modId) => {
-    if (modId === 'config') {
+  const handleNavigateSubmodule = useCallback((modId) => {
+    if (modId === 'config' || modId === 'configuracion') {
       setShowConfigModal(true);
       return;
     }
+    if (modId === 'pedidos') {
+      setSelectedOrderForDetail(null);
+      setOrderIntent((prev) => ({
+        key: prev.key + 1,
+        subTab: 'mis_pedidos',
+        product: null,
+        client: null
+      }));
+    }
     setMobileTab(modId);
-  };
+  }, []);
+
+  const handleCreateOrder = useCallback(() => {
+    setSelectedOrderForDetail(null);
+    setOrderIntent((prev) => ({
+      key: prev.key + 1,
+      subTab: 'crear',
+      product: null,
+      client: null
+    }));
+    setMobileTab('pedidos');
+  }, []);
+
+  const handleOpenOrderDetail = useCallback((order) => {
+    setSelectedOrderForDetail(order || null);
+    setMobileTab('pedidos');
+  }, []);
+
+  const handleConsumeOrderContext = useCallback(() => {
+    setOrderIntent((prev) => ({
+      ...prev,
+      product: null,
+      client: null
+    }));
+  }, []);
+
+  const handleProceedToMobilePOS = useCallback(
+    (order) => {
+      onProceedToPOS?.(order);
+      setMobileTab('ventas');
+    },
+    [onProceedToPOS]
+  );
+
+  const isMainTab = ['home', 'pedidos', 'cxc', 'inventario', 'menu'].includes(mobileTab);
+
+  // Barra inferior con Inicio, Preventa, Cobranzas, Almacén y Menú
+  const dockItems = useMemo(() => {
+    const items = [
+      { id: 'home', label: 'Inicio', icon: Home, badge: null }
+    ];
+    if (
+      canAccessModule(currentUser?.rol, 'pedidos', currentUser) ||
+      canAccessModule(currentUser?.rol, 'preventa', currentUser)
+    ) {
+      items.push({
+        id: 'pedidos',
+        label: 'Preventa',
+        icon: ClipboardList,
+        badge: activePendingOrdersCount > 0 ? activePendingOrdersCount : null
+      });
+    }
+    if (canAccessMobileCxC(currentUser)) {
+      items.push({
+        id: 'cxc',
+        label: 'Cobranzas',
+        icon: Wallet,
+        badge: null
+      });
+    }
+    if (canAccessMobileInventory(currentUser)) {
+      items.push({
+        id: 'inventario',
+        label: 'Almacén',
+        icon: Package,
+        badge: null
+      });
+    }
+    items.push({
+      id: 'menu',
+      label: 'Menú',
+      icon: LayoutGrid,
+      badge: null,
+      activeOverride: !['home', 'pedidos', 'cxc', 'inventario'].includes(mobileTab)
+    });
+    return items;
+  }, [currentUser, activePendingOrdersCount, mobileTab]);
 
   return (
     <div className="mobile-app-root">
-      
-      {/* 1. HEADER MÓVIL FIJO (Compatible con Notch y Dynamic Island) */}
+      {/* 1. HEADER MÓVIL FIJO (STITCH TOP APP BAR) */}
       <header className="mobile-header-bar">
-        <div className="mobile-header-left">
-          <img src={motorvenLogo} alt="MOTORVEN" className="mobile-header-logo" />
-        </div>
+        <button
+          type="button"
+          className="mobile-header-brand"
+          onClick={() => setMobileTab('home')}
+        >
+          <div className="mobile-brand-mark">
+            <img src={motorvenLogo} alt="SIGNUM MOTORVEN" className="mobile-header-logo" />
+          </div>
+          <div className="mobile-brand-titles">
+            <span className="mobile-brand-title">SIGNUM</span>
+            <span className="mobile-brand-sub">MOTORVEN ERP</span>
+          </div>
+        </button>
 
-        <div className="mobile-rate-pill" title="Tasa Oficial BCV en vivo">
-          <span>BCV:</span>
-          <span>{formatBs(tasaBcv)}</span>
-        </div>
+        <div className="mobile-header-actions">
+          <div className="mobile-rate-pill" title="Tasa Oficial BCV del día">
+            <span className="mobile-rate-badge">BCV</span>
+            <span className="mobile-rate-value">
+              {formatBs(tasaBcv).replace(/^Bs\.\s*/, '')}
+            </span>
+          </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {onToggleTheme && (
+            <button
+              type="button"
+              className="mobile-icon-btn"
+              onClick={onToggleTheme}
+              title={theme === 'dark' ? 'Cambiar a Modo Claro' : 'Cambiar a Modo Oscuro'}
+              aria-label="Cambiar tema visual"
+            >
+              {theme === 'dark' ? <Sun size={15} color="#fbbf24" /> : <Moon size={15} />}
+            </button>
+          )}
+
+          {onSwitchToDesktop && (
+            <button
+              type="button"
+              className="mobile-btn-switch-pc"
+              onClick={onSwitchToDesktop}
+              title="Cambiar a Versión Completa de Escritorio (PC)"
+            >
+              <Monitor size={13} />
+              <span>PC</span>
+            </button>
+          )}
+
           <button
             type="button"
-            className="mobile-btn-switch-pc"
-            onClick={onSwitchToDesktop}
-            title="Cambiar a versión de pantalla completa para computadora"
+            className="mobile-avatar-pill"
+            onClick={() => setMobileTab('menu')}
+            title="Perfil y Menú"
           >
-            <Monitor size={12} />
-            <span>PC</span>
+            {userInitials}
           </button>
         </div>
       </header>
 
-      {/* 2. CONTENIDO PRINCIPAL: Cero-Scroll en Inicio, Scroll en Listas */}
+      {/* 2. CONTENIDO PRINCIPAL */}
       {mobileTab === 'home' ? (
         <MobileHomeView
-          currentUser={currentUser}
-          config={config}
           products={products}
-          clients={clients}
           orders={orders}
-          sales={sales}
+          clients={clients}
           profitInvoices={profitInvoices}
-          profitBankAccounts={profitBankAccounts}
-          profitPurchases={profitPurchases}
-          profitSellers={profitSellers}
-          onNavigateTab={handleNavigateSubmodule}
+          sales={sales}
+          profitCollections={profitCollections}
+          config={config}
+          currentUser={currentUser}
+          onNavigate={handleNavigateSubmodule}
+          onCreateOrder={handleCreateOrder}
+          onOpenOrderDetail={handleOpenOrderDetail}
         />
       ) : (
         <main className="mobile-scroll-view">
-          
-          {/* Barra de regreso cuando se navega a un módulo secundario */}
           {!isMainTab && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                marginBottom: '10px',
+                paddingBottom: '8px',
+                borderBottom: '1px solid var(--mob-border)'
+              }}
+            >
               <button
                 type="button"
+                className="mobile-chip"
                 onClick={() => setMobileTab('home')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                  color: '#fff',
-                  borderRadius: '10px',
-                  padding: '6px 12px',
-                  fontSize: '0.78rem',
-                  fontWeight: 700,
-                  cursor: 'pointer'
-                }}
+                style={{ color: 'var(--mob-navy)' }}
               >
                 <ArrowLeft size={14} /> Volver al Inicio
               </button>
-              <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase' }}>
-                Módulo: {mobileTab}
+              <span className="mobile-pill-badge info">
+                {MODULE_LABELS[mobileTab] || mobileTab.toUpperCase()}
               </span>
             </div>
           )}
 
-          {/* 2.1 PEDIDOS / PREVENTA MÓVIL */}
           {mobileTab === 'pedidos' && (
-            <SellerOrderPOSView
+            <MobileOrdersView
+              orders={orders}
               products={products}
               clients={clients}
-              orders={orders}
               profitInvoices={profitInvoices}
-              profitCollections={profitCollections}
               sales={sales}
               profitSellers={profitSellers}
               config={config}
-              profitZones={profitZones}
               currentUser={currentUser}
               onSaveOrder={onSaveOrder}
-              onSaveClient={onSaveClient}
-              onApproveClient={onApproveClient}
-              onRejectClient={onRejectClient}
-              onProceedToPOS={onProceedToPOS}
-              onProcessSale={onProcessSale}
-              onSyncProfit={onSyncProfit}
+              onUpdateOrderStatus={onUpdateOrderStatus}
+              onDeleteOrder={onDeleteOrder}
+              onProceedToPOS={handleProceedToMobilePOS}
+              onSwitchToDesktop={onSwitchToDesktop}
+              initialSubTab={orderIntent.subTab}
+              initialProduct={orderIntent.product}
+              initialClient={orderIntent.client}
+              initialContextKey={orderIntent.key}
+              selectedOrder={selectedOrderForDetail}
+              onConsumeInitialContext={handleConsumeOrderContext}
+              onClearSelectedOrder={() => setSelectedOrderForDetail(null)}
             />
           )}
 
-          {/* 2.2 COBRANZAS (CXC) */}
           {mobileTab === 'cxc' && (
             <MobileCxCView
               clients={clients}
-              sales={sales}
               profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              sales={sales}
               config={config}
+              currentUser={currentUser}
+              profitSellers={profitSellers}
+              onSyncProfit={onSyncProfit}
+              onSelectClientForOrder={(cli) => {
+                setSelectedOrderForDetail(null);
+                setOrderIntent((prev) => ({
+                  key: prev.key + 1,
+                  subTab: 'crear',
+                  product: null,
+                  client: cli
+                }));
+                setMobileTab('pedidos');
+              }}
             />
           )}
 
-          {/* 2.3 STOCK & INVENTARIO */}
           {mobileTab === 'inventario' && (
             <MobileInventoryView
               products={products}
               config={config}
-              onSelectProductForOrder={() => setMobileTab('pedidos')}
+              currentUser={currentUser}
+              onSyncProfit={onSyncProfit}
             />
           )}
 
-          {/* 2.4 MENÚ PRINCIPAL */}
           {mobileTab === 'menu' && (
             <MobileMenuView
               currentUser={currentUser}
+              config={config}
               theme={theme}
               onToggleTheme={onToggleTheme}
               onSwitchToDesktop={onSwitchToDesktop}
@@ -313,7 +397,7 @@ export default function MobileAppLayout({
             />
           )}
 
-          {/* Módulos secundarios cuando se seleccionan desde el menú */}
+          {/* Facturación directa si se pasa un pedido desde Detalle hacia Caja */}
           {mobileTab === 'ventas' && (
             <SalesPOSView
               products={products}
@@ -338,279 +422,39 @@ export default function MobileAppLayout({
               onClearPendingOrder={onClearPendingOrder}
             />
           )}
-
-          {(mobileTab === 'flujo_caja' || mobileTab === 'cxp') && (
-            <CashflowView
-              key={mobileTab}
-              products={products}
-              cashMovements={cashMovements}
-              clients={clients}
-              suppliers={suppliers}
-              sales={sales}
-              profitBankAccounts={profitBankAccounts}
-              profitCashDesks={profitCashDesks}
-              profitAccountsPayable={profitAccountsPayable}
-              profitCollections={profitCollections}
-              profitInvoices={profitInvoices}
-              profitSellers={profitSellers}
-              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
-              onSyncProfit={onSyncProfit}
-              config={config}
-              onAddCashMovement={onAddCashMovement}
-              onUpdateCashDesk={onUpdateCashDesk}
-              onUpdateBankAccount={onUpdateBankAccount}
-              onOpenCashBankModal={() => setMobileTab('caja_bancos')}
-              onSaveClient={onSaveClient}
-              onDeleteClient={onDeleteClient}
-              onApproveClient={onApproveClient}
-              onRejectClient={onRejectClient}
-              currentUser={currentUser}
-              initialTab={mobileTab === 'cxp' ? 'CXP' : 'SPLIT'}
-            />
-          )}
-
-          {mobileTab === 'caja_bancos' && (
-            <CashBankModal
-              cashDesks={profitCashDesks}
-              bankAccounts={profitBankAccounts}
-              cashMovements={cashMovements}
-              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
-              onAddMovement={onAddCashMovement}
-              onUpdateMovement={onUpdateCashMovement}
-              onDeleteMovement={onDeleteCashMovement}
-              onUpdateCashDesk={onUpdateCashDesk}
-              onDeleteCashDesk={onDeleteCashDesk}
-              onUpdateBankAccount={onUpdateBankAccount}
-              onDeleteBankAccount={onDeleteBankAccount}
-              partnerPayableAccounts={partnerPayableAccounts}
-              onAdjustPartnerPayableBalance={onAdjustPartnerPayableBalance}
-              config={config}
-              currentUser={currentUser}
-            />
-          )}
-
-          {mobileTab === 'pasivos' && (
-            <PasivosView
-              partnerPayableAccounts={partnerPayableAccounts}
-              onSavePartnerPayableAccount={onSavePartnerPayableAccount}
-              onDeletePartnerPayableAccount={onDeletePartnerPayableAccount}
-              onAdjustPartnerPayableBalance={onAdjustPartnerPayableBalance}
-              accountsPayable={profitAccountsPayable}
-              profitAccountsPayable={profitAccountsPayable}
-              supplierPayments={profitSupplierPayments}
-              cashDesks={profitCashDesks}
-              bankAccounts={profitBankAccounts}
-              onDeleteCashMovement={onDeleteCashMovement}
-              config={config}
-              currentUser={currentUser}
-              onNavigate={handleNavigateSubmodule}
-            />
-          )}
-
-          {mobileTab === 'auditoria' && (
-            <AuditLedgerView
-              profitInvoices={profitInvoices}
-              profitCollections={profitCollections}
-              profitPurchases={profitPurchases}
-              profitSupplierPayments={profitSupplierPayments}
-              profitBankAccounts={profitBankAccounts}
-              profitCashDesks={profitCashDesks}
-              cashDesks={profitCashDesks}
-              profitAuditTrails={profitAuditTrails}
-              cashMovements={cashMovements}
-              usersList={usersList}
-              config={config}
-              onSyncProfit={onSyncProfit}
-              currentUser={currentUser}
-              onNavigate={handleNavigateSubmodule}
-            />
-          )}
-
-          {mobileTab === 'compras' && (
-            <PurchasesView
-              products={products}
-              suppliers={suppliers}
-              purchases={purchases}
-              config={config}
-              onSaveProduct={onSaveProduct}
-              onRegisterPurchase={onRegisterPurchase}
-              purchaseRequisitions={purchaseRequisitions}
-              purchaseOrders={purchaseOrders}
-              goodsReceiptNotes={goodsReceiptNotes}
-              onSaveRequisition={onSaveRequisition}
-              onSavePurchaseOrder={onSavePurchaseOrder}
-              onSaveGoodsReceipt={onSaveGoodsReceipt}
-              onSavePaymentOrder={onSavePaymentOrder}
-              onOpenCxpModule={() => setMobileTab('cxp')}
-              currentUser={currentUser}
-              profitSuppliers={profitSuppliers}
-              profitPurchases={profitPurchases}
-              profitAccountsPayable={profitAccountsPayable}
-              profitSupplierPayments={profitSupplierPayments}
-              profitIslrConcepts={profitIslrConcepts}
-              profitBeneficiaries={profitBeneficiaries}
-              profitPaymentOrders={profitPaymentOrders}
-              profitIslrWithholdings={profitIslrWithholdings}
-              profitInvoices={profitInvoices}
-              sales={sales}
-              onSyncProfit={onSyncProfit}
-            />
-          )}
-
-          {mobileTab === 'seniat' && (
-            <TaxReportsView
-              sales={sales}
-              purchases={purchases}
-              suppliers={suppliers}
-              fiscalClosures={fiscalClosures}
-              onExecuteCierreZ={onExecuteCierreZ}
-              profitInvoices={profitInvoices}
-              profitIslrConcepts={profitIslrConcepts}
-              profitBeneficiaries={profitBeneficiaries}
-              profitPaymentOrders={profitPaymentOrders}
-              profitIslrWithholdings={profitIslrWithholdings}
-              profitAccountsPayable={profitAccountsPayable}
-              profitPurchases={profitPurchases}
-              config={config}
-              currentUser={currentUser}
-              onSyncProfit={onSyncProfit}
-            />
-          )}
-
-          {mobileTab === 'usuarios' && (
-            <UsersManagementView
-              currentUser={currentUser}
-              usersList={usersList}
-              onUsersUpdated={onUsersUpdated}
-              onUpdateCurrentUser={onUpdateCurrentUser}
-              config={config}
-            />
-          )}
-
-          {mobileTab === 'vendedores' && (
-            <SellersView
-              profitSellers={profitSellers}
-              profitInvoices={profitInvoices}
-              profitCollections={profitCollections}
-              profitBankAccounts={profitBankAccounts}
-              profitZones={profitZones}
-              clients={clients}
-              orders={orders}
-              config={config}
-              currentUser={currentUser}
-              onSyncProfit={onSyncProfit}
-              onUpdateSellerTarget={onUpdateSellerTarget || (async () => {})}
-              onUpdateSellerPhoto={onUpdateSellerPhoto || (async () => {})}
-              onUpdateSellerZone={onUpdateSellerZone || (async () => {})}
-              onUpdateGlobalTarget={onUpdateGlobalTarget || (async () => {})}
-              onAddCashMovement={onAddCashMovement}
-              onCommissionSettlementsChange={onCommissionSettlementsChange}
-            />
-          )}
-
-          {mobileTab === 'rentabilidad' && (
-            <ProfitabilityView
-              products={products}
-              profitInvoices={profitInvoices}
-              sales={sales}
-              profitPurchases={profitPurchases}
-              profitSellers={profitSellers}
-              profitZones={profitZones}
-              profitReturns={profitReturns}
-              profitInventoryAdjustments={profitInventoryAdjustments}
-              profitIslrWithholdings={profitIslrWithholdings}
-              profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
-              profitCashDesks={profitCashDesks}
-              profitBankAccounts={profitBankAccounts}
-              cashMovements={cashMovements}
-              commissionSettlements={commissionSettlements}
-              expenses={expenses}
-              payroll={payroll}
-              employees={employees}
-              clients={clients}
-              config={config}
-              onSyncProfit={onSyncProfit}
-              onSaveExpense={onSaveExpense}
-              onDeleteExpense={onDeleteExpense}
-              onSaveEmployee={onSaveEmployee}
-              onDeleteEmployee={onDeleteEmployee}
-              onSavePayroll={onSavePayroll}
-              onDeletePayroll={onDeletePayroll}
-              onAddCashMovement={onAddCashMovement}
-              currentUser={currentUser}
-            />
-          )}
-
         </main>
       )}
 
-      {/* 3. BARRA INFERIOR DE NAVEGACIÓN FIJA (BOTTOM DOCK) */}
-      <nav className="mobile-bottom-dock">
-        <button
-          type="button"
-          className={`mobile-dock-btn ${mobileTab === 'home' ? 'active' : ''}`}
-          onClick={() => setMobileTab('home')}
-        >
-          <Home size={19} />
-          <span>Inicio</span>
-        </button>
-
-        <button
-          type="button"
-          className={`mobile-dock-btn ${mobileTab === 'pedidos' ? 'active' : ''}`}
-          onClick={() => setMobileTab('pedidos')}
-        >
-          <ShoppingCart size={19} />
-          <span>Pedidos</span>
-          {activePendingOrdersCount > 0 && (
-            <span className="mobile-dock-badge">{activePendingOrdersCount}</span>
-          )}
-        </button>
-
-        <button
-          type="button"
-          className={`mobile-dock-btn ${mobileTab === 'cxc' ? 'active' : ''}`}
-          onClick={() => setMobileTab('cxc')}
-        >
-          <DollarSign size={19} />
-          <span>Cobranzas</span>
-          {clientsInMoraCount > 0 && (
-            <span className="mobile-dock-badge" style={{ background: '#f59e0b' }}>{clientsInMoraCount}</span>
-          )}
-        </button>
-
-        <button
-          type="button"
-          className={`mobile-dock-btn ${mobileTab === 'inventario' ? 'active' : ''}`}
-          onClick={() => setMobileTab('inventario')}
-        >
-          <Package size={19} />
-          <span>Stock</span>
-        </button>
-
-        <button
-          type="button"
-          className={`mobile-dock-btn ${!['home', 'pedidos', 'cxc', 'inventario'].includes(mobileTab) ? 'active' : ''}`}
-          onClick={() => setMobileTab('menu')}
-        >
-          <Menu size={19} />
-          <span>Menú</span>
-        </button>
+      {/* 3. BOTTOM NAVIGATION BAR ENFOCADA (Inicio / Preventa / Menú) */}
+      <nav className="mobile-bottom-dock" aria-label="Navegación Principal Móvil">
+        {dockItems.map((tab) => {
+          const IconComp = tab.icon;
+          const isActive = tab.activeOverride ? true : mobileTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={`mobile-dock-btn ${isActive ? 'active' : ''}`}
+              onClick={() => handleNavigateSubmodule(tab.id)}
+            >
+              <IconComp size={19} />
+              {tab.badge && <span className="mobile-dock-badge">{tab.badge}</span>}
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </nav>
 
-      {/* Modal de Configuración si se abre desde el menú */}
-      {showConfigModal && (
-        <AppConfigModal
-          isOpen={showConfigModal}
-          config={config}
-          onSaveConfig={onSaveConfig}
-          currentUser={currentUser}
-          products={products}
-          clients={clients}
-          onClose={() => setShowConfigModal(false)}
-        />
-      )}
-
+      {/* Modal de Configuración del Sistema */}
+      <AppConfigModal
+        isOpen={showConfigModal}
+        onClose={() => setShowConfigModal(false)}
+        config={config}
+        onSaveConfig={onSaveConfig}
+        currentUser={currentUser}
+        products={products}
+        clients={clients}
+      />
     </div>
   );
 }
