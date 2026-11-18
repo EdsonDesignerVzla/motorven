@@ -20,7 +20,7 @@ const projectRoot = path.resolve(__dirname, '..');
 
 const OFFICIAL_DOMAIN = 'signummotorven.com';
 const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
-const PROD_REPO_URL = 'https://github.com/EdsonDesignerVzla/motorven.git';
+const PROD_REPO_URL = 'https://EdsonDesignerVzla@github.com/EdsonDesignerVzla/motorven.git';
 const NON_INTERACTIVE_GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
 
 function fetchJsonText(urlStr, timeoutMs = 2500) {
