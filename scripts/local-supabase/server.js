@@ -325,6 +325,13 @@ async function initDatabase() {
           u.username.trim().toLowerCase() !== 'autotest_1793130314101'
         );
       }
+      if (Array.isArray(database._applied_stock_delta_keys)) {
+        database._applied_stock_delta_keys.forEach((entry) => {
+          if (entry && entry.key) {
+            APPLIED_STOCK_DELTA_KEYS.set(String(entry.key), entry.updatedProducts || []);
+          }
+        });
+      }
       console.log(`[Supabase Local] Base de datos cargada: ${Object.keys(database).length} tablas activas.`);
       return;
     } catch (err) {
@@ -899,15 +906,19 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
     if (delta02 !== 0) syncWhRow('02', next02);
   }
 
-  if (updatedProducts.length > 0) {
-    saveDatabase();
-  }
   if (cleanKey) {
     if (APPLIED_STOCK_DELTA_KEYS.size >= MAX_APPLIED_DELTA_KEYS) {
       const firstKey = APPLIED_STOCK_DELTA_KEYS.keys().next().value;
       if (firstKey) APPLIED_STOCK_DELTA_KEYS.delete(firstKey);
     }
     APPLIED_STOCK_DELTA_KEYS.set(cleanKey, updatedProducts);
+    database._applied_stock_delta_keys = Array.from(APPLIED_STOCK_DELTA_KEYS.entries()).map(([key, prods]) => ({
+      key,
+      updatedProducts: prods
+    }));
+  }
+  if (updatedProducts.length > 0 || cleanKey) {
+    saveDatabase();
   }
   return { ok: true, updatedProducts };
 }

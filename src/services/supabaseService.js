@@ -4350,7 +4350,7 @@ export const deleteSupabaseSale = async (saleId) => {
         });
       });
       if (revertLines.length > 0) {
-        const revKey = `sale_${cleanId || cleanNum}_revert_${Date.now()}`;
+        const revKey = `sale_${cleanId || cleanNum}_revert`;
         enqueueSyncAction('stock_delta', 'UPDATE', {
           id: revKey,
           idempotencyKey: revKey,
@@ -7258,10 +7258,13 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     dias_vencido_custom: docData.diasVencidoCustom ?? docData.dias_vencido_custom ?? null,
     clienteId: docData.clienteId || docData.cliente_id || docData.clienteRif || 'CLI-GEN',
     cliente_id: docData.clienteId || docData.cliente_id || docData.clienteRif || 'CLI-GEN',
+    co_cli: docData.clienteId || docData.cliente_id || docData.clienteRif || 'CLI-GEN',
     clienteNombre: docData.clienteNombre || docData.cliente_nombre || 'Cliente General',
     cliente_nombre: docData.clienteNombre || docData.cliente_nombre || 'Cliente General',
+    cli_des: docData.clienteNombre || docData.cliente_nombre || 'Cliente General',
     clienteRif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
     cliente_rif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
+    rif: docData.clienteRif || docData.cliente_rif || 'V-00000000',
     clienteDireccion: docData.clienteDireccion || docData.cliente_direccion || docData.direccion || '',
     cliente_direccion: docData.clienteDireccion || docData.cliente_direccion || docData.direccion || '',
     clienteTelefono: docData.clienteTelefono || docData.cliente_telefono || docData.telefono || '',
@@ -7272,10 +7275,14 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     is_exento: Boolean(docData.isExento ?? docData.is_exento ?? isNotaEntrega),
     vendedorId: docData.vendedorId || docData.vendedor_id || 'OF',
     vendedor_id: docData.vendedorId || docData.vendedor_id || 'OF',
+    co_ven: docData.vendedorId || docData.vendedor_id || 'OF',
     vendedorNombre: docData.vendedorNombre || docData.vendedor_nombre || '',
     vendedor_nombre: docData.vendedorNombre || docData.vendedor_nombre || '',
     totBrutoUsd,
+    totalBrutoUsd: totBrutoUsd,
     tot_bruto_usd: totBrutoUsd,
+    tot_bruto: Number((totBrutoUsd * tasa).toFixed(2)),
+    totalBruto: Number((totBrutoUsd * tasa).toFixed(2)),
     totBrutoBs: Number((totBrutoUsd * tasa).toFixed(2)),
     tot_bruto_bs: Number((totBrutoUsd * tasa).toFixed(2)),
     ivaUsd,
@@ -7283,7 +7290,10 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     ivaBs: Number((ivaUsd * tasa).toFixed(2)),
     iva_bs: Number((ivaUsd * tasa).toFixed(2)),
     totNetoUsd,
+    totalNetoUsd: totNetoUsd,
     tot_neto_usd: totNetoUsd,
+    tot_neto: Number((totNetoUsd * tasa).toFixed(2)),
+    totalNeto: Number((totNetoUsd * tasa).toFixed(2)),
     totNetoBs: Number((totNetoUsd * tasa).toFixed(2)),
     tot_neto_bs: Number((totNetoUsd * tasa).toFixed(2)),
     abonosUsd,
@@ -7449,8 +7459,16 @@ export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData)
 
   if (docTypeChanged && itemsToMove.length > 0 && isNetworkOnline()) {
     try {
-      await adjustSupabaseProductsStockForSale({ ...originalDoc, tipoDoc: oldTipo, items: itemsToMove }, { reverse: true });
-      await adjustSupabaseProductsStockForSale({ ...updatedDocData, tipoDoc: newTipo, items: itemsToMove }, { reverse: false });
+      const editDocKey = String(originalDoc?.id || originalDoc?.factNum || updatedDocData?.id || '').trim();
+      const whSwapBase = editDocKey ? `edit_wh_${editDocKey}_${oldTipo}_to_${newTipo}` : '';
+      await adjustSupabaseProductsStockForSale(
+        { ...originalDoc, tipoDoc: oldTipo, items: itemsToMove },
+        { reverse: true, idempotencyKey: whSwapBase ? `${whSwapBase}_rev` : '' }
+      );
+      await adjustSupabaseProductsStockForSale(
+        { ...updatedDocData, tipoDoc: newTipo, items: itemsToMove },
+        { reverse: false, idempotencyKey: whSwapBase ? `${whSwapBase}_ded` : '' }
+      );
     } catch (whErr) {
       console.warn('[updateSupabaseInvoiceDocument] Aviso ajustando almacenes al cambiar tipoDoc:', whErr?.message);
     }
@@ -9528,6 +9546,33 @@ function mergeRemoteAndLocalDocs(remoteList = [], localList = [], idField = 'id'
   return Array.from(map.values());
 }
 
+const CLIENT_APPLIED_DELTA_KEY = 'signum_applied_stock_deltas_v1';
+
+function hasAppliedClientStockDeltaKey(key) {
+  if (!key || typeof window === 'undefined' || isTestEnv) return false;
+  try {
+    const raw = window.localStorage?.getItem(CLIENT_APPLIED_DELTA_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) && list.includes(key);
+  } catch (_) {
+    return false;
+  }
+}
+
+function markAppliedClientStockDeltaKey(key) {
+  if (!key || typeof window === 'undefined' || isTestEnv) return;
+  try {
+    const raw = window.localStorage?.getItem(CLIENT_APPLIED_DELTA_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    const arr = Array.isArray(list) ? list : [];
+    if (!arr.includes(key)) {
+      arr.push(key);
+      if (arr.length > 400) arr.splice(0, arr.length - 400);
+      window.localStorage?.setItem(CLIENT_APPLIED_DELTA_KEY, JSON.stringify(arr));
+    }
+  } catch (_) {}
+}
+
 export async function applyStockDeltaForWarehouseLines(lines = [], options = {}) {
   const {
     validateStrict = false,
@@ -9545,9 +9590,13 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
     }))
     .filter(l => l.codigo && (l.delta01 !== 0 || l.delta02 !== 0));
   if (normalizedDeltaLines.length === 0) return [];
+  const explicitKey = String(idempotencyKey || '').trim();
+  if (explicitKey && hasAppliedClientStockDeltaKey(explicitKey)) {
+    return [];
+  }
   const touchedCodes = Array.from(new Set(normalizedDeltaLines.map(l => l.codigo)));
   const resolvedDeltaKey =
-    String(idempotencyKey || '').trim() ||
+    explicitKey ||
     `delta_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   // 1. Vía atómica en servidor (/inventory/apply-delta): evita condiciones de carrera entre cajas/usuarios
@@ -9590,6 +9639,7 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
       if (res.ok) {
         const data = await res.json().catch(() => null);
         if (data?.ok && Array.isArray(data.updatedProducts)) {
+          if (explicitKey) markAppliedClientStockDeltaKey(explicitKey);
           if (data.updatedProducts.length > 0) {
             patchProductsStockInStorage(data.updatedProducts);
             data.updatedProducts.forEach(p => {
@@ -9725,8 +9775,8 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
 
     if (isNetworkOnline() && isSupabaseAvailable) {
       try {
-        const results = await Promise.all([
-          ...productPatches.map(p =>
+        const prodResults = await Promise.all(
+          productPatches.map(p =>
             withTimeout(
               supabase
                 .from('products')
@@ -9741,14 +9791,22 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
                 .eq('id', p.id),
               6000
             )
-          ),
-          whRows.length > 0
-            ? withTimeout(supabase.from('profit_stock_by_warehouse').upsert(whRows, { onConflict: 'id' }), 6000)
-            : Promise.resolve({ error: null })
-        ]);
-        const firstErr = results.find(r => r?.error)?.error;
-        if (firstErr) {
-          throw firstErr;
+          )
+        );
+        const firstProdErr = prodResults.find(r => r?.error)?.error;
+        if (firstProdErr) {
+          throw firstProdErr;
+        }
+        if (explicitKey) markAppliedClientStockDeltaKey(explicitKey);
+
+        // Sincronizar profit_stock_by_warehouse sin re-encolar stock_delta si products ya persistió
+        if (whRows.length > 0) {
+          withTimeout(
+            supabase.from('profit_stock_by_warehouse').upsert(whRows, { onConflict: 'id' }),
+            6000
+          ).catch((whErr) => {
+            console.warn('[applyStockDeltaForWarehouseLines] Aviso sincronizando profit_stock_by_warehouse:', whErr?.message || whErr);
+          });
         }
       } catch (err) {
         if (throwOnRemoteError) throw err;
