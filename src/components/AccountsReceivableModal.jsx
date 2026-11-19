@@ -1570,7 +1570,7 @@ export function AccountsReceivableModal({
     // Handlers de Emisión de Nota de Crédito / Nota de Débito desde CxC
     // ========================================================================
     const syncCreditDebitAmounts = (next, sourceField) => {
-        const effIva = Boolean(next.isFiscal) && Boolean(next.aplicaIva);
+        const effIva = Boolean(next.isFiscal);
         const rateNum = Number(next.tasa) > 0 ? Number(next.tasa) : tasaBcv;
         const safeRate = rateNum > 0 ? rateNum : 1;
 
@@ -1724,7 +1724,8 @@ export function AccountsReceivableModal({
                 if (value === 'NOTA_CREDITO' && next.doc) {
                     const rest = round2(next.doc.restanteUsd || 0);
                     const total = rest > 0 ? rest : 0;
-                    const sub = (Boolean(next.isFiscal) && next.aplicaIva) ? round2(total / 1.16) : total;
+                    const sub = Boolean(next.isFiscal) ? round2(total / 1.16) : total;
+                    next.aplicaIva = Boolean(next.isFiscal);
                     next.totalUsd = total > 0 ? String(total) : '';
                     next.subtotalUsd = total > 0 ? String(sub) : '';
                     syncCreditDebitAmounts(next, 'totalUsd');
@@ -1732,7 +1733,7 @@ export function AccountsReceivableModal({
             }
 
             if (field === 'aplicaIva') {
-                next.aplicaIva = Boolean(next.isFiscal) && Boolean(value);
+                next.aplicaIva = Boolean(next.isFiscal);
                 syncCreditDebitAmounts(next, 'aplicaIva');
             }
 
@@ -1784,7 +1785,7 @@ export function AccountsReceivableModal({
                 isFiscal: Boolean(creditDebitModal.isFiscal),
                 fechaEmision: creditDebitModal.fechaEmision || getTodayIso(),
                 subtotalUsd: subVal > 0 ? subVal : totVal,
-                aplicaIva: Boolean(creditDebitModal.isFiscal) && Boolean(creditDebitModal.aplicaIva),
+                aplicaIva: Boolean(creditDebitModal.isFiscal),
                 tasa: tasaVal,
                 motivo: creditDebitModal.motivo,
                 clienteDireccion
@@ -1829,6 +1830,7 @@ export function AccountsReceivableModal({
                     config,
                     currentUser,
                     clients,
+                    sellers: profitSellers.length > 0 ? profitSellers : (sellers.length > 0 ? sellers : REAL_PROFIT_SELLERS),
                     autoPrint: true
                 });
             }
@@ -4082,10 +4084,32 @@ export function AccountsReceivableModal({
                                                                     const invIsFiscal = inv.isFiscal !== undefined
                                                                         ? Boolean(inv.isFiscal)
                                                                         : (inferCxcDocType(inv) !== 'NOTA_ENTREGA' && !/^NE-/i.test(String(inv.factNum || '')));
+                                                                    const totalNoteUsd = round2(Number(inv.montoFacturaUsd ?? inv.totNetoUsd ?? 0));
+                                                                    const rawSubVal = Number(inv.totBrutoUsd ?? inv.subtotalUsd ?? 0);
+                                                                    const rawIvaVal = Number(inv.ivaUsd ?? 0);
+                                                                    const resolvedSubUsd = invIsFiscal
+                                                                        ? (rawIvaVal > 0.005 && rawSubVal > 0 && rawSubVal < totalNoteUsd ? round2(rawSubVal) : round2(totalNoteUsd / 1.16))
+                                                                        : (rawSubVal > 0 ? round2(rawSubVal) : totalNoteUsd);
+                                                                    const resolvedIvaUsd = invIsFiscal
+                                                                        ? (rawIvaVal > 0.005 ? round2(rawIvaVal) : round2(Math.max(0, totalNoteUsd - resolvedSubUsd)))
+                                                                        : 0;
+                                                                    const resolvedMotivo = inv.observaciones || inv.comentarios || 'Nota registrada en CxC';
+                                                                    const existingItems = Array.isArray(inv.items) && inv.items.length > 0
+                                                                        ? inv.items
+                                                                        : [{
+                                                                            codigo: String(inv.documentoAfectado || inv.factNum || ''),
+                                                                            descripcion: resolvedMotivo,
+                                                                            cantidad: 1,
+                                                                            precioUsd: resolvedSubUsd,
+                                                                            precioUnitarioUsd: resolvedSubUsd,
+                                                                            subtotalUsd: resolvedSubUsd,
+                                                                            tipoAlicuota: resolvedIvaUsd > 0.005 ? '16%' : 'EXENTO'
+                                                                        }];
                                                                     outputCreditDebitNoteDocument({
                                                                         docData: {
                                                                             tipoDoc: isNd ? 'NOTA_DEBITO' : 'NOTA_CREDITO',
                                                                             isFiscal: invIsFiscal,
+                                                                            isExento: !invIsFiscal,
                                                                             numeroDoc: inv.factNum,
                                                                             numeroControl: inv.numeroControl || '',
                                                                             documentoAfectado: inv.documentoAfectado || inv.nroDocOrigen || 'N/A',
@@ -4093,17 +4117,23 @@ export function AccountsReceivableModal({
                                                                             clienteId: inv.clienteId,
                                                                             clienteNombre: inv.cliente,
                                                                             clienteRif: inv.rif || 'N/A',
+                                                                            vendedorId: inv.vendedorId || inv.coVen || '',
+                                                                            vendedorNombre: inv.vendedorNombre || '',
+                                                                            cobradorNombre: inv.vendedorNombre || '',
                                                                             tasaDolar: inv.tasa || tasaBcv,
-                                                                            subtotalUsd: inv.subtotalUsd ?? inv.montoFacturaUsd,
-                                                                            ivaUsd: inv.ivaUsd ?? 0,
-                                                                            totalUsd: inv.montoFacturaUsd,
-                                                                            motivo: inv.observaciones || inv.comentarios || 'Nota registrada en CxC',
-                                                                            observaciones: inv.observaciones || inv.comentarios || 'Nota registrada en CxC',
-                                                                            items: inv.items || []
+                                                                            subtotalUsd: resolvedSubUsd,
+                                                                            baseGeneralUsd: invIsFiscal ? resolvedSubUsd : 0,
+                                                                            ivaUsd: resolvedIvaUsd,
+                                                                            ivaGeneralUsd: resolvedIvaUsd,
+                                                                            totalUsd: totalNoteUsd,
+                                                                            motivo: resolvedMotivo,
+                                                                            observaciones: resolvedMotivo,
+                                                                            items: existingItems
                                                                         },
                                                                         config,
                                                                         currentUser,
-                                                                        clients
+                                                                        clients,
+                                                                        sellers: profitSellers.length > 0 ? profitSellers : (sellers.length > 0 ? sellers : REAL_PROFIT_SELLERS)
                                                                     });
                                                                 }}
                                                                 className="btn"
@@ -4646,7 +4676,7 @@ export function AccountsReceivableModal({
                 const rateVal = Number(creditDebitModal.tasa) > 1 ? Number(creditDebitModal.tasa) : tasaBcv;
                 const subVal = round2(Number(creditDebitModal.subtotalUsd || 0));
                 const subBsVal = round2(subVal * rateVal);
-                const effIva = isFiscalNote && Boolean(creditDebitModal.aplicaIva);
+                const effIva = isFiscalNote;
                 const ivaVal = effIva ? round2(subVal * 0.16) : 0;
                 const ivaBsVal = round2(ivaVal * rateVal);
                 const totVal = round2(Number(creditDebitModal.totalUsd || (subVal + ivaVal)));
@@ -4854,15 +4884,9 @@ export function AccountsReceivableModal({
                                         />
                                     </div>
                                     <div>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.72rem', fontWeight: 700, color: !isFiscalNote ? 'var(--text-muted)' : 'var(--neon-cyan)', textTransform: 'uppercase', marginBottom: '0.35rem', cursor: !isFiscalNote ? 'not-allowed' : 'pointer' }}>
-                                            <input
-                                                type="checkbox"
-                                                disabled={!isFiscalNote}
-                                                checked={effIva}
-                                                onChange={(e) => handleCreditDebitFieldChange('aplicaIva', e.target.checked)}
-                                            />
-                                            <span>{!isFiscalNote ? 'Exento (No Fiscal)' : 'Aplica IVA 16%'}</span>
-                                        </label>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.72rem', fontWeight: 700, color: !isFiscalNote ? 'var(--text-muted)' : 'var(--neon-cyan)', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                                            <span>{!isFiscalNote ? 'EXENTO (NO FISCAL)' : 'IVA 16% (OBLIGATORIO FISCAL)'}</span>
+                                        </div>
                                         <div className="input-modern" style={{ width: '100%', padding: '0.45rem 0.75rem', fontFamily: 'var(--font-code)', lineHeight: 1.3 }}>
                                             <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                                                 IVA: {formatUsd(ivaVal)}
@@ -5016,6 +5040,7 @@ export function AccountsReceivableModal({
                 documents={allDocuments}
                 collections={collections}
                 catalogCuentas={catalogCuentas}
+                clients={clients}
                 sellers={profitSellers.length > 0 ? profitSellers : (sellers.length > 0 ? sellers : REAL_PROFIT_SELLERS)}
                 config={config}
                 tasaBcv={tasaBcv}

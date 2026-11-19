@@ -4897,6 +4897,9 @@ export function resolveDocumentSellerName(docData = {}, client = null, clients =
   };
 
   const explicitNames = [
+    safeDoc.cobradorNombre,
+    safeDoc.cobrador_nombre,
+    safeDoc.cobrador,
     safeDoc.vendedorNombre,
     safeDoc.vendedor_nombre,
     safeDoc.vendedorDisplay,
@@ -4914,6 +4917,8 @@ export function resolveDocumentSellerName(docData = {}, client = null, clients =
   }
 
   const sellerCodes = [
+    safeDoc.cobradorId,
+    safeDoc.cobrador_id,
     safeDoc.vendedorId,
     safeDoc.vendedor_id,
     safeDoc.vendedorCoVen,
@@ -5965,15 +5970,16 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   const leftClip = (txt) => doc.splitTextToSize(String(txt), leftColW)[0] || '';
   const rightClip = (txt) => doc.splitTextToSize(String(txt), rightColW)[0] || '';
 
+  const isPayable = Boolean(sale.isPayableNote);
+  const emisorRespNombre = String(sale.emisorNombre || sale.creadoPor || currentUser?.nombre || vendedorNombre || 'Sistema').trim();
+  const rightLineCount = (isCreditOrDebit && !isPayable) ? 6 : 5;
   const leftBlockH = 9.8 + (acqNameLines.length * 4.6) + 4.5 + (addrLines.length * 4.1) + 2.0;
-  const rightBlockH = 9.8 + (5 * 4.5) + 2.0;
+  const rightBlockH = 9.8 + (rightLineCount * 4.5) + 2.0;
   const acqBoxH = Math.max(30.5, leftBlockH, rightBlockH);
 
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
   doc.roundedRect(startX, currentY, tableWidth, acqBoxH, 2, 2, 'FD');
-
-  const isPayable = Boolean(sale.isPayableNote);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.8);
@@ -6031,7 +6037,11 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   if (isCreditOrDebit) {
     doc.text(rightClip(`N° Control Ref.: ${sale.numeroControl || 'N/A'}`), midX, expY);
     expY += 4.5;
-    doc.text(rightClip(`Emisor / Resp.: ${vendedorNombre}`), midX, expY);
+    if (!isPayable) {
+      doc.text(rightClip(`Cobrador: ${vendedorNombre}`), midX, expY);
+      expY += 4.5;
+    }
+    doc.text(rightClip(`Emisor / Resp.: ${emisorRespNombre}`), midX, expY);
   } else {
     doc.text(rightClip(`Vencimiento: ${fecVenc} (${sale.diasCredito || 0} Días)`), midX, expY);
     expY += 4.5;
@@ -6045,19 +6055,34 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   currentY += acqBoxH + 4;
 
   // 3. Tabla de Renglones Facturados
-  const totUsd = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
+  const isFiscalNote = isCreditOrDebit && isCreditDebitDocumentFiscal(sale);
+  const totUsd = round2(Number(sale.totalUsd ?? sale.totNetoUsd ?? 0));
+  const rawExplicitIva = Number(sale.ivaGeneralUsd ?? sale.ivaUsd ?? 0);
+  const hasExplicitIva =
+    (sale.ivaGeneralUsd !== undefined && sale.ivaGeneralUsd !== null) ||
+    (sale.ivaUsd !== undefined && sale.ivaUsd !== null);
   const hasExplicitBase =
     (sale.baseGeneralUsd !== undefined && sale.baseGeneralUsd !== null && Number(sale.baseGeneralUsd) > 0) ||
     (sale.subtotalUsd !== undefined && sale.subtotalUsd !== null && Number(sale.subtotalUsd) > 0) ||
     (sale.totBrutoUsd !== undefined && sale.totBrutoUsd !== null && Number(sale.totBrutoUsd) > 0);
-  const isExentoDoc = Boolean(sale.isExento) || (Number(sale.ivaUsd ?? sale.ivaGeneralUsd) === 0 && hasExplicitBase);
-  const baseUsd = hasExplicitBase
-    ? Number(sale.baseGeneralUsd ?? sale.subtotalUsd ?? sale.totBrutoUsd)
-    : (isExentoDoc ? totUsd : (totUsd / 1.16));
-  const rawIvaVal = sale.ivaGeneralUsd ?? sale.ivaUsd;
-  const ivaUsd = rawIvaVal !== undefined && rawIvaVal !== null
-    ? Number(rawIvaVal)
-    : (isExentoDoc ? 0 : Math.max(0, totUsd - baseUsd));
+  // En Notas de Crédito/Débito Fiscales siempre aplica IVA 16% (nunca exento)
+  const isExentoDoc = isFiscalNote
+    ? false
+    : (Boolean(sale.isExento) || (rawExplicitIva === 0 && hasExplicitBase));
+  let baseUsd = hasExplicitBase
+    ? round2(Number(sale.baseGeneralUsd ?? sale.subtotalUsd ?? sale.totBrutoUsd))
+    : (isExentoDoc ? totUsd : round2(totUsd / 1.16));
+  let ivaUsd = hasExplicitIva && (!isFiscalNote || rawExplicitIva > 0.005)
+    ? round2(rawExplicitIva)
+    : (isExentoDoc ? 0 : round2(Math.max(0, totUsd - baseUsd)));
+  if (isFiscalNote && ivaUsd <= 0.005 && totUsd > 0) {
+    if (hasExplicitBase && baseUsd > 0 && baseUsd < totUsd - 0.005) {
+      ivaUsd = round2(totUsd - baseUsd);
+    } else {
+      baseUsd = round2(totUsd / 1.16);
+      ivaUsd = round2(Math.max(0, totUsd - baseUsd));
+    }
+  }
   const totBs = totUsd * tasa;
 
   const fallbackNoteItems = isCreditOrDebit && (!Array.isArray(items) || items.length === 0)
@@ -6072,15 +6097,22 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
 
   const tableRows = fallbackNoteItems.map((it, idx) => {
     const cant = Number(it.cantidad || 1);
-    const precio = Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
-    const subUsd = Number(it.subtotalUsd ?? it.totalUsd ?? (cant * precio));
+    const alignUnitToBase = isCreditOrDebit && fallbackNoteItems.length === 1 && cant === 1;
+    const precio = alignUnitToBase
+      ? baseUsd
+      : Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0);
+    const subUsd = alignUnitToBase
+      ? baseUsd
+      : Number(it.subtotalUsd ?? it.totalUsd ?? (cant * precio));
     const subBs = subUsd * tasa;
     return [
       String(idx + 1),
       String(it.descripcion || it.articuloDescripcion || 'Lubricante'),
       String(cant),
       formatUsd(precio),
-      it.tipoAlicuota || (isExentoDoc ? 'EXENTO' : '16%'),
+      alignUnitToBase
+        ? (ivaUsd > 0.005 ? '16%' : 'EXENTO')
+        : (it.tipoAlicuota || (isExentoDoc ? 'EXENTO' : '16%')),
       formatUsd(subUsd),
       formatBs(subBs)
     ];
@@ -8760,11 +8792,13 @@ export function isCreditDebitDocumentFiscal(docData = {}) {
   return true;
 }
 
-export function generateCreditDebitNotePDF({ docData = {}, config = {}, currentUser = null }) {
+export function generateCreditDebitNotePDF({ docData = {}, config = {}, currentUser = null, client = null, clients = null, sellers = null }) {
   const tasa = Number(docData.tasaDolar || docData.tasa || config?.tasaDolar) || 827.73;
   const tipoRaw = String(docData.tipoDoc || docData.tipo_doc || 'NOTA_CREDITO').toUpperCase();
   const isDebito = tipoRaw === 'NOTA_DEBITO' || tipoRaw === 'ND' || tipoRaw === 'N/DB' || String(docData.fiscalDocType || '').toUpperCase() === 'NOTA_DEBITO';
   const isFiscalDoc = isCreditDebitDocumentFiscal(docData);
+  const cobradorNombre = resolveDocumentSellerName(docData, client, clients, sellers, currentUser);
+  const emisorRespNombre = String(docData.emisorNombre || docData.creadoPor || currentUser?.nombre || cobradorNombre || 'Sistema').trim();
   const docLabel = isDebito
     ? (isFiscalDoc ? 'NOTA DE DÉBITO FISCAL' : 'NOTA DE DÉBITO (NO FISCAL)')
     : (isFiscalDoc ? 'NOTA DE CRÉDITO FISCAL' : 'NOTA DE CRÉDITO (NO FISCAL)');
@@ -8819,32 +8853,43 @@ export function generateCreditDebitNotePDF({ docData = {}, config = {}, currentU
           ? `N° de Control: ${docData.numeroControl || '00-000000'} • Fecha: ${formatDateVe(docData.fechaEmision || docData.fecEmis || docData.fecha)}`
           : `Ref. Interna: ${docData.numeroControl || 'NO FISCAL'} • Fecha: ${formatDateVe(docData.fechaEmision || docData.fecEmis || docData.fecha)}`,
         `${isPayable ? 'Doc. CxP' : 'Factura'} / Doc. Afectado: #${docAfectado}`,
+        ...(!isPayable ? [`Cobrador: ${cobradorNombre}`] : []),
+        `Emisor / Resp.: ${emisorRespNombre}`,
         `Condición: ${docData.condicionPago || (isFiscalDoc ? 'AJUSTE FISCAL' : 'AJUSTE NO FISCAL')} • Tasa BCV: ${formatBs(tasa)}`
       ]
     }
   );
 
-  const totNetoUsd = Number(docData.totalUsd ?? docData.totNeto ?? docData.totNetoUsd ?? items.reduce((s, it) => s + Number(it.subtotalUsd ?? it.totalUsd ?? (Number(it.cantidad || 1) * Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0))), 0));
+  const totNetoUsd = round2(Number(docData.totalUsd ?? docData.totNeto ?? docData.totNetoUsd ?? items.reduce((s, it) => s + Number(it.subtotalUsd ?? it.totalUsd ?? (Number(it.cantidad || 1) * Number(it.precioUsd ?? it.precioUnitarioUsd ?? 0))), 0)));
   const hasExplicitSub = docData.subtotalUsd !== undefined || docData.totBruto !== undefined || docData.baseGeneralUsd !== undefined;
-  const baseImpUsd = hasExplicitSub
-    ? Number(docData.subtotalUsd ?? docData.totBruto ?? docData.baseGeneralUsd ?? 0)
-    : (isFiscalDoc && !docData.isExento ? (totNetoUsd / 1.16) : totNetoUsd);
-  const ivaUsd = docData.ivaUsd !== undefined || docData.iva !== undefined
-    ? Number(docData.ivaUsd ?? docData.iva ?? 0)
-    : Math.max(0, totNetoUsd - baseImpUsd);
+  let baseImpUsd = hasExplicitSub
+    ? round2(Number(docData.subtotalUsd ?? docData.totBruto ?? docData.baseGeneralUsd ?? 0))
+    : (isFiscalDoc ? round2(totNetoUsd / 1.16) : totNetoUsd);
+  let ivaUsd = docData.ivaUsd !== undefined || docData.iva !== undefined
+    ? round2(Number(docData.ivaUsd ?? docData.iva ?? 0))
+    : (isFiscalDoc ? round2(Math.max(0, totNetoUsd - baseImpUsd)) : 0);
+  if (isFiscalDoc && ivaUsd <= 0.005 && totNetoUsd > 0) {
+    if (hasExplicitSub && baseImpUsd > 0 && baseImpUsd < totNetoUsd - 0.005) {
+      ivaUsd = round2(totNetoUsd - baseImpUsd);
+    } else {
+      baseImpUsd = round2(totNetoUsd / 1.16);
+      ivaUsd = round2(Math.max(0, totNetoUsd - baseImpUsd));
+    }
+  }
   const hasIva = ivaUsd > 0.005;
 
   const rows = items.map((it, idx) => {
     const cant = Number(it.cantidad || it.totalArt || 1);
-    const precio = Number(it.precioUsd ?? it.precioUnitarioUsd ?? it.precVta ?? 0);
-    const subUsd = Number(it.subtotalUsd ?? it.totalUsd ?? cant * precio);
+    const alignUnitToBase = items.length === 1 && cant === 1;
+    const precio = alignUnitToBase ? baseImpUsd : Number(it.precioUsd ?? it.precioUnitarioUsd ?? it.precVta ?? 0);
+    const subUsd = alignUnitToBase ? baseImpUsd : Number(it.subtotalUsd ?? it.totalUsd ?? cant * precio);
     return [
       String(idx + 1),
       String(it.codigo || it.coArt || it.articuloId || 'S/C'),
       String(it.descripcion || it.articuloDescripcion || it.artDes || docData.motivo || 'Ajuste CxC').slice(0, 46),
       String(cant),
       formatUsd(precio),
-      it.tipoAlicuota || (hasIva ? '16%' : 'EXENTO'),
+      alignUnitToBase ? (hasIva ? '16%' : 'EXENTO') : (it.tipoAlicuota || (hasIva ? '16%' : 'EXENTO')),
       formatUsd(subUsd),
       formatBs(subUsd * tasa)
     ];
@@ -8923,7 +8968,10 @@ export function outputCreditDebitNoteDocument({
   return generateCreditDebitNotePDF({
     docData: { ...docData, isFiscal: false },
     config,
-    currentUser
+    currentUser,
+    client,
+    clients,
+    sellers
   });
 }
 

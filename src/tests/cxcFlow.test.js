@@ -16,7 +16,7 @@ import {
   getCreditDebitNoteKind,
   isCreditOrDebitNoteDoc
 } from '../utils/cxcUtils.js';
-import { generateCreditDebitNotePDF } from '../services/pdfReportService.js';
+import { generateCreditDebitNotePDF, outputCreditDebitNoteDocument } from '../services/pdfReportService.js';
 import {
   normalizeRateType,
   isDirectCurrencyRateType,
@@ -934,6 +934,8 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     clienteId: 'V257070898',
     cliente: 'Oscar Alberto Cabrera Rodriguez',
     rif: 'V-25707089-8',
+    vendedorId: 'KB',
+    vendedorNombre: 'Katherine Becerra',
     fechaEmision: '2026-11-18',
     montoFacturaUsd: 92,
     abonosUsd: 0,
@@ -947,11 +949,54 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     affectedDoc: baseInvoice,
     noteNum: 'NC-000012',
     fechaEmision: '2026-11-19',
-    subtotalUsd: 13,
+    subtotalUsd: 11.21,
     aplicaIva: false,
     tasa: 917.77,
     motivo: 'Descuento acordado'
   });
+
+  // Fiscal NC/ND siempre aplica IVA 16% por defecto y conserva P. Unit === Base Imponible + Cobrador
+  assert.equal(ncRes.notePdfData.subtotalUsd, 11.21);
+  assert.equal(ncRes.notePdfData.ivaUsd, 1.79);
+  assert.equal(ncRes.notePdfData.totalUsd, 13);
+  assert.equal(ncRes.notePdfData.items[0].precioUsd, 11.21);
+  assert.equal(ncRes.notePdfData.cobradorNombre, 'Katherine Becerra');
+  assert.equal(ncRes.updatedAffectedDoc.historialCobros[0].cobradorNombre, 'Katherine Becerra');
+
+  const formaLibreNc = outputCreditDebitNoteDocument({
+    docData: ncRes.notePdfData,
+    config: { tasaDolar: 917.77 },
+    currentUser: { nombre: 'Edson Designer' },
+    autoPrint: false
+  });
+  const flStream = (formaLibreNc.internal.pages[1] || []).join('\n');
+  assert.ok(flStream.includes('Cobrador: Katherine Becerra'), 'El recibo NC/ND debe mostrar Cobrador asignado a la Factura');
+  assert.ok(flStream.includes('Emisor / Resp.: Edson Designer'), 'El recibo NC/ND debe mostrar Emisor / Resp.');
+  assert.ok(flStream.includes('11.21'), 'P. Unitario y Base Imponible deben coincidir en $11.21');
+
+  // Incluso al reimprimir un registro fiscal previo sin IVA desglosado ($13 total), Forma Libre debe alinear P. Unitario ($11.21) + IVA (16%)
+  const legacyReprintedFl = outputCreditDebitNoteDocument({
+    docData: {
+      tipoDoc: 'NOTA_CREDITO',
+      isFiscal: true,
+      numeroDoc: 'NC-000001',
+      numeroControl: '00-000188',
+      documentoAfectado: '2149',
+      clienteNombre: 'Oscar Alberto Cabrera Rodriguez',
+      clienteRif: 'V-25707089-8',
+      cobradorNombre: 'Katherine Becerra',
+      tasaDolar: 917.77,
+      subtotalUsd: 13,
+      ivaUsd: 0,
+      totalUsd: 13
+    },
+    config: { tasaDolar: 917.77 },
+    currentUser: { nombre: 'Edson Designer' },
+    autoPrint: false
+  });
+  const legacyFlStream = (legacyReprintedFl.internal.pages[1] || []).join('\n');
+  assert.ok(legacyFlStream.includes('11.21'), 'Reimpresión fiscal debe alinear P. Unitario a Base Imponible ($11.21)');
+  assert.ok(legacyFlStream.includes('Cobrador: Katherine Becerra'), 'Reimpresión fiscal debe mostrar Cobrador de la factura');
 
   const ndRes = buildCxcCreditDebitNoteResult({
     noteType: 'NOTA_DEBITO',

@@ -1157,7 +1157,8 @@ export function buildCxcCreditDebitNoteResult({
   const affectedType = inferCxcDocType(affectedDoc);
   const isNotaEntregaAffected = affectedType === 'NOTA_ENTREGA';
   const effectiveIsFiscal = isFiscal === undefined ? !isNotaEntregaAffected : Boolean(isFiscal);
-  const effectiveAplicaIva = effectiveIsFiscal && Boolean(aplicaIva);
+  // En Notas de Crédito/Débito Fiscales siempre aplica IVA 16% por defecto (sin exención)
+  const effectiveAplicaIva = effectiveIsFiscal;
 
   const cleanSub = round2(Math.max(0, Number(subtotalUsd || 0)));
   const cleanIva = effectiveAplicaIva ? round2(cleanSub * 0.16) : 0;
@@ -1219,13 +1220,19 @@ export function buildCxcCreditDebitNoteResult({
       subtotalBs,
       ivaUsd: cleanIva,
       ivaBs,
+      isExento: !effectiveAplicaIva,
       montoUsd: cleanTotal,
       montoBs: totalBs,
       formaPago: 'NOTA_CREDITO',
       cuentaId: 'NC-FISCAL',
       cuentaNombre: `N/CR #${cleanNoteNum}`,
       accountType: 'NOTA_CREDITO',
+      vendedorId,
+      vendedorNombre,
+      cobradorId: vendedorId,
+      cobradorNombre: vendedorNombre,
       referencia: cleanNoteNum,
+      motivo: cleanMotivo,
       observaciones: `Nota de Crédito #${cleanNoteNum} • ${cleanMotivo}`
     };
 
@@ -1364,6 +1371,7 @@ export function buildCxcCreditDebitNoteResult({
     vendedor: vendedorNombre,
     vendedorNombre,
     vendedorId,
+    cobradorNombre: vendedorNombre,
     tasaDolar: cleanTasa,
     tasa: cleanTasa,
     subtotalUsd: cleanSub,
@@ -1385,6 +1393,7 @@ export function buildCxcCreditDebitNoteResult({
         descripcion: cleanMotivo,
         cantidad: 1,
         precioUsd: cleanSub,
+        precioUnitarioUsd: cleanSub,
         tipoAlicuota: effectiveAplicaIva ? '16%' : 'EXENTO',
         subtotalUsd: cleanSub
       }

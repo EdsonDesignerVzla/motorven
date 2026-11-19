@@ -262,6 +262,7 @@ const buildInvoiceMovementsList = ({
         clienteRif: doc.rif || doc.clienteRif || '',
         vendedorId: String(h.cobradorId || h.vendedorId || h.vendedor_id || doc.vendedorId || 'OF').trim(),
         vendedorNombre: String(h.cobradorNombre || h.vendedorNombre || doc.vendedorNombre || '').trim(),
+        cobradorNombre: String(h.cobradorNombre || h.vendedorNombre || doc.vendedorNombre || '').trim(),
         formaPago: resolvePaymentMethodLabel(h.formaPago, h.accountType),
         cuentaId: h.cuentaId || '',
         cuentaNombre,
@@ -271,6 +272,11 @@ const buildInvoiceMovementsList = ({
         tasa: tasaVal,
         tipoTasa: normalizeCxcRateType(h.tipoTasa || h.tipo_tasa),
         monedaPago: h.monedaPago || h.moneda_pago || h.moneda || '',
+        subtotalUsd: h.subtotalUsd !== undefined ? round2(h.subtotalUsd) : undefined,
+        subtotalBs: h.subtotalBs !== undefined ? round2(h.subtotalBs) : undefined,
+        ivaUsd: h.ivaUsd !== undefined ? round2(h.ivaUsd) : undefined,
+        ivaBs: h.ivaBs !== undefined ? round2(h.ivaBs) : undefined,
+        isExento: h.isExento,
         montoUsd,
         montoBs,
         montoFacturaUsd: Number(doc.montoFacturaUsd || 0),
@@ -438,6 +444,7 @@ export function CxcMovementsModal({
   documents = [],
   collections = [],
   catalogCuentas = [],
+  clients = [],
   sellers = [],
   config = {},
   tasaBcv = 827.73,
@@ -3198,10 +3205,37 @@ export function CxcMovementsModal({
                                             String(mov.accountType || '').toUpperCase() === 'NOTA_CREDITO' ||
                                             /^NC-/i.test(String(mov.correlativo || ''));
                                           if (isCreditNoteMov) {
+                                            const totalNoteUsd = round2(Number(mov.montoUsd || 0));
+                                            const isFiscalMov = mov.isFiscal !== undefined
+                                              ? Boolean(mov.isFiscal)
+                                              : (String(mov.tipoDoc || '').toUpperCase() !== 'NOTA_ENTREGA' && !/^NE-/i.test(String(mov.factNum || '')));
+                                            const rawSubVal = Number(mov.subtotalUsd || 0);
+                                            const rawIvaVal = Number(mov.ivaUsd || 0);
+                                            const resolvedSubUsd = isFiscalMov
+                                              ? (rawIvaVal > 0.005 && rawSubVal > 0 && rawSubVal < totalNoteUsd ? round2(rawSubVal) : round2(totalNoteUsd / 1.16))
+                                              : (rawSubVal > 0 ? round2(rawSubVal) : totalNoteUsd);
+                                            const resolvedIvaUsd = isFiscalMov
+                                              ? (rawIvaVal > 0.005 ? round2(rawIvaVal) : round2(Math.max(0, totalNoteUsd - resolvedSubUsd)))
+                                              : 0;
+                                            const matchedDocForSeller = (documents || []).find(
+                                              (d) => d && String(d.factNum || d.factura || '').trim() === String(mov.factNum || '').trim()
+                                            );
+                                            const resolvedVendedorId = String(
+                                              mov.vendedorId || matchedDocForSeller?.vendedorId || matchedDocForSeller?.coVen || ''
+                                            ).trim();
+                                            const resolvedSellerName = String(
+                                              mov.cobradorNombre ||
+                                              mov.vendedorNombre ||
+                                              matchedDocForSeller?.vendedorNombre ||
+                                              sellerNameByCode.get(resolvedVendedorId) ||
+                                              ''
+                                            ).trim();
+                                            const resolvedMotivo = mov.observaciones || `Nota de Crédito #${mov.correlativo} sobre #${mov.factNum}`;
                                             outputCreditDebitNoteDocument({
                                               docData: {
                                                 tipoDoc: 'NOTA_CREDITO',
-                                                isFiscal: mov.isFiscal,
+                                                isFiscal: isFiscalMov,
+                                                isExento: !isFiscalMov,
                                                 numeroDoc: mov.correlativo,
                                                 numeroControl: mov.numeroControl || '',
                                                 documentoAfectado: mov.factNum,
@@ -3209,15 +3243,33 @@ export function CxcMovementsModal({
                                                 clienteId: mov.clienteId,
                                                 clienteNombre: mov.clienteNombre,
                                                 clienteRif: mov.clienteRif,
+                                                vendedorId: resolvedVendedorId,
+                                                vendedorNombre: resolvedSellerName,
+                                                cobradorNombre: resolvedSellerName,
                                                 tasaDolar: mov.tasa,
-                                                subtotalUsd: mov.montoUsd,
-                                                ivaUsd: 0,
-                                                totalUsd: mov.montoUsd,
-                                                motivo: mov.observaciones || `Nota de Crédito #${mov.correlativo} sobre #${mov.factNum}`,
-                                                observaciones: mov.observaciones
+                                                subtotalUsd: resolvedSubUsd,
+                                                baseGeneralUsd: isFiscalMov ? resolvedSubUsd : 0,
+                                                ivaUsd: resolvedIvaUsd,
+                                                ivaGeneralUsd: resolvedIvaUsd,
+                                                totalUsd: totalNoteUsd,
+                                                motivo: resolvedMotivo,
+                                                observaciones: resolvedMotivo,
+                                                items: [
+                                                  {
+                                                    codigo: String(mov.factNum || ''),
+                                                    descripcion: resolvedMotivo,
+                                                    cantidad: 1,
+                                                    precioUsd: resolvedSubUsd,
+                                                    precioUnitarioUsd: resolvedSubUsd,
+                                                    subtotalUsd: resolvedSubUsd,
+                                                    tipoAlicuota: resolvedIvaUsd > 0.005 ? '16%' : 'EXENTO'
+                                                  }
+                                                ]
                                               },
                                               config,
-                                              currentUser
+                                              currentUser,
+                                              clients,
+                                              sellers: Array.isArray(sellers) && sellers.length > 0 ? sellers : REAL_PROFIT_SELLERS
                                             });
                                             return;
                                           }
