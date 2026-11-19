@@ -7626,10 +7626,10 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     fecha_ultimo_cobro: saldoUsd <= 0.01
       ? (docData.fecha_ultimo_cobro || docData.fechaUltimoCobro || nowIso.split('T')[0])
       : (docData.fecha_ultimo_cobro || docData.fechaUltimoCobro || null),
-    totalLitros: Number(docData.totalLitros ?? docData.total_litros ?? 0),
-    total_litros: Number(docData.total_litros ?? docData.totalLitros ?? 0),
-    totalCajas: Number(docData.totalCajas ?? docData.total_cajas ?? 0),
-    total_cajas: Number(docData.total_cajas ?? docData.totalCajas ?? 0),
+    totalLitros: resolveInvoiceLitros(docData),
+    total_litros: resolveInvoiceLitros(docData),
+    totalCajas: resolveInvoiceCajas(docData),
+    total_cajas: resolveInvoiceCajas(docData),
     formaPago: docData.formaPago || docData.forma_pag || (Number(docData.diasCredito || 0) > 0 ? '03' : '01'),
     forma_pag: docData.formaPago || docData.forma_pag || (Number(docData.diasCredito || 0) > 0 ? '03' : '01'),
     observaciones: docData.observaciones || '',

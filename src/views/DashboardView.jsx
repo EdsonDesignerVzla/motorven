@@ -89,24 +89,55 @@ function isExcludedSaleDocType(doc) {
   return tipo === 'NOTA_CREDITO' || tipo === 'COTIZACION';
 }
 
+function isSyntheticManualItem(item) {
+  const sku = String(item?.articuloId || item?.codigo || item?.id || '').trim().toUpperCase();
+  return sku === 'LUB-MANUAL' || sku === 'NE-DESP';
+}
+
+function resolveItemUnitLiters(item, prod) {
+  if (prod) return resolveProductLitersPerUnit(prod);
+  const sku = String(item?.articuloId || item?.codigo || item?.id || '').trim();
+  const desc = String(item?.descripcion || item?.nombre || '').toLowerCase();
+  const unit = String(item?.unidad || item?.unidadVenta || '').toLowerCase();
+  if (sku === '000003' || desc.includes('granel') || unit === 'litros' || unit === 'litro') {
+    return 1;
+  }
+  const explicitUnitL = Number(item?.litrosUnitarios ?? item?.litros_unitarios ?? item?.litrosPorUnidad ?? item?.litros_por_unidad ?? 0);
+  if (explicitUnitL > 0 && explicitUnitL !== 19) return explicitUnitL;
+  return 11.35;
+}
+
+function resolveLineItemLitros(item, productsBySku) {
+  if (!item || typeof item !== 'object') return 0;
+  const desc = String(item.descripcion || item.nombre || '').toLowerCase();
+  const sku = String(item.articuloId || item.codigo || item.id || '').trim();
+  if (desc.includes('flete') || desc.includes('servicio') || sku === '101815' || sku === 'GNP001') {
+    return 0;
+  }
+  if (isSyntheticManualItem(item)) {
+    return Number(item.litrosTotales ?? item.litros_totales ?? item.litros ?? 0) || 0;
+  }
+  const prod = productsBySku?.get(sku);
+  const cantidad = Math.max(0, Number(item.cantidad ?? item.qty ?? 0) || 0);
+  const ltsUnit = resolveItemUnitLiters(item, prod);
+  if (cantidad > 0 && ltsUnit > 0) {
+    return Number((cantidad * ltsUnit).toFixed(2));
+  }
+  return Number(item.litrosTotales ?? item.litros_totales ?? item.litros ?? 0) || 0;
+}
+
 function resolveDocumentLitros(doc, productsBySku, fallbackItems = null) {
   const headerLitros = Number(doc?.totalLitros ?? doc?.total_litros ?? 0) || 0;
-  if (headerLitros > 0) return headerLitros;
   const rawItems = (Array.isArray(doc?.items) && doc.items.length > 0)
     ? doc.items
     : (Array.isArray(fallbackItems) ? fallbackItems : []);
-  return rawItems.reduce((acc, item) => {
-    const explicit = Number(item?.litrosTotales ?? item?.litros_totales ?? item?.litros ?? 0) || 0;
-    if (explicit > 0) return acc + explicit;
-    const sku = String(item?.articuloId || item?.codigo || item?.id || '').trim();
-    const prod = productsBySku?.get(sku);
-    const ltsUnit = Number(
-      item?.litrosUnitarios ??
-      item?.litrosPorUnidad ??
-      (prod ? resolveProductLitersPerUnit(prod) : 0)
-    ) || 0;
-    return acc + ((Number(item?.cantidad || 0) || 0) * ltsUnit);
-  }, 0);
+  const hasRealProductItems = rawItems.some(it => it && !isSyntheticManualItem(it));
+  if (hasRealProductItems) {
+    const itemsSum = rawItems.reduce((acc, item) => acc + resolveLineItemLitros(item, productsBySku), 0);
+    if (itemsSum > 0) return Number(itemsSum.toFixed(2));
+  }
+  if (headerLitros > 0) return headerLitros;
+  return rawItems.reduce((acc, item) => acc + resolveLineItemLitros(item, productsBySku), 0);
 }
 
 function formatAdvisorName(name) {
@@ -699,12 +730,7 @@ export default function DashboardView({
         const prod = productsBySku.get(sku);
         const desc = it.descripcion || it.nombre || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
         const cantidad = Number(it.cantidad || 0);
-        const ltsUnit = Number(
-          it.litrosUnitarios ??
-          it.litrosPorUnidad ??
-          (prod ? resolveProductLitersPerUnit(prod) : 0)
-        ) || 0;
-        const litros = Number(it.litrosTotales ?? it.litros ?? (cantidad * ltsUnit)) || 0;
+        const litros = resolveLineItemLitros(it, productsBySku);
         const usdDirect = Number(it.totalUsd ?? it.subtotalUsd ?? 0);
         const usd = usdDirect > 0
           ? usdDirect
@@ -718,7 +744,7 @@ export default function DashboardView({
           esServicio: isServiceItem(desc)
         };
       });
-      if (mapped.length === 1 && mapped[0].sku === 'LUB-MANUAL' && mapped[0].litros === 0 && headerLitros > 0) {
+      if (mapped.length === 1 && isSyntheticManualItem(rawItems[0]) && mapped[0].litros === 0 && headerLitros > 0) {
         mapped[0].litros = headerLitros;
       }
       return mapped;
@@ -761,7 +787,8 @@ export default function DashboardView({
         ? inv.items
         : (matchingSale?.items || []);
       const items = normalizeDocItems(rawItems, tasaDoc, headerLitros);
-      const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
+      const itemsLitros = Number(items.reduce((acc, it) => acc + it.litros, 0).toFixed(2));
+      const hasRealItems = rawItems.some(it => it && !isSyntheticManualItem(it));
       const docCategory = dk.startsWith('NE:') ? 'NE' : 'FISCAL';
 
       docs.push({
@@ -769,7 +796,7 @@ export default function DashboardView({
         docCategory,
         usd,
         bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
-        litros: headerLitros > 0 ? headerLitros : itemsLitros,
+        litros: (hasRealItems && itemsLitros > 0) ? itemsLitros : (headerLitros > 0 ? headerLitros : itemsLitros),
         cliente: inv.clienteNombre || inv.cliente_nombre || inv.cli_des || inv.clienteId || '',
         items
       });
@@ -792,8 +819,10 @@ export default function DashboardView({
       const bsRaw = Number(s.totalBs ?? s.total_bs ?? 0) || 0;
       const tasaDoc = Number(s.tasaDolar ?? s.tasa_dolar ?? 0) > 1 ? Number(s.tasaDolar ?? s.tasa_dolar) : tasaBcv;
       const headerLitros = Number(s.totalLitros ?? s.total_litros ?? 0) || 0;
-      const items = normalizeDocItems(s.items || [], tasaDoc, headerLitros);
-      const itemsLitros = items.reduce((acc, it) => acc + it.litros, 0);
+      const rawSaleItems = s.items || [];
+      const items = normalizeDocItems(rawSaleItems, tasaDoc, headerLitros);
+      const itemsLitros = Number(items.reduce((acc, it) => acc + it.litros, 0).toFixed(2));
+      const hasRealSaleItems = rawSaleItems.some(it => it && !isSyntheticManualItem(it));
       const docCategory = dk.startsWith('NE:') ? 'NE' : 'FISCAL';
 
       docs.push({
@@ -801,7 +830,7 @@ export default function DashboardView({
         docCategory,
         usd,
         bs: bsRaw > 0 ? bsRaw : usd * tasaBcv,
-        litros: headerLitros > 0 ? headerLitros : itemsLitros,
+        litros: (hasRealSaleItems && itemsLitros > 0) ? itemsLitros : (headerLitros > 0 ? headerLitros : itemsLitros),
         cliente: s.clienteNombre || s.cliente_nombre || s.cliente || '',
         items
       });

@@ -228,29 +228,56 @@ export function isDocFullyPaid(doc) {
   return st === 'COBRADA' || st === 'PAGADO' || st === 'PAGADA';
 }
 
+function isSyntheticCommissionItem(it) {
+  const sku = String(it?.articuloId || it?.codigo || it?.id || '').trim().toUpperCase();
+  return sku === 'LUB-MANUAL' || sku === 'NE-DESP';
+}
+
+function resolveCommissionItemLitros(it) {
+  if (!it || typeof it !== 'object') return 0;
+  const desc = String(it.descripcion || it.nombre || '').toLowerCase();
+  const sku = String(it.articuloId || it.codigo || it.id || '').trim();
+  if (desc.includes('flete') || desc.includes('servicio') || sku === '101815' || sku === 'GNP001') {
+    return 0;
+  }
+  if (isSyntheticCommissionItem(it)) {
+    return Number(it.litrosTotales ?? it.litros_totales ?? it.litros ?? 0) || 0;
+  }
+  const qty = Math.max(0, Number(it.cantidad ?? it.qty ?? 0) || 0);
+  const unit = String(it.unidad || it.unidadVenta || '').toLowerCase();
+  const isGranel = sku === '000003' || desc.includes('granel') || unit === 'litros' || unit === 'litro';
+  if (isGranel) return round2(qty);
+  const explicitUnitL = Number(it.litrosUnitarios ?? it.litros_unitarios ?? it.litrosPorUnidad ?? it.litros_por_unidad ?? 0);
+  const unitL = (explicitUnitL > 0 && explicitUnitL !== 19)
+    ? explicitUnitL
+    : (desc.includes('paila') || unit === 'paila' ? 19 : (desc.includes('tambor') || unit === 'tambor' ? 208 : 11.35));
+  if (qty > 0 && unitL > 0) return round2(qty * unitL);
+  return round2(Number(it.litrosTotales ?? it.litros_totales ?? it.litros ?? 0) || 0);
+}
+
 export function resolveInvoiceLitros(inv) {
   if (!inv || typeof inv !== 'object') return 0;
   const headerLitros = Number(inv.totalLitros ?? inv.total_litros ?? 0);
-  if (headerLitros > 0) return round2(headerLitros);
   if (Array.isArray(inv.items) && inv.items.length > 0) {
-    const sum = inv.items.reduce((acc, it) => {
-      if (!it) return acc;
-      const lineLitros = Number(
-        it.litrosTotales ??
-          it.litros_totales ??
-          it.litros ??
-          (Number(it.litrosUnitarios ?? it.litros_unitarios ?? it.litrosPorUnidad ?? it.litros_por_unidad ?? 0) *
-            Number(it.cantidad || 0))
-      );
-      return acc + (Number.isFinite(lineLitros) ? lineLitros : 0);
-    }, 0);
+    const hasRealItems = inv.items.some(it => it && !isSyntheticCommissionItem(it));
+    const sum = inv.items.reduce((acc, it) => acc + resolveCommissionItemLitros(it), 0);
+    if (hasRealItems && sum > 0) return round2(sum);
+    if (headerLitros > 0) return round2(headerLitros);
     return round2(sum);
   }
+  if (headerLitros > 0) return round2(headerLitros);
   return 0;
 }
 
 export function resolveInvoiceCajas(inv) {
   if (!inv || typeof inv !== 'object') return 0;
+  if (Array.isArray(inv.items) && inv.items.length > 0) {
+    const hasRealItems = inv.items.some(it => it && !isSyntheticCommissionItem(it));
+    if (hasRealItems) {
+      const litros = resolveInvoiceLitros(inv);
+      if (litros > 0) return round2(litros / 11.35);
+    }
+  }
   const headerCajas = Number(inv.totalCajas ?? inv.total_cajas ?? inv.totalUnidades ?? inv.total_unidades ?? 0);
   if (headerCajas > 0) return round2(headerCajas);
   if (Array.isArray(inv.items) && inv.items.length > 0) {
