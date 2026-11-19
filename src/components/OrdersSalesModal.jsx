@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X,
   Truck,
@@ -770,6 +770,8 @@ export default function OrdersSalesModal({
   const [selectedZone, setSelectedZone] = useState('01');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [paymentTerm, setPaymentTerm] = useState('CONTADO'); // 'CONTADO' | '7_DIAS' | '15_DIAS' | '21_DIAS' | '30_DIAS'
+  const lastSyncedClientIdRef = useRef('');
+  const hasManualPaymentTermRef = useRef(false);
   const [orderNotes, setOrderNotes] = useState('');
   const [orderRows, setOrderRows] = useState([
     { articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja (12L)', litrosUnitarios: 11.35 }
@@ -1033,31 +1035,45 @@ export default function OrdersSalesModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeProfitSellers]);
 
-  // Actualizar dirección, zona, vendedor asignado y plazo comercial automáticamente al elegir cliente
+  // Actualizar dirección, zona, vendedor asignado y plazo comercial automáticamente solo cuando cambia el cliente seleccionado
+  // (evita que refrescos en tiempo real de syncedClients sobrescriban el plazo elegido por el usuario).
   useEffect(() => {
-    if (activeClientObj) {
-      setDeliveryAddress(activeClientObj.direccion2 || activeClientObj.direccion || activeClientObj.dir || '');
-      const clientZone = String(activeClientObj.zonaVenta || activeClientObj.coZon || activeClientObj.co_zon || '').trim();
-      const clientSellerCode = String(activeClientObj.vendedorAsignado || activeClientObj.coVen || activeClientObj.co_ven || '').trim();
-      const matchedClientSeller = findSellerByValue(clientSellerCode);
+    if (!selectedClientId) {
+      lastSyncedClientIdRef.current = '';
+      hasManualPaymentTermRef.current = false;
+      return;
+    }
+    if (!activeClientObj) return;
+    if (lastSyncedClientIdRef.current === selectedClientId) return;
 
-      if (matchedClientSeller) {
-        setSelectedSeller(sellerValue(matchedClientSeller));
-        const habitualZon = sellerZoneCode(matchedClientSeller);
-        setSelectedZone(clientZone || habitualZon || '01');
-        setOutOfZoneConfirmed(Boolean(clientZone && habitualZon && clientZone !== habitualZon));
-      } else if (clientZone) {
-        setSelectedZone(clientZone);
-        const zoneAdvisor = getSellersForZone(clientZone)[0];
-        if (zoneAdvisor) {
-          setSelectedSeller(sellerValue(zoneAdvisor));
-          setOutOfZoneConfirmed(false);
-        }
+    const hadPreviousClient = Boolean(lastSyncedClientIdRef.current);
+    lastSyncedClientIdRef.current = selectedClientId;
+
+    setDeliveryAddress(activeClientObj.direccion2 || activeClientObj.direccion || activeClientObj.dir || '');
+    const clientZone = String(activeClientObj.zonaVenta || activeClientObj.coZon || activeClientObj.co_zon || '').trim();
+    const clientSellerCode = String(activeClientObj.vendedorAsignado || activeClientObj.coVen || activeClientObj.co_ven || '').trim();
+    const matchedClientSeller = findSellerByValue(clientSellerCode);
+
+    if (matchedClientSeller) {
+      setSelectedSeller(sellerValue(matchedClientSeller));
+      const habitualZon = sellerZoneCode(matchedClientSeller);
+      setSelectedZone(clientZone || habitualZon || '01');
+      setOutOfZoneConfirmed(Boolean(clientZone && habitualZon && clientZone !== habitualZon));
+    } else if (clientZone) {
+      setSelectedZone(clientZone);
+      const zoneAdvisor = getSellersForZone(clientZone)[0];
+      if (zoneAdvisor) {
+        setSelectedSeller(sellerValue(zoneAdvisor));
+        setOutOfZoneConfirmed(false);
       }
+    }
+
+    if (hadPreviousClient || !hasManualPaymentTermRef.current) {
       setPaymentTerm(clientAgreedInfo.termKey);
+      hasManualPaymentTermRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeClientObj, clientAgreedInfo]);
+  }, [selectedClientId, activeClientObj, clientAgreedInfo]);
 
   // Cálculo de totales del formulario nuevo pedido
   const newOrderCalculations = useMemo(() => {
@@ -1333,9 +1349,12 @@ export default function OrdersSalesModal({
       }
 
       // Resetear formulario
+      lastSyncedClientIdRef.current = '';
+      hasManualPaymentTermRef.current = false;
       setSelectedClientId('');
       setClientSearchText('');
       setDeliveryAddress('');
+      setPaymentTerm('CONTADO');
       setOrderNotes('');
       setOrderRows([{ articuloId: '', cantidad: 1, precioUsd: 0, unidad: 'Caja (12L)', litrosUnitarios: 11.35 }]);
       setSelectedOrder(orderPayload);
@@ -3151,6 +3170,7 @@ export default function OrdersSalesModal({
                       className="form-control"
                       value={paymentTerm}
                       onChange={(e) => {
+                        hasManualPaymentTermRef.current = true;
                         setPaymentTerm(e.target.value);
                         setCreditOverrideApproved(false);
                         setCreditOverrideJustification('');
@@ -3264,6 +3284,7 @@ export default function OrdersSalesModal({
                           <button
                             type="button"
                             onClick={() => {
+                              hasManualPaymentTermRef.current = false;
                               setPaymentTerm(clientAgreedInfo.termKey);
                               setCreditOverrideApproved(false);
                               setCreditOverrideJustification('');
@@ -7786,7 +7807,10 @@ export default function OrdersSalesModal({
                         <button
                           key={opt.key}
                           type="button"
-                          onClick={() => setPaymentTerm(opt.key)}
+                          onClick={() => {
+                            hasManualPaymentTermRef.current = true;
+                            setPaymentTerm(opt.key);
+                          }}
                           style={{
                             fontSize: '0.74rem',
                             fontWeight: isSelected ? 800 : 600,
@@ -8014,6 +8038,7 @@ export default function OrdersSalesModal({
                         return;
                       }
                       if (paymentTerm === 'CONTADO') {
+                        hasManualPaymentTermRef.current = true;
                         setPaymentTerm('7_DIAS');
                       }
                       setCreditOverrideApproved(true);

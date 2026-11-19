@@ -29,6 +29,7 @@ import {
   getSupabaseProfitCollections,
   deleteSupabaseProfitCollection
 } from '../services/supabaseService.js';
+import { getNextCxcMovementCorrelativo } from '../services/fiscalService.js';
 
 const createMemoryStorage = () => {
   const store = new Map();
@@ -865,6 +866,55 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.equal(isCxcEntryDeleted(staleNeDoc, reconciledSet), false, 'Tombstone viejo de documento que sigue en servidor debe limpiarse automáticamente');
   assert.equal(isCxcEntryDeleted(inFlightFacDoc, reconciledSet), true, 'Tombstone recién emitido (<35s en vuelo) debe mantenerse activo');
   console.log('  ✓ 13. Auto-limpieza de caché/tombstones frente al servidor central verificada.');
+}
+
+// 14. Regresión: profit_collections sin correlativo explícito ("" o ausente) deben resolver cobNum y no caer en #S/N
+{
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new Error('offline-test'); };
+    localStorage.clear();
+
+    const col = await saveSupabaseProfitCollection({
+      id: 'cob-mov-004149-test',
+      cobNum: '004149',
+      correlativo: '',
+      fecha: '2026-11-16',
+      clienteId: 'V07238603',
+      clienteNombre: 'Hernann Sanchez Ojeda',
+      montoUsd: 400,
+      montoBs: 403736,
+      tasa: 1009.34
+    });
+    assert.equal(col.correlativo, '004149', 'saveSupabaseProfitCollection debe heredar cobNum si correlativo viene vacío');
+
+    // Simular registro legacy en cache local con correlativo: "" y solo cob_num/cobNum
+    localStorage.setItem('signum_cxc_collections_v1', JSON.stringify([
+      {
+        id: 'cob-mov-004151-legacy',
+        cob_num: '004151',
+        cobNum: '004151',
+        correlativo: '',
+        fec_cob: '2026-11-16',
+        monto_usd: 779,
+        monto_bs: 787226.24,
+        tasa: 1010.56
+      }
+    ]));
+    const loadedCols = await getSupabaseProfitCollections();
+    const legacyCol = loadedCols.find((c) => c.id === 'cob-mov-004151-legacy');
+    assert.ok(legacyCol, 'Debe cargar la cobranza legacy desde cache/fallback');
+    assert.equal(legacyCol.correlativo, '004151', 'getSupabaseProfitCollections no debe devolver correlativo vacío si existe cobNum/cob_num');
+
+    const nextMovCorr = getNextCxcMovementCorrelativo(
+      [{ id: 'c1', correlativo: '', cobNum: '004151', fecha: '2026-11-16' }],
+      [{ factNum: '002093', historialCobros: [{ correlativo: '', cobNum: '004152', fecha: '2026-11-16' }] }]
+    );
+    assert.equal(nextMovCorr, '004153', 'getNextCxcMovementCorrelativo debe detectar cobNum cuando correlativo es ""');
+    console.log('  ✓ 14. Regresión de correlativo vacío -> cobNum (anti-duplicado #S/N) verificada.');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');

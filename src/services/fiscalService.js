@@ -1063,14 +1063,17 @@ const collectUsedCxcMovementNumbers = (collections = [], docs = []) => {
 
   (collections || []).forEach((c) => {
     if (!c || c.anulado) return;
-    registerMov(c.correlativo ?? c.cobNum ?? c.cob_num, c.fecha || c.fec_cob || c.fechaCobro || c.fechaSincronizacion);
+    registerMov(
+      String(c.correlativo || '').trim() || c.cobNum || c.cob_num,
+      c.fecha || c.fec_cob || c.fechaCobro || c.fechaSincronizacion
+    );
   });
 
   (docs || []).forEach((d) => {
     const hist = Array.isArray(d?.historialCobros) ? d.historialCobros : [];
     hist.forEach((h) => {
       if (!h) return;
-      registerMov(h.correlativo ?? h.cobNum, h.fecha);
+      registerMov(String(h.correlativo || '').trim() || h.cobNum || h.cob_num, h.fecha);
     });
   });
 

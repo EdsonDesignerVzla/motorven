@@ -202,15 +202,24 @@ const buildInvoiceMovementsList = ({
   });
 
   const rows = [];
-  const seenKeys = new Set();
+  const seenKeyIndex = new Map();
 
   const pushUniqueMovement = (entry) => {
     if (!entry || Number(entry.montoUsd || 0) <= 0) return;
     const corrDigits = String(entry.correlativo || '').replace(/[^0-9]/g, '');
     const canon = canonicalDocKey(entry.factNum, entry.tipoDoc);
     const sig = `${corrDigits || entry.rawId}|${canon}|${entry.fechaIso}|${round2(entry.montoUsd).toFixed(2)}`;
-    if (seenKeys.has(sig)) return;
-    seenKeys.add(sig);
+    if (seenKeyIndex.has(sig)) {
+      const existing = rows[seenKeyIndex.get(sig)];
+      if (existing && !existing.observaciones && entry.observaciones) {
+        existing.observaciones = entry.observaciones;
+      }
+      if (existing && !existing.collectionId && entry.collectionId) {
+        existing.collectionId = entry.collectionId;
+      }
+      return;
+    }
+    seenKeyIndex.set(sig, rows.length);
     rows.push(entry);
   };
 
@@ -224,7 +233,10 @@ const buildInvoiceMovementsList = ({
       const montoBs = round2(h.montoBs ?? (montoUsd * tasaVal));
       const fechaRaw = h.fecha || doc.fechaEmision || doc.fechaEmisionIso || getTodayIso();
       const fechaIso = toIsoDateOnly(fechaRaw) || getTodayIso();
-      const rawCorr = h.correlativo ?? h.cobNum ?? '';
+      const rawCorr =
+        String(h.correlativo || '').trim() ||
+        String(h.cobNum ?? h.cob_num ?? '').trim() ||
+        (String(h.observaciones || h.descrip || '').match(/Mov\.\s*#(\d+)/i)?.[1] ?? '');
       const tipoDoc = h.tipoDoc || doc.tipoDoc || 'FACTURA';
       const factNum = String(h.factNum || doc.factNum || doc.factura || '').trim();
       const cuentaNombre = h.cuentaNombre || h.cuentaDestino || h.cuentaId || 'Caja / Banco';
@@ -291,7 +303,10 @@ const buildInvoiceMovementsList = ({
       'Tesorería'
     ).trim();
 
-    const rawCorr = c.correlativo ?? c.cobNum ?? c.cob_num ?? '';
+    const rawCorr =
+      String(c.correlativo || '').trim() ||
+      String(c.cobNum ?? c.cob_num ?? '').trim() ||
+      (String(c.descrip || '').match(/Mov\.\s*#(\d+)/i)?.[1] ?? '');
     const corrFormatted = normalizeCorrelativoDisplay(rawCorr);
     const corrNumeric = parseInt(String(rawCorr).replace(/[^0-9]/g, ''), 10) || 0;
 
