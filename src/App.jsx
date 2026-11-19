@@ -142,6 +142,8 @@ import {
   updateSupabaseSellerZone,
   updateSupabaseGlobalSellersTarget,
   getSupabaseProfitZones,
+  saveSupabaseProfitZone,
+  deleteSupabaseProfitZone,
   getSupabaseProfitTransports,
   getSupabaseProfitReturns,
   getSupabaseProfitInventoryAdjustments,
@@ -1433,8 +1435,39 @@ function MainApp() {
             return dedupeSupplierPaymentsList([item, ...list]);
           });
         }
-      } else if (tableId === 'zones' && Array.isArray(allTableData)) {
-        setProfitZones(allTableData);
+      } else if (tableId === 'zones') {
+        if (Array.isArray(allTableData)) {
+          setProfitZones(allTableData);
+          return;
+        }
+        if (action === 'DELETE') {
+          const delId = String(item?.id || '').trim().toUpperCase();
+          const delCoZon = String(item?.coZon || item?.co_zon || key || '').trim().toUpperCase();
+          setProfitZones(prev => (prev || []).filter(z => {
+            const zId = String(z?.id || '').trim().toUpperCase();
+            const zCode = String(z?.coZon || z?.co_zon || '').trim().toUpperCase();
+            return (!delId || zId !== delId) && (!delCoZon || zCode !== delCoZon);
+          }));
+          return;
+        }
+        if (item) {
+          const itemCode = String(item.coZon || item.co_zon || '').trim().toUpperCase();
+          setProfitZones(prev => {
+            const list = Array.isArray(prev) ? [...prev] : [];
+            const idx = list.findIndex(z =>
+              (item.id && String(z.id) === String(item.id)) ||
+              (itemCode && String(z.coZon || z.co_zon || '').trim().toUpperCase() === itemCode)
+            );
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...item };
+            } else {
+              list.push(item);
+            }
+            return list.sort((a, b) =>
+              String(a.coZon || a.co_zon || '').localeCompare(String(b.coZon || b.co_zon || ''), undefined, { numeric: true })
+            );
+          });
+        }
       } else if (tableId === 'transports' && Array.isArray(allTableData)) {
         setProfitTransports(allTableData);
       } else if (tableId === 'customer_returns' && Array.isArray(allTableData)) {
@@ -4517,16 +4550,33 @@ function MainApp() {
   };
 
   const handleUpdateSellerZone = async (coVen, zoneData) => {
-    const targetCoZon = typeof zoneData === 'object' ? (zoneData.coZon || zoneData.co_zon || '') : zoneData;
+    const cleanTargetCoVen = String(coVen || '').trim().replace(/^usr-seller-/i, '').trim() || String(coVen || '').trim();
+    const targetCoZon = String(typeof zoneData === 'object' ? (zoneData.coZon || zoneData.co_zon || '') : (zoneData || '')).trim().toUpperCase();
     const targetZonDes = typeof zoneData === 'object'
       ? (zoneData.zona || zoneData.zonDes || zoneData.zon_des || '')
-      : ((profitZones || []).find(z => (z.coZon || z.co_zon) === targetCoZon)?.zonDes || targetCoZon);
+      : ((profitZones || []).find(z => String(z.coZon || z.co_zon || '').trim().toUpperCase() === targetCoZon)?.zonDes || targetCoZon);
+
+    if (targetCoZon) {
+      const currentSellersList = (profitSellers && profitSellers.length > 0) ? profitSellers : DEFAULT_PROFIT_SELLERS;
+      const occupant = currentSellersList.find((s) => {
+        if (!s || s.activo === false) return false;
+        const sCode = String(s.coVen || s.co_ven || s.id || '').trim().replace(/^usr-seller-/i, '').trim().toUpperCase();
+        const sZone = String(s.coZon || s.co_zon || '').trim().toUpperCase();
+        return sZone === targetCoZon && sCode !== cleanTargetCoVen.toUpperCase();
+      });
+      if (occupant) {
+        const occName = occupant.venDes || occupant.ven_des || occupant.nombre || occupant.coVen || 'otro vendedor';
+        throw new Error(`La Zona ${targetCoZon} es exclusiva y ya está asignada a ${occName}. Libérala primero o crea una zona nueva.`);
+      }
+    }
 
     setProfitSellers(prev => {
       const base = (prev && prev.length > 0) ? [...prev] : [...DEFAULT_PROFIT_SELLERS];
-      return base.map(s => {
-        const c = (s.coVen || s.co_ven || s.id || '').toString().trim();
-        if (c === coVen.toString().trim()) {
+      let matchedAny = false;
+      const mapped = base.map(s => {
+        const c = (s.coVen || s.co_ven || s.id || '').toString().trim().replace(/^usr-seller-/i, '').trim();
+        if (c.toUpperCase() === cleanTargetCoVen.toUpperCase()) {
+          matchedAny = true;
           return {
             ...s,
             coZon: targetCoZon,
@@ -4536,15 +4586,117 @@ function MainApp() {
         }
         return s;
       });
+      if (!matchedAny) {
+        const matchedUsr = (usersList || []).find(u =>
+          String(u?.co_ven || u?.coVen || '').trim().toUpperCase() === cleanTargetCoVen.toUpperCase()
+        );
+        const venName = matchedUsr?.nombre || cleanTargetCoVen;
+        mapped.push({
+          id: cleanTargetCoVen,
+          coVen: cleanTargetCoVen,
+          co_ven: cleanTargetCoVen,
+          venDes: venName,
+          ven_des: venName,
+          cedula: matchedUsr?.cedula || '',
+          telefonos: matchedUsr?.phone || matchedUsr?.telefono || '',
+          foto: matchedUsr?.foto || '',
+          avatar: matchedUsr?.avatar || '',
+          comisionPct: 3.0,
+          metaLitrosMes: 3000,
+          activo: true,
+          coZon: targetCoZon,
+          co_zon: targetCoZon,
+          zona: targetZonDes
+        });
+      }
+      return mapped;
     });
 
     try {
-      await updateSupabaseSellerZone(coVen, { coZon: targetCoZon, zona: targetZonDes });
+      await updateSupabaseSellerZone(cleanTargetCoVen, { coZon: targetCoZon, zona: targetZonDes });
       const fresh = await getSupabaseProfitSellers();
       if (fresh && fresh.length > 0) setProfitSellers(fresh);
     } catch (err) {
       console.warn('[Fuerza de Ventas] Error actualizando zona de asesor:', err?.message);
     }
+  };
+
+  const handleSaveProfitZone = async (zoneData) => {
+    const savedZone = await saveSupabaseProfitZone(zoneData, profitZones);
+    const savedCode = String(savedZone.coZon || savedZone.co_zon || '').trim().toUpperCase();
+    const savedName = String(savedZone.zonDes || savedZone.zon_des || '').trim();
+
+    setProfitZones(prev => {
+      const list = Array.isArray(prev) ? [...prev] : [];
+      const filtered = list.filter(z => {
+        const zId = String(z?.id || '').trim();
+        const zCode = String(z?.coZon || z?.co_zon || '').trim().toUpperCase();
+        return zId !== String(savedZone.id) && zCode !== savedCode;
+      });
+      filtered.push(savedZone);
+      return filtered.sort((a, b) =>
+        String(a.coZon || a.co_zon || '').localeCompare(String(b.coZon || b.co_zon || ''), undefined, { numeric: true })
+      );
+    });
+
+    // Sincronizar el nombre actualizado de la zona en el vendedor asignado (si aplica)
+    const affectedSellers = (profitSellers || []).filter(
+      s => String(s?.coZon || s?.co_zon || '').trim().toUpperCase() === savedCode && String(s?.zona || '').trim() !== savedName
+    );
+    if (affectedSellers.length > 0) {
+      setProfitSellers(prev =>
+        (prev || []).map(s =>
+          String(s?.coZon || s?.co_zon || '').trim().toUpperCase() === savedCode
+            ? { ...s, zona: savedName }
+            : s
+        )
+      );
+      await Promise.all(
+        affectedSellers.map(s =>
+          updateSupabaseSellerZone(s.coVen || s.co_ven || s.id, { coZon: savedCode, zona: savedName }).catch(() => {})
+        )
+      );
+    }
+
+    return savedZone;
+  };
+
+  const handleDeleteProfitZone = async (zoneOrCoZon) => {
+    const targetId = typeof zoneOrCoZon === 'object' ? String(zoneOrCoZon?.id || '').trim() : '';
+    const targetCode = String(
+      typeof zoneOrCoZon === 'object' ? (zoneOrCoZon?.coZon || zoneOrCoZon?.co_zon || '') : (zoneOrCoZon || '')
+    ).trim().toUpperCase();
+
+    await deleteSupabaseProfitZone(zoneOrCoZon);
+
+    setProfitZones(prev =>
+      (prev || []).filter(z => {
+        const zId = String(z?.id || '').trim();
+        const zCode = String(z?.coZon || z?.co_zon || '').trim().toUpperCase();
+        return (!targetId || zId !== targetId) && (!targetCode || zCode !== targetCode);
+      })
+    );
+
+    if (targetCode) {
+      const affectedSellers = (profitSellers || []).filter(
+        s => String(s?.coZon || s?.co_zon || '').trim().toUpperCase() === targetCode
+      );
+      if (affectedSellers.length > 0) {
+        setProfitSellers(prev =>
+          (prev || []).map(s =>
+            String(s?.coZon || s?.co_zon || '').trim().toUpperCase() === targetCode
+              ? { ...s, coZon: '', co_zon: '', zona: '' }
+              : s
+          )
+        );
+        await Promise.all(
+          affectedSellers.map(s =>
+            updateSupabaseSellerZone(s.coVen || s.co_ven || s.id, { coZon: '', zona: '' }).catch(() => {})
+          )
+        );
+      }
+    }
+    return true;
   };
 
   if (deviceViewMode === 'mobile') {
@@ -4824,6 +4976,7 @@ function MainApp() {
             <ModuleErrorBoundary moduleName="Fuerza de Ventas">
               <SellersView
                 profitSellers={profitSellers}
+                usersList={usersList}
                 profitInvoices={profitInvoices}
                 profitCollections={profitCollections}
                 profitBankAccounts={profitBankAccounts}
@@ -4835,6 +4988,8 @@ function MainApp() {
                 onUpdateGlobalTarget={handleUpdateGlobalTarget}
                 onUpdateSellerPhoto={handleUpdateSellerPhoto}
                 onUpdateSellerZone={handleUpdateSellerZone}
+                onSaveProfitZone={handleSaveProfitZone}
+                onDeleteProfitZone={handleDeleteProfitZone}
                 onAddCashMovement={handleAddCashMovement}
                 onCommissionSettlementsChange={setCommissionSettlements}
                 profitZones={profitZones}

@@ -35,14 +35,15 @@ import {
   Navigation,
   Compass,
   Check,
-  X
+  X,
+  Plus
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import SellerDetailModal from '../components/SellerDetailModal';
 import SellerCommissionModal from '../components/SellerCommissionModal';
 import DebtCollectionIntelligenceModal from '../components/DebtCollectionIntelligenceModal';
 import SellerAvatar from '../components/SellerAvatar';
-import { isMasterOrGerencia } from '../services/authService';
+import { isMasterOrGerencia, normalizeRole } from '../services/authService';
 import { generateSellersPDF } from '../services/pdfReportService';
 import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { getCommissionSettlements } from '../services/storageService';
@@ -119,6 +120,7 @@ const MONTHS_LIST = [
 
 export default function SellersView({
   profitSellers = [],
+  usersList = [],
   profitInvoices = [],
   profitCollections = [],
   profitBankAccounts = [],
@@ -131,6 +133,8 @@ export default function SellersView({
   onUpdateGlobalTarget,
   onUpdateSellerPhoto,
   onUpdateSellerZone,
+  onSaveProfitZone,
+  onDeleteProfitZone,
   onAddCashMovement,
   onCommissionSettlementsChange,
   currentUser
@@ -159,8 +163,19 @@ export default function SellersView({
   // States for zone editing modal
   const [editingZoneSeller, setEditingZoneSeller] = useState(null);
   const [modalZoneCoZon, setModalZoneCoZon] = useState('');
-  const [modalCustomZone, setModalCustomZone] = useState('');
   const [savingZoneChange, setSavingZoneChange] = useState(false);
+  const [inlineNewZoneOpen, setInlineNewZoneOpen] = useState(false);
+  const [inlineNewZoneCode, setInlineNewZoneCode] = useState('');
+  const [inlineNewZoneName, setInlineNewZoneName] = useState('');
+
+  // States for CRUD Zonas de Venta modal
+  const [showZonesManagerModal, setShowZonesManagerModal] = useState(false);
+  const [zoneFormId, setZoneFormId] = useState(null);
+  const [zoneFormCode, setZoneFormCode] = useState('');
+  const [zoneFormName, setZoneFormName] = useState('');
+  const [savingZoneRecord, setSavingZoneRecord] = useState(false);
+  const [confirmDeleteZoneKey, setConfirmDeleteZoneKey] = useState(null);
+  const [zoneManagerError, setZoneManagerError] = useState('');
 
   // Cargar liquidaciones guardadas (Supabase + respaldo local)
   useEffect(() => {
@@ -187,44 +202,155 @@ export default function SellersView({
     }
   };
 
-  // Lista activa de vendedores con respaldo automático y deduplicación preservando foto
+  // Lista activa de vendedores con respaldo automático, deduplicación e incorporación de todos los usuarios activos de Ventas
   const effectiveSellers = useMemo(() => {
-    if (Array.isArray(profitSellers) && profitSellers.length > 0) {
-      const byName = new Map();
-      profitSellers.forEach(s => {
-        const name = (s.venDes || s.ven_des || s.nombre || '').trim();
-        if (!name) return;
-        const key = name.toLowerCase();
-        const code = (s.coVen || s.co_ven || s.id || '').trim();
-        const existing = byName.get(key);
-        const preservedFoto = s.foto || existing?.foto || '';
-        const preservedAvatar = s.avatar || existing?.avatar || '';
-        if (!existing || (code.length <= 4 && (existing.coVen?.length || 0) > 4)) {
-          byName.set(key, {
-            ...(existing || {}),
-            ...s,
-            coVen: code,
-            co_ven: code,
-            venDes: name,
-            ven_des: name,
-            foto: preservedFoto,
-            avatar: preservedAvatar,
-            coZon: s.coZon || s.co_zon || existing?.coZon || '',
-            zona: s.zona || existing?.zona || '',
-            metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? existing?.metaLitrosMes ?? 3000)
-          });
-        } else if (preservedFoto && !existing.foto) {
-          byName.set(key, {
-            ...existing,
-            foto: preservedFoto,
-            avatar: preservedAvatar || existing.avatar
+    const stripAcc = (str) =>
+      String(str || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+
+    const rawList = (Array.isArray(profitSellers) && profitSellers.length > 0)
+      ? profitSellers
+      : DEFAULT_PROFIT_SELLERS;
+
+    const byCode = new Map();
+    const codeByName = new Map();
+
+    rawList.forEach((s) => {
+      if (!s) return;
+      const name = (s.venDes || s.ven_des || s.nombre || '').trim();
+      const rawCode = (s.coVen || s.co_ven || s.id || '').trim();
+      const cleanCode = rawCode.replace(/^usr-seller-/i, '').trim().toUpperCase();
+      if ((!name && !cleanCode) || cleanCode.startsWith('USR-')) return;
+
+      const nameKey = stripAcc(name);
+      const codeKey = cleanCode || nameKey;
+      const existingByCode = byCode.get(codeKey);
+      const existingCodeForName = nameKey ? codeByName.get(nameKey) : null;
+      const existing = existingByCode || (existingCodeForName ? byCode.get(existingCodeForName) : null);
+
+      const preservedFoto = s.foto || existing?.foto || '';
+      const preservedAvatar = s.avatar || existing?.avatar || '';
+      const rawIsPrefixed = /^usr-seller-/i.test(rawCode);
+      const existingIsPrefixed = existing ? /^usr-seller-/i.test(existing.coVen || '') : false;
+
+      if (!existing || (existingIsPrefixed && !rawIsPrefixed)) {
+        const finalCode = cleanCode || existing?.coVen || '';
+        const merged = {
+          ...(existing || {}),
+          ...s,
+          id: s.id && !/^usr-seller-/i.test(String(s.id)) ? s.id : (finalCode || s.id),
+          coVen: finalCode,
+          co_ven: finalCode,
+          venDes: name || existing?.venDes || finalCode,
+          ven_des: name || existing?.ven_des || finalCode,
+          foto: preservedFoto,
+          avatar: preservedAvatar,
+          coZon: s.coZon || s.co_zon || existing?.coZon || '',
+          zona: s.zona || existing?.zona || '',
+          metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? existing?.metaLitrosMes ?? 3000)
+        };
+        byCode.set(codeKey, merged);
+        if (nameKey) codeByName.set(nameKey, codeKey);
+      } else if (preservedFoto && !existing.foto) {
+        const updated = {
+          ...existing,
+          foto: preservedFoto,
+          avatar: preservedAvatar || existing.avatar
+        };
+        byCode.set(existingCodeForName || codeKey, updated);
+      }
+    });
+
+    // Incorporar todos los usuarios activos del departamento de Ventas (ej. Rosibel Briceño / @rosibelventas)
+    const usedCodes = new Set(Array.from(byCode.keys()).map((k) => String(k || '').toUpperCase()));
+    const genInitialsCode = (nombre) => {
+      const words = stripAcc(nombre).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+      let base = words.length >= 2 ? `${words[0][0]}${words[1][0]}`.toUpperCase() : (words[0] || 'VN').slice(0, 2).toUpperCase();
+      if (!base || base.length < 2) base = (base || 'VN').padEnd(2, 'X').slice(0, 2);
+      if (!usedCodes.has(base)) return base;
+      if (words.length >= 2 && words[1].length >= 2) {
+        const three = `${words[0][0]}${words[1].slice(0, 2)}`.toUpperCase();
+        if (!usedCodes.has(three)) return three;
+      }
+      for (let i = 2; i < 99; i++) {
+        const c = `${base}${i}`;
+        if (!usedCodes.has(c)) return c;
+      }
+      return `${base}${Date.now().toString(36).slice(-2).toUpperCase()}`;
+    };
+
+    (Array.isArray(usersList) ? usersList : []).forEach((u) => {
+      if (!u || u.activo === false || u.active === false) return;
+      const uname = String(u.username || '').trim().toLowerCase();
+      const uid = String(u.id || '').trim().toLowerCase();
+      if (/^autotest_/i.test(uname) || /^usr-autotest-/i.test(uid)) return;
+      const dept = String(u.departamento || '').trim().toUpperCase();
+      const normRol = normalizeRole(u.rol || u.role || '');
+      if (dept !== 'VEN' && normRol !== 'VENTAS') return;
+
+      const rawUserCoVen = String(u.co_ven || u.coVen || '').trim();
+      const derivedFromId = uid.startsWith('usr-seller-')
+        ? String(u.id).replace(/^usr-seller-/i, '').trim().toUpperCase()
+        : '';
+      const candidateCode = (rawUserCoVen || derivedFromId).toUpperCase();
+      const uName = String(u.nombre || u.name || u.username || '').trim();
+      const uNameKey = stripAcc(uName);
+
+      // Si ya existe en profit_sellers por código o nombre, enriquecer foto/cédula/teléfono si faltan
+      const existingMatchKey =
+        (candidateCode && !candidateCode.startsWith('USR-') && byCode.has(candidateCode) ? candidateCode : null) ||
+        (uNameKey && codeByName.has(uNameKey) ? codeByName.get(uNameKey) : null);
+
+      if (existingMatchKey) {
+        const cur = byCode.get(existingMatchKey);
+        if (cur && ((!cur.foto && u.foto) || (!cur.cedula && u.cedula) || (!cur.telefonos && (u.phone || u.telefono)))) {
+          byCode.set(existingMatchKey, {
+            ...cur,
+            foto: cur.foto || u.foto || '',
+            avatar: cur.avatar || u.avatar || '',
+            cedula: cur.cedula || u.cedula || '',
+            telefonos: cur.telefonos || u.phone || u.telefono || ''
           });
         }
+        return;
+      }
+
+      const assignedCode =
+        candidateCode && !candidateCode.startsWith('USR-') && !usedCodes.has(candidateCode)
+          ? candidateCode
+          : genInitialsCode(uName || uname);
+
+      usedCodes.add(assignedCode);
+      if (uNameKey) codeByName.set(uNameKey, assignedCode);
+
+      byCode.set(assignedCode, {
+        id: assignedCode,
+        coVen: assignedCode,
+        co_ven: assignedCode,
+        venDes: uName || assignedCode,
+        ven_des: uName || assignedCode,
+        cedula: u.cedula || '',
+        telefonos: u.phone || u.telefono || '',
+        direccion: '',
+        tipo: 'A',
+        comisionPct: 3.0,
+        metaLitrosMes: 3000,
+        activo: true,
+        foto: u.foto || '',
+        avatar: u.avatar || '',
+        coZon: '',
+        co_zon: '',
+        zona: '',
+        userId: u.id,
+        username: u.username
       });
-      return Array.from(byName.values());
-    }
-    return DEFAULT_PROFIT_SELLERS;
-  }, [profitSellers]);
+    });
+
+    return Array.from(byCode.values());
+  }, [profitSellers, usersList]);
 
   // Todas las cobranzas válidas con montoUsd normalizado (evita Bs guardados como USD)
   const normalizedCollectionsAll = useMemo(() => {
@@ -375,50 +501,176 @@ export default function SellersView({
         sZona.toLowerCase().includes(q);
 
       const matchesZone = selectedZoneFilter === 'ALL' ||
-        sCoZon === selectedZoneFilter ||
-        sZona.toLowerCase().includes(selectedZoneFilter.toLowerCase());
+        (selectedZoneFilter === 'UNASSIGNED'
+          ? (!sCoZon && !sZona)
+          : (sCoZon === selectedZoneFilter || sZona.toLowerCase().includes(selectedZoneFilter.toLowerCase())));
 
       return matchesSearch && matchesZone;
     });
   }, [sellersPerformance, searchQuery, selectedZoneFilter]);
 
+  // Mapa de exclusividad 1-a-1: coZon -> lista de asesores asignados a esa zona
+  const zoneOccupantsMap = useMemo(() => {
+    const map = new Map();
+    (effectiveSellers || []).forEach((s) => {
+      if (!s || s.activo === false) return;
+      const zCode = String(s.coZon || s.co_zon || '').trim().toUpperCase();
+      if (!zCode || zCode === 'CUSTOM') return;
+      if (!map.has(zCode)) map.set(zCode, []);
+      map.get(zCode).push(s);
+    });
+    return map;
+  }, [effectiveSellers]);
+
+  const getNextSuggestedZoneCode = () => {
+    const usedNums = new Set(
+      (profitZones || [])
+        .map((z) => parseInt(String(z?.coZon || z?.co_zon || '').replace(/\D/g, ''), 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    );
+    let candidate = 1;
+    while (usedNums.has(candidate)) candidate++;
+    return String(candidate).padStart(2, '0');
+  };
+
+  const resetZoneCrudForm = () => {
+    setZoneFormId(null);
+    setZoneFormCode(getNextSuggestedZoneCode());
+    setZoneFormName('');
+    setZoneManagerError('');
+    setConfirmDeleteZoneKey(null);
+  };
+
+  const handleOpenZonesManager = () => {
+    resetZoneCrudForm();
+    setShowZonesManagerModal(true);
+  };
+
+  const handleSaveZoneCrud = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    setZoneManagerError('');
+    const cleanCode = String(zoneFormCode || '').trim().toUpperCase();
+    const cleanName = String(zoneFormName || '').trim();
+    if (!cleanCode) {
+      setZoneManagerError('El código de zona es obligatorio (ej. 08).');
+      return;
+    }
+    if (!cleanName) {
+      setZoneManagerError('El nombre o descripción del territorio es obligatorio.');
+      return;
+    }
+    if (!onSaveProfitZone) {
+      setZoneManagerError('No hay controlador configurado para guardar zonas.');
+      return;
+    }
+
+    setSavingZoneRecord(true);
+    try {
+      await onSaveProfitZone({
+        ...(zoneFormId ? { id: zoneFormId } : {}),
+        coZon: cleanCode,
+        zonDes: cleanName
+      });
+      notify.success(zoneFormId ? `Zona ${cleanCode} actualizada correctamente.` : `Nueva Zona ${cleanCode} (${cleanName}) creada.`);
+      setZoneFormId(null);
+      setZoneFormCode(getNextSuggestedZoneCode());
+      setZoneFormName('');
+      setZoneManagerError('');
+    } catch (err) {
+      const msg = err?.message || 'Error guardando la zona de venta.';
+      setZoneManagerError(msg);
+      notify.error(msg);
+    } finally {
+      setSavingZoneRecord(false);
+    }
+  };
+
+  const handleConfirmDeleteZone = async (zoneObj) => {
+    if (!zoneObj || !onDeleteProfitZone) return;
+    const zCode = String(zoneObj.coZon || zoneObj.co_zon || '').trim().toUpperCase();
+    setSavingZoneRecord(true);
+    try {
+      await onDeleteProfitZone(zoneObj);
+      if (selectedZoneFilter === zCode) setSelectedZoneFilter('ALL');
+      if (zoneFormId && String(zoneFormId) === String(zoneObj.id)) {
+        resetZoneCrudForm();
+      }
+      setConfirmDeleteZoneKey(null);
+      notify.success(`Zona ${zCode} eliminada del catálogo.`);
+    } catch (err) {
+      notify.error(err?.message || 'Error eliminando la zona.');
+    } finally {
+      setSavingZoneRecord(false);
+    }
+  };
+
   // Manejador para abrir modal de edición de zona
   const handleOpenEditZone = (seller, e) => {
     if (e && e.stopPropagation) e.stopPropagation();
     setEditingZoneSeller(seller);
-    const zCode = seller.coZon || '';
-    setModalZoneCoZon(zCode || (seller.zona ? 'CUSTOM' : ''));
-    setModalCustomZone(seller.zona || '');
+    const zCode = String(seller.coZon || seller.co_zon || '').trim().toUpperCase();
+    setModalZoneCoZon(zCode === 'CUSTOM' ? '' : zCode);
+    setInlineNewZoneOpen(false);
+    setInlineNewZoneCode(getNextSuggestedZoneCode());
+    setInlineNewZoneName('');
   };
 
-  // Guardar nueva zona de asesor
+  // Guardar nueva zona exclusiva de asesor
   const handleSaveSellerZoneModal = async () => {
     if (!editingZoneSeller) return;
     const coVen = (editingZoneSeller.coVen || editingZoneSeller.co_ven || editingZoneSeller.id || '').toString().trim();
-    let targetCoZon = modalZoneCoZon;
-    let targetZona = '';
-
-    if (modalZoneCoZon === 'CUSTOM') {
-      targetCoZon = 'CUSTOM';
-      targetZona = modalCustomZone.trim() || 'Zona Especial';
-    } else if (modalZoneCoZon) {
-      targetCoZon = modalZoneCoZon;
-      const matched = (profitZones || []).find(z => (z.coZon || z.co_zon) === modalZoneCoZon);
-      targetZona = matched?.zonDes || matched?.zon_des || `Zona ${modalZoneCoZon}`;
-    }
+    const cleanCoVenUpper = coVen.replace(/^usr-seller-/i, '').trim().toUpperCase();
 
     setSavingZoneChange(true);
     try {
+      let targetCoZon = String(modalZoneCoZon || '').trim().toUpperCase();
+      let targetZona = '';
+
+      if (inlineNewZoneOpen) {
+        const newCode = String(inlineNewZoneCode || '').trim().toUpperCase();
+        const newName = String(inlineNewZoneName || '').trim();
+        if (!newCode || !newName) {
+          notify.warning('Ingresa el código y el nombre de la nueva zona.');
+          setSavingZoneChange(false);
+          return;
+        }
+        if (onSaveProfitZone) {
+          const createdZone = await onSaveProfitZone({ coZon: newCode, zonDes: newName });
+          targetCoZon = String(createdZone?.coZon || newCode).trim().toUpperCase();
+          targetZona = String(createdZone?.zonDes || newName).trim();
+        } else {
+          targetCoZon = newCode;
+          targetZona = newName;
+        }
+      } else if (targetCoZon) {
+        const occupants = (zoneOccupantsMap.get(targetCoZon) || []).filter(
+          (occ) => String(occ.coVen || occ.co_ven || occ.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase() !== cleanCoVenUpper
+        );
+        if (occupants.length > 0) {
+          const occNames = occupants.map((o) => o.venDes || o.coVen).join(', ');
+          notify.error(`La Zona ${targetCoZon} es exclusiva y ya está asignada a: ${occNames}. Selecciona una zona disponible o crea una nueva.`);
+          setSavingZoneChange(false);
+          return;
+        }
+        const matched = (profitZones || []).find((z) => String(z.coZon || z.co_zon || '').trim().toUpperCase() === targetCoZon);
+        targetZona = matched?.zonDes || matched?.zon_des || `Zona ${targetCoZon}`;
+      }
+
       if (onUpdateSellerZone) {
         await onUpdateSellerZone(coVen, { coZon: targetCoZon, zona: targetZona });
       }
-      notify.success(`Zona de ${editingZoneSeller.venDes} actualizada a: ${targetZona || 'Sin Asignar'}`);
+      notify.success(
+        targetCoZon
+          ? `Zona de ${editingZoneSeller.venDes} asignada exclusivamente a: [Z-${targetCoZon}] ${targetZona}`
+          : `${editingZoneSeller.venDes} quedó marcado como: Aún no tiene Zona Asignada`
+      );
       if (selectedSeller && ((selectedSeller.coVen || selectedSeller.id || '').toString().trim() === coVen)) {
         setSelectedSeller(prev => prev ? ({ ...prev, coZon: targetCoZon, zona: targetZona }) : null);
       }
       setEditingZoneSeller(null);
+      setInlineNewZoneOpen(false);
     } catch (err) {
-      notify.error('Error actualizando la zona del asesor');
+      notify.error(err?.message || 'Error actualizando la zona del asesor');
       console.warn('Error saving zone from modal:', err);
     } finally {
       setSavingZoneChange(false);
@@ -932,8 +1184,32 @@ export default function SellersView({
                   </option>
                 );
               })}
+              {sellersPerformance.some(s => !s.coZon && !s.zona) && (
+                <option value="UNASSIGNED">
+                  Aún no tiene Zona Asignada ({sellersPerformance.filter(s => !s.coZon && !s.zona).length})
+                </option>
+              )}
             </select>
           </div>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleOpenZonesManager}
+            title="Crear, editar y eliminar zonas exclusivas de venta"
+            style={{
+              fontSize: '0.8rem',
+              padding: '5px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              borderColor: 'rgba(245, 158, 11, 0.45)',
+              fontWeight: 700
+            }}
+          >
+            <Navigation size={14} color="var(--motorven-gold, #f59e0b)" />
+            Gestionar Zonas ({(profitZones || []).length})
+          </button>
 
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
             Mostrando datos de: <strong>{MONTHS_LIST.find(m => m.id === selectedMonth)?.label}</strong>
@@ -984,26 +1260,42 @@ export default function SellersView({
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span
-                              className="badge badge-primary"
-                              style={{
-                                fontSize: '0.72rem',
-                                padding: '3px 8px',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                cursor: 'pointer',
-                                maxWidth: '170px',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
-                              onClick={() => handleOpenEditZone(seller)}
-                              title="Haga clic para editar o reasignar la zona de este asesor"
-                            >
-                              <MapPin size={11} color="var(--motorven-gold)" />
-                              {seller.coZon ? `[Z-${seller.coZon}] ` : ''}{seller.zona || 'Sin Asignar'}
-                            </span>
+                            {(() => {
+                              const hasZone = Boolean(seller.coZon || seller.zona);
+                              const zKey = String(seller.coZon || '').trim().toUpperCase();
+                              const zOccupants = zKey ? (zoneOccupantsMap.get(zKey) || []) : [];
+                              const isSharedLegacy = hasZone && zOccupants.length > 1;
+                              return (
+                                <span
+                                  className={`badge ${!hasZone || isSharedLegacy ? 'badge-warning' : 'badge-primary'}`}
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    padding: '3px 8px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                    maxWidth: hasZone ? '185px' : '220px',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                  onClick={() => handleOpenEditZone(seller)}
+                                  title={
+                                    !hasZone
+                                      ? 'Aún no tiene Zona Asignada — Haga clic para asignar una zona'
+                                      : isSharedLegacy
+                                        ? `Zona compartida (${zOccupants.map((o) => o.venDes).join(', ')}) — Haga clic para asignar una zona exclusiva`
+                                        : 'Haga clic para editar o reasignar la zona de este asesor'
+                                  }
+                                >
+                                  <MapPin size={11} color="var(--motorven-gold)" />
+                                  {hasZone
+                                    ? `${isSharedLegacy ? '⚠️ ' : ''}${seller.coZon ? `[Z-${seller.coZon}] ` : ''}${seller.zona || `Zona ${seller.coZon}`}`
+                                    : 'Aún no tiene Zona Asignada'}
+                                </span>
+                              );
+                            })()}
                             <button
                               className="btn btn-secondary"
                               onClick={() => handleOpenEditZone(seller)}
@@ -1690,12 +1982,20 @@ export default function SellersView({
                     </button>
                   </div>
                   <div style={{ padding: '5px 9px', background: 'var(--surface-input, rgba(0, 43, 122, 0.04))', borderRadius: '7px', border: '1px solid var(--border-glass)', fontSize: '0.78rem', color: 'var(--text-main)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <span className="badge badge-primary" style={{ fontSize: '0.68rem', padding: '1px 5px' }}>
-                      {seller.coZon ? `Z-${seller.coZon}` : 'Territorio'}
-                    </span>
-                    <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                      {seller.zona || 'Sin Zona Asignada'}
-                    </span>
+                    {seller.coZon || seller.zona ? (
+                      <>
+                        <span className="badge badge-primary" style={{ fontSize: '0.68rem', padding: '1px 5px' }}>
+                          {seller.coZon ? `Z-${seller.coZon}` : 'Territorio'}
+                        </span>
+                        <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                          {seller.zona || `Zona ${seller.coZon}`}
+                        </span>
+                      </>
+                    ) : (
+                      <span style={{ color: 'var(--motorven-gold, #f59e0b)', fontStyle: 'italic' }}>
+                        Aún no tiene Zona Asignada
+                      </span>
+                    )}
                   </div>
 
                   <div>Teléfono: <strong style={{ color: 'var(--text-main)' }}>{seller.telefonos || 'N/A'}</strong></div>
@@ -1735,21 +2035,23 @@ export default function SellersView({
           orders={orders}
           collections={filteredProfitCollections}
           profitZones={profitZones}
+          allSellers={effectiveSellers}
           tasaBcv={config?.tasaDolar || 827.73}
           onOpenCommissionModal={(s) => setCommissionSeller(s)}
           onPhotoUpdated={handlePhotoUpdated}
           onUpdateSellerZone={onUpdateSellerZone}
+          onSaveProfitZone={onSaveProfitZone}
         />
       )}
 
-      {/* MODAL REASIGNACIÓN RÁPIDA DE ZONA */}
+      {/* MODAL REASIGNACIÓN RÁPIDA DE ZONA EXCLUSIVA */}
       {editingZoneSeller && (
         <div className="modal-overlay" onClick={() => setEditingZoneSeller(null)}>
           <div
             className="modal-content"
             onClick={(e) => e.stopPropagation()}
             style={{
-              maxWidth: '520px',
+              maxWidth: '560px',
               width: '95%',
               borderRadius: '16px',
               overflow: 'hidden',
@@ -1773,7 +2075,7 @@ export default function SellersView({
                 <Navigation size={22} color="var(--motorven-navy-light)" />
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                    Reasignar Zona Comercial
+                    Asignar Zona Exclusiva de Venta
                   </h3>
                   <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
                     Asesor: <strong>{editingZoneSeller.venDes}</strong> (Cód: {editingZoneSeller.coVen})
@@ -1788,56 +2090,111 @@ export default function SellersView({
               </button>
             </div>
 
-            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '6px', display: 'block' }}>
-                  Seleccionar Zona o Territorio de Ventas:
+            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>
+                  Seleccionar Zona Disponible (Exclusiva 1 a 1):
                 </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setInlineNewZoneOpen((prev) => !prev);
+                      setInlineNewZoneCode(getNextSuggestedZoneCode());
+                      setInlineNewZoneName('');
+                    }}
+                    style={{ fontSize: '0.72rem', padding: '3px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Plus size={12} /> {inlineNewZoneOpen ? 'Elegir Existente' : 'Crear Nueva Zona'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setEditingZoneSeller(null);
+                      handleOpenZonesManager();
+                    }}
+                    style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                  >
+                    Administrar Catálogo
+                  </button>
+                </div>
+              </div>
+
+              {!inlineNewZoneOpen ? (
                 <select
                   className="form-control"
                   value={modalZoneCoZon}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setModalZoneCoZon(val);
-                    if (val !== 'CUSTOM') {
-                      const matched = (profitZones || []).find(z => (z.coZon || z.co_zon) === val);
-                      if (matched) setModalCustomZone(matched.zonDes || matched.zon_des || '');
-                    }
-                  }}
+                  onChange={(e) => setModalZoneCoZon(e.target.value)}
                   style={{ width: '100%', fontSize: '0.84rem' }}
                 >
-                  <option value="">-- Sin Zona Asignada --</option>
-                  {(profitZones || []).map(z => {
-                    const cZon = z.coZon || z.co_zon;
+                  <option value="">-- Aún no tiene Zona Asignada (Liberar Zona) --</option>
+                  {(profitZones || []).map((z) => {
+                    const cZon = String(z.coZon || z.co_zon || '').trim().toUpperCase();
                     const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
+                    const selfCode = String(editingZoneSeller.coVen || editingZoneSeller.co_ven || editingZoneSeller.id || '')
+                      .trim()
+                      .replace(/^usr-seller-/i, '')
+                      .toUpperCase();
+                    const otherOccupants = (zoneOccupantsMap.get(cZon) || []).filter(
+                      (o) => String(o.coVen || o.co_ven || o.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase() !== selfCode
+                    );
+                    const isTakenByOther = otherOccupants.length > 0;
+                    const statusSuffix = isTakenByOther
+                      ? ` — [Ocupada por: ${otherOccupants.map((o) => o.venDes).join(', ')}]`
+                      : (String(editingZoneSeller.coZon || '').trim().toUpperCase() === cZon ? ' — [Actual]' : ' — [Disponible]');
                     return (
-                      <option key={cZon} value={cZon}>
-                        Zona {cZon}: {dZon}
+                      <option key={cZon} value={cZon} disabled={isTakenByOther}>
+                        Zona {cZon}: {dZon}{statusSuffix}
                       </option>
                     );
                   })}
-                  <option value="CUSTOM">★ Zona Personalizada / Otro Territorio...</option>
                 </select>
-              </div>
-
-              {modalZoneCoZon === 'CUSTOM' && (
-                <div>
-                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '6px', display: 'block' }}>
-                    Nombre del Territorio Personalizado:
-                  </label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="Ej: Gran Caracas / Altos Mirandinos"
-                    value={modalCustomZone}
-                    onChange={(e) => setModalCustomZone(e.target.value)}
-                    style={{ width: '100%', fontSize: '0.84rem' }}
-                  />
+              ) : (
+                <div
+                  style={{
+                    background: 'var(--surface-input, rgba(0, 43, 122, 0.04))',
+                    border: '1px dashed var(--motorven-navy-light, #3b82f6)',
+                    borderRadius: '10px',
+                    padding: '0.9rem',
+                    display: 'grid',
+                    gridTemplateColumns: '110px 1fr',
+                    gap: '0.65rem'
+                  }}
+                >
+                  <div>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                      Código *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={inlineNewZoneCode}
+                      onChange={(e) => setInlineNewZoneCode(e.target.value.toUpperCase())}
+                      placeholder="08"
+                      maxLength={8}
+                      style={{ fontSize: '0.84rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                      Nombre / Territorio de la Nueva Zona *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={inlineNewZoneName}
+                      onChange={(e) => setInlineNewZoneName(e.target.value)}
+                      placeholder="Ej: Valencia Norte - Prebo - Trigal"
+                      style={{ fontSize: '0.84rem' }}
+                    />
+                  </div>
                 </div>
               )}
 
               <div style={{ background: 'var(--surface-input, rgba(0, 43, 122, 0.03))', padding: '0.85rem', borderRadius: '10px', border: '1px solid var(--border-glass)', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                ℹ La nueva zona se sincronizará automáticamente en tiempo real en la base de datos Supabase, los reportes en PDF y en Supabase.
+                ℹ Cada zona es exclusiva de un solo vendedor (1 a 1). Las zonas ocupadas por otro asesor aparecen bloqueadas para evitar duplicados.
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem' }}>
@@ -1854,8 +2211,249 @@ export default function SellersView({
                   disabled={savingZoneChange}
                   style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 18px' }}
                 >
-                  <Check size={15} /> {savingZoneChange ? 'Guardando...' : 'Confirmar y Guardar'}
+                  <Check size={15} /> {savingZoneChange ? 'Guardando...' : (inlineNewZoneOpen ? 'Crear y Asignar Zona' : 'Confirmar y Guardar')}
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CRUD: GESTIÓN DE ZONAS DE VENTA */}
+      {showZonesManagerModal && (
+        <div className="modal-overlay" onClick={() => setShowZonesManagerModal(false)}>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '760px',
+              width: '96%',
+              maxHeight: '88vh',
+              display: 'flex',
+              flexDirection: 'column',
+              borderRadius: '16px',
+              overflow: 'hidden',
+              padding: 0,
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-glass)',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4)'
+            }}
+          >
+            <div
+              style={{
+                padding: '1.15rem 1.5rem',
+                background: 'linear-gradient(135deg, rgba(0, 43, 122, 0.1) 0%, rgba(230, 0, 18, 0.06) 100%)',
+                borderBottom: '1px solid var(--border-glass)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <MapPin size={22} color="var(--motorven-red)" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                    Gestión de Zonas de Venta (Exclusivas por Vendedor)
+                  </h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Crea, edita, guarda o elimina territorios comerciales. Cada zona admite un único vendedor asignado.
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowZonesManagerModal(false)}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '4px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.25rem 1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
+              {/* FORMULARIO CREAR / EDITAR ZONA */}
+              <form
+                onSubmit={handleSaveZoneCrud}
+                style={{
+                  background: 'var(--surface-input, rgba(0, 43, 122, 0.04))',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: '12px',
+                  padding: '1rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {zoneFormId ? `✏️ Editando Zona [${zoneFormCode}]` : '➕ Crear Nueva Zona de Venta'}
+                  </span>
+                  {zoneFormId && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={resetZoneCrudForm}
+                      style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                    >
+                      Cancelar Edición
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: '0.65rem', alignItems: 'end' }}>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                      Código *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={zoneFormCode}
+                      onChange={(e) => setZoneFormCode(e.target.value.toUpperCase())}
+                      placeholder="08"
+                      maxLength={8}
+                      disabled={Boolean(zoneFormId)}
+                      title={zoneFormId ? 'El código se mantiene para preservar el historial contable/clientes' : 'Código identificador (ej. 08)'}
+                      style={{ fontSize: '0.84rem', fontFamily: 'var(--font-code)', fontWeight: 800 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                      Descripción / Territorio *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={zoneFormName}
+                      onChange={(e) => setZoneFormName(e.target.value)}
+                      placeholder="Ej: Aragua - Maracay / Cagua / Turmero"
+                      style={{ fontSize: '0.84rem' }}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={savingZoneRecord}
+                    style={{ fontSize: '0.8rem', padding: '7px 14px', display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
+                  >
+                    <Save size={14} /> {savingZoneRecord ? 'Guardando...' : (zoneFormId ? 'Guardar Cambios' : 'Crear Zona')}
+                  </button>
+                </div>
+
+                {zoneManagerError && (
+                  <div style={{ fontSize: '0.76rem', color: '#ef4444', fontWeight: 700 }}>
+                    ⚠️ {zoneManagerError}
+                  </div>
+                )}
+              </form>
+
+              {/* LISTADO DE ZONAS REGISTRADAS */}
+              <div style={{ border: '1px solid var(--border-glass)', borderRadius: '12px', overflow: 'hidden' }}>
+                <table className="custom-table" style={{ width: '100%', fontSize: '0.8rem' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: '80px', textAlign: 'center' }}>CÓD.</th>
+                      <th>TERRITORIO / DESCRIPCIÓN</th>
+                      <th style={{ width: '230px' }}>VENDEDOR EXCLUSIVO</th>
+                      <th style={{ width: '140px', textAlign: 'center' }}>ACCIONES</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(profitZones || []).length > 0 ? (
+                      (profitZones || []).map((z) => {
+                        const cZon = String(z.coZon || z.co_zon || '').trim().toUpperCase();
+                        const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
+                        const occupants = zoneOccupantsMap.get(cZon) || [];
+                        const isConfirmingDel = confirmDeleteZoneKey === (z.id || cZon);
+
+                        return (
+                          <tr key={z.id || cZon}>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-code)', fontWeight: 800 }}>
+                              <span className="badge badge-primary" style={{ fontSize: '0.72rem' }}>Z-{cZon}</span>
+                            </td>
+                            <td style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                              {dZon}
+                            </td>
+                            <td>
+                              {occupants.length === 0 ? (
+                                <span className="badge badge-success" style={{ fontSize: '0.7rem' }}>
+                                  ✓ Disponible
+                                </span>
+                              ) : occupants.length === 1 ? (
+                                <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
+                                  {occupants[0].venDes} ({occupants[0].coVen})
+                                </span>
+                              ) : (
+                                <span
+                                  className="badge badge-warning"
+                                  style={{ fontSize: '0.7rem' }}
+                                  title="Zona compartida heredada: reasigna o crea nuevas zonas para dejar 1 vendedor por zona"
+                                >
+                                  ⚠️ Compartida ({occupants.length}): {occupants.map((o) => o.coVen).join(', ')}
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              {isConfirmingDel ? (
+                                <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={() => handleConfirmDeleteZone(z)}
+                                    disabled={savingZoneRecord}
+                                    style={{ padding: '3px 8px', fontSize: '0.68rem', background: '#dc2626', borderColor: '#dc2626' }}
+                                    title={occupants.length > 0 ? 'Eliminar y liberar al vendedor asignado' : 'Confirmar eliminación'}
+                                  >
+                                    Confirmar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setConfirmDeleteZoneKey(null)}
+                                    style={{ padding: '3px 7px', fontSize: '0.68rem' }}
+                                  >
+                                    No
+                                  </button>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', gap: '5px', justifyContent: 'center' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                      setZoneFormId(z.id || `ZON-${cZon}`);
+                                      setZoneFormCode(cZon);
+                                      setZoneFormName(dZon);
+                                      setZoneManagerError('');
+                                      setConfirmDeleteZoneKey(null);
+                                    }}
+                                    title="Editar nombre de la zona"
+                                    style={{ padding: '4px 8px', fontSize: '0.72rem' }}
+                                  >
+                                    <Edit size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setConfirmDeleteZoneKey(z.id || cZon)}
+                                    title={occupants.length > 0 ? `Eliminar zona (liberará a ${occupants.map((o) => o.venDes).join(', ')})` : 'Eliminar zona'}
+                                    style={{ padding: '4px 8px', fontSize: '0.72rem', color: '#ef4444' }}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan="4" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+                          No hay zonas registradas todavía.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

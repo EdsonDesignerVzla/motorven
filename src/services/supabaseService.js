@@ -5240,6 +5240,155 @@ const stripAccents = (str) =>
     .trim()
     .toLowerCase();
 
+const autoProvisionedSellerKeys = new Set();
+
+const isSalesDepartmentUser = (u) => {
+  if (!u || typeof u !== 'object') return false;
+  if (u.activo === false || u.active === false) return false;
+  const uname = String(u.username || '').trim().toLowerCase();
+  const uid = String(u.id || '').trim().toLowerCase();
+  if (/^autotest_/i.test(uname) || /^usr-autotest-/i.test(uid)) return false;
+  const dept = String(u.departamento || '').trim().toUpperCase();
+  const normRol = normalizeRole(u.rol || u.role || '');
+  return dept === 'VEN' || normRol === 'VENTAS';
+};
+
+const generateUniqueSellerCode = (nombre, usedCodesSet = new Set()) => {
+  const words = stripAccents(nombre)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  let base = '';
+  if (words.length >= 2) {
+    base = `${words[0][0]}${words[1][0]}`.toUpperCase();
+  } else if (words.length === 1) {
+    base = words[0].slice(0, 2).toUpperCase();
+  }
+  if (!base || base.length < 2) {
+    base = (base || 'VN').padEnd(2, 'X').slice(0, 2);
+  }
+  if (!usedCodesSet.has(base)) return base;
+
+  if (words.length >= 2 && words[1].length >= 2) {
+    const three = `${words[0][0]}${words[1].slice(0, 2)}`.toUpperCase();
+    if (!usedCodesSet.has(three)) return three;
+  }
+  for (let i = 2; i < 99; i++) {
+    const candidate = `${base}${i}`;
+    if (!usedCodesSet.has(candidate)) return candidate;
+  }
+  return `${base}${Date.now().toString(36).slice(-2).toUpperCase()}`;
+};
+
+const buildSellerFromSalesUser = (userObj, coVen) => {
+  const nowIso = new Date().toISOString();
+  const nombre = String(userObj?.nombre || userObj?.name || userObj?.username || coVen).trim();
+  return {
+    id: coVen,
+    co_ven: coVen,
+    coVen,
+    ven_des: nombre,
+    venDes: nombre,
+    cedula: userObj?.cedula || '',
+    telefonos: userObj?.phone || userObj?.telefono || '',
+    direccion: '',
+    tipo: 'A',
+    comision_pct: 3.0,
+    comisionPct: 3.0,
+    meta_litros_mes: 3000,
+    metaLitrosMes: 3000,
+    activo: true,
+    foto: userObj?.foto || '',
+    avatar: userObj?.avatar || '',
+    co_zon: '',
+    coZon: '',
+    zona: '',
+    userId: userObj?.id || '',
+    username: userObj?.username || '',
+    created_at: nowIso,
+    createdAt: nowIso,
+    updated_at: nowIso,
+    updatedAt: nowIso
+  };
+};
+
+const ensureSalesUserInProfitSellers = async (userObj) => {
+  if (!isSalesDepartmentUser(userObj)) return null;
+  try {
+    const sellers = getStorageSellers();
+    const rawUserCoVen = String(userObj.co_ven || userObj.coVen || '').trim();
+    const derivedFromId = String(userObj.id || '').toLowerCase().startsWith('usr-seller-')
+      ? String(userObj.id).replace(/^usr-seller-/i, '').trim().toUpperCase()
+      : '';
+    const candidateCoVen = (rawUserCoVen || derivedFromId).toUpperCase();
+    const userNameNorm = stripAccents(userObj.nombre);
+
+    const usedCodes = new Set();
+    sellers.forEach((s) => {
+      const code = String(s?.coVen || s?.co_ven || s?.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      if (code && !code.startsWith('USR-')) usedCodes.add(code);
+    });
+
+    const existingSeller = sellers.find((s) => {
+      const sCode = String(s?.coVen || s?.co_ven || s?.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      const sName = stripAccents(s?.venDes || s?.ven_des);
+      if (candidateCoVen && !candidateCoVen.startsWith('USR-') && sCode === candidateCoVen) return true;
+      if (userNameNorm && sName && sName === userNameNorm) return true;
+      return false;
+    });
+
+    const resolvedCoVen = existingSeller
+      ? String(existingSeller.coVen || existingSeller.co_ven || existingSeller.id).trim().replace(/^usr-seller-/i, '').toUpperCase()
+      : (candidateCoVen && !candidateCoVen.startsWith('USR-')
+          ? candidateCoVen
+          : generateUniqueSellerCode(userObj.nombre || userObj.username, usedCodes));
+
+    if (!existingSeller) {
+      const newSeller = buildSellerFromSalesUser(userObj, resolvedCoVen);
+      saveStorageSeller(newSeller);
+
+      // Enlazar co_ven en users local si estaba vacío
+      if (!rawUserCoVen && userObj.id) {
+        try {
+          const localUsers = getUsersList();
+          const updatedUsers = localUsers.map((u) =>
+            u && u.id === userObj.id
+              ? { ...u, coVen: resolvedCoVen, co_ven: resolvedCoVen, seller_id: resolvedCoVen }
+              : u
+          );
+          localStorage.setItem('signum_users_list', JSON.stringify(sortUsersByHierarchy(updatedUsers)));
+        } catch (_) {}
+      }
+
+      if (isNetworkOnline() && !isStaticCloudHost && !autoProvisionedSellerKeys.has(resolvedCoVen)) {
+        autoProvisionedSellerKeys.add(resolvedCoVen);
+        withTimeout(
+          supabase.from('profit_sellers').upsert([newSeller], { onConflict: 'co_ven' }),
+          4000
+        ).catch(() => {});
+        if (!rawUserCoVen && userObj.id) {
+          withTimeout(
+            supabase.from('users').update({ co_ven: resolvedCoVen, coVen: resolvedCoVen, seller_id: resolvedCoVen }).eq('id', userObj.id),
+            3000
+          ).catch(() => {});
+        }
+      }
+
+      broadcastReconcileChange({
+        tableId: 'sellers',
+        action: 'RECONCILE',
+        key: resolvedCoVen,
+        item: newSeller
+      });
+      return newSeller;
+    }
+
+    return existingSeller;
+  } catch (_) {
+    return null;
+  }
+};
+
 // Sincroniza automáticamente la foto de un usuario con su registro de asesor comercial (profit_sellers) si existe
 const syncSellerPhotoFromUser = async (userObj) => {
   if (!userObj || userObj.foto === undefined) return;
@@ -5495,6 +5644,9 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
         if (userData.foto !== undefined) {
           await syncSellerPhotoFromUser(savedFromDb);
         }
+        if (isSalesDepartmentUser(savedFromDb)) {
+          await ensureSalesUserInProfitSellers(savedFromDb);
+        }
 
         broadcastReconcileChange({
           tableId: 'users',
@@ -5516,6 +5668,9 @@ export const saveSupabaseUser = async (userData, auditUser = null) => {
 
   if (userData.foto !== undefined) {
     await syncSellerPhotoFromUser(mappedUser);
+  }
+  if (isSalesDepartmentUser(mappedUser)) {
+    await ensureSalesUserInProfitSellers(mappedUser);
   }
 
   addStorageUserLog({
@@ -8699,6 +8854,63 @@ export const getSupabaseProfitSellers = async () => {
       }
     }
 
+    // Incorporar usuarios activos del departamento de Ventas (users con departamento VEN o rol VENTAS)
+    // que aún no tengan ficha creada en profit_sellers (ej. Rosibel Briceño / @rosibelventas).
+    const usedCodes = new Set(Array.from(byCleanCode.keys()).map((k) => String(k || '').toUpperCase()));
+    const knownNames = new Set(
+      Array.from(byCleanCode.values())
+        .map((s) => stripAccents(s?.venDes || s?.ven_des))
+        .filter(Boolean)
+    );
+    const knownUserNames = new Map();
+    currentUsers.forEach((u) => {
+      if (!u) return;
+      const uCode = String(u.co_ven || u.coVen || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      if (uCode && !uCode.startsWith('USR-')) knownUserNames.set(uCode, u);
+    });
+
+    currentUsers.forEach((u) => {
+      if (!isSalesDepartmentUser(u)) return;
+      const rawUserCoVen = String(u.co_ven || u.coVen || '').trim();
+      const derivedFromId = String(u.id || '').toLowerCase().startsWith('usr-seller-')
+        ? String(u.id).replace(/^usr-seller-/i, '').trim().toUpperCase()
+        : '';
+      const candidateCode = (rawUserCoVen || derivedFromId).toUpperCase();
+      const uNameNorm = stripAccents(u.nombre || u.name);
+
+      if (candidateCode && !candidateCode.startsWith('USR-') && byCleanCode.has(candidateCode)) {
+        return;
+      }
+      if (uNameNorm && knownNames.has(uNameNorm)) {
+        return;
+      }
+
+      const assignedCode =
+        candidateCode && !candidateCode.startsWith('USR-') && !usedCodes.has(candidateCode)
+          ? candidateCode
+          : generateUniqueSellerCode(u.nombre || u.username, usedCodes);
+
+      usedCodes.add(assignedCode);
+      if (uNameNorm) knownNames.add(uNameNorm);
+
+      const synthesized = buildSellerFromSalesUser(u, assignedCode);
+      byCleanCode.set(assignedCode, { ...synthesized, _cleanCode: assignedCode });
+
+      if (isNetworkOnline() && !isStaticCloudHost && !autoProvisionedSellerKeys.has(assignedCode)) {
+        autoProvisionedSellerKeys.add(assignedCode);
+        withTimeout(
+          supabase.from('profit_sellers').upsert([synthesized], { onConflict: 'co_ven' }),
+          4000
+        ).catch(() => {});
+        if (!rawUserCoVen && u.id) {
+          withTimeout(
+            supabase.from('users').update({ co_ven: assignedCode, coVen: assignedCode, seller_id: assignedCode }).eq('id', u.id),
+            3000
+          ).catch(() => {});
+        }
+      }
+    });
+
     return Array.from(byCleanCode.values()).map(({ _cleanCode, ...rest }) => rest);
   };
 
@@ -8723,34 +8935,73 @@ export const getSupabaseProfitSellers = async () => {
 };
 
 export const updateSupabaseSellerZone = async (coVen, { coZon, zona }) => {
+  const cleanCoVen = String(coVen || '').trim().replace(/^usr-seller-/i, '').trim() || String(coVen || '').trim();
+  const currentSellers = getStorageSellers();
+  const existing = currentSellers.find(
+    (s) => String(s?.coVen || s?.co_ven || s?.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase() === cleanCoVen.toUpperCase()
+  );
+
   // 1. Guardar de forma nativa en tiempo real en la aplicación
-  saveStorageSeller({ coVen, co_ven: coVen, coZon, co_zon: coZon, zona });
+  saveStorageSeller({
+    ...(existing || {}),
+    id: existing?.id || cleanCoVen,
+    coVen: cleanCoVen,
+    co_ven: cleanCoVen,
+    coZon: coZon || '',
+    co_zon: coZon || '',
+    zona: zona || ''
+  });
 
   // 2. Si no hay conexión de red, encolar para sincronizar cuando se reactive
   if (!isNetworkOnline()) {
-    enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
-    return { co_ven: coVen, coVen, co_zon: coZon, coZon, zona };
+    enqueueSyncAction('seller_zone', 'UPDATE', { coVen: cleanCoVen, coZon, zona });
+    return { co_ven: cleanCoVen, coVen: cleanCoVen, co_zon: coZon, coZon, zona };
   }
 
   try {
+    const nowIso = new Date().toISOString();
     const payload = {
       co_zon: coZon || null,
       coZon: coZon || null,
       zona: zona || null,
-      updated_at: new Date().toISOString()
+      updated_at: nowIso
     };
 
     const { data, error } = await withTimeout(
-      supabase.from('profit_sellers').update(payload).eq('co_ven', coVen).select().single(),
+      supabase.from('profit_sellers').update(payload).eq('co_ven', cleanCoVen).select().maybeSingle(),
       8000
     );
-    if (error) throw error;
+    if (!error && data) {
+      isSupabaseAvailable = true;
+      return data;
+    }
+
+    // Si el asesor aún no existía en profit_sellers remoto (ej. recién creado desde users), hacer upsert completo
+    const upsertRow = {
+      ...(existing || {}),
+      id: existing?.id || cleanCoVen,
+      co_ven: cleanCoVen,
+      coVen: cleanCoVen,
+      ven_des: existing?.venDes || existing?.ven_des || cleanCoVen,
+      venDes: existing?.venDes || existing?.ven_des || cleanCoVen,
+      co_zon: coZon || null,
+      coZon: coZon || null,
+      zona: zona || null,
+      activo: existing?.activo !== false,
+      updated_at: nowIso,
+      updatedAt: nowIso
+    };
+    const { data: upserted, error: upsertErr } = await withTimeout(
+      supabase.from('profit_sellers').upsert([upsertRow], { onConflict: 'co_ven' }).select().single(),
+      8000
+    );
+    if (upsertErr) throw upsertErr;
     isSupabaseAvailable = true;
-    return data;
+    return upserted;
   } catch (err) {
     markSupabaseOffline(err, 'updateSupabaseSellerZone');
-    enqueueSyncAction('seller_zone', 'UPDATE', { coVen, coZon, zona });
-    return { co_ven: coVen, coVen, co_zon: coZon, coZon, zona };
+    enqueueSyncAction('seller_zone', 'UPDATE', { coVen: cleanCoVen, coZon, zona });
+    return { co_ven: cleanCoVen, coVen: cleanCoVen, co_zon: coZon, coZon, zona };
   }
 };
 
@@ -8924,7 +9175,83 @@ export const updateSupabaseGlobalSellersTarget = async (activeSellerCodes = [], 
   }
 };
 
+const PROFIT_ZONES_STORAGE_KEY = 'signum_profit_zones_v1';
+const DELETED_PROFIT_ZONES_KEY = 'signum_deleted_profit_zones_v1';
+
+const normalizeProfitZoneRecord = (z) => {
+  if (!z) return null;
+  const coZon = String(z.co_zon || z.coZon || '').trim().toUpperCase();
+  const zonDes = String(z.zon_des || z.zonDes || '').trim();
+  if (!coZon) return null;
+  const nowIso = new Date().toISOString();
+  return {
+    id: String(z.id || `ZON-${coZon}`).trim(),
+    coZon,
+    co_zon: coZon,
+    zonDes,
+    zon_des: zonDes,
+    disCen: z.dis_cen ?? z.disCen ?? '',
+    dis_cen: z.dis_cen ?? z.disCen ?? '',
+    createdAt: z.created_at || z.createdAt || nowIso,
+    created_at: z.created_at || z.createdAt || nowIso,
+    updatedAt: z.updated_at || z.updatedAt || nowIso,
+    updated_at: z.updated_at || z.updatedAt || nowIso
+  };
+};
+
+const getDeletedProfitZoneSet = () => {
+  try {
+    if (typeof localStorage === 'undefined') return new Set();
+    const raw = localStorage.getItem(DELETED_PROFIT_ZONES_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map((x) => String(x).trim().toUpperCase()).filter(Boolean) : []);
+  } catch (_) {
+    return new Set();
+  }
+};
+
+const setDeletedProfitZoneSet = (setObj) => {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(DELETED_PROFIT_ZONES_KEY, JSON.stringify(Array.from(setObj)));
+  } catch (_) {}
+};
+
+const readLocalProfitZones = () => {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(PROFIT_ZONES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(normalizeProfitZoneRecord).filter(Boolean) : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+const writeLocalProfitZones = (zonesList) => {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(PROFIT_ZONES_STORAGE_KEY, JSON.stringify(zonesList || []));
+  } catch (_) {}
+};
+
+const mergeAndSortProfitZones = (baseList = []) => {
+  const deletedSet = getDeletedProfitZoneSet();
+  const seen = new Map();
+  (baseList || []).forEach((item) => {
+    const norm = normalizeProfitZoneRecord(item);
+    if (!norm) return;
+    if (deletedSet.has(norm.coZon.toUpperCase()) || deletedSet.has(String(norm.id).toUpperCase())) return;
+    seen.set(norm.coZon, norm);
+  });
+  return Array.from(seen.values()).sort((a, b) => a.coZon.localeCompare(b.coZon, undefined, { numeric: true }));
+};
+
 export const getSupabaseProfitZones = async () => {
+  const localCached = readLocalProfitZones();
+  const localPending = localCached.filter((z) => z && z._pendingServerSync);
+
   try {
     const { data, error } = await withTimeout(
       supabase.from('profit_zones').select('*').order('co_zon', { ascending: true }),
@@ -8932,28 +9259,165 @@ export const getSupabaseProfitZones = async () => {
     );
     if (error) throw error;
     isSupabaseAvailable = true;
-    const seen = new Map();
-    (data || []).forEach(z => {
-      if (!z) return;
-      const coZon = String(z.co_zon || z.coZon || '').trim();
-      const zonDes = String(z.zon_des || z.zonDes || '').trim();
-      if (!coZon || seen.has(coZon)) return;
-      seen.set(coZon, {
-        id: z.id || `ZON-${coZon}`,
-        coZon,
-        co_zon: coZon,
-        zonDes,
-        zon_des: zonDes,
-        disCen: z.dis_cen ?? z.disCen ?? '',
-        createdAt: z.created_at || z.createdAt,
-        updatedAt: z.updated_at || z.updatedAt
-      });
-    });
-    const list = Array.from(seen.values()).sort((a, b) => a.coZon.localeCompare(b.coZon));
-    return list.length > 0 ? list : REAL_PROFIT_ZONES;
+    const remoteList = Array.isArray(data) ? data : [];
+    const baseSource = remoteList.length > 0 ? remoteList : (localCached.length > 0 ? localCached : REAL_PROFIT_ZONES);
+    const merged = mergeAndSortProfitZones([...baseSource, ...localPending]);
+    writeLocalProfitZones(merged);
+    return merged;
   } catch (err) {
     console.warn('[Supabase] Error cargando zonas Profit:', err.message);
-    return REAL_PROFIT_ZONES;
+    const fallbackSource = localCached.length > 0 ? localCached : REAL_PROFIT_ZONES;
+    return mergeAndSortProfitZones(fallbackSource);
+  }
+};
+
+export const saveSupabaseProfitZone = async (zoneData, existingZones = []) => {
+  const coZon = String(zoneData?.coZon ?? zoneData?.co_zon ?? '').trim().toUpperCase();
+  const zonDes = String(zoneData?.zonDes ?? zoneData?.zon_des ?? '').trim();
+  if (!coZon) {
+    throw new Error('El código de zona es obligatorio (ej. 08).');
+  }
+  if (!zonDes) {
+    throw new Error('El nombre o descripción de la zona es obligatorio.');
+  }
+
+  const currentZones = mergeAndSortProfitZones([
+    ...(Array.isArray(existingZones) && existingZones.length > 0 ? existingZones : []),
+    ...readLocalProfitZones()
+  ]);
+
+  const incomingId = zoneData?.id ? String(zoneData.id).trim() : '';
+  const isEditingExisting = Boolean(incomingId && currentZones.some((z) => String(z.id) === incomingId));
+
+  // Validar duplicados de código o nombre en otras zonas distintas a la actual
+  const duplicateCode = currentZones.find(
+    (z) => z.coZon.toUpperCase() === coZon && (!isEditingExisting || String(z.id) !== incomingId)
+  );
+  if (duplicateCode) {
+    throw new Error(`Ya existe una zona con el código "${coZon}" (${duplicateCode.zonDes}).`);
+  }
+
+  const targetNameNorm = stripAccents(zonDes);
+  const duplicateName = currentZones.find(
+    (z) => stripAccents(z.zonDes) === targetNameNorm && (!isEditingExisting || String(z.id) !== incomingId)
+  );
+  if (duplicateName) {
+    throw new Error(`Ya existe otra zona con ese nombre: Zona ${duplicateName.coZon} (${duplicateName.zonDes}).`);
+  }
+
+  const existingById = isEditingExisting ? currentZones.find((z) => String(z.id) === incomingId) : null;
+  const nowIso = new Date().toISOString();
+  const resolvedId = existingById?.id || incomingId || `ZON-${coZon}`;
+
+  const normalized = normalizeProfitZoneRecord({
+    ...(existingById || {}),
+    ...zoneData,
+    id: resolvedId,
+    coZon,
+    co_zon: coZon,
+    zonDes,
+    zon_des: zonDes,
+    createdAt: existingById?.createdAt || zoneData?.createdAt || nowIso,
+    created_at: existingById?.created_at || zoneData?.created_at || nowIso,
+    updatedAt: nowIso,
+    updated_at: nowIso
+  });
+
+  // Limpiar tombstones si se recrea un código previamente eliminado
+  const delSet = getDeletedProfitZoneSet();
+  delSet.delete(coZon.toUpperCase());
+  delSet.delete(resolvedId.toUpperCase());
+  setDeletedProfitZoneSet(delSet);
+
+  const nextLocal = mergeAndSortProfitZones([
+    ...currentZones.filter((z) => String(z.id) !== resolvedId && z.coZon !== existingById?.coZon),
+    { ...normalized, _pendingServerSync: true }
+  ]);
+  writeLocalProfitZones(nextLocal);
+
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_zone', isEditingExisting ? 'UPDATE' : 'INSERT', normalized);
+    broadcastReconcileChange({ tableId: 'zones', action: 'RECONCILE', key: coZon, item: normalized });
+    return normalized;
+  }
+
+  try {
+    const dbPayload = {
+      id: normalized.id,
+      co_zon: normalized.coZon,
+      coZon: normalized.coZon,
+      zon_des: normalized.zonDes,
+      zonDes: normalized.zonDes,
+      dis_cen: normalized.disCen || '',
+      disCen: normalized.disCen || '',
+      created_at: normalized.createdAt,
+      updated_at: nowIso
+    };
+    const { data, error } = await withTimeout(
+      supabase.from('profit_zones').upsert([dbPayload], { onConflict: 'id' }).select().single(),
+      6000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    const savedNorm = normalizeProfitZoneRecord({ ...normalized, ...(data || {}) });
+    const syncedLocal = mergeAndSortProfitZones([
+      ...currentZones.filter((z) => String(z.id) !== resolvedId && z.coZon !== existingById?.coZon),
+      savedNorm
+    ]);
+    writeLocalProfitZones(syncedLocal);
+    broadcastReconcileChange({ tableId: 'zones', action: 'RECONCILE', key: savedNorm.coZon, item: savedNorm });
+    return savedNorm;
+  } catch (err) {
+    console.warn('[saveSupabaseProfitZone] Guardado local/encolado:', err?.message || err);
+    markSupabaseOffline(err, 'saveSupabaseProfitZone');
+    enqueueSyncAction('profit_zone', isEditingExisting ? 'UPDATE' : 'INSERT', normalized);
+    broadcastReconcileChange({ tableId: 'zones', action: 'RECONCILE', key: coZon, item: normalized });
+    return normalized;
+  }
+};
+
+export const deleteSupabaseProfitZone = async (zoneOrCoZon) => {
+  const targetId = typeof zoneOrCoZon === 'object' ? String(zoneOrCoZon?.id || '').trim() : '';
+  const targetCoZon = (typeof zoneOrCoZon === 'object'
+    ? String(zoneOrCoZon?.coZon || zoneOrCoZon?.co_zon || '').trim()
+    : String(zoneOrCoZon || '').trim()
+  ).toUpperCase();
+  if (!targetId && !targetCoZon) return false;
+
+  const delSet = getDeletedProfitZoneSet();
+  if (targetId) delSet.add(targetId.toUpperCase());
+  if (targetCoZon) delSet.add(targetCoZon);
+  setDeletedProfitZoneSet(delSet);
+
+  const filteredLocal = readLocalProfitZones().filter((z) => {
+    const zId = String(z?.id || '').trim().toUpperCase();
+    const zCode = String(z?.coZon || z?.co_zon || '').trim().toUpperCase();
+    return (!targetId || zId !== targetId.toUpperCase()) && (!targetCoZon || zCode !== targetCoZon);
+  });
+  writeLocalProfitZones(filteredLocal);
+
+  if (!isNetworkOnline()) {
+    enqueueSyncAction('profit_zone', 'DELETE', { id: targetId, coZon: targetCoZon });
+    broadcastReconcileChange({ tableId: 'zones', action: 'DELETE', key: targetCoZon || targetId, item: { id: targetId, coZon: targetCoZon } });
+    return true;
+  }
+
+  try {
+    if (targetId) {
+      await withTimeout(supabase.from('profit_zones').delete().eq('id', targetId), 6000);
+    }
+    if (targetCoZon) {
+      await withTimeout(supabase.from('profit_zones').delete().eq('co_zon', targetCoZon), 6000);
+    }
+    isSupabaseAvailable = true;
+    broadcastReconcileChange({ tableId: 'zones', action: 'DELETE', key: targetCoZon || targetId, item: { id: targetId, coZon: targetCoZon } });
+    return true;
+  } catch (err) {
+    console.warn('[deleteSupabaseProfitZone] Encolado offline:', err?.message || err);
+    markSupabaseOffline(err, 'deleteSupabaseProfitZone');
+    enqueueSyncAction('profit_zone', 'DELETE', { id: targetId, coZon: targetCoZon });
+    broadcastReconcileChange({ tableId: 'zones', action: 'DELETE', key: targetCoZon || targetId, item: { id: targetId, coZon: targetCoZon } });
+    return true;
   }
 };
 

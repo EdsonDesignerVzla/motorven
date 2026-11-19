@@ -17,7 +17,8 @@ import {
   Edit,
   Check,
   Navigation,
-  Compass
+  Compass,
+  Plus
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import { generateSellersPDF } from '../services/pdfReportService';
@@ -39,22 +40,27 @@ export default function SellerDetailModal({
   orders = [],
   collections = [],
   profitZones = [],
+  allSellers = [],
   tasaBcv = 827.73,
   onOpenCommissionModal,
   onPhotoUpdated,
-  onUpdateSellerZone
+  onUpdateSellerZone,
+  onSaveProfitZone
 }) {
   const sellerCoVen = (seller?.coVen || seller?.co_ven || seller?.codigo || seller?.id || '').toString().trim();
   const sellerVenDes = (seller?.venDes || seller?.ven_des || seller?.nombre || '').toString().trim();
 
   // Zone management state
-  const initialCoZon = seller?.coZon || seller?.co_zon || '';
-  const initialZona = seller?.zona || ((profitZones || []).find(z => (z.coZon || z.co_zon) === initialCoZon)?.zonDes || '');
-  const [currentCoZon, setCurrentCoZon] = useState(initialCoZon);
+  const initialCoZon = String(seller?.coZon || seller?.co_zon || '').trim().toUpperCase();
+  const initialZona = seller?.zona || ((profitZones || []).find(z => String(z.coZon || z.co_zon || '').trim().toUpperCase() === initialCoZon)?.zonDes || '');
+  const [currentCoZon, setCurrentCoZon] = useState(initialCoZon === 'CUSTOM' ? '' : initialCoZon);
   const [currentZona, setCurrentZona] = useState(initialZona);
   const [isEditingZone, setIsEditingZone] = useState(false);
-  const [selectedZoneVal, setSelectedZoneVal] = useState(initialCoZon || (initialZona ? 'CUSTOM' : ''));
-  const [customZoneText, setCustomZoneText] = useState(initialZona || '');
+  const [selectedZoneVal, setSelectedZoneVal] = useState(initialCoZon === 'CUSTOM' ? '' : initialCoZon);
+  const [inlineNewZoneOpen, setInlineNewZoneOpen] = useState(false);
+  const [inlineNewZoneCode, setInlineNewZoneCode] = useState('');
+  const [inlineNewZoneName, setInlineNewZoneName] = useState('');
+  const [zoneErrorMsg, setZoneErrorMsg] = useState('');
   const [savingZone, setSavingZone] = useState(false);
   const [zoneSaveSuccess, setZoneSaveSuccess] = useState(false);
 
@@ -86,30 +92,75 @@ export default function SellerDetailModal({
   const metaLitros = Number(seller?.metaLitrosMes) || 3000;
   const cumplimientoPct = metaLitros > 0 ? parseFloat(((totalLitros / metaLitros) * 100).toFixed(1)) : 0;
 
+  const getNextZoneCode = () => {
+    const used = new Set(
+      (profitZones || [])
+        .map((z) => parseInt(String(z?.coZon || z?.co_zon || '').replace(/\D/g, ''), 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    );
+    let n = 1;
+    while (used.has(n)) n++;
+    return String(n).padStart(2, '0');
+  };
+
+  const getOtherZoneOccupants = (zCode) => {
+    const cleanZone = String(zCode || '').trim().toUpperCase();
+    const selfClean = sellerCoVen.replace(/^usr-seller-/i, '').trim().toUpperCase();
+    if (!cleanZone) return [];
+    return (allSellers || []).filter((s) => {
+      if (!s || s.activo === false) return false;
+      const sCode = String(s.coVen || s.co_ven || s.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase();
+      const sZone = String(s.coZon || s.co_zon || '').trim().toUpperCase();
+      return sZone === cleanZone && sCode !== selfClean;
+    });
+  };
+
   const handleSaveZone = async () => {
-    let newCoZon = currentCoZon;
-    let newZona = currentZona;
-
-    if (selectedZoneVal === 'CUSTOM') {
-      newCoZon = 'CUSTOM';
-      newZona = customZoneText.trim() || 'Zona Especial';
-    } else if (selectedZoneVal) {
-      newCoZon = selectedZoneVal;
-      const matched = (profitZones || []).find(z => (z.coZon || z.co_zon) === selectedZoneVal);
-      newZona = matched?.zonDes || matched?.zon_des || selectedZoneVal;
-    }
-
+    setZoneErrorMsg('');
     setSavingZone(true);
     try {
+      let newCoZon = String(selectedZoneVal || '').trim().toUpperCase();
+      let newZona = '';
+
+      if (inlineNewZoneOpen) {
+        const cleanCode = String(inlineNewZoneCode || '').trim().toUpperCase();
+        const cleanName = String(inlineNewZoneName || '').trim();
+        if (!cleanCode || !cleanName) {
+          setZoneErrorMsg('Ingresa código y nombre para crear la nueva zona.');
+          setSavingZone(false);
+          return;
+        }
+        if (onSaveProfitZone) {
+          const created = await onSaveProfitZone({ coZon: cleanCode, zonDes: cleanName });
+          newCoZon = String(created?.coZon || cleanCode).trim().toUpperCase();
+          newZona = String(created?.zonDes || cleanName).trim();
+        } else {
+          newCoZon = cleanCode;
+          newZona = cleanName;
+        }
+      } else if (newCoZon) {
+        const otherOccupants = getOtherZoneOccupants(newCoZon);
+        if (otherOccupants.length > 0) {
+          setZoneErrorMsg(`La Zona ${newCoZon} es exclusiva y ya pertenece a ${otherOccupants.map((o) => o.venDes || o.coVen).join(', ')}.`);
+          setSavingZone(false);
+          return;
+        }
+        const matched = (profitZones || []).find((z) => String(z.coZon || z.co_zon || '').trim().toUpperCase() === newCoZon);
+        newZona = matched?.zonDes || matched?.zon_des || `Zona ${newCoZon}`;
+      }
+
       if (onUpdateSellerZone) {
         await onUpdateSellerZone(sellerCoVen, { coZon: newCoZon, zona: newZona });
       }
       setCurrentCoZon(newCoZon);
       setCurrentZona(newZona);
+      setSelectedZoneVal(newCoZon);
+      setInlineNewZoneOpen(false);
       setZoneSaveSuccess(true);
       setIsEditingZone(false);
       setTimeout(() => setZoneSaveSuccess(false), 3000);
     } catch (err) {
+      setZoneErrorMsg(err?.message || 'Error guardando la zona.');
       console.warn('Error saving zone:', err);
     } finally {
       setSavingZone(false);
@@ -328,12 +379,20 @@ export default function SellerDetailModal({
                     Zona Comercial / Territorio de Ventas Asignado
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '2px' }}>
-                    <span className="badge badge-primary" style={{ fontSize: '0.8rem', padding: '3px 10px', fontWeight: 800 }}>
-                      {currentCoZon ? `Zona ${currentCoZon}` : 'Territorio'}
-                    </span>
-                    <strong style={{ fontSize: '0.92rem', color: 'var(--text-main)' }}>
-                      {currentZona || 'Sin Zona Asignada'}
-                    </strong>
+                    {currentCoZon || currentZona ? (
+                      <>
+                        <span className="badge badge-primary" style={{ fontSize: '0.8rem', padding: '3px 10px', fontWeight: 800 }}>
+                          {currentCoZon ? `Zona ${currentCoZon}` : 'Territorio'}
+                        </span>
+                        <strong style={{ fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                          {currentZona || `Zona ${currentCoZon}`}
+                        </strong>
+                      </>
+                    ) : (
+                      <strong style={{ fontSize: '0.9rem', color: 'var(--motorven-gold, #f59e0b)' }}>
+                        Aún no tiene Zona Asignada
+                      </strong>
+                    )}
                   </div>
                 </div>
               </div>
@@ -341,7 +400,13 @@ export default function SellerDetailModal({
               {!isEditingZone ? (
                 <button
                   className="btn btn-secondary"
-                  onClick={() => setIsEditingZone(true)}
+                  onClick={() => {
+                    setZoneErrorMsg('');
+                    setInlineNewZoneOpen(false);
+                    setInlineNewZoneCode(getNextZoneCode());
+                    setInlineNewZoneName('');
+                    setIsEditingZone(true);
+                  }}
                   style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px' }}
                 >
                   <Edit size={13} /> Reasignar / Editar Zona
@@ -357,48 +422,78 @@ export default function SellerDetailModal({
                   padding: '1rem',
                   background: 'var(--bg-card)',
                   borderRadius: '10px',
-                  border: '1px dashed var(--motorven-navy)'
+                  border: '1px dashed var(--motorven-navy)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.65rem'
                 }}
               >
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.5rem' }}>
-                  Seleccione la nueva zona para el asesor {sellerVenDes}:
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
-                  <select
-                    className="form-control"
-                    value={selectedZoneVal}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSelectedZoneVal(val);
-                      if (val !== 'CUSTOM') {
-                        const matched = (profitZones || []).find(z => (z.coZon || z.co_zon) === val);
-                        if (matched) setCustomZoneText(matched.zonDes || matched.zon_des || '');
-                      }
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                    Zona exclusiva para {sellerVenDes}:
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setInlineNewZoneOpen((prev) => !prev);
+                      setInlineNewZoneCode(getNextZoneCode());
+                      setInlineNewZoneName('');
+                      setZoneErrorMsg('');
                     }}
-                    style={{ flex: 1, minWidth: '240px', fontSize: '0.82rem' }}
+                    style={{ fontSize: '0.72rem', padding: '3px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   >
-                    <option value="">-- Seleccionar Zona Corporativa --</option>
-                    {(profitZones || []).map(z => {
-                      const cZon = z.coZon || z.co_zon;
-                      const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
-                      return (
-                        <option key={cZon} value={cZon}>
-                          Zona {cZon}: {dZon}
-                        </option>
-                      );
-                    })}
-                    <option value="CUSTOM">★ Zona Personalizada / Otro Territorio...</option>
-                  </select>
+                    <Plus size={12} /> {inlineNewZoneOpen ? 'Elegir Zona Existente' : 'Crear Nueva Zona'}
+                  </button>
+                </div>
 
-                  {selectedZoneVal === 'CUSTOM' && (
-                    <input
-                      type="text"
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+                  {!inlineNewZoneOpen ? (
+                    <select
                       className="form-control"
-                      placeholder="Nombre de la zona o territorio..."
-                      value={customZoneText}
-                      onChange={(e) => setCustomZoneText(e.target.value)}
-                      style={{ flex: 1, minWidth: '220px', fontSize: '0.82rem' }}
-                    />
+                      value={selectedZoneVal}
+                      onChange={(e) => {
+                        setSelectedZoneVal(e.target.value);
+                        setZoneErrorMsg('');
+                      }}
+                      style={{ flex: 1, minWidth: '240px', fontSize: '0.82rem' }}
+                    >
+                      <option value="">-- Aún no tiene Zona Asignada --</option>
+                      {(profitZones || []).map((z) => {
+                        const cZon = String(z.coZon || z.co_zon || '').trim().toUpperCase();
+                        const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
+                        const others = getOtherZoneOccupants(cZon);
+                        const isTaken = others.length > 0;
+                        const labelSuffix = isTaken
+                          ? ` — [Ocupada por: ${others.map((o) => o.venDes || o.coVen).join(', ')}]`
+                          : (currentCoZon === cZon ? ' — [Actual]' : ' — [Disponible]');
+                        return (
+                          <option key={cZon} value={cZon} disabled={isTaken}>
+                            Zona {cZon}: {dZon}{labelSuffix}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="Cód (08)"
+                        maxLength={8}
+                        value={inlineNewZoneCode}
+                        onChange={(e) => setInlineNewZoneCode(e.target.value.toUpperCase())}
+                        style={{ width: '95px', fontSize: '0.82rem', fontFamily: 'var(--font-code)', fontWeight: 700 }}
+                      />
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="Nombre del territorio de la nueva zona..."
+                        value={inlineNewZoneName}
+                        onChange={(e) => setInlineNewZoneName(e.target.value)}
+                        style={{ flex: 1, minWidth: '200px', fontSize: '0.82rem' }}
+                      />
+                    </>
                   )}
 
                   <div style={{ display: 'flex', gap: '6px' }}>
@@ -408,13 +503,15 @@ export default function SellerDetailModal({
                       disabled={savingZone}
                       style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 14px' }}
                     >
-                      <Check size={14} /> {savingZone ? 'Guardando...' : 'Guardar Zona'}
+                      <Check size={14} /> {savingZone ? 'Guardando...' : (inlineNewZoneOpen ? 'Crear y Guardar' : 'Guardar Zona')}
                     </button>
                     <button
                       className="btn btn-secondary"
                       onClick={() => {
                         setIsEditingZone(false);
-                        setSelectedZoneVal(currentCoZon || (currentZona ? 'CUSTOM' : ''));
+                        setInlineNewZoneOpen(false);
+                        setZoneErrorMsg('');
+                        setSelectedZoneVal(currentCoZon || '');
                       }}
                       style={{ fontSize: '0.78rem', padding: '6px 12px' }}
                     >
@@ -422,6 +519,11 @@ export default function SellerDetailModal({
                     </button>
                   </div>
                 </div>
+                {zoneErrorMsg && (
+                  <div style={{ fontSize: '0.74rem', color: '#ef4444', fontWeight: 700 }}>
+                    ⚠️ {zoneErrorMsg}
+                  </div>
+                )}
               </div>
             )}
 

@@ -28,6 +28,12 @@ if (typeof global.URL === 'undefined') {
 
 import fs from 'fs';
 import {
+  saveSupabaseProfitZone,
+  getSupabaseProfitZones,
+  deleteSupabaseProfitZone,
+  getSupabaseProfitSellers
+} from '../services/supabaseService.js';
+import {
   normalizeProfitCollectionUsd,
   matchesSeller,
   resolveBaseSinIvaUsd,
@@ -311,7 +317,9 @@ test('8. PDFs de Cobradores y CxC reemplazan Vendedor/Asesor por Cobrador y ejec
     if (
       (f.startsWith('Reporte_Fuerza_Ventas_SIGNUM_') ||
         f.startsWith('Cuentas_por_Cobrar_SIGNUM_') ||
-        f.startsWith('Reporte_Consolidado_CxC_')) &&
+        f.startsWith('Reporte_Consolidado_CxC_') ||
+        f.startsWith('Reporte_CxC_Consolidado_Documentos_') ||
+        f.startsWith('Reporte_Documentos_CxC_')) &&
       f.endsWith('.pdf')
     ) {
       try {
@@ -320,6 +328,69 @@ test('8. PDFs de Cobradores y CxC reemplazan Vendedor/Asesor por Cobrador y ejec
     }
   });
 });
+
+// 9. CRUD de Zonas Exclusivas de Venta y Sincronización de Usuarios de Ventas
+{
+  const memStore = new Map();
+  const prevStorage = globalThis.localStorage;
+  const prevFetch = globalThis.fetch;
+  globalThis.localStorage = {
+    getItem: (k) => (memStore.has(k) ? memStore.get(k) : null),
+    setItem: (k, v) => { memStore.set(k, String(v)); },
+    removeItem: (k) => { memStore.delete(k); },
+    clear: () => { memStore.clear(); }
+  };
+  globalThis.fetch = async () => { throw new Error('offline-test'); };
+
+  try {
+    const created = await saveSupabaseProfitZone({ coZon: '08', zonDes: 'Aragua Centro - Maracay' }, []);
+    assert.equal(created.coZon, '08');
+    assert.equal(created.zonDes, 'Aragua Centro - Maracay');
+
+    const edited = await saveSupabaseProfitZone({ id: created.id, coZon: '08', zonDes: 'Aragua - Maracay y Cagua' }, [created]);
+    assert.equal(edited.zonDes, 'Aragua - Maracay y Cagua');
+
+    await assert.rejects(
+      () => saveSupabaseProfitZone({ coZon: '08', zonDes: 'Otro Territorio' }, [edited]),
+      /Ya existe una zona con el código/
+    );
+    await assert.rejects(
+      () => saveSupabaseProfitZone({ coZon: '09', zonDes: 'Aragua - Maracay y Cagua' }, [edited]),
+      /Ya existe otra zona con ese nombre/
+    );
+
+    const zonesAfterSave = await getSupabaseProfitZones();
+    assert.ok(zonesAfterSave.some((z) => z.coZon === '08' && z.zonDes === 'Aragua - Maracay y Cagua'));
+
+    await deleteSupabaseProfitZone(edited);
+    const zonesAfterDelete = await getSupabaseProfitZones();
+    assert.equal(zonesAfterDelete.some((z) => z.coZon === '08'), false);
+
+    // Verificar que un usuario de Ventas sin co_ven aparece automáticamente en getSupabaseProfitSellers sin zona asignada
+    globalThis.localStorage.setItem('signum_users_list', JSON.stringify([
+      {
+        id: 'usr-mwaup5bz',
+        username: 'rosibelventas',
+        nombre: 'Rosibel Briceño',
+        rol: 'VENTAS',
+        departamento: 'VEN',
+        activo: true,
+        co_ven: null
+      }
+    ]));
+    const sellers = await getSupabaseProfitSellers();
+    const rosibel = sellers.find((s) => s.venDes === 'Rosibel Briceño');
+    assert.ok(rosibel, 'Usuario activo de Ventas sin co_ven debe aparecer automáticamente en Fuerza de Ventas');
+    assert.equal(rosibel.coZon, '');
+    assert.equal(rosibel.zona, '');
+
+    passed += 1;
+    console.log('  ✔ 9. CRUD de Zonas Exclusivas (crear, editar, anti-duplicado, eliminar) y sincronización de usuario Ventas');
+  } finally {
+    globalThis.localStorage = prevStorage;
+    globalThis.fetch = prevFetch;
+  }
+}
 
 console.log(`\nResultado commissionFlow.test.js: ${passed} pruebas aprobadas.`);
 if (process.exitCode && process.exitCode !== 0) {
