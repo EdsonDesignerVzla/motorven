@@ -94,6 +94,7 @@ import {
 } from './data/supabaseRealData';
 
 import {
+  isStaticFallbackList,
   seedDatabaseIfEmpty,
   ensureInventoryReconcileEpoch,
   getSupabaseConfig,
@@ -586,74 +587,107 @@ function MainApp() {
           setProfitWarehouses(pWarehouses || []);
         }
 
-        // Ola 2: módulos financieros, históricos y catálogos auxiliares
-        const [
-          bnks, cdesks, cobs, sups, cash, purs, closures,
-          pSups, pPurs, pCxp, pPays, pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers,
-          pIslr, pBen, pOrders, pWithholdings, pAuditTrails,
-          pLines, pCategories, pSublines, pCurrs,
-          pReqs, pPOs, pRecs,
-          pIncExpAccounts, pSettlements, pExpenses, pEmployees, pPayroll
-        ] = await Promise.all([
+        // Ola 2 escalonada en lotes pequeños para no saturar el túnel HTTPS:
+        // Ola 2A: Tesorería, Cobranzas CxC y Cajas (máxima prioridad financiera)
+        const [bnks, cdesks, cobs, cash, closures] = await Promise.all([
           getSupabaseProfitBankAccounts(),
           getSupabaseProfitCashDesks(),
           getSupabaseProfitCollections(),
-          getSupabaseSuppliers(),
           getSupabaseCashMovements(),
+          getSupabaseFiscalClosures()
+        ]);
+        if (isMounted) {
+          setProfitBankAccounts(bnks || []);
+          setProfitCashDesks(cdesks || []);
+          setProfitCollections(cobs || []);
+          setCashMovementsState(cash || []);
+          setFiscalClosures(closures || []);
+        }
+
+        // Ola 2B: Compras, Proveedores, Cuentas por Pagar e Impuestos
+        const [
+          sups, purs, pSups, pPurs, pCxp, pPays, pIslr, pBen, pOrders, pWithholdings, pReqs, pPOs, pRecs
+        ] = await Promise.all([
+          getSupabaseSuppliers(),
           getSupabasePurchases(),
-          getSupabaseFiscalClosures(),
           getSupabaseProfitSuppliers(),
           getSupabaseProfitPurchases(),
           getSupabaseProfitAccountsPayable(),
           getSupabaseProfitSupplierPayments(),
+          getSupabaseProfitIslrConcepts(),
+          getSupabaseProfitBeneficiaries(),
+          getSupabaseProfitPaymentOrdersMerged(),
+          getSupabaseProfitIslrWithholdings(),
+          getSupabasePurchaseRequisitions(),
+          getSupabasePurchaseOrders(),
+          getSupabaseGoodsReceiptNotesMerged()
+        ]);
+        if (isMounted) {
+          setSuppliersState(sups || []);
+          setPurchasesState(purs || []);
+          setProfitSuppliers(pSups || []);
+          setProfitPurchases(pPurs || []);
+          setProfitAccountsPayable(pCxp || []);
+          setProfitSupplierPayments(pPays || []);
+          setProfitIslrConcepts(pIslr || []);
+          setProfitBeneficiaries(pBen || []);
+          setProfitPaymentOrders(pOrders || []);
+          setProfitIslrWithholdings(pWithholdings || []);
+          setPurchaseRequisitions(pReqs || []);
+          setPurchaseOrders(pPOs || []);
+          setGoodsReceiptNotes(pRecs || []);
+        }
+
+        // Ola 2C: Fuerza de Ventas, Rutas, Catálogos, RRHH y Auditoría
+        const [
+          pSellers, pZones, pTrans, pReturns, pAdjustments, pTransfers, pAuditTrails,
+          pLines, pCategories, pSublines, pCurrs, pIncExpAccounts, pSettlements, pExpenses, pEmployees, pPayroll
+        ] = await Promise.all([
           getSupabaseProfitSellers(),
           getSupabaseProfitZones(),
           getSupabaseProfitTransports(),
           getSupabaseProfitReturnsMerged(),
           getSupabaseProfitInventoryAdjustmentsMerged(),
           getSupabaseProfitWarehouseTransfersMerged(),
-          getSupabaseProfitIslrConcepts(),
-          getSupabaseProfitBeneficiaries(),
-          getSupabaseProfitPaymentOrdersMerged(),
-          getSupabaseProfitIslrWithholdings(),
           getSupabaseProfitAuditTrails(),
           getSupabaseProfitProductLines(),
           getSupabaseProfitProductCategories(),
           getSupabaseProfitProductSublines(),
           getSupabaseProfitCurrencies(),
-          getSupabasePurchaseRequisitions(),
-          getSupabasePurchaseOrders(),
-          getSupabaseGoodsReceiptNotesMerged(),
           getSupabaseProfitIncomeExpenseAccounts(),
           getSupabaseCommissionSettlements(),
           getSupabaseExpenses(),
           getSupabaseEmployees(),
           getSupabasePayroll()
         ]);
-        
+
+        // Recuperación automática si Facturas o Cobranzas cayeron en fallback estático por congestión de red
+        if (isMounted && (isStaticFallbackList(facs) || isStaticFallbackList(cobs) || isStaticFallbackList(sls))) {
+          setTimeout(async () => {
+            if (!isMounted) return;
+            try {
+              const [retryFacs, retryCobs, retrySales] = await Promise.all([
+                isStaticFallbackList(facs) ? getSupabaseProfitInvoices() : Promise.resolve(null),
+                isStaticFallbackList(cobs) ? getSupabaseProfitCollections() : Promise.resolve(null),
+                isStaticFallbackList(sls) ? getSupabaseSales() : Promise.resolve(null)
+              ]);
+              if (!isMounted) return;
+              if (retryFacs && !isStaticFallbackList(retryFacs)) setProfitInvoices(filterOutDeletedCxcDocs(retryFacs));
+              if (retryCobs && !isStaticFallbackList(retryCobs)) setProfitCollections(retryCobs);
+              if (retrySales && !isStaticFallbackList(retrySales)) setSalesState(filterOutDeletedCxcDocs(retrySales));
+            } catch (_) {}
+          }, 2500);
+        }
+
         if (isMounted) {
           const activeConfig = cfg || await getSupabaseConfig();
           if (cfg) setConfigState(activeConfig);
-          // products / clients / orders / profitInvoices / sales ya se cargaron en la Ola 1.
-          // No se re-asignan aquí con esa foto vieja: si durante la Ola 2 se eliminó o editó un
-          // documento (o llegó un cambio en tiempo real), se resucitaría el estado anterior.
-          setProfitBankAccounts(bnks || []);
-          setProfitCashDesks(cdesks || []);
-          setProfitCollections(cobs || []);
-          setProfitSuppliers(pSups || []);
-          setProfitPurchases(pPurs || []);
-          setProfitAccountsPayable(pCxp || []);
-          setProfitSupplierPayments(pPays || []);
           setProfitSellers(pSellers || []);
           setProfitZones(pZones || []);
           setProfitTransports(pTrans || []);
           setProfitReturns(pReturns || []);
           setProfitInventoryAdjustments(pAdjustments || []);
           setProfitWarehouseTransfers(pTransfers || []);
-          setProfitIslrConcepts(pIslr || []);
-          setProfitBeneficiaries(pBen || []);
-          setProfitPaymentOrders(pOrders || []);
-          setProfitIslrWithholdings(pWithholdings || []);
           setProfitAuditTrails(pAuditTrails || []);
           setProfitWarehouses(pWarehouses || []);
           setProfitProductLines(pLines || []);
@@ -665,13 +699,6 @@ function MainApp() {
           setExpensesState(pExpenses || []);
           setEmployeesState(pEmployees || []);
           setPayrollState(pPayroll || []);
-          setSuppliersState(sups || []);
-          setPurchasesState(purs || []);
-          setPurchaseRequisitions(pReqs || []);
-          setPurchaseOrders(pPOs || []);
-          setGoodsReceiptNotes(pRecs || []);
-          setCashMovementsState(cash || []);
-          setFiscalClosures(closures || []);
           if (usrs && usrs.length > 0) {
             const cleanUsrs = usrs.filter(u => u && u.username && u.username.toLowerCase() !== 'sysadmin' && u.id !== 'usr-sysadmin');
             const hasMasterAdmin = cleanUsrs.some(u => normalizeRole(u.rol) === 'ADMINISTRADOR MASTER' || u.username?.toLowerCase() === 'edson designer');
@@ -1821,12 +1848,12 @@ function MainApp() {
       onCollectionsChange: async () => {
         console.log('⚡ [Realtime] Recargando cobranzas Profit...');
         const updatedCobs = await getSupabaseProfitCollections();
-        if (updatedCobs) setProfitCollections(updatedCobs);
+        if (updatedCobs && !isStaticFallbackList(updatedCobs)) setProfitCollections(updatedCobs);
       },
       onInvoicesChange: async () => {
         console.log('⚡ [Realtime] Recargando facturas Profit...');
         const updatedFacs = await getSupabaseProfitInvoices();
-        if (updatedFacs) setProfitInvoices(filterOutDeletedCxcDocs(updatedFacs));
+        if (updatedFacs && !isStaticFallbackList(updatedFacs)) setProfitInvoices(filterOutDeletedCxcDocs(updatedFacs));
       },
       onSuppliersChange: async () => {
         console.log('⚡ [Realtime] Recargando proveedores...');
@@ -1941,21 +1968,19 @@ function MainApp() {
         await flushSyncQueue().catch(() => {});
       }
       // 1. Recargar inmediatamente los datos más recientes desde Supabase
-      const [
-        latestProds, latestClis, latestOrds, latestBnks, latestCobs, latestFacs, latestSales,
-        latestSups, latestPurs, latestCxp, latestPays, latestSellers, latestZones, latestTrans,
-        latestReturns, latestAju, latestTra, latestIslr, latestBen, latestOrders, latestWithholdings,
-        latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs,
-        latestIncExp, latestSettlements, latestExpenses, latestEmployees, latestPayroll,
-        latestCashDesks, latestCashMovements
-      ] = await Promise.all([
+      const [latestProds, latestClis, latestOrds, latestBnks, latestCobs, latestFacs, latestSales] = await Promise.all([
         getSupabaseProducts(),
         getSupabaseClients(),
         getSupabaseOrders(),
         getSupabaseProfitBankAccounts(),
         getSupabaseProfitCollections(),
         getSupabaseProfitInvoices(),
-        getSupabaseSales(),
+        getSupabaseSales()
+      ]);
+      const [
+        latestSups, latestPurs, latestCxp, latestPays, latestSellers, latestZones, latestTrans,
+        latestReturns, latestAju, latestTra, latestIslr, latestBen, latestOrders, latestWithholdings
+      ] = await Promise.all([
         getSupabaseProfitSuppliers(),
         getSupabaseProfitPurchases(),
         getSupabaseProfitAccountsPayable(),
@@ -1969,7 +1994,13 @@ function MainApp() {
         getSupabaseProfitIslrConcepts(),
         getSupabaseProfitBeneficiaries(),
         getSupabaseProfitPaymentOrdersMerged(),
-        getSupabaseProfitIslrWithholdings(),
+        getSupabaseProfitIslrWithholdings()
+      ]);
+      const [
+        latestTrails, latestWarehouses, latestLines, latestCategories, latestCurrs,
+        latestIncExp, latestSettlements, latestExpenses, latestEmployees, latestPayroll,
+        latestCashDesks, latestCashMovements
+      ] = await Promise.all([
         getSupabaseProfitAuditTrails(),
         getSupabaseProfitWarehouses(),
         getSupabaseProfitProductLines(),
@@ -1983,16 +2014,16 @@ function MainApp() {
         getSupabaseProfitCashDesks(),
         getSupabaseCashMovements()
       ]);
-      if (latestProds && latestProds.length > 0) setProductsState(latestProds);
-      if (latestClis && latestClis.length > 0) setClientsState(latestClis);
+      if (latestProds && latestProds.length > 0 && !isStaticFallbackList(latestProds)) setProductsState(latestProds);
+      if (latestClis && latestClis.length > 0 && !isStaticFallbackList(latestClis)) setClientsState(latestClis);
       if (latestOrds) setOrdersState(latestOrds);
       if (latestBnks) setProfitBankAccounts(latestBnks);
-      if (latestCobs) setProfitCollections(latestCobs);
-      if (latestFacs) setProfitInvoices(filterOutDeletedCxcDocs(latestFacs));
-      if (latestSales) setSalesState(filterOutDeletedCxcDocs(latestSales));
+      if (latestCobs && !isStaticFallbackList(latestCobs)) setProfitCollections(latestCobs);
+      if (latestFacs && !isStaticFallbackList(latestFacs)) setProfitInvoices(filterOutDeletedCxcDocs(latestFacs));
+      if (latestSales && !isStaticFallbackList(latestSales)) setSalesState(filterOutDeletedCxcDocs(latestSales));
       if (latestSups) setProfitSuppliers(latestSups);
-      if (latestPurs) setProfitPurchases(latestPurs);
-      if (latestCxp) setProfitAccountsPayable(latestCxp);
+      if (latestPurs && !isStaticFallbackList(latestPurs)) setProfitPurchases(latestPurs);
+      if (latestCxp && !isStaticFallbackList(latestCxp)) setProfitAccountsPayable(latestCxp);
       if (latestPays) setProfitSupplierPayments(latestPays);
       if (latestSellers) setProfitSellers(latestSellers);
       if (latestZones) setProfitZones(latestZones);

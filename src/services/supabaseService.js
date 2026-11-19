@@ -550,6 +550,44 @@ const withTimeout = (promise, ms) => {
   });
 };
 
+export const isStaticFallbackList = (list) => Boolean(list && list.__isStaticFallback);
+
+const markStaticFallback = (list) => {
+  if (Array.isArray(list)) {
+    try {
+      Object.defineProperty(list, '__isStaticFallback', {
+        value: true,
+        enumerable: false,
+        configurable: true
+      });
+    } catch (_) {}
+  }
+  return list;
+};
+
+const runSupabaseQueryWithRetry = async (queryFactory, timeoutMs = 45000, maxRetries = 1) => {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await withTimeout(queryFactory(), timeoutMs);
+      if (result?.error && attempt < maxRetries && /timeout|network|fetch|aborted|502|503|504/i.test(String(result.error.message || ''))) {
+        lastErr = result.error;
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        continue;
+      }
+      return result;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries && /timeout|network|fetch|aborted/i.test(String(err?.message || ''))) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr || new Error('Supabase connection timeout');
+};
+
 const markSupabaseOffline = (err, action = '') => {
   const msg = err?.message || String(err);
   if (!isNetworkOnline()) {
@@ -2448,8 +2486,9 @@ export const getSupabaseClients = async () => {
   // Almacena cartera de clientes completa sincronizada
   if (isNetworkOnline()) {
     try {
-      const { data, error } = await withTimeout(
-        supabase.from('clients').select('*').order('nombre', { ascending: true })
+      const { data, error } = await runSupabaseQueryWithRetry(
+        () => supabase.from('clients').select('*').order('nombre', { ascending: true }),
+        30000
       );
 
       if (!error && Array.isArray(data) && data.length > 0) {
@@ -2467,7 +2506,7 @@ export const getSupabaseClients = async () => {
   }
 
   // 2. Caché local en caso de estar offline
-  return applyPendingQueueToEntities('client', getStorageClients());
+  return markStaticFallback(applyPendingQueueToEntities('client', getStorageClients()));
 };
 
 export const saveSupabaseClient = async (client) => {
@@ -2754,15 +2793,16 @@ const getStorageSalesWithoutDeleted = () => {
 };
 
 export const getSupabaseSales = async () => {
-  if (!isSupabaseAvailable) return applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted());
+  if (!isSupabaseAvailable) return markStaticFallback(applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted()));
   try {
-    const { data, error } = await withTimeout(
-      supabase.from('sales').select('*').order('fecha', { ascending: false })
+    const { data, error } = await runSupabaseQueryWithRetry(
+      () => supabase.from('sales').select('*').order('fecha', { ascending: false }),
+      30000
     );
 
     if (error) {
       markSupabaseOffline(error, 'getSupabaseSales');
-      return applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted());
+      return markStaticFallback(applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted()));
     }
     isSupabaseAvailable = true;
     const rawMapped = (data || []).map(mapSaleFromDb).filter(Boolean);
@@ -2777,7 +2817,7 @@ export const getSupabaseSales = async () => {
     return reconciled;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseSales');
-    return applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted());
+    return markStaticFallback(applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted()));
   }
 };
 
@@ -6916,9 +6956,9 @@ const normalizeFallbackColRecord = (c) => {
 export const getSupabaseProfitCollections = async () => {
   const deletedSet = getEffectiveDeletedProfitCollectionSet();
   try {
-    const { data, error } = await withTimeout(
-      supabase.from('profit_collections').select('*').order('fec_cob', { ascending: false }).limit(5000),
-      10000
+    const { data, error } = await runSupabaseQueryWithRetry(
+      () => supabase.from('profit_collections').select('*').order('fec_cob', { ascending: false }).limit(5000),
+      45000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -7026,11 +7066,11 @@ export const getSupabaseProfitCollections = async () => {
           const rest = (REAL_PROFIT_COLLECTIONS || [])
             .filter(r => r && !localIds.has(String(r.id)) && isVisibleCol(r))
             .map(normalizeFallbackColRecord);
-          return [...visibleLocal, ...rest];
+          return markStaticFallback([...visibleLocal, ...rest]);
         }
       }
     } catch (_) {}
-    return (REAL_PROFIT_COLLECTIONS || []).filter(isVisibleCol).map(normalizeFallbackColRecord);
+    return markStaticFallback((REAL_PROFIT_COLLECTIONS || []).filter(isVisibleCol).map(normalizeFallbackColRecord));
   }
 };
 
@@ -7353,9 +7393,9 @@ export const deleteSupabaseProfitBankAccount = async (bankIdOrCode) => {
 
 export const getSupabaseProfitInvoices = async () => {
   try {
-    const { data, error } = await withTimeout(
-      supabase.from('profit_invoices').select('*').order('fec_emis', { ascending: false }).limit(5000),
-      10000
+    const { data, error } = await runSupabaseQueryWithRetry(
+      () => supabase.from('profit_invoices').select('*').order('fec_emis', { ascending: false }).limit(5000),
+      45000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -7434,7 +7474,7 @@ export const getSupabaseProfitInvoices = async () => {
     return applyLocalCxcOverridesToInvoices(mapped, Array.isArray(mapped) && mapped.length > 0);
   } catch (err) {
     console.warn('[Supabase] Error cargando facturas Profit:', err.message);
-    return applyLocalCxcOverridesToInvoices(REAL_PROFIT_INVOICES, false);
+    return markStaticFallback(applyLocalCxcOverridesToInvoices(REAL_PROFIT_INVOICES, false));
   }
 };
 
@@ -8010,9 +8050,9 @@ export const getSupabaseProfitSuppliers = async () => {
 
 export const getSupabaseProfitPurchases = async () => {
   try {
-    const { data, error } = await withTimeout(
-      supabase.from('profit_purchases').select('*').order('fec_emis', { ascending: false }).limit(5000),
-      10000
+    const { data, error } = await runSupabaseQueryWithRetry(
+      () => supabase.from('profit_purchases').select('*').order('fec_emis', { ascending: false }).limit(5000),
+      30000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -8044,7 +8084,7 @@ export const getSupabaseProfitPurchases = async () => {
   } catch (err) {
     console.warn('[Supabase] Error cargando compras Profit:', err.message);
     const localPurchases = readLocalDocList('signum_profit_purchases_v1');
-    return mergeRemoteAndLocalDocs(REAL_PROFIT_PURCHASES || [], localPurchases, 'id');
+    return markStaticFallback(mergeRemoteAndLocalDocs(REAL_PROFIT_PURCHASES || [], localPurchases, 'id'));
   }
 };
 
@@ -8243,9 +8283,9 @@ export const applyLocalCxpOverridesToPayables = (rawList = [], hasRemoteResponse
 
 export const getSupabaseProfitAccountsPayable = async () => {
   try {
-    const { data, error } = await withTimeout(
-      supabase.from('profit_accounts_payable').select('*').order('fec_emis', { ascending: false }).limit(5000),
-      10000
+    const { data, error } = await runSupabaseQueryWithRetry(
+      () => supabase.from('profit_accounts_payable').select('*').order('fec_emis', { ascending: false }).limit(5000),
+      30000
     );
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -8293,7 +8333,7 @@ export const getSupabaseProfitAccountsPayable = async () => {
     return dedupePayablesList(applyLocalCxpOverridesToPayables(mapped, Array.isArray(data)));
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseProfitAccountsPayable');
-    return dedupePayablesList(applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE, false));
+    return markStaticFallback(dedupePayablesList(applyLocalCxpOverridesToPayables(REAL_PROFIT_ACCOUNTS_PAYABLE, false)));
   }
 };
 

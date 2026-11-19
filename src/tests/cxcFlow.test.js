@@ -23,12 +23,14 @@ import {
   resolveDefaultRateValue
 } from '../utils/rateClassificationUtils.js';
 import {
+  isStaticFallbackList,
   getScopedCxcDeleteKeys,
   markCxcDocDeleted,
   isCxcEntryDeleted,
   reconcileCxcTombstonesWithServerDocs,
   saveSupabaseProfitCollection,
   getSupabaseProfitCollections,
+  getSupabaseProfitInvoices,
   deleteSupabaseProfitCollection
 } from '../services/supabaseService.js';
 import {
@@ -1072,6 +1074,24 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   assert.equal(reconciled.clients[0].saldoDeudorUsd, 0, 'Una ND saldada en CxC no debe reaparecer como deuda desde fiscalSaleRecord en sales');
 
   console.log('  ✓ 15. Regresión NC/ND (correlativos aislados, anti-factura fantasma, anti-deuda duplicada) verificada.');
+}
+
+// 16. Regresión: fallos de red/timeout deben marcar fallback estático para no sobrescribir estado vivo
+{
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new Error('timeout-simulado'); };
+    localStorage.clear();
+
+    assert.equal(isStaticFallbackList([]), false);
+    const colsFallback = await getSupabaseProfitCollections();
+    assert.equal(isStaticFallbackList(colsFallback), true, 'getSupabaseProfitCollections offline/timeout debe marcar __isStaticFallback');
+    const invsFallback = await getSupabaseProfitInvoices();
+    assert.equal(isStaticFallbackList(invsFallback), true, 'getSupabaseProfitInvoices offline/timeout debe marcar __isStaticFallback');
+    console.log('  ✓ 16. Detección isStaticFallbackList (anti-sobrescritura por timeout) verificada.');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');
