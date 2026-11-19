@@ -47,6 +47,8 @@ import {
 import {
   calculateFiscalTaxes,
   generateFiscalControlNumber,
+  generateDeliveryNoteControlNumber,
+  formatDocumentControlNumber,
   generateVatRetentionVoucherNumber,
   getNextInvoiceCorrelativo,
   commitInvoiceCorrelativo,
@@ -450,7 +452,7 @@ const dynamicSupabaseFetch = async (input, init) => {
     }
     const targetUrl = rewriteRequestUrl(input, currentBackendUrl);
     try {
-      const res = await fetch(targetUrl, init);
+      const res = await fetch(targetUrl, { ...init, cache: 'no-store' });
       if (res.status < 500 && res.status !== 404) {
         isSupabaseAvailable = true;
         notifyBackendRecoveredIfNeeded();
@@ -1141,8 +1143,9 @@ const mapSupplierFromDb = (s) => {
 const mapSaleToDb = (s) => ({
   id: s.id,
   numero_doc: s.numeroDoc || s.numero_doc,
-  numero_control: s.numeroControl || s.numero_control || '00-000000',
+  numero_control: s.numeroControl || s.numero_control || formatDocumentControlNumber(s.numeroDoc || s.numero_doc || s.id, s.tipoDoc || s.tipo_doc),
   tipo_doc: s.tipoDoc || s.tipo_doc || 'FACTURA',
+  ...(s.seriesEra || s.series_era ? { series_era: s.seriesEra || s.series_era } : {}),
   documento_afectado: s.documentoAfectado || s.documento_afectado || '',
   fecha: s.fecha,
   cliente_id: s.clienteId || s.cliente_id,
@@ -1231,8 +1234,9 @@ const mapSaleFromDb = (s) => {
   return {
     id: s.id,
     numeroDoc: s.numero_doc ?? s.numeroDoc,
-    numeroControl: s.numero_control || s.numeroControl || '00-000000',
+    numeroControl: s.numero_control || s.numeroControl || (isNe ? generateDeliveryNoteControlNumber(rawNum) : '00-000000'),
     tipoDoc: resolvedTipoDoc,
+    seriesEra: s.series_era || s.seriesEra || '',
     documentoAfectado: s.documento_afectado || s.documentoAfectado || '',
     fecha: s.fecha,
     clienteId: s.cliente_id ?? s.clienteId,
@@ -2738,8 +2742,19 @@ export const deleteSupabaseSupplier = async (id) => {
 };
 
 // Sales
+const getStorageSalesWithoutDeleted = () => {
+  const list = getStorageSales() || [];
+  try {
+    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
+    if (delSet.size === 0) return list;
+    return list.filter(s => s && !isCxcEntryDeleted(s, delSet));
+  } catch (_) {
+    return list;
+  }
+};
+
 export const getSupabaseSales = async () => {
-  if (!isSupabaseAvailable) return applyPendingQueueToEntities('sale', getStorageSales());
+  if (!isSupabaseAvailable) return applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted());
   try {
     const { data, error } = await withTimeout(
       supabase.from('sales').select('*').order('fecha', { ascending: false })
@@ -2747,38 +2762,66 @@ export const getSupabaseSales = async () => {
 
     if (error) {
       markSupabaseOffline(error, 'getSupabaseSales');
-      return applyPendingQueueToEntities('sale', getStorageSales());
+      return applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted());
     }
     isSupabaseAvailable = true;
-    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
-    const mapped = (data || [])
-      .map(mapSaleFromDb)
-      .filter(s => s && !isCxcEntryDeleted(s, delSet));
+    const rawMapped = (data || []).map(mapSaleFromDb).filter(Boolean);
+    const delSet = reconcileCxcTombstonesWithServerDocs(rawMapped);
+    const mapped = rawMapped.filter(s => !isCxcEntryDeleted(s, delSet));
     const reconciled = dedupeCanonicalDocs(applyPendingQueueToEntities('sale', mapped));
     try {
-      if (typeof localStorage !== 'undefined' && Array.isArray(data) && data.length > 0) {
+      if (typeof localStorage !== 'undefined' && Array.isArray(data)) {
         localStorage.setItem('sm_sales_v4_fiscal', JSON.stringify(reconciled));
       }
     } catch (_) {}
     return reconciled;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabaseSales');
-    return applyPendingQueueToEntities('sale', getStorageSales());
+    return applyPendingQueueToEntities('sale', getStorageSalesWithoutDeleted());
   }
 };
 
-const buildSaleStockDeltaLines = (saleRecord, { reverse = false } = {}) => {
+const SYNTHETIC_ITEM_ID_RE = /^(ITEM-|PED-|ROW-|LINE-)/i;
+
+export const resolveStockItemProductKey = (item) => {
+  if (!item || typeof item !== 'object') return '';
+  const explicitCandidates = [
+    item.articuloId,
+    item.articulo_id,
+    item.codigo,
+    item.co_art,
+    item.productoCodigo,
+    item.productoId
+  ];
+  for (const cand of explicitCandidates) {
+    const clean = String(cand ?? '').trim();
+    if (clean && !SYNTHETIC_ITEM_ID_RE.test(clean)) return clean;
+  }
+  const fallbackId = String(item.id ?? '').trim();
+  if (fallbackId && !SYNTHETIC_ITEM_ID_RE.test(fallbackId)) return fallbackId;
+  return '';
+};
+
+const resolveOutgoingDocType = (doc) => {
+  if (!doc || typeof doc !== 'object') return 'FACTURA';
+  const rawTipo = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
+  const rawDocRef = String(doc.numeroDoc || doc.numero_doc || doc.factNum || doc.fact_num || doc.id || '').toUpperCase().trim();
+  if (rawTipo === 'NOTA_ENTREGA' || rawDocRef.startsWith('NE-') || rawDocRef.startsWith('N.E-')) {
+    return 'NOTA_ENTREGA';
+  }
+  return rawTipo || 'FACTURA';
+};
+
+export const buildSaleStockDeltaLines = (saleRecord, { reverse = false } = {}) => {
   if (!saleRecord || !Array.isArray(saleRecord.items) || saleRecord.items.length === 0) return [];
-  const rawTipo = String(saleRecord.tipoDoc || saleRecord.tipo_doc || 'FACTURA').toUpperCase().trim();
-  const isNotaEntrega =
-    rawTipo === 'NOTA_ENTREGA' ||
-    String(saleRecord.numeroDoc || saleRecord.numero_doc || saleRecord.factNum || saleRecord.id || '').toUpperCase().startsWith('NE-');
+  const rawTipo = resolveOutgoingDocType(saleRecord);
+  const isNotaEntrega = rawTipo === 'NOTA_ENTREGA';
   const isNotaCredito = rawTipo === 'NOTA_CREDITO';
   const isSaleOut = rawTipo === 'FACTURA' || isNotaEntrega || rawTipo === 'NOTA_DEBITO';
   if (!isSaleOut && !isNotaCredito) return [];
 
   const targetWh = isNotaCredito
-    ? (String(saleRecord.documentoAfectado || saleRecord.documento_afectado || '').toUpperCase().startsWith('NE') ? '02' : '01')
+    ? (/^(NE|N\.E)/i.test(String(saleRecord.documentoAfectado || saleRecord.documento_afectado || '').trim()) ? '02' : '01')
     : (isNotaEntrega ? '02' : '01');
 
   // Al emitir venta: FACT/NE/ND restan (-1), NC suma (+1). Al eliminar/revertir: se invierte el signo.
@@ -2786,7 +2829,7 @@ const buildSaleStockDeltaLines = (saleRecord, { reverse = false } = {}) => {
 
   const qtyByKey = new Map();
   for (const item of saleRecord.items) {
-    const prodKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+    const prodKey = resolveStockItemProductKey(item);
     const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
     if (!prodKey || qty <= 0) continue;
     qtyByKey.set(prodKey, (qtyByKey.get(prodKey) || 0) + qty);
@@ -2805,11 +2848,75 @@ const buildSaleStockDeltaLines = (saleRecord, { reverse = false } = {}) => {
   return lines;
 };
 
+export const buildDocTypeChangeWarehouseDeltaLines = (originalDoc, updatedDocData) => {
+  if (!originalDoc || !updatedDocData) return [];
+  const oldTipo = resolveOutgoingDocType(originalDoc);
+  const newTipo = resolveOutgoingDocType(updatedDocData);
+  const outgoingTypes = new Set(['FACTURA', 'NOTA_ENTREGA', 'NOTA_DEBITO']);
+  if (!outgoingTypes.has(oldTipo) || !outgoingTypes.has(newTipo)) return [];
+
+  const oldWh = oldTipo === 'NOTA_ENTREGA' ? '02' : '01';
+  const newWh = newTipo === 'NOTA_ENTREGA' ? '02' : '01';
+  if (oldWh === newWh) return [];
+
+  const sourceItems = Array.isArray(originalDoc?.items)
+    ? originalDoc.items
+    : (Array.isArray(updatedDocData?.items) ? updatedDocData.items : []);
+  if (sourceItems.length === 0) return [];
+
+  const qtyByKey = new Map();
+  for (const item of sourceItems) {
+    const prodKey = resolveStockItemProductKey(item);
+    const qty = Math.max(0, Number(item?.cantidad ?? item?.qty ?? 0));
+    if (!prodKey || qty <= 0) continue;
+    qtyByKey.set(prodKey, (qtyByKey.get(prodKey) || 0) + qty);
+  }
+  if (qtyByKey.size === 0) return [];
+
+  const lines = [];
+  for (const [prodKey, rawQty] of qtyByKey.entries()) {
+    const qty = Number(rawQty.toFixed(4));
+    lines.push({
+      codigo: prodKey,
+      delta01: oldWh === '01' ? qty : -qty,
+      delta02: oldWh === '02' ? qty : -qty
+    });
+  }
+  return lines;
+};
+
+/**
+ * Clave idempotente estable para la reversión de inventario al eliminar un documento.
+ * Combina tipo (FAC/NE), número limpio y fecha/hora de emisión para que:
+ *  - reintentos del mismo borrado (directo o desde la cola offline) compartan la misma clave y
+ *    nunca reingresen el stock dos veces;
+ *  - un correlativo reutilizado en otra fecha no quede bloqueado por una clave antigua.
+ */
+export const buildSaleRevertIdempotencyKey = (doc, fallbackRef = '') => {
+  const src = doc && typeof doc === 'object' ? doc : {};
+  const rawRef = String(
+    src.numeroDoc || src.numero_doc || src.factNum || src.fact_num || src.id || fallbackRef || ''
+  ).trim();
+  const isNe = resolveOutgoingDocType(src) === 'NOTA_ENTREGA' || /^(NE-|NDE-|N\.E-)/i.test(rawRef);
+  const cleanNum = rawRef.replace(/^(FAC-|FACT-|NE-|NDE-|N\.E-|fac-|doc-|inv-)/i, '').trim();
+  const rawDate = src.fechaEmision || src.fecha_emision || src.fecha || src.fec_emis || '';
+  let ts = '';
+  if (rawDate) {
+    const parsed = Date.parse(rawDate);
+    ts = Number.isFinite(parsed)
+      ? new Date(parsed).toISOString().slice(0, 19).replace(/[^0-9]/g, '')
+      : String(rawDate).replace(/[^0-9]/g, '').slice(0, 14);
+  }
+  return `sale_${isNe ? 'NE' : 'FAC'}_${cleanNum || 'SN'}${ts ? `_${ts}` : ''}_revert`;
+};
+
 const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false, idempotencyKey = '', skipLocalStoragePatch = false } = {}) => {
   const lines = buildSaleStockDeltaLines(saleRecord, { reverse });
   if (lines.length === 0) return [];
-  const docId = String(saleRecord?.id || saleRecord?.numeroDoc || '').trim();
-  const resolvedKey = idempotencyKey || (docId ? `sale_${docId}_${reverse ? 'revert' : 'deduct'}` : '');
+  const docId = String(saleRecord?.id || saleRecord?.numeroDoc || saleRecord?.factNum || saleRecord?.fact_num || '').trim();
+  const resolvedKey =
+    idempotencyKey ||
+    (reverse ? buildSaleRevertIdempotencyKey(saleRecord, docId) : (docId ? `sale_${docId}_deduct` : ''));
   return applyStockDeltaForWarehouseLines(lines, {
     validateStrict: false,
     idempotencyKey: resolvedKey,
@@ -2820,7 +2927,21 @@ const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false,
 export const CXC_DELETED_DOCS_KEY = 'signum_cxc_deleted_docs_v1';
 const CXC_DELETED_META_KEY = 'signum_cxc_deleted_meta_v1';
 const CXC_DELETED_SANITIZED_KEY = 'signum_cxc_deleted_docs_sanitized_v1';
+const CXC_DELETED_SERVER_SYNC_V2_KEY = 'signum_cxc_deleted_server_sync_v2';
 const CXC_DELETED_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const CXC_IN_FLIGHT_DELETE_GRACE_MS = 35 * 1000;
+
+const getPendingCxcDeleteKeysFromQueue = () => {
+  const pendingSet = new Set();
+  try {
+    getSyncQueue()
+      .filter(q => q && ['sale', 'sales', 'profit_invoice', 'profit_invoices'].includes(q.entity) && q.action === 'DELETE')
+      .forEach(q => {
+        getScopedCxcDeleteKeys(q.data).forEach(k => pendingSet.add(k));
+      });
+  } catch (_) {}
+  return pendingSet;
+};
 
 const readCxcDeletedMeta = () => {
   try {
@@ -2912,20 +3033,47 @@ export const sanitizeCxcDeletedDocsStorage = () => {
       localStorage.setItem(CXC_DELETED_SANITIZED_KEY, '1');
     }
 
-    // Purgar tombstones con antigüedad > 7 días para evitar ocultar correlativos reutilizados semanas después
+    // Purgar tombstones con antigüedad > 7 días o huérfanos sin timestamp en navegador real
     const meta = readCxcDeletedMeta();
     const now = Date.now();
+    const pendingDeleteKeys = getPendingCxcDeleteKeysFromQueue();
     let metaDirty = false;
+    let listDirty = false;
+
+    if (typeof window !== 'undefined' && !isTestEnv && !localStorage.getItem(CXC_DELETED_SERVER_SYNC_V2_KEY)) {
+      list = list.filter(k => {
+        const m = meta[k];
+        const keep = pendingDeleteKeys.has(k) || Boolean(m && m.deletedAt && (now - m.deletedAt) <= CXC_IN_FLIGHT_DELETE_GRACE_MS);
+        if (!keep && meta[k]) {
+          delete meta[k];
+          metaDirty = true;
+        }
+        return keep;
+      });
+      localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(list));
+      localStorage.setItem(CXC_DELETED_SERVER_SYNC_V2_KEY, '1');
+      if (metaDirty) writeCxcDeletedMeta(meta);
+    }
+
     const filteredList = list.filter(k => {
       const m = meta[k];
-      if (m && m.deletedAt && (now - m.deletedAt) > CXC_DELETED_TOMBSTONE_TTL_MS) {
+      if (typeof window !== 'undefined' && !isTestEnv && (!m || !m.deletedAt) && !pendingDeleteKeys.has(k)) {
+        if (meta[k]) {
+          delete meta[k];
+          metaDirty = true;
+        }
+        listDirty = true;
+        return false;
+      }
+      if (m && m.deletedAt && (now - m.deletedAt) > CXC_DELETED_TOMBSTONE_TTL_MS && !pendingDeleteKeys.has(k)) {
         delete meta[k];
         metaDirty = true;
+        listDirty = true;
         return false;
       }
       return true;
     });
-    if (metaDirty) {
+    if (metaDirty || listDirty) {
       localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(filteredList));
       writeCxcDeletedMeta(meta);
     }
@@ -2933,6 +3081,40 @@ export const sanitizeCxcDeletedDocsStorage = () => {
   } catch (_) {
     return [];
   }
+};
+
+/**
+ * Reconcilia automáticamente la caché local de documentos eliminados (signum_cxc_deleted_docs_v1)
+ * contra la respuesta viva del servidor central:
+ * Si un documento sigue activo en el servidor y no tiene un DELETE pendiente en la cola offline
+ * ni fue eliminado en los últimos 35 segundos (ventana de petición en vuelo), purga el tombstone
+ * obsoleto de localStorage para que todos los navegadores vean exactamente lo mismo que el servidor.
+ */
+export const reconcileCxcTombstonesWithServerDocs = (remoteDocs = []) => {
+  const delList = sanitizeCxcDeletedDocsStorage();
+  const delSet = new Set(delList);
+  if (delSet.size === 0 || !Array.isArray(remoteDocs) || remoteDocs.length === 0) {
+    return delSet;
+  }
+  try {
+    const meta = readCxcDeletedMeta();
+    const now = Date.now();
+    const pendingDeleteKeys = getPendingCxcDeleteKeysFromQueue();
+    for (const doc of remoteDocs) {
+      if (!doc) continue;
+      const scopedKeys = getScopedCxcDeleteKeys(doc);
+      const matched = scopedKeys.filter(k => delSet.has(k));
+      if (matched.length === 0) continue;
+      const isPendingOrInFlight = scopedKeys.some(
+        k => pendingDeleteKeys.has(k) || Boolean(meta[k]?.deletedAt && (now - meta[k].deletedAt) <= CXC_IN_FLIGHT_DELETE_GRACE_MS)
+      );
+      if (!isPendingOrInFlight) {
+        unmarkCxcDeletedDoc(doc);
+        scopedKeys.forEach(k => delSet.delete(k));
+      }
+    }
+  } catch (_) {}
+  return delSet;
 };
 
 export const isCxcEntryDeleted = (docOrIds, delSet) => {
@@ -3108,7 +3290,7 @@ const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
     }
     const storageProds = getStorageProducts();
     (localSale.items || saleData.items || []).forEach(it => {
-      const key = String(it.articuloId || it.id || it.codigo || it.co_art || '').trim();
+      const key = resolveStockItemProductKey(it);
       if (!key) return;
       const updatedProd = storageProds.find(
         p => String(p.id || '').trim() === key || String(p.codigo || '').trim() === key
@@ -3542,25 +3724,27 @@ export const processSupabaseSale = async (saleData) => {
     unmarkCxcDeletedDoc(newSale);
 
     // Ejecutar ajuste de inventario y movimiento de caja / saldo cliente tras confirmar la inserción en sales
-    const stockPromise = adjustSupabaseProductsStockForSale(newSale, {
-      reverse: false,
-      idempotencyKey: `sale_${newSale.id || newSale.numeroDoc}_deduct`
-    }).catch(stockErr => {
-      console.warn('[processSupabaseSale] Aviso ajustando inventario tras venta confirmada:', stockErr?.message || stockErr);
-      try {
-        const deltaLines = buildSaleStockDeltaLines(newSale, { reverse: false });
-        if (deltaLines.length > 0) {
-          const stockKey = `sale_${newSale.id || newSale.numeroDoc}_deduct`;
-          enqueueSyncAction('stock_delta', 'UPDATE', {
-            id: stockKey,
-            idempotencyKey: stockKey,
-            lines: deltaLines,
-            validateStrict: false,
-            alreadyAppliedLocally: false
-          });
-        }
-      } catch (_) {}
-    });
+    const stockPromise = saleData.skipStockAdjustment
+      ? Promise.resolve([])
+      : adjustSupabaseProductsStockForSale(newSale, {
+          reverse: false,
+          idempotencyKey: `sale_${newSale.id || newSale.numeroDoc}_deduct`
+        }).catch(stockErr => {
+          console.warn('[processSupabaseSale] Aviso ajustando inventario tras venta confirmada:', stockErr?.message || stockErr);
+          try {
+            const deltaLines = buildSaleStockDeltaLines(newSale, { reverse: false });
+            if (deltaLines.length > 0) {
+              const stockKey = `sale_${newSale.id || newSale.numeroDoc}_deduct`;
+              enqueueSyncAction('stock_delta', 'UPDATE', {
+                id: stockKey,
+                idempotencyKey: stockKey,
+                lines: deltaLines,
+                validateStrict: false,
+                alreadyAppliedLocally: false
+              });
+            }
+          } catch (_) {}
+        });
 
     const accountOrCashPromise = !sendToReceivables
       ? (newSale.tipoDoc === 'NOTA_CREDITO'
@@ -3733,7 +3917,7 @@ export const saveSupabasePurchase = async (purchaseData) => {
 
     itemsList.forEach((it) => {
       const qty = Number(it.cantidad || 0);
-      const code = String(it.codigo || it.productoId || it.articuloId || '').trim();
+      const code = resolveStockItemProductKey(it);
       if (!code || !(qty > 0)) return;
       const lineAlm = String(it.almacen || defaultAlm).includes('02') ? '02' : '01';
       const signedQty = isNc ? -qty : qty;
@@ -3746,7 +3930,10 @@ export const saveSupabasePurchase = async (purchaseData) => {
     });
 
     if (stockLines.length > 0) {
-      await applyStockDeltaForWarehouseLines(stockLines, { validateStrict: isNc });
+      await applyStockDeltaForWarehouseLines(stockLines, {
+        validateStrict: isNc,
+        idempotencyKey: `purchase_${localSaved.id}_stock`
+      });
 
       // Actualizar costo unitario del producto si aplica (compras regulares)
       if (!isNc) {
@@ -4395,18 +4582,22 @@ export const deleteSupabaseSale = async (saleId) => {
     tipoDoc: isTargetNe ? 'NOTA_ENTREGA' : 'FACTURA'
   };
 
+  // Evita reingresar inventario dos veces si la reversión directa ya se aplicó antes de un fallo posterior
+  let stockRevertAlreadyApplied = false;
+
   const finalizeLocalOfflineDelete = () => {
-    candidateKeys.forEach(k => deleteStorageSale(k));
+    candidateKeys.forEach(k => deleteStorageSale(k, { skipStockAdjustment: stockRevertAlreadyApplied }));
     try {
       const storageProds = getStorageProducts();
-      const fallbackSources = localSalesBeforeDelete.length > 0
-        ? localSalesBeforeDelete
-        : (typeof saleId === 'object' && Array.isArray(saleId.items) ? [saleId] : []);
-      const revertLines = [];
+      const fallbackSources = stockRevertAlreadyApplied
+        ? []
+        : (localSalesBeforeDelete.length > 0
+            ? localSalesBeforeDelete
+            : (typeof saleId === 'object' && Array.isArray(saleId.items) ? [saleId] : []));
       fallbackSources.forEach(s => {
-        revertLines.push(...buildSaleStockDeltaLines(s, { reverse: true }));
+        const revertLines = buildSaleStockDeltaLines(s, { reverse: true });
         (s.items || []).forEach(it => {
-          const itemKey = String(it.articuloId || it.id || it.codigo || it.co_art || '').trim();
+          const itemKey = resolveStockItemProductKey(it);
           if (!itemKey) return;
           const prod = storageProds.find(
             p => String(p.id || '').trim() === itemKey || String(p.codigo || '').trim() === itemKey
@@ -4420,17 +4611,17 @@ export const deleteSupabaseSale = async (saleId) => {
             });
           }
         });
+        if (revertLines.length > 0) {
+          const revKey = buildSaleRevertIdempotencyKey(s, cleanId || cleanNum);
+          enqueueSyncAction('stock_delta', 'UPDATE', {
+            id: revKey,
+            idempotencyKey: revKey,
+            lines: revertLines,
+            validateStrict: false,
+            alreadyAppliedLocally: true
+          });
+        }
       });
-      if (revertLines.length > 0) {
-        const revKey = `sale_${cleanId || cleanNum}_revert`;
-        enqueueSyncAction('stock_delta', 'UPDATE', {
-          id: revKey,
-          idempotencyKey: revKey,
-          lines: revertLines,
-          validateStrict: false,
-          alreadyAppliedLocally: true
-        });
-      }
     } catch (_) {}
 
     broadcastReconcileChange({ tableId: 'sales', action: 'DELETE', key: broadcastKey, item: broadcastItem });
@@ -4458,26 +4649,68 @@ export const deleteSupabaseSale = async (saleId) => {
     }
     const uniqueOrSalesParts = Array.from(new Set(orSalesParts));
 
-    // 1. Obtener registros en `sales` ANTES de borrarlos para reingresar sus artículos al almacén (respetando tipoDoc)
+    // 1. Obtener registros en `sales` y `profit_invoices` ANTES de borrarlos para reingresar sus artículos al almacén
+    //    solo cuando el documento realmente exista (evita doble reversión si ya fue eliminado en servidor).
     const targetTipoDoc = isTargetNe ? 'NOTA_ENTREGA' : 'FACTURA';
-    let foundSales = [];
-    if (uniqueOrSalesParts.length > 0) {
-      const { data: fetchedSales } = await withTimeout(
-        supabase.from('sales').select('*').or(uniqueOrSalesParts.join(',')),
-        6000
-      ).catch(() => ({ data: [] }));
-      if (Array.isArray(fetchedSales) && fetchedSales.length > 0) {
-        foundSales = fetchedSales
-          .map(mapSaleFromDb)
-          .filter(s => s && inferCxcDocType(s) === targetTipoDoc);
+    const isTargetLegacy = typeof saleId === 'object' ? isLegacyPreNovInvoice(saleId) : /^fac-[1-9]\d{0,3}$/i.test(cleanId);
+    const orInvParts = [];
+    if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
+    if (cleanNum) {
+      if (isTargetNe) {
+        const neCode = `NE-${cleanNum}`;
+        orInvParts.push(`id.eq.${neCode}`, `fact_num.eq.${neCode}`);
+      } else if (isTargetLegacy) {
+        orInvParts.push(`fact_num.eq.${cleanNum}`, `id.eq.fac-${cleanNum}`, `id.eq.FAC-${cleanNum}`);
+      } else {
+        orInvParts.push(`id.eq.FAC-${cleanNum}`);
+        if (cleanNum.length >= 6) {
+          orInvParts.push(`id.eq.${cleanNum}`, `factNum.eq.${cleanNum}`);
+        }
       }
     }
+    const uniqueOrInvParts = Array.from(new Set(orInvParts));
+
+    let foundSales = [];
+    let remoteSalesCheckSucceeded = false;
+    if (uniqueOrSalesParts.length > 0) {
+      const { data: fetchedSales, error: salesFetchErr } = await withTimeout(
+        supabase.from('sales').select('*').or(uniqueOrSalesParts.join(',')),
+        6000
+      ).catch(() => ({ data: null, error: true }));
+      if (!salesFetchErr && Array.isArray(fetchedSales)) {
+        remoteSalesCheckSucceeded = true;
+        if (fetchedSales.length > 0) {
+          foundSales = fetchedSales
+            .map(mapSaleFromDb)
+            .filter(s => s && inferCxcDocType(s) === targetTipoDoc);
+        }
+      }
+    }
+
+    let invMatches = null;
+    if (uniqueOrInvParts.length > 0) {
+      const { data: fetchedInvMatches } = await withTimeout(
+        supabase.from('profit_invoices').select('id,tipo_doc,tipoDoc,fechaEmision,fec_emis,fact_num,factNum').or(uniqueOrInvParts.join(',')),
+        5000
+      ).catch(() => ({ data: null }));
+      invMatches = fetchedInvMatches;
+    }
+    const sameEraInvIds = Array.isArray(invMatches)
+      ? invMatches.filter(r => r && r.id && isLegacyPreNovInvoice(r) === isTargetLegacy).map(r => r.id)
+      : [];
+
+    const confirmedAlreadyDeletedOnServer =
+      remoteSalesCheckSucceeded &&
+      foundSales.length === 0 &&
+      (uniqueOrInvParts.length === 0 || (Array.isArray(invMatches) && sameEraInvIds.length === 0)) &&
+      localSalesBeforeDelete.length === 0;
 
     const salesToRevertRaw = foundSales.length > 0
       ? foundSales
       : (localSalesBeforeDelete.length > 0
           ? localSalesBeforeDelete
-          : (typeof saleId === 'object' &&
+          : (!confirmedAlreadyDeletedOnServer &&
+             typeof saleId === 'object' &&
              Array.isArray(saleId.items) &&
              saleId.items.length > 0 &&
              (saleId._source === 'POS' || /^0+\d+$/.test(cleanNum) || /^NE-0+\d+$/i.test(rawNum))
@@ -4496,6 +4729,7 @@ export const deleteSupabaseSale = async (saleId) => {
     // 2. Reingresar existencias al almacén correspondiente (Alm 01 o Alm 02) y revertir saldo deudor / caja
     for (const saleRecord of salesToRevert) {
       await adjustSupabaseProductsStockForSale(saleRecord, { reverse: true });
+      stockRevertAlreadyApplied = true;
 
       try {
         const sIsCredit =
@@ -4703,32 +4937,8 @@ export const deleteSupabaseSale = async (saleId) => {
     } catch (_) {}
 
     // 4. Eliminar en Supabase (profit_invoices y sales en paralelo), respetando era/serie para no borrar histórico por error
-    const isTargetLegacy = typeof saleId === 'object' ? isLegacyPreNovInvoice(saleId) : /^fac-[1-9]\d{0,3}$/i.test(cleanId);
-    const orInvParts = [];
-    if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
-    if (cleanNum) {
-      if (isTargetNe) {
-        const neCode = `NE-${cleanNum}`;
-        orInvParts.push(`id.eq.${neCode}`, `fact_num.eq.${neCode}`);
-      } else if (isTargetLegacy) {
-        orInvParts.push(`fact_num.eq.${cleanNum}`, `id.eq.fac-${cleanNum}`, `id.eq.FAC-${cleanNum}`);
-      } else {
-        orInvParts.push(`id.eq.FAC-${cleanNum}`);
-        if (cleanNum.length >= 6) {
-          orInvParts.push(`id.eq.${cleanNum}`, `factNum.eq.${cleanNum}`);
-        }
-      }
-    }
-    const uniqueOrInvParts = Array.from(new Set(orInvParts));
     const deletePromises = [];
     if (uniqueOrInvParts.length > 0) {
-      const { data: invMatches } = await withTimeout(
-        supabase.from('profit_invoices').select('id,tipo_doc,tipoDoc,fechaEmision,fec_emis,fact_num,factNum').or(uniqueOrInvParts.join(',')),
-        5000
-      ).catch(() => ({ data: null }));
-      const sameEraInvIds = Array.isArray(invMatches)
-        ? invMatches.filter(r => r && r.id && isLegacyPreNovInvoice(r) === isTargetLegacy).map(r => r.id)
-        : [];
       if (sameEraInvIds.length > 0) {
         deletePromises.push(
           withTimeout(
@@ -6181,7 +6391,9 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
     });
 
     if (typeof localStorage === 'undefined') return normalizedBase;
-    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
+    const delSet = hasRemoteResponse
+      ? reconcileCxcTombstonesWithServerDocs(normalizedBase)
+      : new Set(sanitizeCxcDeletedDocsStorage());
     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
     const customMap = rawCustom ? JSON.parse(rawCustom) : {};
     const customByCanon = new Map();
@@ -6241,12 +6453,15 @@ const applyLocalCxcOverridesToInvoices = (rawList = [], hasRemoteResponse = fals
           (numKey && pendingInvIds.has(numKey)) ||
           (invCanon && pendingCanonKeys.has(invCanon)) ||
           Boolean(override._pendingServerSync);
+        const isRecentOverride = ovTs > 0 && (nowMs - ovTs) < CXC_RECENT_LOCAL_GRACE_MS;
 
-        if (!hasRemoteResponse || isPending || ovTs > remTs) {
+        if (!hasRemoteResponse || isPending || (ovTs > remTs && isRecentOverride)) {
           result.push({ ...inv, ...override });
         } else {
           if (idKey && customMap[idKey]) keysToPrune.add(idKey);
           if (numKey && customMap[numKey]) keysToPrune.add(numKey);
+          if (override.id && customMap[override.id]) keysToPrune.add(String(override.id));
+          if (override.factNum && customMap[override.factNum]) keysToPrune.add(String(override.factNum));
           result.push(inv);
         }
       } else {
@@ -7008,6 +7223,7 @@ export const getSupabaseProfitInvoices = async () => {
         factNum: rawFactNum,
         numeroControl: f.numero_control ?? f.numeroControl ?? '',
         tipoDoc: resolvedTipoDoc,
+        seriesEra: f.series_era ?? f.seriesEra ?? '',
       fechaEmision: f.fec_emis ?? f.fechaEmision,
       fechaVencimiento: f.fec_venc ?? f.fechaVencimiento,
       diasCredito: f.dias_credito ?? f.diasCredito,
@@ -7081,10 +7297,13 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
 
   if (!skipSalesSync && rawNum) {
     const isCreditDoc = Number(cleanPayload.diasCredito || 0) > 0 || String(cleanPayload.condicionPago || '').toUpperCase().includes('CREDITO');
+    const resolvedCtrl = cleanPayload.numeroControl || formatDocumentControlNumber(rawNum, cleanPayload.tipoDoc);
+    const resolvedEra = cleanPayload.seriesEra || cleanPayload.series_era || '';
     const salesUpdatePayload = {
       numero_doc: cleanPayload.numeroDoc || rawNum,
-      numero_control: cleanPayload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+      numero_control: resolvedCtrl,
       tipo_doc: cleanPayload.tipoDoc,
+      ...(resolvedEra ? { series_era: resolvedEra } : {}),
       cliente_id: cleanPayload.clienteId,
       cliente_nombre: cleanPayload.clienteNombre,
       cliente_rif: cleanPayload.clienteRif,
@@ -7139,10 +7358,16 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
             ...(isLegacyPreNovInvoice(docRef) && unpaddedD ? [`id.eq.${unpaddedD}`, `numero_doc.eq.${unpaddedD}`, `id.eq.fac-${unpaddedD}`] : [])
           ];
     };
-    const docOrCandidates = Array.from(new Set([
-      ...buildSalesOrCandidates(previousDoc),
-      ...buildSalesOrCandidates({ id, factNum: rawNum, tipoDoc: cleanPayload.tipoDoc, fechaEmision: cleanPayload.fechaEmision })
-    ].filter(Boolean))).join(',');
+    const prevId = String(previousDoc?.id || '').trim();
+    const targetId = String(cleanPayload.id || '').trim();
+    const isIdChanged = Boolean(prevId && targetId && prevId.toUpperCase() !== targetId.toUpperCase());
+    const hasExplicitSeriesEra = Boolean(resolvedEra);
+    const docOrCandidates = (isIdChanged || hasExplicitSeriesEra)
+      ? `id.eq.${targetId}`
+      : Array.from(new Set([
+          ...buildSalesOrCandidates(previousDoc),
+          ...buildSalesOrCandidates({ id, factNum: rawNum, tipoDoc: cleanPayload.tipoDoc, fechaEmision: cleanPayload.fechaEmision })
+        ].filter(Boolean))).join(',');
     const updateRes = await withTimeout(
       supabase.from('sales').update(salesUpdatePayload).or(docOrCandidates).select('id'),
       6000
@@ -7152,8 +7377,9 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
       const saleRow = mapSaleToDb({
         id: cleanPayload.id,
         numeroDoc: cleanPayload.numeroDoc || rawNum,
-        numeroControl: cleanPayload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+        numeroControl: resolvedCtrl,
         tipoDoc: cleanPayload.tipoDoc,
+        ...(resolvedEra ? { seriesEra: resolvedEra } : {}),
         fecha: cleanPayload.fechaEmision,
         fechaEmision: cleanPayload.fechaEmision,
         fechaVencimiento: cleanPayload.fechaVencimiento,
@@ -7341,8 +7567,9 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     cliente_direccion: docData.clienteDireccion || docData.cliente_direccion || docData.direccion || '',
     clienteTelefono: docData.clienteTelefono || docData.cliente_telefono || docData.telefono || '',
     cliente_telefono: docData.clienteTelefono || docData.cliente_telefono || docData.telefono || '',
-    numeroControl: docData.numeroControl || docData.numero_control || '',
-    numero_control: docData.numeroControl || docData.numero_control || '',
+    numeroControl: docData.numeroControl || docData.numero_control || formatDocumentControlNumber(rawNum, isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA'),
+    numero_control: docData.numeroControl || docData.numero_control || formatDocumentControlNumber(rawNum, isNotaEntrega ? 'NOTA_ENTREGA' : 'FACTURA'),
+    ...(docData.seriesEra || docData.series_era ? { seriesEra: docData.seriesEra || docData.series_era, series_era: docData.seriesEra || docData.series_era } : {}),
     isExento: Boolean(docData.isExento ?? docData.is_exento ?? isNotaEntrega),
     is_exento: Boolean(docData.isExento ?? docData.is_exento ?? isNotaEntrega),
     vendedorId: docData.vendedorId || docData.vendedor_id || 'OF',
@@ -7438,11 +7665,13 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
     broadcastReconcileChange({
       tableId: 'sales',
       action: 'RECONCILE',
-      key: rawNum,
+      key: payload.id || rawNum,
       item: {
         id: payload.id,
-        numeroDoc: rawNum,
+        numeroDoc: payload.numeroDoc || rawNum,
+        numeroControl: payload.numeroControl,
         tipoDoc: payload.tipoDoc,
+        ...(payload.seriesEra ? { seriesEra: payload.seriesEra } : {}),
         clienteId: payload.clienteId,
         clienteNombre: payload.clienteNombre,
         clienteRif: payload.clienteRif,
@@ -7482,8 +7711,9 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
       saveStorageSale({
         id: payload.id,
         numeroDoc: payload.numeroDoc || rawNum,
-        numeroControl: payload.numeroControl || `00-${rawNum.replace(/\D/g, '').padStart(6, '0')}`,
+        numeroControl: payload.numeroControl || formatDocumentControlNumber(rawNum, payload.tipoDoc),
         tipoDoc: payload.tipoDoc,
+        ...(payload.seriesEra ? { seriesEra: payload.seriesEra } : {}),
         fecha: payload.fechaEmision,
         fechaEmision: payload.fechaEmision,
         fechaVencimiento: payload.fechaVencimiento,
@@ -7522,25 +7752,25 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
  */
 export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData) => {
   if (!updatedDocData) return null;
-  const oldTipo = String(originalDoc?.tipoDoc || originalDoc?.tipo_doc || (String(originalDoc?.id || originalDoc?.factNum || '').toUpperCase().startsWith('NE-') ? 'NOTA_ENTREGA' : 'FACTURA')).toUpperCase().trim();
-  const newTipo = String(updatedDocData?.tipoDoc || updatedDocData?.tipo_doc || (String(updatedDocData?.id || updatedDocData?.factNum || '').toUpperCase().startsWith('NE-') ? 'NOTA_ENTREGA' : 'FACTURA')).toUpperCase().trim();
-  const docTypeChanged = Boolean(oldTipo && newTipo && oldTipo !== newTipo);
-  const itemsToMove = Array.isArray(updatedDocData.items) && updatedDocData.items.length > 0
-    ? updatedDocData.items
-    : (Array.isArray(originalDoc?.items) ? originalDoc.items : []);
+  const oldTipo = resolveOutgoingDocType(originalDoc);
+  const newTipo = resolveOutgoingDocType(updatedDocData);
+  const swapLines = buildDocTypeChangeWarehouseDeltaLines(originalDoc, updatedDocData);
 
-  if (docTypeChanged && itemsToMove.length > 0 && isNetworkOnline()) {
+  if (swapLines.length > 0) {
     try {
       const editDocKey = String(originalDoc?.id || originalDoc?.factNum || updatedDocData?.id || '').trim();
-      const whSwapBase = editDocKey ? `edit_wh_${editDocKey}_${oldTipo}_to_${newTipo}` : '';
-      await adjustSupabaseProductsStockForSale(
-        { ...originalDoc, tipoDoc: oldTipo, items: itemsToMove },
-        { reverse: true, idempotencyKey: whSwapBase ? `${whSwapBase}_rev` : '' }
-      );
-      await adjustSupabaseProductsStockForSale(
-        { ...updatedDocData, tipoDoc: newTipo, items: itemsToMove },
-        { reverse: false, idempotencyKey: whSwapBase ? `${whSwapBase}_ded` : '' }
-      );
+      const revToken = String(
+        originalDoc?.updatedAt ||
+        originalDoc?.updated_at ||
+        originalDoc?.fechaSincronizacion ||
+        originalDoc?.fecha_sincronizacion ||
+        Date.now()
+      ).trim();
+      const whSwapKey = editDocKey ? `edit_wh_${editDocKey}_${oldTipo}_to_${newTipo}_${revToken}` : '';
+      await applyStockDeltaForWarehouseLines(swapLines, {
+        validateStrict: false,
+        idempotencyKey: whSwapKey
+      });
     } catch (whErr) {
       console.warn('[updateSupabaseInvoiceDocument] Aviso ajustando almacenes al cambiar tipoDoc:', whErr?.message);
     }
@@ -7551,23 +7781,25 @@ export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData)
 
   const oldId = String(originalDoc?.id || '').trim();
   const oldNum = String(originalDoc?.factNum ?? originalDoc?.fact_num ?? originalDoc?.numeroDoc ?? '').trim();
+  const oldEraKey = getEraScopedCanonicalDocKey(originalDoc);
   const newId = String(saved.id || '').trim();
   const newNum = String(saved.factNum || saved.numeroDoc || '').trim();
+  const newEraKey = getEraScopedCanonicalDocKey(saved);
   const idChanged = Boolean(oldId && newId && oldId.toUpperCase() !== newId.toUpperCase());
   const numChanged = Boolean(oldNum && newNum && oldNum.toUpperCase() !== newNum.toUpperCase());
+  const eraChanged = Boolean(oldEraKey && newEraKey && oldEraKey !== newEraKey);
 
-  if (idChanged || numChanged) {
-    // Limpiar entradas antiguas en localStorage sin revertir stock
+  if (idChanged || numChanged || eraChanged) {
+    // Limpiar entradas antiguas en localStorage sin revertir stock y sin colisión cruzada por tipo/era
     try {
-      if (oldId && oldId !== newId) deleteStorageSale(oldId, { skipStockAdjustment: true });
-      if (oldNum && oldNum !== newNum) deleteStorageSale(oldNum, { skipStockAdjustment: true });
+      if (idChanged || eraChanged) deleteStorageSale(originalDoc, { skipStockAdjustment: true });
       if (typeof localStorage !== 'undefined') {
         const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
         if (rawCustom) {
           const customMap = JSON.parse(rawCustom);
           if (customMap && typeof customMap === 'object') {
             if (oldId && oldId !== newId) delete customMap[oldId];
-            if (oldNum && oldNum !== newNum) delete customMap[oldNum];
+            if (oldEraKey && oldEraKey !== newEraKey) delete customMap[oldEraKey];
             localStorage.setItem('signum_cxc_custom_docs_v1', JSON.stringify(customMap));
           }
         }
@@ -9647,124 +9879,7 @@ function markAppliedClientStockDeltaKey(key) {
   } catch (_) {}
 }
 
-export async function applyStockDeltaForWarehouseLines(lines = [], options = {}) {
-  const {
-    validateStrict = false,
-    idempotencyKey = '',
-    skipLocalStoragePatch = false,
-    throwOnRemoteError = false,
-    forceServerFetch = false
-  } = options || {};
-  if (!Array.isArray(lines) || lines.length === 0) return [];
-  const normalizedDeltaLines = lines
-    .map(l => ({
-      codigo: String(l?.codigo || l?.co_art || l?.articuloId || l?.id || '').trim(),
-      delta01: Number(l?.delta01 || 0),
-      delta02: Number(l?.delta02 || 0)
-    }))
-    .filter(l => l.codigo && (l.delta01 !== 0 || l.delta02 !== 0));
-  if (normalizedDeltaLines.length === 0) return [];
-  const explicitKey = String(idempotencyKey || '').trim();
-  if (explicitKey && hasAppliedClientStockDeltaKey(explicitKey)) {
-    return [];
-  }
-  const touchedCodes = Array.from(new Set(normalizedDeltaLines.map(l => l.codigo)));
-  const resolvedDeltaKey =
-    explicitKey ||
-    `delta_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  // 1. Vía atómica en servidor (/inventory/apply-delta): evita condiciones de carrera entre cajas/usuarios
-  const canUseAtomicEndpoint =
-    (forceServerFetch || (typeof window !== 'undefined' && !isTestEnv)) &&
-    isNetworkOnline() &&
-    isSupabaseAvailable &&
-    typeof fetch !== 'undefined' &&
-    Boolean(currentBackendUrl);
-
-  if (canUseAtomicEndpoint) {
-    try {
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const tid = controller ? setTimeout(() => controller.abort(), 8000) : null;
-      const base = String(currentBackendUrl).replace(/\/+$/, '');
-      const res = await fetch(`${base}/inventory/apply-delta`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'bypass-tunnel-reminder': 'true',
-          'ngrok-skip-browser-warning': 'true'
-        },
-        body: JSON.stringify({
-          lines: normalizedDeltaLines,
-          validateStrict: Boolean(validateStrict),
-          idempotencyKey: resolvedDeltaKey
-        }),
-        signal: controller?.signal
-      });
-      if (tid) clearTimeout(tid);
-
-      if (res.status === 409) {
-        const errBody = await res.json().catch(() => ({}));
-        const err = new Error(errBody?.error || 'Stock insuficiente en almacén.');
-        err.isValidationError = true;
-        err.code = errBody?.code || 'INSUFFICIENT_WAREHOUSE_STOCK';
-        throw err;
-      }
-
-      if (res.ok) {
-        const data = await res.json().catch(() => null);
-        if (data?.ok && Array.isArray(data.updatedProducts)) {
-          if (explicitKey) markAppliedClientStockDeltaKey(explicitKey);
-          if (data.updatedProducts.length > 0) {
-            patchProductsStockInStorage(data.updatedProducts);
-            data.updatedProducts.forEach(p => {
-              broadcastReconcileChange({
-                tableId: 'products',
-                action: 'RECONCILE',
-                key: p.codigo || p.id,
-                item: p
-              });
-            });
-          }
-          return data.updatedProducts;
-        }
-      } else if (res.status !== 404 && res.status !== 501) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody?.error || `HTTP ${res.status} en apply-delta`);
-      }
-    } catch (atomicErr) {
-      if (atomicErr?.isValidationError || atomicErr?.code === 'INSUFFICIENT_WAREHOUSE_STOCK') {
-        throw atomicErr;
-      }
-      if (throwOnRemoteError) throw atomicErr;
-      console.warn('[applyStockDeltaForWarehouseLines] Fallback tras error en endpoint atómico:', atomicErr?.message || atomicErr);
-    }
-  }
-
-  const storageProds = getStorageProducts();
-  const remoteMap = new Map();
-  if (isNetworkOnline() && isSupabaseAvailable) {
-    try {
-      const orParts = touchedCodes.flatMap(k => [`id.eq.${k}`, `codigo.eq.${k}`]);
-      const { data, error: fetchErr } = await withTimeout(
-        supabase
-          .from('products')
-          .select('id,codigo,descripcion,stock,stock_almacen_01,stock_almacen_02,stockAlmacen01,stockAlmacen02,comprometido')
-          .or(orParts.join(',')),
-        6000
-      );
-      if (fetchErr) {
-        console.warn('[applyStockDeltaForWarehouseLines] Error consultando stock remoto:', fetchErr.message);
-      } else {
-        (data || []).forEach(p => {
-          if (p.id) remoteMap.set(String(p.id), p);
-          if (p.codigo) remoteMap.set(String(p.codigo), p);
-        });
-      }
-    } catch (err) {
-      console.warn('[applyStockDeltaForWarehouseLines] Timeout/error leyendo stock remoto:', err?.message || err);
-    }
-  }
-
+const buildWarehouseStockDeltaPatches = (normalizedDeltaLines = [], sourceMap = new Map(), storageProds = [], { validateStrict = false } = {}) => {
   // Acumular deltas netos por SKU resuelto para evitar dobles lecturas o validaciones parciales
   const groupedDeltas = new Map();
   for (const line of normalizedDeltaLines) {
@@ -9772,7 +9887,7 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
     const delta01 = line.delta01;
     const delta02 = line.delta02;
 
-    const existing = remoteMap.get(code) || storageProds.find(p => String(p.id) === code || String(p.codigo) === code);
+    const existing = sourceMap.get(code) || storageProds.find(p => String(p.id) === code || String(p.codigo) === code);
     if (!existing) {
       if (validateStrict) {
         throw new Error(`Producto/SKU "${code}" no encontrado en el inventario.`);
@@ -9833,6 +9948,171 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
       whRows.push({ id: `${prodId}_02`, co_art: prodId, codigo: prodCode, co_alma: '02', stock_act: next02, stock_disp: next02, updated_at: nowIso });
     }
   }
+
+  return { productPatches, whRows, nowIso };
+};
+
+export async function applyStockDeltaForWarehouseLines(lines = [], options = {}) {
+  const {
+    validateStrict = false,
+    idempotencyKey = '',
+    skipLocalStoragePatch = false,
+    throwOnRemoteError = false,
+    forceServerFetch = false
+  } = options || {};
+  if (!Array.isArray(lines) || lines.length === 0) return [];
+  const normalizedDeltaLines = lines
+    .map(l => ({
+      codigo: String(l?.codigo || l?.co_art || l?.articuloId || l?.id || '').trim(),
+      delta01: Number(l?.delta01 || 0),
+      delta02: Number(l?.delta02 || 0)
+    }))
+    .filter(l => l.codigo && (l.delta01 !== 0 || l.delta02 !== 0));
+  if (normalizedDeltaLines.length === 0) return [];
+  const explicitKey = String(idempotencyKey || '').trim();
+  if (explicitKey && hasAppliedClientStockDeltaKey(explicitKey)) {
+    return [];
+  }
+  const touchedCodes = Array.from(new Set(normalizedDeltaLines.map(l => l.codigo)));
+  const resolvedDeltaKey =
+    explicitKey ||
+    `delta_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  // 1. Vía atómica en servidor (/inventory/apply-delta): evita condiciones de carrera entre cajas/usuarios
+  const canUseAtomicEndpoint =
+    (forceServerFetch || (typeof window !== 'undefined' && !isTestEnv)) &&
+    isNetworkOnline() &&
+    isSupabaseAvailable &&
+    typeof fetch !== 'undefined' &&
+    Boolean(currentBackendUrl);
+
+  if (canUseAtomicEndpoint) {
+    let allowNonAtomicFallback = false;
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const tid = controller ? setTimeout(() => controller.abort(), 8000) : null;
+      const base = String(currentBackendUrl).replace(/\/+$/, '');
+      const res = await fetch(`${base}/inventory/apply-delta`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'bypass-tunnel-reminder': 'true',
+          'ngrok-skip-browser-warning': 'true'
+        },
+        body: JSON.stringify({
+          lines: normalizedDeltaLines,
+          validateStrict: Boolean(validateStrict),
+          idempotencyKey: resolvedDeltaKey
+        }),
+        signal: controller?.signal
+      });
+      if (tid) clearTimeout(tid);
+
+      if (res.status === 409) {
+        const errBody = await res.json().catch(() => ({}));
+        const err = new Error(errBody?.error || 'Stock insuficiente en almacén.');
+        err.isValidationError = true;
+        err.code = errBody?.code || 'INSUFFICIENT_WAREHOUSE_STOCK';
+        throw err;
+      }
+
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.ok && Array.isArray(data.updatedProducts)) {
+          if (explicitKey) markAppliedClientStockDeltaKey(explicitKey);
+          if (data.updatedProducts.length > 0) {
+            patchProductsStockInStorage(data.updatedProducts);
+            data.updatedProducts.forEach(p => {
+              broadcastReconcileChange({
+                tableId: 'products',
+                action: 'RECONCILE',
+                key: p.codigo || p.id,
+                item: p
+              });
+            });
+          }
+          return data.updatedProducts;
+        }
+        throw new Error(data?.error || 'Respuesta inválida del servidor en apply-delta');
+      } else if (res.status === 404 || res.status === 501) {
+        allowNonAtomicFallback = true;
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody?.error || `HTTP ${res.status} en apply-delta`);
+      }
+    } catch (atomicErr) {
+      if (atomicErr?.isValidationError || atomicErr?.code === 'INSUFFICIENT_WAREHOUSE_STOCK') {
+        throw atomicErr;
+      }
+      if (throwOnRemoteError) throw atomicErr;
+
+      // Ante timeout, caída de red o 5xx tras intentar el endpoint atómico, no caer a PATCH directo
+      // sobre products porque omitiría APPLIED_STOCK_DELTA_KEYS en servidor y podría duplicar descuentos.
+      console.warn('[applyStockDeltaForWarehouseLines] Encolando stock_delta idempotente tras fallo en endpoint atómico:', atomicErr?.message || atomicErr);
+      markSupabaseOffline(atomicErr, 'applyStockDeltaForWarehouseLines');
+      const { productPatches: optimisticPatches } = buildWarehouseStockDeltaPatches(
+        normalizedDeltaLines,
+        new Map(),
+        getStorageProducts(),
+        { validateStrict: false }
+      );
+      if (optimisticPatches.length > 0 && !skipLocalStoragePatch) {
+        patchProductsStockInStorage(optimisticPatches);
+        optimisticPatches.forEach(p => {
+          broadcastReconcileChange({
+            tableId: 'products',
+            action: 'RECONCILE',
+            key: p.codigo || p.id,
+            item: p
+          });
+        });
+      }
+      enqueueSyncAction('stock_delta', 'UPDATE', {
+        id: resolvedDeltaKey,
+        idempotencyKey: resolvedDeltaKey,
+        lines: normalizedDeltaLines,
+        validateStrict: Boolean(validateStrict),
+        alreadyAppliedLocally: !skipLocalStoragePatch
+      });
+      return optimisticPatches;
+    }
+
+    if (!allowNonAtomicFallback) {
+      return [];
+    }
+  }
+
+  const storageProds = getStorageProducts();
+  const remoteMap = new Map();
+  if (isNetworkOnline() && isSupabaseAvailable) {
+    try {
+      const orParts = touchedCodes.flatMap(k => [`id.eq.${k}`, `codigo.eq.${k}`]);
+      const { data, error: fetchErr } = await withTimeout(
+        supabase
+          .from('products')
+          .select('id,codigo,descripcion,stock,stock_almacen_01,stock_almacen_02,stockAlmacen01,stockAlmacen02,comprometido')
+          .or(orParts.join(',')),
+        6000
+      );
+      if (fetchErr) {
+        console.warn('[applyStockDeltaForWarehouseLines] Error consultando stock remoto:', fetchErr.message);
+      } else {
+        (data || []).forEach(p => {
+          if (p.id) remoteMap.set(String(p.id), p);
+          if (p.codigo) remoteMap.set(String(p.codigo), p);
+        });
+      }
+    } catch (err) {
+      console.warn('[applyStockDeltaForWarehouseLines] Timeout/error leyendo stock remoto:', err?.message || err);
+    }
+  }
+
+  const { productPatches, whRows, nowIso } = buildWarehouseStockDeltaPatches(
+    normalizedDeltaLines,
+    remoteMap,
+    storageProds,
+    { validateStrict }
+  );
 
   if (productPatches.length > 0) {
     if (!skipLocalStoragePatch) {
@@ -10047,12 +10327,14 @@ export const saveSupabaseGoodsReceiptNote = async (receiptData) => {
     const lines = receiptData.items
       .filter(it => Number(it.cantidadRecibida ?? it.cantidad ?? 0) > 0)
       .map(it => ({
-        codigo: it.codigo || it.articuloId || it.productoId,
+        codigo: resolveStockItemProductKey(it),
         delta01: alm === '01' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0,
         delta02: alm === '02' ? Number(it.cantidadRecibida ?? it.cantidad ?? 0) : 0
       }));
     if (lines.length > 0) {
-      await applyStockDeltaForWarehouseLines(lines);
+      await applyStockDeltaForWarehouseLines(lines, {
+        idempotencyKey: `receipt_${id}_stock`
+      });
     }
     if (linkedPurchase?.id) {
       updateStoragePurchase(linkedPurchase.id, { recepcionId: id, stockAplicado: true });
@@ -10150,15 +10432,17 @@ export const saveSupabaseProfitWarehouseTransfer = async (transferData) => {
       throw new Error(`Cantidad inválida (${qty}) para ${r.co_art || r.codigo || 'producto'} en traslado.`);
     }
     return {
-      codigo: r.co_art || r.codigo || r.articuloId,
+      codigo: resolveStockItemProductKey(r),
       delta01: almOrig === '01' ? -qty : (almDest === '01' ? qty : 0),
       delta02: almOrig === '02' ? -qty : (almDest === '02' ? qty : 0)
     };
   });
-  await applyStockDeltaForWarehouseLines(lines, { validateStrict: true });
-
   const totalItems = renglones.reduce((s, r) => s + Number(r.total_art ?? r.cantidad ?? 0), 0);
   const id = transferData.id || trasNum;
+  await applyStockDeltaForWarehouseLines(lines, {
+    validateStrict: true,
+    idempotencyKey: `transfer_${id}_stock`
+  });
   const dbPayload = {
     id,
     tras_num: trasNum,
@@ -10238,15 +10522,17 @@ export const saveSupabaseProfitInventoryAdjustment = async (adjData) => {
     const qty = Number(r.total_art || 0);
     const sign = r.tipo_trans === 'E' ? 1 : -1;
     return {
-      codigo: r.co_art || r.codigo || r.articuloId,
+      codigo: resolveStockItemProductKey(r),
       delta01: r.co_alma === '01' ? sign * qty : 0,
       delta02: r.co_alma === '02' ? sign * qty : 0
     };
   });
-  await applyStockDeltaForWarehouseLines(lines, { validateStrict: hasExit });
-
   const totalItems = normalizedRenglones.reduce((s, r) => s + Number(r.total_art || 0), 0);
   const id = adjData.id || ajueNum;
+  await applyStockDeltaForWarehouseLines(lines, {
+    validateStrict: hasExit,
+    idempotencyKey: `adjustment_${id}_stock`
+  });
   const dbPayload = {
     id,
     ajue_num: ajueNum,
@@ -10339,11 +10625,13 @@ export const saveSupabaseProfitCustomerReturn = async (retData) => {
   if (retData.reenterStock !== false && renglones.length > 0) {
     const alm = String(retData.almacen || '01').includes('02') ? '02' : '01';
     const lines = renglones.map(r => ({
-      codigo: r.co_art || r.codigo || r.articuloId,
+      codigo: resolveStockItemProductKey(r),
       delta01: alm === '01' ? Number(r.total_art ?? r.cantidad ?? 0) : 0,
       delta02: alm === '02' ? Number(r.total_art ?? r.cantidad ?? 0) : 0
     }));
-    await applyStockDeltaForWarehouseLines(lines);
+    await applyStockDeltaForWarehouseLines(lines, {
+      idempotencyKey: `return_${id}_stock`
+    });
   }
 
   upsertLocalDocList(RET_STORAGE_KEY, normalized, 'id');

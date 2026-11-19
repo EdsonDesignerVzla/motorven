@@ -18,9 +18,9 @@ import {
     commitCxcMovementCorrelativo
 } from '../services/fiscalService';
 import {
-    CXC_DELETED_DOCS_KEY,
     getScopedCxcDeleteKeys,
     isCxcEntryDeleted,
+    markCxcDocDeleted,
     sanitizeCxcDeletedDocsStorage,
     fetchEuroRateDetails,
     fetchUsdtRateDetails
@@ -54,6 +54,8 @@ import ClientRegistrationModal from './ClientRegistrationModal';
 import ClientApprovalsModal from './ClientApprovalsModal';
 import ClientsDirectoryModal from './ClientsDirectoryModal';
 import { canApproveClients, getClientApprovalStatus } from '../services/authService';
+import DatePeriodFilter from './DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
@@ -258,6 +260,7 @@ export function AccountsReceivableModal({
     const [selectedClient, setSelectedClient] = useState('ALL');
     const [selectedSeller, setSelectedSeller] = useState('ALL');
     const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'VENCIDA' | 'POR_VENCER' | 'PAGADA'
+    const [datePeriodFilter, setDatePeriodFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
     const [sortField, setSortField] = useState('fechaEmision');
     const [sortDirection, setSortDirection] = useState('desc');
     const [selectedInvoiceDetail, setSelectedInvoiceDetail] = useState(null);
@@ -959,7 +962,8 @@ export function AccountsReceivableModal({
             })();
             const matchesClient = selectedClient === 'ALL' || inv.clienteId === selectedClient || inv.rif === selectedClient;
             const matchesSeller = selectedSeller === 'ALL' || inv.vendedorId === selectedSeller;
-            return matchesSearch && matchesClient && matchesSeller;
+            const matchesDate = matchesDatePeriodFilter(inv.fechaEmisionIso || inv.fechaEmision, datePeriodFilter);
+            return matchesSearch && matchesClient && matchesSeller && matchesDate;
         };
 
         let allCount = 0;
@@ -985,7 +989,7 @@ export function AccountsReceivableModal({
             POR_VENCER: porVencerCount,
             PAGADA: pagadaCount
         };
-    }, [allDocsForActiveType, searchTerm, selectedClient, selectedSeller]);
+    }, [allDocsForActiveType, searchTerm, selectedClient, selectedSeller, datePeriodFilter]);
 
     // Filtrado y Ordenamiento para la Parte B
     const filteredInvoices = useMemo(() => {
@@ -1003,8 +1007,9 @@ export function AccountsReceivableModal({
             const matchesStatus = statusFilter === 'ALL'
                 ? inv.isCarteraActiva
                 : inv.estado === statusFilter;
+            const matchesDate = matchesDatePeriodFilter(inv.fechaEmisionIso || inv.fechaEmision, datePeriodFilter);
 
-            return matchesSearch && matchesClient && matchesSeller && matchesStatus;
+            return matchesSearch && matchesClient && matchesSeller && matchesStatus && matchesDate;
         }).sort((a, b) => {
             // Ordenamiento cronológico exacto por Fecha de Emisión o Fecha de Vencimiento
             if (sortField === 'fechaEmision' || sortField === 'fechaVencimiento') {
@@ -1041,7 +1046,7 @@ export function AccountsReceivableModal({
                 ? String(a.factura).localeCompare(String(b.factura), 'es', { numeric: true })
                 : String(b.factura).localeCompare(String(a.factura), 'es', { numeric: true });
         });
-    }, [docsForActiveType, allDocsForActiveType, searchTerm, selectedClient, selectedSeller, statusFilter, sortField, sortDirection]);
+    }, [docsForActiveType, allDocsForActiveType, searchTerm, selectedClient, selectedSeller, statusFilter, datePeriodFilter, sortField, sortDirection]);
 
     // Resumen de métricas
     const summaryMetrics = useMemo(() => {
@@ -2158,15 +2163,10 @@ export function AccountsReceivableModal({
                 return next;
             });
 
-            // 2. Persistir inmediatamente en localStorage sin colisionar entre Factura y Nota de Entrega
+            // 2. Persistir inmediatamente en localStorage con metadatos completos (timestamp, era, tipoDoc)
             try {
+                markCxcDocDeleted(inv);
                 if (typeof localStorage !== 'undefined') {
-                    const delList = sanitizeCxcDeletedDocsStorage();
-                    keysToDelete.forEach(k => {
-                        if (!delList.includes(k)) delList.push(k);
-                    });
-                    localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(delList));
-
                     const rawCustom = localStorage.getItem('signum_cxc_custom_docs_v1');
                     if (rawCustom) {
                         const customMap = JSON.parse(rawCustom);
@@ -3515,6 +3515,9 @@ export function AccountsReceivableModal({
                                     </option>
                                 ))}
                             </select>
+
+                            {/* Filtro Fecha / Período */}
+                            <DatePeriodFilter value={datePeriodFilter} onChange={setDatePeriodFilter} compact />
 
                             {/* Selector Estado Pastilla */}
                             <div style={{

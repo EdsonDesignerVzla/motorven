@@ -6,6 +6,14 @@ import {
   toLocalYmd,
   formatDateVe
 } from '../services/creditPolicyService.js';
+import {
+  createDefaultDatePeriodFilter,
+  extractLocalYmd,
+  normalizeDateRange,
+  isDatePeriodFilterActive,
+  matchesDatePeriodFilter,
+  formatDatePeriodLabel
+} from '../utils/dateRangeFilterUtils.js';
 
 console.log('--- INICIANDO PRUEBAS DE FECHA/HORA Y FILTROS DE FACTURAS ---');
 
@@ -64,6 +72,59 @@ console.log('--- INICIANDO PRUEBAS DE FECHA/HORA Y FILTROS DE FACTURAS ---');
   const passthrough = preserveDateWithTime('2026-11-12T19:05:11.000Z', ref);
   assert.equal(passthrough, '2026-11-12T19:05:11.000Z', 'ISO completo existente se preserva intacto');
   console.log('  ✓ preserveDateWithTime verificado correctamente:', combinedIso);
+}
+
+// 5. Filtro uniforme por Fecha Exacta y Por Período (dateRangeFilterUtils)
+{
+  const def = createDefaultDatePeriodFilter('EXACT');
+  assert.equal(def.mode, 'EXACT');
+  assert.equal(isDatePeriodFilterActive(def), false);
+  assert.equal(matchesDatePeriodFilter('2026-11-18', def), true);
+
+  assert.equal(extractLocalYmd('2026-10-05T00:00:00.000Z'), '2026-10-05', 'Medianoche UTC no debe retroceder al día anterior');
+  assert.equal(extractLocalYmd('18/11/2026'), '2026-11-18', 'Formato DD/MM/YYYY debe convertirse a YYYY-MM-DD');
+  assert.equal(extractLocalYmd('2026-11-18T14:30:00.000Z'), toLocalYmd(new Date('2026-11-18T14:30:00.000Z')));
+  assert.equal(extractLocalYmd(new Date(2026, 10, 18, 12, 0, 0)), '2026-11-18');
+
+  assert.deepEqual(
+    normalizeDateRange('2026-11-18', '2026-11-01'),
+    { minDate: '2026-11-01', maxDate: '2026-11-18' },
+    'Rango invertido debe ordenarse cronológicamente'
+  );
+  assert.deepEqual(
+    normalizeDateRange('2026-11-05', ''),
+    { minDate: '2026-11-05', maxDate: '' }
+  );
+
+  const exactFilter = { mode: 'EXACT', exactDate: '2026-11-18', fromDate: '', toDate: '' };
+  assert.equal(isDatePeriodFilterActive(exactFilter), true);
+  assert.equal(matchesDatePeriodFilter('2026-11-18T00:00:00.000Z', exactFilter), true);
+  assert.equal(matchesDatePeriodFilter('2026-11-17', exactFilter), false);
+  assert.equal(formatDatePeriodLabel(exactFilter), 'Fecha: 18/11/2026');
+
+  const rangeFilter = { mode: 'RANGE', exactDate: '', fromDate: '2026-11-01', toDate: '2026-11-18' };
+  assert.equal(isDatePeriodFilterActive(rangeFilter), true);
+  assert.equal(matchesDatePeriodFilter('2026-11-01', rangeFilter), true, 'Límite inferior inclusivo');
+  assert.equal(matchesDatePeriodFilter('2026-11-10', rangeFilter), true, 'Fecha dentro del período');
+  assert.equal(matchesDatePeriodFilter('2026-11-18', rangeFilter), true, 'Límite superior inclusivo');
+  assert.equal(matchesDatePeriodFilter('2026-10-31', rangeFilter), false, 'Fuera antes del rango');
+  assert.equal(matchesDatePeriodFilter('2026-11-19', rangeFilter), false, 'Fuera después del rango');
+  assert.equal(matchesDatePeriodFilter('', rangeFilter), false, 'Fecha vacía no coincide cuando hay filtro activo');
+  assert.equal(formatDatePeriodLabel(rangeFilter), 'Período: 01/11/2026 al 18/11/2026');
+
+  const reversedRange = { mode: 'RANGE', exactDate: '', fromDate: '2026-11-18', toDate: '2026-11-01' };
+  assert.equal(matchesDatePeriodFilter('2026-11-10', reversedRange), true, 'Rango invertido también filtra correctamente');
+
+  const openStartRange = { mode: 'RANGE', exactDate: '', fromDate: '2026-11-15', toDate: '' };
+  assert.equal(matchesDatePeriodFilter('2026-11-14', openStartRange), false);
+  assert.equal(matchesDatePeriodFilter('2026-11-18', openStartRange), true);
+  assert.equal(formatDatePeriodLabel(openStartRange), 'Desde: 15/11/2026');
+
+  const emptyRange = { mode: 'RANGE', exactDate: '', fromDate: '', toDate: '' };
+  assert.equal(isDatePeriodFilterActive(emptyRange), false);
+  assert.equal(matchesDatePeriodFilter('2026-01-01', emptyRange), true);
+
+  console.log('  ✓ dateRangeFilterUtils (Fecha Exacta y Por Período) verificado al 100%');
 }
 
 console.log('--- TODAS LAS PRUEBAS DE FECHA/HORA DE FACTURAS PASARON AL 100% ---');

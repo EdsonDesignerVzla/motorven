@@ -119,7 +119,7 @@ export function buildConsolidatedKardex({
   const seenPurchaseInvoices = new Set();
   const registerPurchaseLine = (item, fallbackName = '') => {
     const qty = Number(item?.cantidad ?? item?.qty ?? 0);
-    const code = item?.codigo || item?.co_art || item?.articuloId || item?.productoId;
+    const code = item?.codigo || item?.co_art || item?.articuloId || item?.articulo_id || item?.productoId;
     if (!(qty > 0) || !code) return;
     const entry = ensureEntry(code, { descripcion: item?.descripcion || item?.producto || fallbackName });
     if (entry) entry.entradasCompras += qty;
@@ -163,7 +163,7 @@ export function buildConsolidatedKardex({
     if (inv && seenPurchaseInvoices.has(inv)) return;
     (rec.items || []).forEach((it) => {
       const qty = Number(it.cantidadRecibida ?? it.cantidad ?? 0);
-      const entry = ensureEntry(it.codigo || it.articuloId, { descripcion: it.descripcion, unidad: it.unidad });
+      const entry = ensureEntry(it.codigo || it.co_art || it.articuloId || it.articulo_id, { descripcion: it.descripcion, unidad: it.unidad });
       if (entry && qty > 0) entry.entradasCompras += qty;
     });
   });
@@ -179,7 +179,7 @@ export function buildConsolidatedKardex({
     const lines = Array.isArray(doc.items) && doc.items.length > 0 ? doc.items : (Array.isArray(doc.renglones) ? doc.renglones : []);
     lines.forEach((it) => {
       const qty = Number(it.cantidad ?? it.total_art ?? it.qty ?? 0);
-      const code = it.codigo || it.co_art || it.articuloId || it.product?.codigo || it.product?.id;
+      const code = it.codigo || it.co_art || it.articuloId || it.articulo_id || it.product?.codigo || it.product?.id;
       if (!(qty > 0) || !code) return;
       const entry = ensureEntry(code, { descripcion: it.descripcion || it.art_des || it.product?.descripcion });
       if (entry) entry.salidasVentas += qty;

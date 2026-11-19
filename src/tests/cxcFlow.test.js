@@ -24,6 +24,7 @@ import {
   getScopedCxcDeleteKeys,
   markCxcDocDeleted,
   isCxcEntryDeleted,
+  reconcileCxcTombstonesWithServerDocs,
   saveSupabaseProfitCollection,
   getSupabaseProfitCollections,
   deleteSupabaseProfitCollection
@@ -770,72 +771,100 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
 
 // 12. Edición de datos del cobro y eliminación con tombstone persistente en profit_collections
 {
-  const colId = `cob-test-edit-del-${Date.now()}`;
-  const createdCol = await saveSupabaseProfitCollection({
-    id: colId,
-    cobNum: '004999',
-    correlativo: '004999',
-    fecha: '2026-11-17T14:00:00.000Z',
-    clienteId: 'CLI-TEST',
-    clienteNombre: 'Cliente Test Edit',
-    vendedorId: 'V1',
-    vendedorNombre: 'Vendedor Uno',
-    cobradorId: 'V1',
-    cobradorNombre: 'Vendedor Uno',
-    montoUsd: 100,
-    montoBs: 91574,
-    tasa: 915.74,
-    tipoTasa: 'BCV',
-    monedaPago: 'BS',
-    cuentaId: 'BANCO-BDV',
-    cuentaNombre: 'Banco de Venezuela',
-    formaPago: 'TRANSFERENCIA',
-    referencia: 'REF-100',
-    descrip: 'Abono inicial',
-    documentosAfectados: [{ numDoc: '002093', tipoDoc: 'FACTURA', montoCobradoUsd: 100, montoCobrado: 91574 }],
-    formasPago: [{ formaPago: 'TRANSFERENCIA', montoUsd: 100, montoBs: 91574, tasa: 915.74, tipoTasa: 'BCV', referencia: 'REF-100' }]
-  });
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new Error('offline-test'); };
+    const colId = `cob-test-edit-del-${Date.now()}`;
+    const createdCol = await saveSupabaseProfitCollection({
+      id: colId,
+      cobNum: '004999',
+      correlativo: '004999',
+      fecha: '2026-11-17T14:00:00.000Z',
+      clienteId: 'CLI-TEST',
+      clienteNombre: 'Cliente Test Edit',
+      vendedorId: 'V1',
+      vendedorNombre: 'Vendedor Uno',
+      cobradorId: 'V1',
+      cobradorNombre: 'Vendedor Uno',
+      montoUsd: 100,
+      montoBs: 91574,
+      tasa: 915.74,
+      tipoTasa: 'BCV',
+      monedaPago: 'BS',
+      cuentaId: 'BANCO-BDV',
+      cuentaNombre: 'Banco de Venezuela',
+      formaPago: 'TRANSFERENCIA',
+      referencia: 'REF-100',
+      descrip: 'Abono inicial',
+      documentosAfectados: [{ numDoc: '002093', tipoDoc: 'FACTURA', montoCobradoUsd: 100, montoCobrado: 91574 }],
+      formasPago: [{ formaPago: 'TRANSFERENCIA', montoUsd: 100, montoBs: 91574, tasa: 915.74, tipoTasa: 'BCV', referencia: 'REF-100' }]
+    });
 
-  assert.equal(createdCol.correlativo, '004999');
-  assert.equal(createdCol.formaPago, 'TRANSFERENCIA');
-  assert.equal(createdCol.referencia, 'REF-100');
+    assert.equal(createdCol.correlativo, '004999');
+    assert.equal(createdCol.formaPago, 'TRANSFERENCIA');
+    assert.equal(createdCol.referencia, 'REF-100');
 
-  const updatedCol = await saveSupabaseProfitCollection({
-    ...createdCol,
-    formaPago: 'ZELLE',
-    tipoTasa: 'ZELLE',
-    tasa: 1,
-    tasaPago: 1,
-    monedaPago: 'USD',
-    montoUsd: 120,
-    montoBs: 0,
-    cuentaId: 'CAJA-ZELLE',
-    cuentaNombre: 'Cuenta Zelle USD',
-    referencia: 'ZELLE-8899',
-    descrip: 'Datos corregidos',
-    formasPago: [{ formaPago: 'ZELLE', moneda: 'USD', montoUsd: 120, montoBs: 0, tasa: 1, tipoTasa: 'ZELLE', referencia: 'ZELLE-8899' }],
-    documentosAfectados: [{ numDoc: '002093', tipoDoc: 'FACTURA', montoCobradoUsd: 120, montoCobrado: 120 }],
-    _localEditedAt: new Date().toISOString()
-  });
+    const updatedCol = await saveSupabaseProfitCollection({
+      ...createdCol,
+      formaPago: 'ZELLE',
+      tipoTasa: 'ZELLE',
+      tasa: 1,
+      tasaPago: 1,
+      monedaPago: 'USD',
+      montoUsd: 120,
+      montoBs: 0,
+      cuentaId: 'CAJA-ZELLE',
+      cuentaNombre: 'Cuenta Zelle USD',
+      referencia: 'ZELLE-8899',
+      descrip: 'Datos corregidos',
+      formasPago: [{ formaPago: 'ZELLE', moneda: 'USD', montoUsd: 120, montoBs: 0, tasa: 1, tipoTasa: 'ZELLE', referencia: 'ZELLE-8899' }],
+      documentosAfectados: [{ numDoc: '002093', tipoDoc: 'FACTURA', montoCobradoUsd: 120, montoCobrado: 120 }],
+      _localEditedAt: new Date().toISOString()
+    });
 
-  assert.equal(updatedCol.formaPago, 'ZELLE');
-  assert.equal(updatedCol.montoUsd, 120);
-  assert.equal(updatedCol.montoBs, 0);
-  assert.equal(updatedCol.referencia, 'ZELLE-8899');
-  assert.equal(updatedCol.cuentaNombre, 'Cuenta Zelle USD');
+    assert.equal(updatedCol.formaPago, 'ZELLE');
+    assert.equal(updatedCol.montoUsd, 120);
+    assert.equal(updatedCol.montoBs, 0);
+    assert.equal(updatedCol.referencia, 'ZELLE-8899');
+    assert.equal(updatedCol.cuentaNombre, 'Cuenta Zelle USD');
 
-  await deleteSupabaseProfitCollection(colId);
-  const rawDeleted = localStorage.getItem('signum_deleted_cxc_collections_v1');
-  const parsedDeleted = rawDeleted ? JSON.parse(rawDeleted) : [];
-  assert.ok(parsedDeleted.includes(colId), 'El cobro eliminado debe quedar marcado en tombstones locales');
+    await deleteSupabaseProfitCollection(colId);
+    const rawDeleted = localStorage.getItem('signum_deleted_cxc_collections_v1');
+    const parsedDeleted = rawDeleted ? JSON.parse(rawDeleted) : [];
+    assert.ok(parsedDeleted.includes(colId), 'El cobro eliminado debe quedar marcado en tombstones locales');
 
-  const collectionsAfterDelete = await getSupabaseProfitCollections();
-  assert.equal(
-    collectionsAfterDelete.some((c) => String(c.id) === colId),
-    false,
-    'Un cobro eliminado no debe reaparecer al consultar getSupabaseProfitCollections'
-  );
-  console.log('  ✓ 12. Edición de datos de cobro y eliminación con tombstone verificados.');
+    const collectionsAfterDelete = await getSupabaseProfitCollections();
+    assert.equal(
+      collectionsAfterDelete.some((c) => String(c.id) === colId),
+      false,
+      'Un cobro eliminado no debe reaparecer al consultar getSupabaseProfitCollections'
+    );
+    console.log('  ✓ 12. Edición de datos de cobro y eliminación con tombstone verificados.');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+// 13. Auto-limpieza de tombstones viejos en localStorage cuando el servidor central devuelve el documento activo
+{
+  localStorage.clear();
+  const staleNeDoc = { id: 'NE-002232', factNum: '002232', tipoDoc: 'NOTA_ENTREGA', fechaEmision: '2026-11-18T12:34:06.000Z' };
+  const inFlightFacDoc = { id: '000041', factNum: '000041', tipoDoc: 'FACTURA', fechaEmision: '2026-11-18T12:45:44.583Z' };
+
+  markCxcDocDeleted(staleNeDoc);
+  markCxcDocDeleted(inFlightFacDoc);
+
+  // Simular que el tombstone de NE-002232 quedó viejo (> 35s) en localStorage mientras que 000041 acaba de borrarse en vuelo
+  const rawMeta = JSON.parse(localStorage.getItem('signum_cxc_deleted_meta_v1') || '{}');
+  for (const k of getScopedCxcDeleteKeys(staleNeDoc)) {
+    if (rawMeta[k]) rawMeta[k].deletedAt = Date.now() - 120000;
+  }
+  localStorage.setItem('signum_cxc_deleted_meta_v1', JSON.stringify(rawMeta));
+
+  const reconciledSet = reconcileCxcTombstonesWithServerDocs([staleNeDoc, inFlightFacDoc]);
+  assert.equal(isCxcEntryDeleted(staleNeDoc, reconciledSet), false, 'Tombstone viejo de documento que sigue en servidor debe limpiarse automáticamente');
+  assert.equal(isCxcEntryDeleted(inFlightFacDoc, reconciledSet), true, 'Tombstone recién emitido (<35s en vuelo) debe mantenerse activo');
+  console.log('  ✓ 13. Auto-limpieza de caché/tombstones frente al servidor central verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');

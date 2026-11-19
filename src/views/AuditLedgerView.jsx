@@ -43,6 +43,8 @@ import {
   generateGeneralLedgerPDF,
   generateFinancialStatementsPDF
 } from '../services/pdfReportService';
+import DatePeriodFilter from '../components/DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 export default function AuditLedgerView({
   profitInvoices = [],
@@ -63,6 +65,7 @@ export default function AuditLedgerView({
   const [activeSubTab, setActiveSubTab] = useState('diario'); // 'diario' | 'mayor' | 'balance' | 'estados' | 'plan' | 'estructura' | 'audit' | 'export'
   const [searchFilter, setSearchFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
+  const [diarioDateFilter, setDiarioDateFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [syncing, setSyncing] = useState(false);
 
@@ -81,6 +84,7 @@ export default function AuditLedgerView({
   const [auditOpFilter, setAuditOpFilter] = useState('ALL');
   const [auditTableFilter, setAuditTableFilter] = useState('ALL');
   const [auditUserFilter, setAuditUserFilter] = useState('ALL');
+  const [auditDateFilter, setAuditDateFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
   const [selectedAuditTrail, setSelectedAuditTrail] = useState(null);
 
   const tasa = config?.tasaDolar || 827.73;
@@ -141,6 +145,7 @@ export default function AuditLedgerView({
       if (auditOpFilter !== 'ALL' && p.tipoOp !== auditOpFilter) return false;
       if (auditTableFilter !== 'ALL' && p.tabla !== auditTableFilter) return false;
       if (auditUserFilter !== 'ALL' && p.usuario !== auditUserFilter) return false;
+      if (!matchesDatePeriodFilter(p.fecha, auditDateFilter)) return false;
       if (auditSearch.trim()) {
         const q = auditSearch.toLowerCase();
         const matchesDoc = (p.numDoc || '').toString().includes(q);
@@ -153,7 +158,7 @@ export default function AuditLedgerView({
       }
       return true;
     });
-  }, [profitAuditTrails, auditOpFilter, auditTableFilter, auditUserFilter, auditSearch]);
+  }, [profitAuditTrails, auditOpFilter, auditTableFilter, auditUserFilter, auditDateFilter, auditSearch]);
 
   // Forensic Audit KPIs
   const auditKpis = useMemo(() => {
@@ -287,8 +292,10 @@ export default function AuditLedgerView({
       list = list.filter(e => e.tipoOperacion === typeFilter);
     }
 
+    list = list.filter(e => matchesDatePeriodFilter(e.fecha, diarioDateFilter));
+
     return list;
-  }, [accountingEntries, searchFilter, typeFilter]);
+  }, [accountingEntries, searchFilter, typeFilter, diarioDateFilter]);
 
   const filteredPlanAccounts = useMemo(() => {
     return CHART_OF_ACCOUNTS.filter((acc) => {
@@ -662,6 +669,8 @@ export default function AuditLedgerView({
                 <option value="COMPRA">Compras de Mercancía</option>
                 <option value="PAGO_PROVEEDOR">Pagos a Proveedores</option>
               </select>
+
+              <DatePeriodFilter value={diarioDateFilter} onChange={setDiarioDateFilter} compact />
             </div>
 
             <button
@@ -886,6 +895,8 @@ export default function AuditLedgerView({
                     <option key={u} value={u}>{u}</option>
                   ))}
                 </select>
+
+                <DatePeriodFilter value={auditDateFilter} onChange={setAuditDateFilter} compact />
               </div>
 
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>

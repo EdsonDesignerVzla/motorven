@@ -468,14 +468,14 @@ export const getCanonicalDocKey = (docOrNum, explicitTipoDoc = '') => {
     rawTipo === 'NOTA_ENTREGA' ||
     rawTipo === 'N/E' ||
     rawTipo === 'NE' ||
-    /^(NE-|NDE-)/.test(rawId) ||
-    /^(NE-|NDE-)/.test(rawNum);
+    /^(NE-|N\.E-|NDE-)/.test(rawId) ||
+    /^(NE-|N\.E-|NDE-)/.test(rawNum);
   const isNc = rawTipo === 'NOTA_CREDITO' || /^(NC-)/.test(rawId) || /^(NC-)/.test(rawNum);
   const isNd = rawTipo === 'NOTA_DEBITO' || /^(ND-)/.test(rawId) || /^(ND-)/.test(rawNum);
   const family = isNe ? 'NE' : isNc ? 'NC' : isNd ? 'ND' : 'FAC';
 
   const base = rawNum || rawId;
-  const digits = base.replace(/^(FAC-|FACT-|NE-|NDE-|NC-|ND-|INV-|DOC-)/i, '').replace(/^0+(?=\d)/, '');
+  const digits = base.replace(/^(FAC-|FACT-|NE-|N\.E-|NDE-|NC-|ND-|INV-|DOC-)/i, '').replace(/^0+(?=\d)/, '');
   return `${family}:${digits || base}`;
 };
 
@@ -489,8 +489,14 @@ export const getCanonicalDocKey = (docOrNum, explicitTipoDoc = '') => {
 export const getEraScopedCanonicalDocKey = (docOrNum, explicitTipoDoc = '') => {
   const baseKey = getCanonicalDocKey(docOrNum, explicitTipoDoc);
   if (!baseKey) return '';
-  if (baseKey.startsWith('FAC:') && typeof docOrNum === 'object' && isLegacyPreNovInvoice(docOrNum)) {
-    return `${baseKey}:LEGACY`;
+  if (typeof docOrNum === 'object' && docOrNum !== null) {
+    const explicitEra = String(docOrNum.seriesEra || docOrNum.series_era || '').trim().toUpperCase();
+    if (explicitEra) {
+      return `${baseKey}:${explicitEra}`;
+    }
+    if (baseKey.startsWith('FAC:') && isLegacyPreNovInvoice(docOrNum)) {
+      return `${baseKey}:LEGACY`;
+    }
   }
   return baseKey;
 };
@@ -551,6 +557,215 @@ export const dedupeCanonicalDocs = (docs = []) => {
 export const generateFiscalControlNumber = (sequenceNumber) => {
   const seq = parseInt(sequenceNumber, 10) || 1;
   return `00-${String(seq).padStart(6, '0')}`;
+};
+
+/**
+ * Genera el identificador de control para Nota de Entrega con formato N.E-XXXXXX (6 dígitos).
+ * @param {string|number} correlativo
+ * @returns {string}
+ */
+export const generateDeliveryNoteControlNumber = (correlativo) => {
+  const digits = String(correlativo ?? '').replace(/[^0-9]/g, '');
+  const padded = digits ? digits.slice(-6).padStart(6, '0') : '000001';
+  return `N.E-${padded}`;
+};
+
+/**
+ * Formatea el N° Control por defecto según tipo de documento (00-XXXXXX para fiscales, N.E-XXXXXX para N.E.).
+ * @param {string|number} correlativo
+ * @param {string} [tipoDoc]
+ * @returns {string}
+ */
+export const formatDocumentControlNumber = (correlativo, tipoDoc = 'FACTURA') => {
+  const normTipo = String(tipoDoc || 'FACTURA').toUpperCase().trim();
+  if (normTipo === 'NOTA_ENTREGA' || normTipo === 'N/E' || normTipo === 'NE') {
+    return generateDeliveryNoteControlNumber(correlativo);
+  }
+  const digits = String(correlativo ?? '').replace(/[^0-9]/g, '');
+  const seq = digits ? parseInt(digits.slice(-6), 10) : 1;
+  return generateFiscalControlNumber(Number.isFinite(seq) && seq >= 0 ? seq : 1);
+};
+
+/**
+ * Actualiza el campo N° Control Fiscal al alternar Tipo Documento entre Factura Fiscal y Nota de Entrega.
+ */
+export const resolveControlNumberOnTipoDocChange = ({
+  prevTipoDoc = 'FACTURA',
+  nextTipoDoc = 'FACTURA',
+  numeroDoc = '',
+  currentControl = '',
+  savedFiscalControl = ''
+} = {}) => {
+  const nextIsNe = String(nextTipoDoc || '').trim().toUpperCase() === 'NOTA_ENTREGA';
+  const prevIsNe = String(prevTipoDoc || '').trim().toUpperCase() === 'NOTA_ENTREGA';
+  const trimmedCurrent = String(currentControl || '').trim();
+
+  if (nextIsNe) {
+    const nextSavedFiscal = (!prevIsNe && trimmedCurrent && !/^N\.E-/i.test(trimmedCurrent))
+      ? trimmedCurrent
+      : String(savedFiscalControl || '').trim();
+    return {
+      numeroControl: generateDeliveryNoteControlNumber(numeroDoc),
+      savedFiscalControl: nextSavedFiscal
+    };
+  }
+
+  const trimmedSaved = String(savedFiscalControl || '').trim();
+  if (trimmedSaved && !/^N\.E-/i.test(trimmedSaved)) {
+    return { numeroControl: trimmedSaved, savedFiscalControl: trimmedSaved };
+  }
+  if (!trimmedCurrent || /^N\.E-/i.test(trimmedCurrent)) {
+    return { numeroControl: formatDocumentControlNumber(numeroDoc, 'FACTURA'), savedFiscalControl: '' };
+  }
+  return { numeroControl: trimmedCurrent, savedFiscalControl: trimmedCurrent };
+};
+
+/**
+ * Sincroniza N.E-XXXXXX automáticamente cuando se edita el correlativo de una Nota de Entrega,
+ * preservando un valor manual personalizado si el usuario escribió otro formato.
+ */
+export const syncControlNumberOnCorrelativoEdit = ({
+  tipoDoc = 'FACTURA',
+  prevNumeroDoc = '',
+  nextNumeroDoc = '',
+  currentControl = ''
+} = {}) => {
+  if (String(tipoDoc || '').trim().toUpperCase() !== 'NOTA_ENTREGA') {
+    return currentControl;
+  }
+  const trimmed = String(currentControl || '').trim();
+  const prevDefault = generateDeliveryNoteControlNumber(prevNumeroDoc);
+  if (
+    !trimmed ||
+    trimmed.toUpperCase() === prevDefault.toUpperCase() ||
+    /^N\.E-\d{1,6}$/i.test(trimmed) ||
+    /^00-\d{6}$/.test(trimmed)
+  ) {
+    return generateDeliveryNoteControlNumber(nextNumeroDoc);
+  }
+  return currentControl;
+};
+
+/**
+ * Evalúa colisiones al editar un documento (tipo/correlativo), aislando Facturas vs Notas de Entrega
+ * y separando Notas de Entrega de la serie activa (>= 2026-11) frente a coincidencias históricas (< 2026-11).
+ */
+export const resolveEditedInvoiceCollision = ({
+  orig = {},
+  allInvoices = [],
+  cleanNum = '',
+  targetTipo = 'FACTURA',
+  emitIso = ''
+} = {}) => {
+  const extractPad6 = (doc) => {
+    const raw = String(doc?.numeroDoc || doc?.factNum || doc?.fact_num || doc?.nroFactura || doc?.id || '0').trim();
+    const digits = raw.replace(/[^0-9]/g, '');
+    return digits ? digits.slice(-6).padStart(6, '0') : raw;
+  };
+  const extractTipo = (doc) => {
+    const rawTipo = String(doc?.tipoDoc || doc?.tipo_doc || '').toUpperCase().trim();
+    const rawId = String(doc?.id || '').trim().toUpperCase();
+    const rawNum = String(doc?.numeroDoc || doc?.factNum || doc?.fact_num || doc?.nroFactura || '').trim().toUpperCase();
+    if (
+      rawTipo === 'NOTA_ENTREGA' ||
+      rawTipo === 'N/E' ||
+      rawTipo === 'NE' ||
+      /^(NE-|N\.E-|NDE-)/.test(rawId) ||
+      /^(NE-|N\.E-|NDE-)/.test(rawNum)
+    ) {
+      return 'NOTA_ENTREGA';
+    }
+    return 'FACTURA';
+  };
+  const extractDateYmd = (doc) => {
+    const primary = String(doc?.fechaEmision || doc?.fec_emis || doc?.fecha_emision || doc?.fecha || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(primary)) return primary.slice(0, 10);
+    const fallback = String(doc?.updated_at || doc?.created_at || doc?.fecha_sincronizacion || doc?.fechaSincronizacion || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(fallback)) return fallback.slice(0, 10);
+    return '';
+  };
+
+  const origEraKey = getEraScopedCanonicalDocKey(orig);
+  const origPad6 = extractPad6(orig);
+  const origTipo = extractTipo(orig);
+  const targetDateYmd = /^\d{4}-\d{2}-\d{2}/.test(String(emitIso || '').trim())
+    ? String(emitIso).trim().slice(0, 10)
+    : extractDateYmd(orig);
+  const targetIsHistorical = Boolean(targetDateYmd && targetDateYmd < INVOICE_SERIES_RESET_DATE);
+
+  const sameTypeNumOthers = (Array.isArray(allInvoices) ? allInvoices : []).filter((other) => {
+    if (!other || other === orig) return false;
+    if (orig?.id && other.id && String(other.id) === String(orig.id)) return false;
+    if (origEraKey && getEraScopedCanonicalDocKey(other) === origEraKey) return false;
+    return extractPad6(other) === cleanNum && extractTipo(other) === targetTipo;
+  });
+
+  if (targetTipo === 'FACTURA') {
+    const origIsLegacy = targetDateYmd ? targetIsHistorical : isLegacyPreNovInvoice(orig);
+    const dup = sameTypeNumOthers.find((other) => isLegacyPreNovInvoice(other) === origIsLegacy);
+    if (dup) {
+      return {
+        blocked: true,
+        conflictingDoc: dup,
+        isolatedFromHistorical: false,
+        seriesEra: '',
+        newId: cleanNum
+      };
+    }
+    return {
+      blocked: false,
+      conflictingDoc: null,
+      isolatedFromHistorical: false,
+      seriesEra: '',
+      newId: origIsLegacy && orig?.id ? String(orig.id) : cleanNum
+    };
+  }
+
+  const isOtherHistorical = (other) => {
+    const d = extractDateYmd(other);
+    return Boolean(d && d < INVOICE_SERIES_RESET_DATE) || (!d && /^fac-[1-9]\d{0,3}$/i.test(String(other?.id || '').trim()));
+  };
+  const sameEraDup = sameTypeNumOthers.find((other) => isOtherHistorical(other) === targetIsHistorical);
+  const historicalDup = sameTypeNumOthers.find((other) => isOtherHistorical(other));
+
+  if (sameEraDup) {
+    return {
+      blocked: true,
+      conflictingDoc: sameEraDup,
+      isolatedFromHistorical: false,
+      seriesEra: '',
+      newId: `NE-${cleanNum}`
+    };
+  }
+
+  if (!targetIsHistorical && historicalDup) {
+    return {
+      blocked: false,
+      conflictingDoc: null,
+      isolatedFromHistorical: true,
+      conflictingHistoricalDoc: historicalDup,
+      seriesEra: '2026-11',
+      newId: `NE-${cleanNum}-202611`
+    };
+  }
+
+  if (cleanNum === origPad6 && targetTipo === origTipo && (orig?.seriesEra || orig?.series_era)) {
+    return {
+      blocked: false,
+      conflictingDoc: null,
+      isolatedFromHistorical: true,
+      seriesEra: String(orig.seriesEra || orig.series_era),
+      newId: String(orig.id || `NE-${cleanNum}`)
+    };
+  }
+
+  return {
+    blocked: false,
+    conflictingDoc: null,
+    isolatedFromHistorical: false,
+    seriesEra: '',
+    newId: `NE-${cleanNum}`
+  };
 };
 
 /**
@@ -1057,7 +1272,7 @@ export const isFiscalDocEligible = (doc) => {
   const rawTipo = String(doc.tipoDoc || doc.tipo_doc || 'FACTURA').toUpperCase().trim();
   const rawNum = String(doc.numeroDoc ?? doc.numero_doc ?? doc.factNum ?? doc.fact_num ?? '').toUpperCase().trim();
   const rawId = String(doc.id || '').toUpperCase().trim();
-  if (/^(NE-|NDE-|COT-|PED-|PRE-)/.test(rawNum) || /^(NE-|NDE-|COT-|PED-|PRE-)/.test(rawId)) {
+  if (/^(NE-|N\.E-|NDE-|COT-|PED-|PRE-)/.test(rawNum) || /^(NE-|N\.E-|NDE-|COT-|PED-|PRE-)/.test(rawId)) {
     return false;
   }
   return VALID_FISCAL_DOC_TYPES.has(rawTipo);

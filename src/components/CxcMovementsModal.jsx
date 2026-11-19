@@ -50,6 +50,7 @@ import {
 } from '../utils/rateClassificationUtils';
 import { generateCollectionReceiptPDF, outputCreditDebitNoteDocument } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
+import { matchesDatePeriodFilter, normalizeDateRange, formatDateYmdVe } from '../utils/dateRangeFilterUtils';
 
 const getTodayIso = () => {
   const now = new Date();
@@ -500,6 +501,9 @@ export function CxcMovementsModal({
 
   // Filtros
   const [selectedDay, setSelectedDay] = useState(initialDocument ? 'ALL' : getTodayIso());
+  const [dateFilterMode, setDateFilterMode] = useState(initialDocument ? 'ALL' : 'DAY'); // 'DAY' | 'RANGE' | 'ALL'
+  const [periodFrom, setPeriodFrom] = useState(() => getTodayIso());
+  const [periodTo, setPeriodTo] = useState(() => getTodayIso());
   const [focusedFactNum, setFocusedFactNum] = useState(initialDocument?.factNum || '');
   const [docTypeFilter, setDocTypeFilter] = useState('ALL'); // 'ALL' | 'FACTURA' | 'NOTA_ENTREGA'
   const [rateTypeFilter, setRateTypeFilter] = useState('ALL'); // 'ALL' | 'BCV' | 'EURO' | 'KEYSTONE' | 'PERSONALIZADA'
@@ -602,6 +606,7 @@ export function CxcMovementsModal({
     if (targetFactNum) {
       setFocusedFactNum(targetFactNum);
       setInsertDocKey(targetFactNum);
+      setDateFilterMode('ALL');
       setSelectedDay('ALL');
       setShowInsertPanel(true);
       const rest = round2(initialDocument.restanteUsd || 0);
@@ -618,6 +623,7 @@ export function CxcMovementsModal({
       setInsertDocSearch('');
       setSearchQuery('');
       setRateTypeFilter('ALL');
+      setDateFilterMode('DAY');
       setSelectedDay(getTodayIso());
       setInsertMontoUsd('');
       setInsertMontoBs('');
@@ -723,7 +729,10 @@ export function CxcMovementsModal({
   const filteredMovements = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return allMovements.filter((m) => {
-      if (selectedDay && selectedDay !== 'ALL' && m.fechaIso !== selectedDay) {
+      if (dateFilterMode === 'DAY' && selectedDay && selectedDay !== 'ALL' && m.fechaIso !== selectedDay) {
+        return false;
+      }
+      if (dateFilterMode === 'RANGE' && !matchesDatePeriodFilter(m.fechaIso, { mode: 'RANGE', fromDate: periodFrom, toDate: periodTo })) {
         return false;
       }
       if (focusedFactNum) {
@@ -745,7 +754,7 @@ export function CxcMovementsModal({
       }
       return true;
     });
-  }, [allMovements, selectedDay, focusedFactNum, docTypeFilter, rateTypeFilter, searchQuery, initialDocument]);
+  }, [allMovements, dateFilterMode, selectedDay, periodFrom, periodTo, focusedFactNum, docTypeFilter, rateTypeFilter, searchQuery, initialDocument]);
 
   // Desglose global por renglones de tasa y sumatoria consolidada por Caja / Banco
   const overallRateBreakdown = useMemo(
@@ -1124,8 +1133,12 @@ export function CxcMovementsModal({
         setInsertMontoUsd('');
         setInsertMontoBs('');
       }
-      if (selectedDay !== 'ALL' && insertFecha !== selectedDay) {
+      if (dateFilterMode === 'DAY' && selectedDay !== 'ALL' && insertFecha !== selectedDay) {
         setSelectedDay(insertFecha);
+      } else if (dateFilterMode === 'RANGE' && insertFecha) {
+        const { minDate, maxDate } = normalizeDateRange(periodFrom, periodTo);
+        if (minDate && insertFecha < minDate) setPeriodFrom(insertFecha);
+        if (maxDate && insertFecha > maxDate) setPeriodTo(insertFecha);
       }
 
       notify.success(`Movimiento #${correlativoFinal} registrado en #${factKey} (${formatUsd(effectiveUsd)}).`);
@@ -1876,8 +1889,12 @@ export function CxcMovementsModal({
 
       await Promise.all([...updatedDocPromises, ...updatedColPromises]);
 
-      if (selectedDay && selectedDay !== 'ALL' && newFechaIso !== selectedDay) {
+      if (dateFilterMode === 'DAY' && selectedDay && selectedDay !== 'ALL' && newFechaIso !== selectedDay) {
         setSelectedDay(newFechaIso);
+      } else if (dateFilterMode === 'RANGE' && newFechaIso) {
+        const { minDate, maxDate } = normalizeDateRange(periodFrom, periodTo);
+        if (minDate && newFechaIso < minDate) setPeriodFrom(newFechaIso);
+        if (maxDate && newFechaIso > maxDate) setPeriodTo(newFechaIso);
       }
       setCorrelativoRefreshKey(k => k + 1);
       notify.success(`Movimiento #${newCorr} actualizado (${formatDateShort(newFechaIso)} • Cobrador: ${newSellerName}).`);
@@ -1893,7 +1910,17 @@ export function CxcMovementsModal({
   if (!isOpen) return null;
 
   const filterSummaryText = [
-    selectedDay === 'ALL' ? 'Todos los días' : `Día: ${formatDateShort(selectedDay)}`,
+    (dateFilterMode === 'ALL' || (selectedDay === 'ALL' && dateFilterMode === 'DAY'))
+      ? 'Todos los días'
+      : dateFilterMode === 'RANGE'
+        ? (() => {
+            const { minDate, maxDate } = normalizeDateRange(periodFrom, periodTo);
+            if (minDate && maxDate) return `Período: ${formatDateYmdVe(minDate)} al ${formatDateYmdVe(maxDate)}`;
+            if (minDate) return `Desde: ${formatDateYmdVe(minDate)}`;
+            if (maxDate) return `Hasta: ${formatDateYmdVe(maxDate)}`;
+            return 'Todos los días';
+          })()
+        : `Día: ${formatDateShort(selectedDay)}`,
     focusedFactNum ? `Documento: #${focusedFactNum}` : 'Todas las facturas y N.E.',
     docTypeFilter === 'FACTURA' ? 'Solo Facturas Fiscales' : (docTypeFilter === 'NOTA_ENTREGA' ? 'Solo Notas de Entrega' : ''),
     rateTypeFilter !== 'ALL'
@@ -2695,25 +2722,56 @@ export function CxcMovementsModal({
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.65rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <Filter size={15} color="#38bdf8" />
-                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Filtrar por Día:</span>
-                  <input
-                    type="date"
-                    value={selectedDay === 'ALL' ? '' : selectedDay}
-                    onChange={(e) => setSelectedDay(e.target.value || 'ALL')}
-                    className="input-modern"
-                    style={{ padding: '0.38rem 0.6rem', fontSize: '0.8rem' }}
-                  />
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>
+                    {dateFilterMode === 'RANGE' ? 'Filtrar por Período:' : 'Filtrar por Día:'}
+                  </span>
+                  {dateFilterMode !== 'RANGE' ? (
+                    <input
+                      type="date"
+                      value={selectedDay === 'ALL' ? '' : selectedDay}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setDateFilterMode(v ? 'DAY' : 'ALL');
+                        setSelectedDay(v || 'ALL');
+                      }}
+                      className="input-modern"
+                      style={{ padding: '0.38rem 0.6rem', fontSize: '0.8rem' }}
+                    />
+                  ) : (
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                      <input
+                        type="date"
+                        value={periodFrom}
+                        onChange={(e) => setPeriodFrom(e.target.value)}
+                        className="input-modern"
+                        style={{ padding: '0.38rem 0.6rem', fontSize: '0.8rem' }}
+                        title="Fecha inicial (Desde)"
+                      />
+                      <span style={{ fontSize: '0.76rem', color: '#94a3b8', fontWeight: 600 }}>a</span>
+                      <input
+                        type="date"
+                        value={periodTo}
+                        onChange={(e) => setPeriodTo(e.target.value)}
+                        className="input-modern"
+                        style={{ padding: '0.38rem 0.6rem', fontSize: '0.8rem' }}
+                        title="Fecha final (Hasta)"
+                      />
+                    </div>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setSelectedDay(getTodayIso())}
+                    onClick={() => {
+                      setDateFilterMode('DAY');
+                      setSelectedDay(getTodayIso());
+                    }}
                     style={{
                       padding: '0.38rem 0.7rem',
                       borderRadius: '7px',
                       fontSize: '0.76rem',
                       fontWeight: 700,
-                      border: selectedDay === getTodayIso() ? '1px solid #10b981' : '1px solid var(--border-glass)',
-                      background: selectedDay === getTodayIso() ? 'rgba(16, 185, 129, 0.18)' : 'rgba(255,255,255,0.04)',
-                      color: selectedDay === getTodayIso() ? '#34d399' : '#cbd5e1',
+                      border: dateFilterMode === 'DAY' && selectedDay === getTodayIso() ? '1px solid #10b981' : '1px solid var(--border-glass)',
+                      background: dateFilterMode === 'DAY' && selectedDay === getTodayIso() ? 'rgba(16, 185, 129, 0.18)' : 'rgba(255,255,255,0.04)',
+                      color: dateFilterMode === 'DAY' && selectedDay === getTodayIso() ? '#34d399' : '#cbd5e1',
                       cursor: 'pointer'
                     }}
                   >
@@ -2721,15 +2779,39 @@ export function CxcMovementsModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSelectedDay('ALL')}
+                    onClick={() => {
+                      const fallback = selectedDay && selectedDay !== 'ALL' ? selectedDay : getTodayIso();
+                      if (!periodFrom) setPeriodFrom(fallback);
+                      if (!periodTo) setPeriodTo(fallback);
+                      setDateFilterMode('RANGE');
+                    }}
                     style={{
                       padding: '0.38rem 0.7rem',
                       borderRadius: '7px',
                       fontSize: '0.76rem',
                       fontWeight: 700,
-                      border: selectedDay === 'ALL' ? '1px solid #38bdf8' : '1px solid var(--border-glass)',
-                      background: selectedDay === 'ALL' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.04)',
-                      color: selectedDay === 'ALL' ? '#38bdf8' : '#cbd5e1',
+                      border: dateFilterMode === 'RANGE' ? '1px solid #a855f7' : '1px solid var(--border-glass)',
+                      background: dateFilterMode === 'RANGE' ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255,255,255,0.04)',
+                      color: dateFilterMode === 'RANGE' ? '#c084fc' : '#cbd5e1',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Por Período
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDateFilterMode('ALL');
+                      setSelectedDay('ALL');
+                    }}
+                    style={{
+                      padding: '0.38rem 0.7rem',
+                      borderRadius: '7px',
+                      fontSize: '0.76rem',
+                      fontWeight: 700,
+                      border: (dateFilterMode === 'ALL' || (dateFilterMode === 'DAY' && selectedDay === 'ALL')) ? '1px solid #38bdf8' : '1px solid var(--border-glass)',
+                      background: (dateFilterMode === 'ALL' || (dateFilterMode === 'DAY' && selectedDay === 'ALL')) ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.04)',
+                      color: (dateFilterMode === 'ALL' || (dateFilterMode === 'DAY' && selectedDay === 'ALL')) ? '#38bdf8' : '#cbd5e1',
                       cursor: 'pointer'
                     }}
                   >
@@ -2840,7 +2922,10 @@ export function CxcMovementsModal({
                     <button
                       key={day.fechaIso}
                       type="button"
-                      onClick={() => setSelectedDay(day.fechaIso)}
+                      onClick={() => {
+                        setDateFilterMode('DAY');
+                        setSelectedDay(day.fechaIso);
+                      }}
                       style={{
                         padding: '2px 8px',
                         borderRadius: '6px',
@@ -2848,9 +2933,9 @@ export function CxcMovementsModal({
                         fontFamily: 'var(--font-code)',
                         fontWeight: 700,
                         cursor: 'pointer',
-                        border: selectedDay === day.fechaIso ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.1)',
-                        background: selectedDay === day.fechaIso ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.04)',
-                        color: selectedDay === day.fechaIso ? '#38bdf8' : '#cbd5e1'
+                        border: dateFilterMode === 'DAY' && selectedDay === day.fechaIso ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.1)',
+                        background: dateFilterMode === 'DAY' && selectedDay === day.fechaIso ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.04)',
+                        color: dateFilterMode === 'DAY' && selectedDay === day.fechaIso ? '#38bdf8' : '#cbd5e1'
                       }}
                     >
                       {formatDateShort(day.fechaIso)} ({day.count} • {formatUsd(day.usd)})
@@ -2877,10 +2962,13 @@ export function CxcMovementsModal({
                   <div style={{ fontSize: '0.8rem', marginTop: '4px' }}>
                     Puede cambiar a "Todos los Días" o registrar un nuevo abono en el panel superior.
                   </div>
-                  {selectedDay !== 'ALL' && (
+                  {dateFilterMode !== 'ALL' && (
                     <button
                       type="button"
-                      onClick={() => setSelectedDay('ALL')}
+                      onClick={() => {
+                        setDateFilterMode('ALL');
+                        setSelectedDay('ALL');
+                      }}
                       style={{
                         marginTop: '0.8rem',
                         padding: '0.45rem 0.95rem',

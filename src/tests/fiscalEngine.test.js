@@ -6,6 +6,11 @@ import {
   calculateFiscalTaxes,
   resolveConfigIgtfOptions,
   generateFiscalControlNumber,
+  generateDeliveryNoteControlNumber,
+  formatDocumentControlNumber,
+  resolveControlNumberOnTipoDocChange,
+  syncControlNumberOnCorrelativoEdit,
+  resolveEditedInvoiceCollision,
   generateVatRetentionVoucherNumber,
   generateSeniatVatRetentionTxt,
   generateSeniatIslrXml,
@@ -648,6 +653,138 @@ assert.strictEqual(recalcNe.ivaUsd, '0.00', 'Nota de Entrega debe quedar exenta 
 assert.strictEqual(recalcNe.totalUsd, '100.00');
 assert.strictEqual(recalcNe.totalBs, '90000.00');
 console.log('  ✓ Recálculo automático de edición de facturas y N.E. verificado.');
+
+// 17. Conversión Factura -> Nota de Entrega (N.E-XXXXXX) y aislamiento anti-colisión para correlativo 002000
+console.log('17. Verificando identificador N.E-XXXXXX y aislamiento de colisión en edición de documentos...');
+assert.strictEqual(generateDeliveryNoteControlNumber('000614'), 'N.E-000614');
+assert.strictEqual(generateDeliveryNoteControlNumber('002000'), 'N.E-002000');
+assert.strictEqual(generateDeliveryNoteControlNumber('NE-2000'), 'N.E-002000');
+assert.strictEqual(formatDocumentControlNumber('002000', 'NOTA_ENTREGA'), 'N.E-002000');
+assert.strictEqual(formatDocumentControlNumber('002000', 'FACTURA'), '00-002000');
+
+const switchToNe = resolveControlNumberOnTipoDocChange({
+  prevTipoDoc: 'FACTURA',
+  nextTipoDoc: 'NOTA_ENTREGA',
+  numeroDoc: '000614',
+  currentControl: '00-001185',
+  savedFiscalControl: ''
+});
+assert.strictEqual(switchToNe.numeroControl, 'N.E-000614', 'Al pasar Factura a N.E. debe asignar N.E-000614 por defecto');
+assert.strictEqual(switchToNe.savedFiscalControl, '00-001185', 'Debe recordar el control fiscal previo para restaurarlo si vuelve a Factura');
+
+const switchBackToFac = resolveControlNumberOnTipoDocChange({
+  prevTipoDoc: 'NOTA_ENTREGA',
+  nextTipoDoc: 'FACTURA',
+  numeroDoc: '000614',
+  currentControl: switchToNe.numeroControl,
+  savedFiscalControl: switchToNe.savedFiscalControl
+});
+assert.strictEqual(switchBackToFac.numeroControl, '00-001185', 'Debe restaurar el control fiscal original si regresa a Factura Fiscal');
+
+assert.strictEqual(
+  syncControlNumberOnCorrelativoEdit({
+    tipoDoc: 'NOTA_ENTREGA',
+    prevNumeroDoc: '000614',
+    nextNumeroDoc: '002000',
+    currentControl: 'N.E-000614'
+  }),
+  'N.E-002000',
+  'Al editar el correlativo de 000614 a 002000 en N.E. debe sincronizarse a N.E-002000'
+);
+assert.strictEqual(
+  syncControlNumberOnCorrelativoEdit({
+    tipoDoc: 'NOTA_ENTREGA',
+    prevNumeroDoc: '000614',
+    nextNumeroDoc: '002000',
+    currentControl: 'CTRL-CUSTOM'
+  }),
+  'CTRL-CUSTOM',
+  'Debe respetar un N° Control personalizado manualmente'
+);
+
+// Escenario 002000: existe fac-2000 (FACTURA 2026-10-05); editar 000614 (2026-11-18) a NOTA_ENTREGA #002000 NO debe colisionar
+const fac2000Legacy = {
+  id: 'fac-2000',
+  factNum: 2000,
+  tipoDoc: 'FACTURA',
+  fec_emis: '2026-10-05T00:00:00.000Z',
+  clienteNombre: 'Cesar Antonio Diaz Rodriguez'
+};
+const fac0614Nov = {
+  id: '000614',
+  numeroDoc: '000614',
+  tipoDoc: 'FACTURA',
+  fechaEmision: '2026-11-18T12:34:21.000Z',
+  clienteNombre: 'Auto Partes Fastlap77, C.A'
+};
+const collisionVsFac2000 = resolveEditedInvoiceCollision({
+  orig: fac0614Nov,
+  allInvoices: [fac2000Legacy, fac0614Nov],
+  cleanNum: '002000',
+  targetTipo: 'NOTA_ENTREGA',
+  emitIso: '2026-11-18T12:34:21.000Z'
+});
+assert.strictEqual(collisionVsFac2000.blocked, false);
+assert.strictEqual(collisionVsFac2000.newId, 'NE-002000');
+assert.strictEqual(collisionVsFac2000.seriesEra, '');
+
+const ne2000Nov = {
+  id: 'NE-002000',
+  numeroDoc: 'NE-002000',
+  factNum: '002000',
+  numeroControl: 'N.E-002000',
+  tipoDoc: 'NOTA_ENTREGA',
+  fechaEmision: '2026-11-18T12:34:21.000Z',
+  clienteNombre: 'Auto Partes Fastlap77, C.A'
+};
+assert.strictEqual(dedupeCanonicalDocs([fac2000Legacy, ne2000Nov]).length, 2, 'fac-2000 y NE-002000 deben coexistir sin sobrescribirse');
+assert.strictEqual(isFiscalDocEligible(ne2000Nov), false, 'NE-002000 con control N.E-002000 debe quedar excluida de libros fiscales SENIAT');
+
+// Escenario NE histórica (< 2026-11-01): editar 000614 a NOTA_ENTREGA #002000 debe aislarse con seriesEra 2026-11
+const legacyNe2000 = {
+  id: 'NE-002000',
+  numeroDoc: 'NE-002000',
+  tipoDoc: 'NOTA_ENTREGA',
+  fechaEmision: '2026-10-05T10:00:00.000Z',
+  clienteNombre: 'Cliente Historico Octubre'
+};
+const collisionVsHistoricalNe = resolveEditedInvoiceCollision({
+  orig: fac0614Nov,
+  allInvoices: [fac2000Legacy, legacyNe2000, fac0614Nov],
+  cleanNum: '002000',
+  targetTipo: 'NOTA_ENTREGA',
+  emitIso: '2026-11-18T12:34:21.000Z'
+});
+assert.strictEqual(collisionVsHistoricalNe.blocked, false);
+assert.strictEqual(collisionVsHistoricalNe.isolatedFromHistorical, true);
+assert.strictEqual(collisionVsHistoricalNe.seriesEra, '2026-11');
+assert.strictEqual(collisionVsHistoricalNe.newId, 'NE-002000-202611');
+const isolatedNe2000Nov = { ...ne2000Nov, id: collisionVsHistoricalNe.newId, seriesEra: collisionVsHistoricalNe.seriesEra };
+assert.strictEqual(dedupeCanonicalDocs([legacyNe2000, isolatedNe2000Nov]).length, 2, 'N.E. histórica y N.E. aislada 2026-11 deben coexistir sin fusionarse');
+
+// Escenario duplicado activo de noviembre: debe bloquear con el documento conflictivo
+const activeNovNe2000 = {
+  id: 'NE-002000',
+  numeroDoc: 'NE-002000',
+  tipoDoc: 'NOTA_ENTREGA',
+  fechaEmision: '2026-11-15T10:00:00.000Z',
+  clienteNombre: 'Otro Cliente Noviembre'
+};
+const collisionVsActiveNovNe = resolveEditedInvoiceCollision({
+  orig: fac0614Nov,
+  allInvoices: [activeNovNe2000, fac0614Nov],
+  cleanNum: '002000',
+  targetTipo: 'NOTA_ENTREGA',
+  emitIso: '2026-11-18T12:34:21.000Z'
+});
+assert.strictEqual(collisionVsActiveNovNe.blocked, true);
+assert.strictEqual(collisionVsActiveNovNe.conflictingDoc.id, 'NE-002000');
+
+// Regresión FAC-2166 / NE-002166: sin seriesEra deben seguir deduplicando como una sola N.E.
+const fac2166Ne = { id: 'FAC-2166', factNum: '002166', tipoDoc: 'NOTA_ENTREGA', fechaEmision: '2026-10-30T00:00:00.000Z' };
+const ne2166Nov = { id: 'NE-002166', numeroDoc: 'NE-002166', tipoDoc: 'NOTA_ENTREGA', fechaEmision: '2026-11-05T00:00:00.000Z' };
+assert.strictEqual(dedupeCanonicalDocs([fac2166Ne, ne2166Nov]).length, 1, 'FAC-2166 y NE-002166 deben seguir deduplicando como el mismo documento');
+console.log('  ✓ Identificador N.E-XXXXXX y aislamiento anti-colisión en edición verificados.');
 
 console.log('\n================================================================');
 console.log('--- TODAS LAS PRUEBAS UNITARIAS FISCALES PASARON EXITOSAMENTE (100% OK) ---');

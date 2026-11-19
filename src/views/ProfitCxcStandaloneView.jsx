@@ -32,9 +32,9 @@ import {
   getSupabaseSales,
   saveSupabaseProfitInvoice,
   deleteSupabaseSale,
-  CXC_DELETED_DOCS_KEY,
   getScopedCxcDeleteKeys,
   isCxcEntryDeleted,
+  markCxcDocDeleted,
   sanitizeCxcDeletedDocsStorage
 } from '../services/supabaseService';
 import { subscribeToRealtimeChanges } from '../services/profitService';
@@ -370,8 +370,13 @@ export default function ProfitCxcStandaloneView() {
         }
       }
 
-      rawMap.set(key, normalizedInv);
-      if (cKey) canonicalKeyToRawKey.set(cKey, key);
+      const existingSameRaw = rawMap.get(key);
+      const mapKey =
+        existingSameRaw && canonicalDocLookupKey(existingSameRaw, inferDocType(existingSameRaw)) !== cKey
+          ? (cKey || `${docType}:${key}`)
+          : key;
+      rawMap.set(mapKey, normalizedInv);
+      if (cKey) canonicalKeyToRawKey.set(cKey, mapKey);
     });
 
     (sales || []).forEach((sale) => {
@@ -383,7 +388,10 @@ export default function ProfitCxcStandaloneView() {
       if (!key || isDocDeleted({ ...sale, tipoDoc: saleDocType })) return;
 
       const cKey = canonicalDocLookupKey({ ...sale, factNum: key, tipoDoc: saleDocType }, saleDocType);
-      const existingRawKey = rawMap.has(cKey) ? cKey : (rawMap.has(key) ? key : cKey ? canonicalKeyToRawKey.get(cKey) : null);
+      const rawMapHasSameCKey =
+        rawMap.has(key) &&
+        canonicalDocLookupKey(rawMap.get(key), inferDocType(rawMap.get(key))) === cKey;
+      const existingRawKey = rawMap.has(cKey) ? cKey : (rawMapHasSameCKey ? key : cKey ? canonicalKeyToRawKey.get(cKey) : null);
 
       const rawSaleTotal = Number(sale.totalUsd ?? sale.totNetoUsd ?? 0);
       const rawSaleIva = Number(sale.impuestoUsd ?? sale.ivaUsd ?? 0);
@@ -418,7 +426,12 @@ export default function ProfitCxcStandaloneView() {
       );
 
       if (!existingRawKey) {
-        rawMap.set(key, {
+        const existingSameRaw = rawMap.get(key);
+        const mapKey =
+          existingSameRaw && canonicalDocLookupKey(existingSameRaw, inferDocType(existingSameRaw)) !== cKey
+            ? (cKey || `${saleDocType}:${key}`)
+            : key;
+        rawMap.set(mapKey, {
           id: sale.id || `DOC-${key}`,
           factNum: key,
           tipoDoc: saleDocType,
@@ -446,7 +459,7 @@ export default function ProfitCxcStandaloneView() {
           _source: 'POS',
           _isPosSale: true
         });
-        if (cKey) canonicalKeyToRawKey.set(cKey, key);
+        if (cKey) canonicalKeyToRawKey.set(cKey, mapKey);
       } else {
         const existing = rawMap.get(existingRawKey);
         const resolvedMergedSeller = resolveSellerFromCatalog(
@@ -1194,13 +1207,7 @@ export default function ProfitCxcStandaloneView() {
         delete next[row.factNum];
         return next;
       });
-      if (typeof localStorage !== 'undefined') {
-        const delList = sanitizeCxcDeletedDocsStorage();
-        keysToDelete.forEach((k) => {
-          if (!delList.includes(k)) delList.push(k);
-        });
-        localStorage.setItem(CXC_DELETED_DOCS_KEY, JSON.stringify(delList));
-      }
+      markCxcDocDeleted(row);
       await deleteSupabaseSale(row);
       showNotice('success', `Documento #${row.factNum} eliminado de la base de datos.`);
     } catch (err) {

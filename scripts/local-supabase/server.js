@@ -61,15 +61,19 @@ const canonicalServerDocKey = (row, isProfitInvoice = false) => {
   }
   if (!raw) return '';
   let prefix = 'FAC';
-  if (tipo === 'NOTA_ENTREGA' || raw.startsWith('NE-') || /^NE\s*\d/.test(raw)) prefix = 'NE';
+  if (tipo === 'NOTA_ENTREGA' || raw.startsWith('NE-') || raw.startsWith('N.E-') || /^NE\s*\d/.test(raw) || /^N\.E\s*\d/.test(raw)) prefix = 'NE';
   else if (tipo === 'NOTA_CREDITO' || raw.startsWith('NC-')) prefix = 'NC';
   else if (tipo === 'NOTA_DEBITO' || raw.startsWith('ND-')) prefix = 'ND';
   else if (!isProfitInvoice && tipo && tipo !== 'FACTURA') prefix = tipo;
   const cleaned = raw
-    .replace(/^(FAC-|FACT-|FAC\s+|INV-|NE-|NE\s+|NC-|ND-|doc-)/i, '')
+    .replace(/^(FAC-|FACT-|FAC\s+|INV-|NE-|N\.E-|NE\s+|NC-|ND-|doc-)/i, '')
     .trim()
     .replace(/^0+(?=\d)/, '');
   if (!cleaned) return '';
+  const explicitEra = String(row.seriesEra || row.series_era || '').trim().toUpperCase();
+  if (explicitEra) {
+    return `${prefix}:${cleaned}:${explicitEra}`;
+  }
   const eraSuffix = prefix === 'FAC' && isLegacyPreNovServerRow(row) ? ':LEGACY' : '';
   return `${prefix}:${cleaned}${eraSuffix}`;
 };

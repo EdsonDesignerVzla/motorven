@@ -102,7 +102,7 @@ export function inferCxcDocType(raw) {
 export function getCxcScopedDocKey(docOrNum, explicitTipoDoc = '') {
   if (typeof docOrNum === 'string') {
     const clean = docOrNum.trim().toUpperCase();
-    if (/^(FAC|NE|NC|ND):[^:]+(:LEGACY)?$/i.test(clean)) {
+    if (/^(FAC|NE|NC|ND):[^:]+(:[A-Z0-9_-]+)?$/i.test(clean)) {
       return clean;
     }
   }

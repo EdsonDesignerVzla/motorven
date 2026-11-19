@@ -101,8 +101,8 @@ export const enqueueSyncAction = (entity, action, data) => {
   saveSyncQueue(queue);
   console.log(`[OfflineSync] Operación encolada (${entity} - ${action}):`, data);
 
-  // Intentar sincronizar de inmediato si hay conexión a internet
-  if (isNetworkOnline()) {
+  // Intentar sincronizar de inmediato si hay conexión a internet (solo en navegador para no disparar timers tras tests CLI)
+  if (isNetworkOnline() && typeof window !== 'undefined') {
     setTimeout(() => {
       flushSyncQueue();
     }, 300);

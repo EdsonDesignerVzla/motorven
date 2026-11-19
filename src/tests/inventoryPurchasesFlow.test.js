@@ -5,6 +5,12 @@ import {
   mapPurchaseToDb,
   mapPurchaseFromDb,
   applyStockDeltaForWarehouseLines,
+  resolveStockItemProductKey,
+  buildSaleStockDeltaLines,
+  buildDocTypeChangeWarehouseDeltaLines,
+  buildSaleRevertIdempotencyKey,
+  deleteSupabaseSale,
+  resetSupabaseOnlineStatus,
   saveSupabaseProfitWarehouseTransfer,
   saveSupabaseProfitInventoryAdjustment,
   saveSupabasePurchase,
@@ -37,7 +43,9 @@ const mockQueryChain = () => {
     eq: () => chain,
     neq: () => chain,
     in: () => chain,
+    or: () => chain,
     like: () => chain,
+    ilike: () => chain,
     order: () => chain,
     limit: () => chain,
     single: () => res,
@@ -339,7 +347,257 @@ assert.strictEqual(replayedDeltaArgs?.opts?.idempotencyKey, 'sale_FAC-TEST-DELTA
 assert.strictEqual(replayedDeltaArgs?.opts?.skipLocalStoragePatch, true, 'No debe doble-descontar en localStorage');
 assert.strictEqual(getSyncQueue().length, 0, 'La cola debe quedar vacía tras sincronizar');
 
+// 7. Blindaje de claves SKU, traslado atómico en cambio de tipoDoc y fallback anti-doble-descuento
+console.log('7. Verificando resolución de SKU, cambio de tipoDoc y protección de apply-delta...');
+assert.strictEqual(
+  resolveStockItemProductKey({ id: 'ITEM-1794938679424', codigo: '100102', cantidad: 2 }),
+  '100102',
+  'Debe ignorar id sintético ITEM- y usar codigo 100102'
+);
+assert.strictEqual(
+  resolveStockItemProductKey({ id: 'PED-NE-1', articulo_id: '001201', cantidad: 1 }),
+  '001201',
+  'Debe resolver articulo_id cuando id es PED-'
+);
+assert.strictEqual(
+  resolveStockItemProductKey({ id: '001208', articuloId: '001201', codigo: '001201', cantidad: 1 }),
+  '001201',
+  'Debe priorizar articuloId/codigo antes que id ambiguo'
+);
+assert.strictEqual(
+  resolveStockItemProductKey({ id: '001208', cantidad: 3 }),
+  '001208',
+  'Debe conservar id numérico legacy cuando no hay articuloId/codigo'
+);
+
+const factDeltaLines = buildSaleStockDeltaLines({
+  id: '000614',
+  tipoDoc: 'FACTURA',
+  items: [
+    { id: 'ITEM-1794938679424', codigo: '100102', cantidad: 2 },
+    { id: '001208', cantidad: 3 }
+  ]
+});
+assert.deepStrictEqual(factDeltaLines, [
+  { codigo: '100102', delta01: -2, delta02: 0 },
+  { codigo: '001208', delta01: -3, delta02: 0 }
+]);
+
+const nePrefixDeltaLines = buildSaleStockDeltaLines({
+  id: 'doc-ne-1',
+  numeroDoc: 'N.E-002250',
+  items: [{ id: 'PED-NE-1', articulo_id: '001201', cantidad: 1 }]
+});
+assert.deepStrictEqual(nePrefixDeltaLines, [
+  { codigo: '001201', delta01: 0, delta02: -1 }
+]);
+
+const facToNeSwap = buildDocTypeChangeWarehouseDeltaLines(
+  {
+    id: '000614',
+    tipoDoc: 'FACTURA',
+    items: [
+      { id: 'ITEM-1', codigo: '100102', cantidad: 2 },
+      { id: 'ITEM-2', articuloId: '001208', cantidad: 1 }
+    ]
+  },
+  { id: 'NE-000614', tipoDoc: 'NOTA_ENTREGA', items: [{ codigo: '100102', cantidad: 2 }] }
+);
+assert.deepStrictEqual(facToNeSwap, [
+  { codigo: '100102', delta01: 2, delta02: -2 },
+  { codigo: '001208', delta01: 1, delta02: -1 }
+]);
+for (const sw of facToNeSwap) {
+  assert.strictEqual(sw.delta01 + sw.delta02, 0, 'Cambio de tipoDoc debe ser suma cero entre almacenes');
+}
+
+const neToFacSwap = buildDocTypeChangeWarehouseDeltaLines(
+  { id: 'NE-002200', tipoDoc: 'NOTA_ENTREGA', items: [{ codigo: '001308', cantidad: 3 }] },
+  { id: '002200', tipoDoc: 'FACTURA', items: [{ codigo: '001308', cantidad: 3 }] }
+);
+assert.deepStrictEqual(neToFacSwap, [
+  { codigo: '001308', delta01: -3, delta02: 3 }
+]);
+
+assert.deepStrictEqual(
+  buildDocTypeChangeWarehouseDeltaLines(
+    { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100102', cantidad: 1 }] },
+    { id: '000614', tipoDoc: 'NOTA_DEBITO', items: [{ codigo: '100102', cantidad: 1 }] }
+  ),
+  [],
+  'Mismo almacén 01->01 debe retornar []'
+);
+assert.deepStrictEqual(
+  buildDocTypeChangeWarehouseDeltaLines(
+    { id: '000614', tipoDoc: 'FACTURA', items: [] },
+    { id: 'NE-000614', tipoDoc: 'NOTA_ENTREGA', items: [{ codigo: '100102', cantidad: 2 }] }
+  ),
+  [],
+  'originalDoc.items vacío no debe fabricar stock fantasma al cambiar tipoDoc'
+);
+
+const origFetchForStockTest = globalThis.fetch;
+const prevFromForStockTest = supabase.from;
+let productUpdateCalls = 0;
+supabase.from = (table) => {
+  const baseChain = mockQueryChain();
+  if (table !== 'products') return baseChain;
+  return {
+    ...baseChain,
+    update: (...args) => {
+      productUpdateCalls += 1;
+      return baseChain.update(...args);
+    }
+  };
+};
+try {
+  // Caso HTTP 500 en /inventory/apply-delta: NO debe caer a products.update(), SÍ debe encolar stock_delta
+  clearSyncQueue();
+  resetSupabaseOnlineStatus();
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({ error: 'Simulated 500' })
+  });
+  await applyStockDeltaForWarehouseLines(
+    [{ codigo: 'TEST-SKU-01', delta01: -1, delta02: 0 }],
+    { forceServerFetch: true, idempotencyKey: 'test_500_no_double_deduct' }
+  );
+  assert.strictEqual(productUpdateCalls, 0, 'Ante HTTP 500 en apply-delta NO debe llamar products.update()');
+  assert.strictEqual(
+    getSyncQueue().some(q => q.entity === 'stock_delta' && q.data?.idempotencyKey === 'test_500_no_double_deduct'),
+    true,
+    'Ante HTTP 500 en apply-delta debe encolar stock_delta con el idempotencyKey exacto'
+  );
+
+  // Caso timeout/AbortError en /inventory/apply-delta: tampoco debe caer a products.update()
+  clearSyncQueue();
+  resetSupabaseOnlineStatus();
+  globalThis.fetch = async () => {
+    throw new Error('AbortError: network timeout');
+  };
+  await applyStockDeltaForWarehouseLines(
+    [{ codigo: 'TEST-SKU-01', delta01: -1, delta02: 0 }],
+    { forceServerFetch: true, idempotencyKey: 'test_timeout_no_double_deduct' }
+  );
+  assert.strictEqual(productUpdateCalls, 0, 'Ante timeout en apply-delta NO debe llamar products.update()');
+  assert.strictEqual(
+    getSyncQueue().some(q => q.entity === 'stock_delta' && q.data?.idempotencyKey === 'test_timeout_no_double_deduct'),
+    true,
+    'Ante timeout en apply-delta debe encolar stock_delta con el idempotencyKey exacto'
+  );
+
+  // Caso HTTP 404 en /inventory/apply-delta: SÍ debe caer al fallback PostgREST tradicional
+  clearSyncQueue();
+  resetSupabaseOnlineStatus();
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 404,
+    json: async () => ({ error: 'Not Found' })
+  });
+  await applyStockDeltaForWarehouseLines(
+    [{ codigo: 'TEST-SKU-01', delta01: -1, delta02: 0 }],
+    { forceServerFetch: true, idempotencyKey: 'test_404_postgrest_fallback' }
+  );
+  assert.strictEqual(productUpdateCalls, 1, 'Ante HTTP 404 en apply-delta SÍ debe usar fallback PostgREST products.update()');
+  clearSyncQueue();
+
+  // 11. Protección contra doble/triple reversión de stock al eliminar una factura ya borrada o con fallo parcial en DELETE
+  const revKeyA = buildSaleRevertIdempotencyKey({ id: '000041', factNum: '000041', tipoDoc: 'FACTURA', fechaEmision: '2026-11-18T12:45:44.583Z' });
+  const revKeyB = buildSaleRevertIdempotencyKey({ id: 'FAC-000041', numeroDoc: '000041', tipo_doc: 'FACTURA', fec_emis: '2026-11-18T12:45:44.583Z' });
+  assert.strictEqual(revKeyA, revKeyB, 'buildSaleRevertIdempotencyKey debe generar la misma clave para variantes de la misma factura');
+
+  // 11a. Si la factura ya fue borrada en servidor (sales=[] y profit_invoices=[]) y en localStorage, NO debe volver a sumar stock
+  productUpdateCalls = 0;
+  clearSyncQueue();
+  const stockBeforeGhostDelete = getProducts().find(p => p.codigo === 'TEST-SKU-01').stockAlmacen01;
+  await deleteSupabaseSale({
+    id: '009941',
+    factNum: '009941',
+    numeroDoc: '009941',
+    tipoDoc: 'FACTURA',
+    fechaEmision: '2026-11-18T12:45:44.583Z',
+    items: [{ codigo: 'TEST-SKU-01', cantidad: 1 }]
+  });
+  const stockAfterGhostDelete = getProducts().find(p => p.codigo === 'TEST-SKU-01').stockAlmacen01;
+  assert.strictEqual(productUpdateCalls, 0, 'Eliminar un documento que ya no existe en sales ni profit_invoices NO debe tocar products');
+  assert.strictEqual(stockAfterGhostDelete, stockBeforeGhostDelete, 'Stock local Alm 01 no debe inflarse al re-eliminar documento ya borrado');
+
+  // 11b. Si el Paso 2 (reversión de stock) tuvo éxito pero el Paso 4 (DELETE) falla, NO debe re-encolar stock_delta duplicado
+  productUpdateCalls = 0;
+  clearSyncQueue();
+  const prevFromForPartialFail = supabase.from;
+  supabase.from = (table) => {
+    const baseChain = mockQueryChain();
+    if (table === 'sales') {
+      const selectRes = Promise.resolve({
+        data: [{
+          id: '009942',
+          numero_doc: '009942',
+          tipo_doc: 'FACTURA',
+          fecha: '2026-11-18T13:00:00.000Z',
+          items: [{ codigo: 'TEST-SKU-01', cantidad: 1 }]
+        }],
+        error: null
+      });
+      const delErrRes = Promise.resolve({ data: null, error: new Error('Simulated DELETE timeout') });
+      return {
+        ...baseChain,
+        select: () => ({
+          ...baseChain,
+          or: () => selectRes
+        }),
+        delete: () => ({
+          ...baseChain,
+          or: () => delErrRes,
+          in: () => delErrRes
+        })
+      };
+    }
+    if (table === 'products') {
+      return {
+        ...baseChain,
+        update: (...args) => {
+          productUpdateCalls += 1;
+          return baseChain.update(...args);
+        }
+      };
+    }
+    return baseChain;
+  };
+  try {
+    await deleteSupabaseSale({
+      id: '009942',
+      factNum: '009942',
+      numeroDoc: '009942',
+      tipoDoc: 'FACTURA',
+      fechaEmision: '2026-11-18T13:00:00.000Z',
+      items: [{ codigo: 'TEST-SKU-01', cantidad: 1 }]
+    });
+    assert.strictEqual(productUpdateCalls, 1, 'Paso 2 debe revertir stock exactamente 1 vez');
+    assert.strictEqual(
+      getSyncQueue().some(q => q.entity === 'stock_delta'),
+      false,
+      'Si el Paso 2 ya revirtió el stock y falló el DELETE en Paso 4, NO debe re-encolar stock_delta'
+    );
+    assert.strictEqual(
+      getSyncQueue().some(q => q.entity === 'sales' && q.action === 'DELETE'),
+      true,
+      'Sí debe encolar el DELETE pendiente de sales'
+    );
+  } finally {
+    supabase.from = prevFromForPartialFail;
+    clearSyncQueue();
+  }
+} finally {
+  clearSyncQueue();
+  globalThis.fetch = origFetchForStockTest;
+  supabase.from = prevFromForStockTest;
+  resetSupabaseOnlineStatus();
+}
+
 console.log('✅ TODAS LAS PRUEBAS DE INVENTARIO, ALMACENES Y COMPRAS FINALIZADAS CON ÉXITO.');
 } finally {
+  clearSyncQueue();
   supabase.from = origSupabaseFrom;
 }

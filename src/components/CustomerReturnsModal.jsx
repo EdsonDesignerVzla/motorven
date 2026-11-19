@@ -24,6 +24,8 @@ import {
 import { formatBs, formatNumberUs, round2 } from '../services/formatService';
 import { generateSalesPOSPDF, outputCreditDebitNoteDocument } from '../services/pdfReportService';
 import { Plus } from 'lucide-react';
+import DatePeriodFilter from './DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 export default function CustomerReturnsModal({
   isOpen,
@@ -42,6 +44,7 @@ export default function CustomerReturnsModal({
   const [selectedReturn, setSelectedReturn] = useState(null);
   const [filterSeller, setFilterSeller] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL'); // 'ALL' | 'WITH_NC' | 'WITHOUT_NC'
+  const [datePeriodFilter, setDatePeriodFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
   const [isSyncing, setIsSyncing] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [savingReturn, setSavingReturn] = useState(false);
@@ -118,9 +121,11 @@ export default function CustomerReturnsModal({
         (filterStatus === 'WITH_NC' && Boolean(r.ncNum)) ||
         (filterStatus === 'WITHOUT_NC' && !r.ncNum);
 
-      return matchSearch && matchSeller && matchStatus;
+      const matchDate = matchesDatePeriodFilter(r.fecEmis || r.fechaEmision || r.fecha, datePeriodFilter);
+
+      return matchSearch && matchSeller && matchStatus && matchDate;
     });
-  }, [profitReturns, searchTerm, filterSeller, filterStatus]);
+  }, [profitReturns, searchTerm, filterSeller, filterStatus, datePeriodFilter]);
 
   // Totales y Estadísticas
   const stats = useMemo(() => {
@@ -506,6 +511,8 @@ export default function CustomerReturnsModal({
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
+
+            <DatePeriodFilter value={datePeriodFilter} onChange={setDatePeriodFilter} compact />
           </div>
         </div>
 

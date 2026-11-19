@@ -60,6 +60,8 @@ import {
   applyTreasuryBalanceDelta,
   validateSufficientTreasuryBalance
 } from '../utils/treasuryAccountUtils';
+import DatePeriodFilter from '../components/DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 export default function CashflowView({
   products = [],
@@ -99,6 +101,7 @@ export default function CashflowView({
   }, [initialTab]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTipo, setFilterTipo] = useState('TODOS'); // TODOS, INGRESO, EGRESO
+  const [movDateFilter, setMovDateFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
 
   // Modales
   const [showMovModal, setShowMovModal] = useState(false);
@@ -116,10 +119,12 @@ export default function CashflowView({
   const [cobrosSearch, setCobrosSearch] = useState('');
   const [cobrosMethodFilter, setCobrosMethodFilter] = useState('TODOS');
   const [cobrosSellerFilter, setCobrosSellerFilter] = useState('TODOS');
+  const [cobrosDateFilter, setCobrosDateFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
 
   // Filtros de Facturas Profit
   const [invoicesSearch, setInvoicesSearch] = useState('');
   const [invoicesStatusFilter, setInvoicesStatusFilter] = useState('TODAS');
+  const [invoicesDateFilter, setInvoicesDateFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
 
   // Filtros de Cartera CxC & Aging
   const [cxcSearch, setCxcSearch] = useState('');
@@ -451,9 +456,11 @@ export default function CashflowView({
         cobrosSellerFilter === 'TODOS' ||
         (c.vendedorId || '').toUpperCase() === cobrosSellerFilter.toUpperCase();
 
-      return matchSearch && matchMethod && matchSeller;
+      const matchDate = matchesDatePeriodFilter(c.fecha, cobrosDateFilter);
+
+      return matchSearch && matchMethod && matchSeller && matchDate;
     });
-  }, [profitCollections, cobrosSearch, cobrosMethodFilter, cobrosSellerFilter]);
+  }, [profitCollections, cobrosSearch, cobrosMethodFilter, cobrosSellerFilter, cobrosDateFilter]);
 
   // Facturas Profit Filtradas
   const filteredProfitInvoices = useMemo(() => {
@@ -469,9 +476,11 @@ export default function CashflowView({
       const matchStatus =
         invoicesStatusFilter === 'TODAS' || f.status === invoicesStatusFilter;
 
-      return matchSearch && matchStatus;
+      const matchDate = matchesDatePeriodFilter(f.fechaEmision || f.fec_emis, invoicesDateFilter);
+
+      return matchSearch && matchStatus && matchDate;
     });
-  }, [profitInvoices, invoicesSearch, invoicesStatusFilter]);
+  }, [profitInvoices, invoicesSearch, invoicesStatusFilter, invoicesDateFilter]);
 
   // Movimientos filtrados para Arqueo
   const filteredMovements = useMemo(() => {
@@ -481,9 +490,10 @@ export default function CashflowView({
         (m.metodo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (m.usuario || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchTipo = filterTipo === 'TODOS' || m.tipo === filterTipo;
-      return matchSearch && matchTipo;
+      const matchDate = matchesDatePeriodFilter(m.fecha || m.createdAt, movDateFilter);
+      return matchSearch && matchTipo && matchDate;
     });
-  }, [cashMovements, searchTerm, filterTipo]);
+  }, [cashMovements, searchTerm, filterTipo, movDateFilter]);
 
   // Manejador para registrar movimiento manual (USD o Bs + actualización real de Caja/Banco)
   const handleRegisterMovement = async (e) => {
@@ -683,6 +693,8 @@ export default function CashflowView({
             - Egresos
           </button>
         </div>
+
+        <DatePeriodFilter value={movDateFilter} onChange={setMovDateFilter} compact />
       </div>
 
       {/* Tabla Responsiva */}
@@ -1523,6 +1535,8 @@ export default function CashflowView({
                 <option value="DEPOSITO_BS">Depósito Bs.</option>
               </select>
 
+              <DatePeriodFilter value={cobrosDateFilter} onChange={setCobrosDateFilter} compact />
+
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={handleTriggerSync}
@@ -1732,6 +1746,8 @@ export default function CashflowView({
                 <option value="SALDO_PENDIENTE">Saldo Pendiente</option>
                 <option value="ANULADA">Anuladas</option>
               </select>
+
+              <DatePeriodFilter value={invoicesDateFilter} onChange={setInvoicesDateFilter} compact />
 
               <button
                 className="btn btn-secondary btn-sm"

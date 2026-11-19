@@ -2,6 +2,8 @@
 import { X, Layers, Receipt, FileText, Search, Users, ArrowUpDown, ChevronUp, ChevronDown, Eye, Printer } from 'lucide-react';
 import { formatUsd, formatBs } from '../services/formatService';
 import { generateConsolidatedCxcPDF } from '../services/pdfReportService';
+import DatePeriodFilter from './DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 /**
  * MODAL CONSOLIDADO CxC — Facturas Fiscales + Notas de Entrega
@@ -62,6 +64,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
     const [typeFilter, setTypeFilter] = useState('ALL'); // ALL | FACTURA | NOTA_ENTREGA
     const [statusFilter, setStatusFilter] = useState('ALL'); // ALL | VENCIDA | POR_VENCER | PAGADA
     const [sellerFilter, setSellerFilter] = useState('ALL');
+    const [datePeriodFilter, setDatePeriodFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
     const [viewMode, setViewMode] = useState('DOCS'); // DOCS | CLIENTES
     const [sortField, setSortField] = useState('fechaEmisionIso');
     const [sortDirection, setSortDirection] = useState('desc');
@@ -85,6 +88,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
             const matchesStatus = statusFilter === 'ALL' ? doc.isCarteraActiva : doc.estado === statusFilter;
             if (!matchesStatus) return false;
             if (sellerFilter !== 'ALL' && (doc.vendedorId || 'OF') !== sellerFilter) return false;
+            if (!matchesDatePeriodFilter(doc.fechaEmisionIso || doc.fechaEmision, datePeriodFilter)) return false;
             if (tokens.length === 0) return true;
             const blob = normalize([
                 doc.factura,
@@ -100,7 +104,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
             ].join(' '));
             return tokens.every(t => blob.includes(t));
         });
-    }, [documents, searchTerm, statusFilter, sellerFilter]);
+    }, [documents, searchTerm, statusFilter, sellerFilter, datePeriodFilter]);
 
     // Totales por tipo y consolidados
     const totals = useMemo(() => {
@@ -442,6 +446,8 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
                                 <option key={id} value={id}>{label}</option>
                             ))}
                         </select>
+
+                        <DatePeriodFilter value={datePeriodFilter} onChange={setDatePeriodFilter} compact />
 
                         <div style={pillGroup}>
                             <button type="button" style={pillBtn(viewMode === 'DOCS', 'rgba(56, 189, 248, 0.35)')} onClick={() => setViewMode('DOCS')}>

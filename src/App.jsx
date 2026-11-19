@@ -191,8 +191,23 @@ import {
   deleteSupabaseEmployee,
   getSupabasePayroll,
   saveSupabasePayroll,
-  deleteSupabasePayroll
+  deleteSupabasePayroll,
+  isCxcEntryDeleted,
+  sanitizeCxcDeletedDocsStorage
 } from './services/supabaseService';
+
+// Excluye facturas/NE/ventas marcadas como eliminadas (tombstones CxC) para que nunca
+// reaparezcan por respuestas de red tardías, respaldos estáticos o recargas en curso.
+const filterOutDeletedCxcDocs = (list) => {
+  if (!Array.isArray(list) || list.length === 0) return Array.isArray(list) ? list : [];
+  try {
+    const delSet = new Set(sanitizeCxcDeletedDocsStorage());
+    if (delSet.size === 0) return list;
+    return list.filter(doc => !doc || !isCxcEntryDeleted(doc, delSet));
+  } catch (_) {
+    return list;
+  }
+};
 import soundFX from './services/soundService';
 import {
   initOfflineSyncListeners,
@@ -230,6 +245,7 @@ import {
 import { subscribeToRealtimeSync, broadcastReconcileChange, getRealtimeClientId } from './services/realtimeSyncBridge';
 import {
   getEraScopedCanonicalDocKey,
+  formatDocumentControlNumber,
   commitInvoiceCorrelativo,
   commitNotaEntregaCorrelativo
 } from './services/fiscalService';
@@ -411,7 +427,7 @@ function MainApp() {
     profitCashDesksRef.current = profitCashDesks;
   }, [profitCashDesks]);
   const [profitCollections, setProfitCollections] = useState(() => REAL_PROFIT_COLLECTIONS || []);
-  const [profitInvoices, setProfitInvoices] = useState(() => REAL_PROFIT_INVOICES || []);
+  const [profitInvoices, setProfitInvoices] = useState(() => filterOutDeletedCxcDocs(REAL_PROFIT_INVOICES || []));
   const [profitSuppliers, setProfitSuppliers] = useState(() => REAL_PROFIT_SUPPLIERS || []);
   const [profitPurchases, setProfitPurchases] = useState(() => REAL_PROFIT_PURCHASES || []);
   const [profitAccountsPayable, setProfitAccountsPayable] = useState(() => REAL_PROFIT_ACCOUNTS_PAYABLE || []);
@@ -562,8 +578,8 @@ function MainApp() {
           setProductsState(prods || []);
           setClientsState(clis || []);
           setOrdersState(ords || []);
-          setProfitInvoices(facs || []);
-          setSalesState(sls || []);
+          setProfitInvoices(filterOutDeletedCxcDocs(facs || []));
+          setSalesState(filterOutDeletedCxcDocs(sls || []));
           setProfitWarehouses(pWarehouses || []);
         }
 
@@ -615,13 +631,12 @@ function MainApp() {
         if (isMounted) {
           const activeConfig = cfg || await getSupabaseConfig();
           if (cfg) setConfigState(activeConfig);
-          setProductsState(prods || []);
-          setClientsState(clis || []);
-          setOrdersState(ords || []);
+          // products / clients / orders / profitInvoices / sales ya se cargaron en la Ola 1.
+          // No se re-asignan aquí con esa foto vieja: si durante la Ola 2 se eliminó o editó un
+          // documento (o llegó un cambio en tiempo real), se resucitaría el estado anterior.
           setProfitBankAccounts(bnks || []);
           setProfitCashDesks(cdesks || []);
           setProfitCollections(cobs || []);
-          setProfitInvoices(facs || []);
           setProfitSuppliers(pSups || []);
           setProfitPurchases(pPurs || []);
           setProfitAccountsPayable(pCxp || []);
@@ -648,7 +663,6 @@ function MainApp() {
           setEmployeesState(pEmployees || []);
           setPayrollState(pPayroll || []);
           setSuppliersState(sups || []);
-          setSalesState(sls || []);
           setPurchasesState(purs || []);
           setPurchaseRequisitions(pReqs || []);
           setPurchaseOrders(pPOs || []);
@@ -935,7 +949,7 @@ function MainApp() {
         }
       } else if (tableId === 'invoices') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
-          setProfitInvoices(allTableData);
+          setProfitInvoices(filterOutDeletedCxcDocs(allTableData));
           return;
         }
         if (action === 'DELETE') {
@@ -1156,7 +1170,7 @@ function MainApp() {
         }
       } else if (tableId === 'sales') {
         if ((action === 'RECONCILE_ALL' || action === 'STORAGE_UPDATE') && Array.isArray(allTableData)) {
-          setSalesState(allTableData);
+          setSalesState(filterOutDeletedCxcDocs(allTableData));
           return;
         }
         if (action === 'DELETE') {
@@ -1778,7 +1792,7 @@ function MainApp() {
       onInvoicesChange: async () => {
         console.log('⚡ [Realtime] Recargando facturas Profit...');
         const updatedFacs = await getSupabaseProfitInvoices();
-        if (updatedFacs) setProfitInvoices(updatedFacs);
+        if (updatedFacs) setProfitInvoices(filterOutDeletedCxcDocs(updatedFacs));
       },
       onSuppliersChange: async () => {
         console.log('⚡ [Realtime] Recargando proveedores...');
@@ -1866,7 +1880,7 @@ function MainApp() {
       onSalesChange: async () => {
         console.log('⚡ [Realtime] Recargando ventas Supabase...');
         const updatedSales = await getSupabaseSales();
-        if (updatedSales) setSalesState(updatedSales);
+        if (updatedSales) setSalesState(filterOutDeletedCxcDocs(updatedSales));
       },
       onCashMovementsChange: async () => {
         console.log('⚡ [Realtime] Recargando movimientos de caja Supabase...');
@@ -1940,8 +1954,8 @@ function MainApp() {
       if (latestOrds) setOrdersState(latestOrds);
       if (latestBnks) setProfitBankAccounts(latestBnks);
       if (latestCobs) setProfitCollections(latestCobs);
-      if (latestFacs) setProfitInvoices(latestFacs);
-      if (latestSales) setSalesState(latestSales);
+      if (latestFacs) setProfitInvoices(filterOutDeletedCxcDocs(latestFacs));
+      if (latestSales) setSalesState(filterOutDeletedCxcDocs(latestSales));
       if (latestSups) setProfitSuppliers(latestSups);
       if (latestPurs) setProfitPurchases(latestPurs);
       if (latestCxp) setProfitAccountsPayable(latestCxp);
@@ -3340,24 +3354,25 @@ function MainApp() {
     if (!saved) return null;
 
     const oldId = String(originalDoc?.id || '').trim().toUpperCase();
-    const oldNum = String(originalDoc?.factNum ?? originalDoc?.fact_num ?? originalDoc?.numeroDoc ?? '').trim().toUpperCase();
+    const oldEraKey = getEraScopedCanonicalDocKey(originalDoc);
     const savedId = String(saved.id || '').trim().toUpperCase();
-    const savedNum = String(saved.factNum || saved.numeroDoc || '').trim().toUpperCase();
-    const renamed = (oldId && savedId && oldId !== savedId) || (oldNum && savedNum && oldNum !== savedNum);
+    const savedEraKey = getEraScopedCanonicalDocKey(saved);
+    const renamed = (oldId && savedId && oldId !== savedId) || (oldEraKey && savedEraKey && oldEraKey !== savedEraKey);
 
     setProfitInvoices(prev => {
       const base = Array.isArray(prev) ? [...prev] : [];
       const list = renamed
         ? base.filter(p => {
             const pId = String(p.id || '').trim().toUpperCase();
-            const pNum = String(p.factNum ?? p.fact_num ?? p.numeroDoc ?? '').trim().toUpperCase();
-            return pId !== oldId && pNum !== oldNum;
+            const pEraKey = getEraScopedCanonicalDocKey(p);
+            return !(oldId && pId === oldId) && !(oldEraKey && pEraKey === oldEraKey);
           })
         : base;
-      const idx = list.findIndex(p =>
-        String(p.id || '').trim().toUpperCase() === savedId ||
-        String(p.factNum ?? p.fact_num ?? '').trim().toUpperCase() === savedNum
-      );
+      const idx = list.findIndex(p => {
+        const pId = String(p.id || '').trim().toUpperCase();
+        const pEraKey = getEraScopedCanonicalDocKey(p);
+        return (savedId && pId === savedId) || (savedEraKey && pEraKey === savedEraKey);
+      });
       if (idx >= 0) {
         const mergedItems = Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : (list[idx].items || []);
         list[idx] = { ...list[idx], ...saved, items: mergedItems };
@@ -3371,18 +3386,20 @@ function MainApp() {
       const list = renamed
         ? base.filter(s => {
             const sId = String(s.id || '').trim().toUpperCase();
-            const sNum = String(s.numeroDoc ?? s.factNum ?? '').trim().toUpperCase();
-            return sId !== oldId && sNum !== oldNum;
+            const sEraKey = getEraScopedCanonicalDocKey(s);
+            return !(oldId && sId === oldId) && !(oldEraKey && sEraKey === oldEraKey);
           })
         : base;
-      const idx = list.findIndex(s =>
-        String(s.id || '').trim().toUpperCase() === savedId ||
-        String(s.numeroDoc ?? s.factNum ?? '').trim().toUpperCase() === savedNum
-      );
+      const idx = list.findIndex(s => {
+        const sId = String(s.id || '').trim().toUpperCase();
+        const sEraKey = getEraScopedCanonicalDocKey(s);
+        return (savedId && sId === savedId) || (savedEraKey && sEraKey === savedEraKey);
+      });
       const nextSalePatch = {
         ...saved,
+        ...(saved.seriesEra ? { seriesEra: saved.seriesEra } : {}),
         numeroDoc: saved.numeroDoc || saved.factNum,
-        numeroControl: saved.numeroControl || `00-${String(saved.factNum).replace(/\D/g, '').padStart(6, '0')}`,
+        numeroControl: saved.numeroControl || formatDocumentControlNumber(saved.factNum || saved.numeroDoc, saved.tipoDoc),
         fecha: saved.fechaEmision,
         fechaEmision: saved.fechaEmision,
         fechaVencimiento: saved.fechaVencimiento,

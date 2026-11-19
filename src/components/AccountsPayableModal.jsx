@@ -41,6 +41,8 @@ import {
   suggestCreditDebitControlNumber
 } from '../utils/cxpUtils';
 import { loadPartnerPayableAccounts } from '../utils/treasuryAccountUtils';
+import DatePeriodFilter from './DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter, formatDatePeriodLabel } from '../utils/dateRangeFilterUtils';
 import {
   normalizeRateType,
   getAllowedRateTypesForDoc,
@@ -386,6 +388,7 @@ export default function AccountsPayableModal({
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'VENCIDO' | 'VIGENTE' | 'SOLVENTE' | 'VENCIDO_1_15' | 'VENCIDO_16_30' | 'VENCIDO_OVER_30'
   const [docTypeFilter, setDocTypeFilter] = useState('ALL');
   const [supplierFilter, setSupplierFilter] = useState('ALL');
+  const [datePeriodFilter, setDatePeriodFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
 
   // Overrides locales en memoria para respuesta instantánea
   const [localDocOverrides, setLocalDocOverrides] = useState({});
@@ -713,9 +716,11 @@ export default function AccountsPayableModal({
       if (statusFilter === 'VENCIDO_16_30' && p.tramo !== '16_30') return false;
       if (statusFilter === 'VENCIDO_OVER_30' && p.tramo !== 'OVER_30') return false;
 
+      if (!matchesDatePeriodFilter(p.fechaEmisionIso || p.fechaEmision, datePeriodFilter)) return false;
+
       return true;
     });
-  }, [processedPayables, searchFilter, docTypeFilter, supplierFilter, statusFilter]);
+  }, [processedPayables, searchFilter, docTypeFilter, supplierFilter, statusFilter, datePeriodFilter]);
 
   // Descripción de filtros activos en Parte B para imprimir exactamente lo mostrado en la tabla
   const activeFiltersLabel = useMemo(() => {
@@ -733,11 +738,15 @@ export default function AccountsPayableModal({
       `Doc.: ${docTypeFilter === 'ALL' ? 'Todos' : docTypeFilter}`,
       `Estado: ${statusLabels[statusFilter] || statusFilter}`
     ];
+    const periodLbl = formatDatePeriodLabel(datePeriodFilter);
+    if (periodLbl) {
+      parts.push(periodLbl);
+    }
     if (searchFilter.trim()) {
       parts.push(`Búsqueda: "${searchFilter.trim()}"`);
     }
     return parts.join(' • ');
-  }, [searchFilter, docTypeFilter, supplierFilter, statusFilter]);
+  }, [searchFilter, docTypeFilter, supplierFilter, statusFilter, datePeriodFilter]);
 
   const handlePrintFilteredReport = () => {
     generateAccountsPayablePDF({
@@ -2497,6 +2506,9 @@ export default function AccountsPayableModal({
                 <option value="VENCIDO_16_30">Vencidas 16 a 30 días</option>
                 <option value="VENCIDO_OVER_30">Vencidas más de 30 días</option>
               </select>
+
+              {/* Filtro por Fecha Exacta o Período */}
+              <DatePeriodFilter value={datePeriodFilter} onChange={setDatePeriodFilter} compact />
             </div>
 
             {/* Fila 2: Pestañas Rápidas estilo CxC */}

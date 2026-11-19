@@ -48,6 +48,8 @@ import {
   generateSeniatRetentionVoucherPDF
 } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
+import DatePeriodFilter from '../components/DatePeriodFilter';
+import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 export default function PurchasesView({
   products = [],
@@ -86,6 +88,7 @@ export default function PurchasesView({
   const [showReorderModal, setShowReorderModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('TODOS');
+  const [datePeriodFilter, setDatePeriodFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
   const [syncing, setSyncing] = useState(false);
 
   // Estados para Requisiciones (REQ), Órdenes de Compra (OC), Recepciones (REC) y Órdenes de Pago (OP)
@@ -388,9 +391,10 @@ export default function PurchasesView({
         (p.coProv && String(p.coProv).toLowerCase().includes(q));
 
       const matchStatus = statusFilter === 'TODOS' || p.status === statusFilter;
-      return matchQuery && matchStatus;
+      const matchDate = matchesDatePeriodFilter(p.fechaEmision || p.fec_emis || p.fecha, datePeriodFilter);
+      return matchQuery && matchStatus && matchDate;
     });
-  }, [effectivePurchases, searchQuery, statusFilter]);
+  }, [effectivePurchases, searchQuery, statusFilter, datePeriodFilter]);
 
   // Filtrado de Proveedores Unificados
   const effectiveSuppliers = unifiedSuppliers;
@@ -430,22 +434,24 @@ export default function PurchasesView({
         matchStatus = Number(d.saldoUsd || 0) <= 0.01;
       }
 
-      return matchQuery && matchStatus;
+      const matchDate = matchesDatePeriodFilter(d.fechaEmision || d.fec_emis || d.fecha, datePeriodFilter);
+      return matchQuery && matchStatus && matchDate;
     });
-  }, [profitAccountsPayable, searchQuery, statusFilter]);
+  }, [profitAccountsPayable, searchQuery, statusFilter, datePeriodFilter]);
 
   // Filtrado de Pagos a Proveedores
   const filteredPayments = useMemo(() => {
     return (profitSupplierPayments || []).filter(p => {
       if (!p || p.anulado) return false;
       const q = searchQuery.toLowerCase().trim();
-      return !q ||
+      const matchQuery = !q ||
         String(p.pagoNum || '').toLowerCase().includes(q) ||
         (p.provNombre && String(p.provNombre).toLowerCase().includes(q)) ||
         (p.descrip && String(p.descrip).toLowerCase().includes(q)) ||
         (p.coProv && String(p.coProv).toLowerCase().includes(q));
+      return matchQuery && matchesDatePeriodFilter(p.fecha || p.fec_cob || p.fechaPago, datePeriodFilter);
     });
-  }, [profitSupplierPayments, searchQuery]);
+  }, [profitSupplierPayments, searchQuery, datePeriodFilter]);
 
   // Filtrado de Órdenes de Pago Profit
   const filteredPaymentOrders = useMemo(() => {
@@ -456,9 +462,10 @@ export default function PurchasesView({
       const desc = String(o.descrip || o.motivo || '').toLowerCase();
       const ord = String(o.ordNum || o.ord_num || '').toLowerCase();
       const cod = String(o.codBen || o.cod_ben || '').toLowerCase();
-      return !q || ord.includes(q) || ben.includes(q) || desc.includes(q) || cod.includes(q);
+      const matchQuery = !q || ord.includes(q) || ben.includes(q) || desc.includes(q) || cod.includes(q);
+      return matchQuery && matchesDatePeriodFilter(o.fecha || o.fec_emis || o.fec_pag, datePeriodFilter);
     });
-  }, [profitPaymentOrders, searchQuery]);
+  }, [profitPaymentOrders, searchQuery, datePeriodFilter]);
 
   // Filtrado de Beneficiarios Profit
   const filteredBeneficiaries = useMemo(() => {
@@ -1032,6 +1039,10 @@ export default function PurchasesView({
               style={{ fontSize: '0.84rem', height: '36px' }}
             />
           </div>
+
+          {activeSubTab !== 'proveedores' && (
+            <DatePeriodFilter value={datePeriodFilter} onChange={setDatePeriodFilter} compact />
+          )}
 
           {activeSubTab === 'facturas_profit' && (
             <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>

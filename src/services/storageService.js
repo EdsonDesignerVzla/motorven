@@ -366,15 +366,17 @@ export const getSales = () => {
 const adjustLocalProductsStockForSale = (saleRecord, { reverse = false } = {}) => {
   if (!saleRecord || !Array.isArray(saleRecord.items) || saleRecord.items.length === 0) return [];
   const rawTipo = String(saleRecord.tipoDoc || saleRecord.tipo_doc || 'FACTURA').toUpperCase().trim();
+  const rawDocRef = String(saleRecord.numeroDoc || saleRecord.numero_doc || saleRecord.factNum || saleRecord.id || '').toUpperCase().trim();
   const isNotaEntrega =
     rawTipo === 'NOTA_ENTREGA' ||
-    String(saleRecord.numeroDoc || saleRecord.factNum || saleRecord.id || '').toUpperCase().startsWith('NE-');
+    rawDocRef.startsWith('NE-') ||
+    rawDocRef.startsWith('N.E-');
   const isNotaCredito = rawTipo === 'NOTA_CREDITO';
   const isSaleOut = rawTipo === 'FACTURA' || isNotaEntrega || rawTipo === 'NOTA_DEBITO';
   if (!isSaleOut && !isNotaCredito) return [];
 
   const targetWh = isNotaCredito
-    ? (String(saleRecord.documentoAfectado || saleRecord.documento_afectado || '').toUpperCase().startsWith('NE') ? '02' : '01')
+    ? (/^(NE|N\.E)/i.test(String(saleRecord.documentoAfectado || saleRecord.documento_afectado || '').trim()) ? '02' : '01')
     : (isNotaEntrega ? '02' : '01');
 
   // Al emitir venta: FACT/NE/ND restan (-1), NC suma (+1). Al eliminar/revertir: se invierte el signo.
@@ -384,7 +386,12 @@ const adjustLocalProductsStockForSale = (saleRecord, { reverse = false } = {}) =
   const touched = [];
 
   saleRecord.items.forEach(item => {
-    const itemKey = String(item.articuloId || item.id || item.codigo || item.co_art || '').trim();
+    const syntheticRe = /^(ITEM-|PED-|ROW-|LINE-)/i;
+    const explicitKey = [item.articuloId, item.articulo_id, item.codigo, item.co_art, item.productoCodigo, item.productoId]
+      .map(v => String(v ?? '').trim())
+      .find(v => v && !syntheticRe.test(v));
+    const fallbackId = String(item.id ?? '').trim();
+    const itemKey = explicitKey || (fallbackId && !syntheticRe.test(fallbackId) ? fallbackId : '');
     const qty = Math.max(0, Number(item.cantidad ?? item.qty ?? 0));
     if (!itemKey || qty <= 0) return;
 

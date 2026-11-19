@@ -20,7 +20,8 @@ const projectRoot = path.resolve(__dirname, '..');
 
 const OFFICIAL_DOMAIN = 'signummotorven.com';
 const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
-const PROD_REPO_URL = 'https://EdsonDesignerVzla@github.com/EdsonDesignerVzla/motorven.git';
+const PROD_REPO_URL = 'https://github.com/EdsonDesignerVzla/motorven.git';
+const PROD_REPO_URL_FALLBACK = 'https://EdsonDesignerVzla@github.com/EdsonDesignerVzla/motorven.git';
 const NON_INTERACTIVE_GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
 
 function fetchJsonText(urlStr, timeoutMs = 2500) {
@@ -232,7 +233,16 @@ async function main() {
         'git commit -m "deploy(prod): sincronizacion en tiempo real blindada con servidor central SVR-MOTORVEN"',
         { cwd: tmpDeployDir, stdio: 'inherit' }
       );
-      execSync('git push origin main', { cwd: tmpDeployDir, stdio: 'inherit', env: NON_INTERACTIVE_GIT_ENV });
+      try {
+        execSync('git push origin main', { cwd: tmpDeployDir, stdio: 'inherit', env: NON_INTERACTIVE_GIT_ENV });
+      } catch (primaryPushErr) {
+        console.warn('⚠️ Push estándar falló; reintentando con URL de cuenta EdsonDesignerVzla...');
+        try {
+          execSync(`git push "${PROD_REPO_URL_FALLBACK}" main`, { cwd: tmpDeployDir, stdio: 'inherit', env: NON_INTERACTIVE_GIT_ENV });
+        } catch (_) {
+          throw primaryPushErr;
+        }
+      }
       console.log('🎉 Despliegue completado exitosamente en https://github.com/EdsonDesignerVzla/motorven (https://signummotorven.com)');
     }
   } finally {

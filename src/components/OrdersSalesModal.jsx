@@ -76,11 +76,13 @@ import {
   pickPreferredLineItems
 } from '../services/pdfReportService';
 import { REAL_PROFIT_SELLERS, REAL_PROFIT_ZONES } from '../data/supabaseRealData';
-import { calculateFiscalTaxes, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts, getEraScopedCanonicalDocKey, isLegacyPreNovInvoice, recalculateEditableInvoiceAmounts } from '../services/fiscalService';
+import { calculateFiscalTaxes, getNextInvoiceCorrelativo, commitInvoiceCorrelativo, getNextNotaEntregaCorrelativo, commitNotaEntregaCorrelativo, setNotaEntregaCorrelativo, clearNotaEntregaCorrelativoForce, generateFiscalControlNumber, generateDeliveryNoteControlNumber, formatDocumentControlNumber, resolveControlNumberOnTipoDocChange, syncControlNumberOnCorrelativoEdit, resolveEditedInvoiceCollision, resetInvoiceCorrelativo, setInvoiceCorrelativo, SENIAT_CONTRIBUTOR_TYPES, resolveClientContributorType, computeContributorTypeCounts, getEraScopedCanonicalDocKey, isLegacyPreNovInvoice, recalculateEditableInvoiceAmounts } from '../services/fiscalService';
 import { useNotification } from '../context/NotificationContext';
 import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
 import ClientsDirectoryModal from './ClientsDirectoryModal';
-import { saveSupabaseProfitInvoice, saveSupabaseNotification, updateSupabaseInvoiceDocument } from '../services/supabaseService';
+import { saveSupabaseProfitInvoice, saveSupabaseNotification, updateSupabaseInvoiceDocument, isCxcEntryDeleted, sanitizeCxcDeletedDocsStorage } from '../services/supabaseService';
+import DatePeriodFilter from './DatePeriodFilter';
+import { createDefaultDatePeriodFilter, isDatePeriodFilterActive, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
 
 const normalizeSearchText = (val) =>
   String(val || '')
@@ -208,7 +210,7 @@ export default function OrdersSalesModal({
   const [invoiceSearchQuery, setInvoiceSearchQuery] = useState('');
   const [invoicePeriodFilter, setInvoicePeriodFilter] = useState('ALL'); // 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK' | 'MONTH'
   const [invoiceNumColFilter, setInvoiceNumColFilter] = useState('');
-  const [invoiceDateColFilter, setInvoiceDateColFilter] = useState('');
+  const [invoiceDateFilter, setInvoiceDateFilter] = useState(() => createDefaultDatePeriodFilter('EXACT'));
   const [invoiceClientColFilter, setInvoiceClientColFilter] = useState('');
   const [invoiceSellerColFilter, setInvoiceSellerColFilter] = useState('ALL');
   const [invoiceCondColFilter, setInvoiceCondColFilter] = useState('ALL');
@@ -232,7 +234,7 @@ export default function OrdersSalesModal({
     setInvoiceSearchQuery('');
     setInvoicePeriodFilter('ALL');
     setInvoiceNumColFilter('');
-    setInvoiceDateColFilter('');
+    setInvoiceDateFilter(createDefaultDatePeriodFilter('EXACT'));
     setInvoiceClientColFilter('');
     setInvoiceSellerColFilter('ALL');
     setInvoiceCondColFilter('ALL');
@@ -1594,10 +1596,15 @@ export default function OrdersSalesModal({
   // Consolidación de todas las facturas del sistema (ventas locales, Supabase y Profit Plus)
   const allInvoices = useMemo(() => {
     const canonicalInvoiceKey = (doc) => getEraScopedCanonicalDocKey(doc);
+    let persistentDelSet = new Set();
+    try {
+      persistentDelSet = new Set(sanitizeCxcDeletedDocsStorage());
+    } catch (_) {}
 
     const byKey = new Map();
     const upsertDoc = (doc, sourceOrder) => {
       if (!doc) return;
+      if (persistentDelSet.size > 0 && isCxcEntryDeleted(doc, persistentDelSet)) return;
       const rawKey = String(doc.numeroDoc || doc.factNum || doc.fact_num || doc.id || '').trim();
       if (!rawKey) return;
       const cKey = canonicalInvoiceKey(doc);
@@ -1788,7 +1795,7 @@ export default function OrdersSalesModal({
       id: inv.id || correlativo,
       numeroDoc: correlativo,
       nroFactura: correlativo,
-      numeroControl: inv.numeroControl || inv.nroControl || generateFiscalControlNumber(parseInt(correlativo, 10) || 1),
+      numeroControl: inv.numeroControl || inv.nroControl || formatDocumentControlNumber(correlativo, tipoDocNorm),
       tipoDoc: tipoDocNorm,
       clienteNombre: cliName,
       clienteRif: cliRif,
@@ -1871,7 +1878,7 @@ export default function OrdersSalesModal({
 
       // 3. Filtro por período (usando fecha local sin desfase a medianoche UTC)
       const dateInfo = parseInvoiceDateInfo(inv);
-      if (invoicePeriodFilter !== 'ALL') {
+      if (invoicePeriodFilter !== 'ALL' && invoicePeriodFilter !== 'RANGE') {
         if (!dateInfo.date) return false;
         if (invoicePeriodFilter === 'TODAY' && dateInfo.isoDateOnly !== todayYmd) return false;
         if (invoicePeriodFilter === 'YESTERDAY' && dateInfo.isoDateOnly !== yesterdayYmd) return false;
@@ -1935,7 +1942,7 @@ export default function OrdersSalesModal({
         if (!numMatch) return false;
       }
 
-      if (invoiceDateColFilter && dateInfo.isoDateOnly !== invoiceDateColFilter) {
+      if (!matchesDatePeriodFilter(dateInfo.isoDateOnly || dateInfo.date, invoiceDateFilter)) {
         return false;
       }
 
@@ -2023,7 +2030,7 @@ export default function OrdersSalesModal({
     invoicePeriodFilter,
     invoiceSearchQuery,
     invoiceNumColFilter,
-    invoiceDateColFilter,
+    invoiceDateFilter,
     invoiceClientColFilter,
     invoiceSellerColFilter,
     invoiceCondColFilter,
@@ -2130,13 +2137,16 @@ export default function OrdersSalesModal({
       litros: Number(it.litros ?? it.volumenTotal ?? it.litrosTotales ?? 0)
     }));
 
+    const initialControl = inv.numeroControl || inv.nroControl || formatDocumentControlNumber(correlativo, tipoDocNorm);
+
     setEditClientSearch('');
     setEditingInvoice({
       _originalDoc: inv,
+      _savedFiscalControl: tipoDocNorm !== 'NOTA_ENTREGA' ? initialControl : '',
       id: inv.id || '',
       tipoDoc: tipoDocNorm,
       numeroDoc: correlativo,
-      numeroControl: inv.numeroControl || inv.nroControl || generateFiscalControlNumber(parseInt(correlativo, 10) || 1),
+      numeroControl: initialControl,
       fechaEmisionDate,
       fechaEmisionTime,
       condicionPago: isCredit ? 'CREDITO' : 'CONTADO',
@@ -2181,22 +2191,6 @@ export default function OrdersSalesModal({
     const origTipo = resolveInvoiceTipoDoc(orig);
     const targetTipo = editingInvoice.tipoDoc || 'FACTURA';
 
-    // Validar que no exista otro documento diferente (misma serie/era) con el mismo correlativo y tipo
-    const origIsLegacy = isLegacyPreNovInvoice(orig);
-    const duplicate = allInvoices.find((other) => {
-      if (!other || other === orig) return false;
-      if (orig.id && other.id && String(other.id) === String(orig.id)) return false;
-      return (
-        formatInvoiceCorrelativo(other) === cleanNum &&
-        resolveInvoiceTipoDoc(other) === targetTipo &&
-        isLegacyPreNovInvoice(other) === origIsLegacy
-      );
-    });
-    if (duplicate && (cleanNum !== origNum || targetTipo !== origTipo)) {
-      notify.error(`Ya existe ${targetTipo === 'NOTA_ENTREGA' ? 'una Nota de Entrega' : 'una Factura'} con el correlativo #${cleanNum}.`);
-      return;
-    }
-
     // Construir fecha/hora exacta de emisión preservando hora local
     let emitIso = '';
     const dParts = String(editingInvoice.fechaEmisionDate || '').split('-').map(Number);
@@ -2213,6 +2207,23 @@ export default function OrdersSalesModal({
     }
     if (!emitIso) {
       emitIso = preserveDateWithTime(editingInvoice.fechaEmisionDate || new Date());
+    }
+
+    // Validar que no exista otro documento diferente en la misma serie activa con el mismo correlativo y tipo
+    const collision = resolveEditedInvoiceCollision({
+      orig,
+      allInvoices,
+      cleanNum,
+      targetTipo,
+      emitIso
+    });
+    if (collision.blocked && (cleanNum !== origNum || targetTipo !== origTipo)) {
+      const conflictClient = resolveInvoiceClientName(collision.conflictingDoc);
+      const conflictDate = parseInvoiceDateInfo(collision.conflictingDoc).isoDateOnly || '';
+      notify.error(
+        `Ya existe ${targetTipo === 'NOTA_ENTREGA' ? 'una Nota de Entrega' : 'una Factura'} activa con el correlativo #${cleanNum} (${conflictClient}${conflictDate ? ` - ${conflictDate}` : ''}). Use otro correlativo libre para evitar sobrescribirla.`
+      );
+      return;
     }
 
     const isCredit = editingInvoice.condicionPago === 'CREDITO';
@@ -2236,10 +2247,8 @@ export default function OrdersSalesModal({
         String(s.coVen || '').trim().toLowerCase() === String(editingInvoice.vendedor || '').trim().toLowerCase()
     );
 
-    const newId =
-      targetTipo === 'NOTA_ENTREGA'
-        ? `NE-${cleanNum}`
-        : cleanNum;
+    const newId = collision.newId;
+    const resolvedSeriesEra = collision.seriesEra || '';
 
     const cleanItems = (editingInvoice.items || []).map((it) => {
       const cant = Math.max(0, Number(it.cantidad) || 0);
@@ -2268,14 +2277,23 @@ export default function OrdersSalesModal({
       }
     }
 
+    const rawEditedControl = String(editingInvoice.numeroControl || '').trim();
+    const resolvedNumeroControl = targetTipo === 'NOTA_ENTREGA'
+      ? ((!rawEditedControl || (origTipo !== 'NOTA_ENTREGA' && /^00-\d+$/.test(rawEditedControl)))
+          ? generateDeliveryNoteControlNumber(cleanNum)
+          : rawEditedControl)
+      : (rawEditedControl || generateFiscalControlNumber(parseInt(cleanNum, 10) || 1));
+
     const updatedPayload = {
       ...orig,
       id: newId,
+      ...(resolvedSeriesEra ? { seriesEra: resolvedSeriesEra, series_era: resolvedSeriesEra } : { seriesEra: '', series_era: null }),
       factNum: cleanNum,
       fact_num: cleanNum,
       numeroDoc: cleanNum,
       nroFactura: cleanNum,
-      numeroControl: String(editingInvoice.numeroControl || '').trim() || generateFiscalControlNumber(parseInt(cleanNum, 10) || 1),
+      numeroControl: resolvedNumeroControl,
+      numero_control: resolvedNumeroControl,
       tipoDoc: targetTipo,
       almacen: targetTipo === 'NOTA_ENTREGA' ? '02' : (orig.almacen || '01'),
       fechaEmision: emitIso,
@@ -5776,7 +5794,7 @@ export default function OrdersSalesModal({
                   invoiceSearchQuery.trim() ||
                   invoicePeriodFilter !== 'ALL' ||
                   invoiceNumColFilter.trim() ||
-                  invoiceDateColFilter ||
+                  isDatePeriodFilterActive(invoiceDateFilter) ||
                   invoiceClientColFilter.trim() ||
                   invoiceSellerColFilter !== 'ALL' ||
                   invoiceCondColFilter !== 'ALL' ||
@@ -5936,7 +5954,14 @@ export default function OrdersSalesModal({
                         <select
                           className="form-control"
                           value={invoicePeriodFilter}
-                          onChange={(e) => setInvoicePeriodFilter(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setInvoicePeriodFilter(val);
+                            if (val === 'RANGE') {
+                              setInvoiceDateFilter((prev) => ({ ...prev, mode: 'RANGE' }));
+                              setShowColumnFilters(true);
+                            }
+                          }}
                           style={{ fontSize: '0.80rem' }}
                         >
                           <option value="ALL">Todos los Períodos</option>
@@ -5944,6 +5969,7 @@ export default function OrdersSalesModal({
                           <option value="YESTERDAY">Ayer</option>
                           <option value="WEEK">Últimos 7 días</option>
                           <option value="MONTH">Últimos 30 días</option>
+                          <option value="RANGE">Por Período (Desde / Hasta)</option>
                         </select>
                       </div>
 
@@ -6088,16 +6114,19 @@ export default function OrdersSalesModal({
                           />
                         </div>
 
-                        <div>
-                          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-                            Fecha Exacta
-                          </label>
-                          <input
-                            type="date"
-                            value={invoiceDateColFilter}
-                            onChange={(e) => setInvoiceDateColFilter(e.target.value)}
-                            style={{ ...filterInputStyle, padding: '5px 9px', fontSize: '0.76rem' }}
-                            title="Filtrar por fecha exacta de emisión"
+                        <div style={{ gridColumn: invoiceDateFilter.mode === 'RANGE' ? 'span 2' : 'auto' }}>
+                          <DatePeriodFilter
+                            value={invoiceDateFilter}
+                            onChange={(next) => {
+                              setInvoiceDateFilter(next);
+                              if (next.mode === 'RANGE' && (next.fromDate || next.toDate)) {
+                                setInvoicePeriodFilter('RANGE');
+                              } else if (next.mode === 'EXACT' && invoicePeriodFilter === 'RANGE') {
+                                setInvoicePeriodFilter('ALL');
+                              }
+                            }}
+                            label="Fecha"
+                            stacked
                           />
                         </div>
 
@@ -6910,7 +6939,22 @@ export default function OrdersSalesModal({
                             value={editingInvoice.tipoDoc}
                             onChange={(e) => {
                               const nextTipo = e.target.value;
-                              setEditingInvoice(prev => applyRecalculatedEditingInvoice(prev, prev.items || [], nextTipo));
+                              setEditingInvoice((prev) => {
+                                if (!prev) return prev;
+                                const recalcNext = applyRecalculatedEditingInvoice(prev, prev.items || [], nextTipo);
+                                const ctrlPatch = resolveControlNumberOnTipoDocChange({
+                                  prevTipoDoc: prev.tipoDoc,
+                                  nextTipoDoc: nextTipo,
+                                  numeroDoc: prev.numeroDoc,
+                                  currentControl: prev.numeroControl,
+                                  savedFiscalControl: prev._savedFiscalControl
+                                });
+                                return {
+                                  ...recalcNext,
+                                  numeroControl: ctrlPatch.numeroControl,
+                                  _savedFiscalControl: ctrlPatch.savedFiscalControl
+                                };
+                              });
                             }}
                             style={{ fontSize: '0.82rem' }}
                           >
@@ -6926,7 +6970,22 @@ export default function OrdersSalesModal({
                               type="text"
                               className="form-control"
                               value={editingInvoice.numeroDoc}
-                              onChange={(e) => setEditingInvoice(prev => ({ ...prev, numeroDoc: e.target.value }))}
+                              onChange={(e) => {
+                                const nextNum = e.target.value;
+                                setEditingInvoice((prev) => {
+                                  if (!prev) return prev;
+                                  return {
+                                    ...prev,
+                                    numeroDoc: nextNum,
+                                    numeroControl: syncControlNumberOnCorrelativoEdit({
+                                      tipoDoc: prev.tipoDoc,
+                                      prevNumeroDoc: prev.numeroDoc,
+                                      nextNumeroDoc: nextNum,
+                                      currentControl: prev.numeroControl
+                                    })
+                                  };
+                                });
+                              }}
                               placeholder="080583"
                               required
                               style={{ fontFamily: 'var(--font-code)', fontWeight: 800, fontSize: '0.84rem' }}
@@ -6937,10 +6996,10 @@ export default function OrdersSalesModal({
                               onClick={() => {
                                 const digits = String(editingInvoice.numeroDoc || '').replace(/[^0-9]/g, '');
                                 const padded = digits ? digits.slice(-6).padStart(6, '0') : editingInvoice.numeroDoc;
-                                setEditingInvoice(prev => ({
+                                setEditingInvoice((prev) => ({
                                   ...prev,
                                   numeroDoc: padded,
-                                  numeroControl: generateFiscalControlNumber(parseInt(padded, 10) || 1)
+                                  numeroControl: formatDocumentControlNumber(padded, prev.tipoDoc)
                                 }));
                               }}
                               style={{ padding: '0 8px', borderRadius: '6px', border: '1px solid var(--border-glass)', background: 'rgba(56,189,248,0.12)', color: '#38bdf8', fontSize: '0.70rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -6957,7 +7016,7 @@ export default function OrdersSalesModal({
                             className="form-control"
                             value={editingInvoice.numeroControl}
                             onChange={(e) => setEditingInvoice(prev => ({ ...prev, numeroControl: e.target.value }))}
-                            placeholder="00-080583"
+                            placeholder={editingInvoice.tipoDoc === 'NOTA_ENTREGA' ? 'N.E-000614' : '00-080583'}
                             style={{ fontFamily: 'var(--font-code)', fontSize: '0.82rem' }}
                           />
                         </div>
