@@ -79,6 +79,7 @@ import {
 import {
   isCxcInvoiceCancelled,
   isCxcInvoiceSettled,
+  isCreditOrDebitNoteDoc,
   normalizeClientRifKey,
   normalizeClientCodeKey,
   normalizeClientNameKey
@@ -86,7 +87,11 @@ import {
 
 function isExcludedSaleDocType(doc) {
   const tipo = String(doc?.tipoDoc || doc?.tipo_doc || '').trim().toUpperCase();
-  return tipo === 'NOTA_CREDITO' || tipo === 'COTIZACION';
+  return (
+    tipo === 'COTIZACION' ||
+    tipo === 'SOLICITUD_CLIENTE' ||
+    isCreditOrDebitNoteDoc(doc)
+  );
 }
 
 function isSyntheticManualItem(item) {
@@ -766,8 +771,7 @@ export default function DashboardView({
 
     (dedupeCanonicalDocs(profitInvoices) || []).forEach(inv => {
       if (!inv || inv.anulada) return;
-      const tipo = inv.tipoDoc || inv.tipo_doc || '';
-      if (String(tipo).toUpperCase() === 'NOTA_CREDITO') return;
+      if (isExcludedSaleDocType(inv)) return;
       const dateKey = toDateKey(inv.fechaEmision || inv.fecEmis || inv.fec_emis || inv.fecha);
       if (!dateKey) return;
 
@@ -804,8 +808,7 @@ export default function DashboardView({
 
     (sales || []).forEach(s => {
       if (!s || s.anulada) return;
-      const tipo = s.tipoDoc || s.tipo_doc || '';
-      if (String(tipo).toUpperCase() === 'NOTA_CREDITO') return;
+      if (isExcludedSaleDocType(s)) return;
 
       const idStr = s.id ? String(s.id) : '';
       const dk = getDocDedupKey(s);

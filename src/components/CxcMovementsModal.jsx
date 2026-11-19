@@ -132,6 +132,7 @@ const canonicalDocKey = (rawNum, tipoDoc = 'FACTURA') => {
 const normalizeCorrelativoDisplay = (rawCode) => {
   const s = String(rawCode ?? '').trim();
   if (!s) return 'S/N';
+  if (/^(NC|ND)-/i.test(s)) return s.toUpperCase();
   const digits = s.replace(/[^0-9]/g, '');
   if (digits && digits.length <= 6) {
     return digits.padStart(6, '0');

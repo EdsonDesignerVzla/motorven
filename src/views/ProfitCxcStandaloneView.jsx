@@ -381,7 +381,8 @@ export default function ProfitCxcStandaloneView() {
 
     (sales || []).forEach((sale) => {
       const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
-      if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
+      const saleIdUpper = String(sale.id || '').toUpperCase().trim();
+      if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION' || saleIdUpper.startsWith('NOTA_DEBITO-')) return;
       const saleDocType = inferDocType(sale);
       const isNotaEntregaSale = saleDocType === 'NOTA_ENTREGA';
       const key = String(sale.factura || sale.factNum || sale.numeroDoc || sale.id || '').trim();

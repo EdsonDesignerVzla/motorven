@@ -46,6 +46,7 @@ import {
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
+import { getCreditDebitNoteKind, isCreditOrDebitNoteDoc } from '../utils/cxcUtils';
 import {
   resolveCreditDaysFromTerm,
   calculateExpirationDate,
@@ -1511,7 +1512,10 @@ export default function OrdersSalesModal({
   // Helpers uniformes para resolver campos de facturas / notas de entrega (Profit, Supabase, POS)
   const resolveInvoiceTipoDoc = (inv) => {
     if (!inv) return 'FACTURA';
+    const noteKind = getCreditDebitNoteKind(inv);
+    if (noteKind) return noteKind;
     const rawTipo = String(inv.tipoDoc || inv.tipo_doc || '').toUpperCase().trim();
+    if (rawTipo === 'COTIZACION' || rawTipo === 'SOLICITUD_CLIENTE') return rawTipo;
     const rawId = String(inv.id || '').trim().toUpperCase();
     const rawNum = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.nroFactura || '').trim().toUpperCase();
     if (
@@ -1623,6 +1627,8 @@ export default function OrdersSalesModal({
     const byKey = new Map();
     const upsertDoc = (doc, sourceOrder) => {
       if (!doc) return;
+      const rawTipoDoc = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
+      if (isCreditOrDebitNoteDoc(doc) || rawTipoDoc === 'COTIZACION' || rawTipoDoc === 'SOLICITUD_CLIENTE') return;
       if (persistentDelSet.size > 0 && isCxcEntryDeleted(doc, persistentDelSet)) return;
       const rawKey = String(doc.numeroDoc || doc.factNum || doc.fact_num || doc.id || '').trim();
       if (!rawKey) return;
@@ -1693,7 +1699,9 @@ export default function OrdersSalesModal({
   const highestExistingInvoiceNum = useMemo(() => {
     let max = -1;
     (allInvoices || []).forEach(inv => {
+      if (!inv || isCreditOrDebitNoteDoc(inv)) return;
       const rawTipo = String(inv.tipoDoc || inv.tipo_doc || '').toUpperCase().trim();
+      if (rawTipo === 'COTIZACION' || rawTipo === 'SOLICITUD_CLIENTE') return;
       const rawId = String(inv.id || '').trim();
       const raw = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.nroFactura || '');
       const isNe =
@@ -1718,6 +1726,7 @@ export default function OrdersSalesModal({
   const highestExistingNeNum = useMemo(() => {
     let max = -1;
     (allInvoices || []).forEach(inv => {
+      if (!inv || isCreditOrDebitNoteDoc(inv)) return;
       const rawTipo = String(inv.tipoDoc || inv.tipo_doc || '').toUpperCase().trim();
       const rawId = String(inv.id || '').trim();
       const raw = String(inv.numeroDoc || inv.factNum || inv.fact_num || inv.nroFactura || '').trim();

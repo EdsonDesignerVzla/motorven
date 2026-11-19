@@ -240,6 +240,7 @@ import {
 } from './utils/cxpUtils';
 import {
   inferCxcDocType,
+  isCreditOrDebitNoteDoc,
   normalizeCollectionWriteAmounts,
   reconcileClientsWithRealCxc,
   buildCxcCreditDebitNoteResult
@@ -3291,9 +3292,13 @@ function MainApp() {
 
   // Guardar o Editar Documento CxC (Factura Fiscal / Nota de Entrega)
   const handleSaveCxcDocument = async (docData) => {
-    const saved = await saveSupabaseProfitInvoice(docData);
+    const { _skipSaleInsert, ...persistDocData } = docData || {};
+    const saved = await saveSupabaseProfitInvoice(persistDocData);
     if (!saved) return null;
-    if (saved.factNum) {
+    const isNoteDoc = isCreditOrDebitNoteDoc(saved) || isCreditOrDebitNoteDoc(persistDocData);
+    const isNewManualDoc = Boolean(persistDocData?._customCreated) && !_skipSaleInsert && !isNoteDoc;
+
+    if (isNewManualDoc && saved.factNum) {
       if (String(saved.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA') {
         commitNotaEntregaCorrelativo(saved.factNum);
       } else {
@@ -3316,6 +3321,10 @@ function MainApp() {
     });
     setSalesState(prev => {
       const list = Array.isArray(prev) ? [...prev] : [];
+      if (isNoteDoc) {
+        // Las Notas de Débito/Crédito se registran en Libro de Ventas únicamente mediante fiscalSaleRecord
+        return list;
+      }
       const idx = list.findIndex(s =>
         (savedCanonKey && getEraScopedCanonicalDocKey(s) === savedCanonKey) ||
         String(s.id) === String(saved.id)
@@ -3345,7 +3354,10 @@ function MainApp() {
         };
         return list;
       }
-      // Si es un documento nuevo para cuadre de noviembre, agregarlo a la lista de ventas
+      if (!isNewManualDoc) {
+        return list;
+      }
+      // Si es un documento nuevo manual de CxC, agregarlo a la lista de ventas
       const newSaleItem = {
         id: saved.id,
         numeroDoc: saved.factNum,
@@ -3752,11 +3764,11 @@ function MainApp() {
     } = result;
 
     if (updatedAffectedDoc) {
-      await handleSaveCxcDocument(updatedAffectedDoc);
+      await handleSaveCxcDocument({ ...updatedAffectedDoc, _skipSaleInsert: true });
     }
 
     if (createdDebitDoc) {
-      await handleSaveCxcDocument(createdDebitDoc);
+      await handleSaveCxcDocument({ ...createdDebitDoc, _skipSaleInsert: true });
     }
 
     if (fiscalSaleRecord) {

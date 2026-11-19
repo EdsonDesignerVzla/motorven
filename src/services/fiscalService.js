@@ -794,10 +794,17 @@ export const getNextInvoiceCorrelativo = (sales = [], extraDocs = []) => {
   list.forEach(s => {
     if (!s) return;
     const rawTipo = String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim();
+    const rawFiscalType = String(s.fiscalDocType || s.fiscal_doc_type || '').toUpperCase().trim();
     const rawId = String(s.id || '').trim();
     const raw = String(s.numeroDoc || s.numero_doc || s.nroFactura || s.factNum || s.fact_num || '');
     if (rawTipo && rawTipo !== 'FACTURA') return;
-    if (/^(NE-|NDE-|NC-|ND-)/i.test(rawId) || /^(NE-|NDE-|NC-|ND-)/i.test(raw)) return;
+    if (rawFiscalType === 'NOTA_CREDITO' || rawFiscalType === 'NOTA_DEBITO') return;
+    if (
+      /^(NE-|NDE-|NC-|ND-|NE-NC-|NE-ND-|NOTA_CREDITO-|NOTA_DEBITO-)/i.test(rawId) ||
+      /^(NE-|NDE-|NC-|ND-|NE-NC-|NE-ND-)/i.test(raw)
+    ) {
+      return;
+    }
     if (!raw) return;
     const digitsOnly = raw.replace(/[^0-9]/g, '');
     if (digitsOnly) {
@@ -886,10 +893,19 @@ export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix 
   const inspectRecord = (rec) => {
     if (!rec) return;
     const rawTipo = String(rec.tipoDoc || rec.tipo_doc || '').toUpperCase().trim();
+    const rawFiscalType = String(rec.fiscalDocType || rec.fiscal_doc_type || '').toUpperCase().trim();
     const rawNum = String(rec.numeroDoc ?? rec.numero_doc ?? rec.factNum ?? rec.fact_num ?? rec.factura ?? rec.id ?? '').trim();
     const rawId = String(rec.id || '').trim();
+    const isCreditOrDebit =
+      rawTipo === 'NOTA_CREDITO' ||
+      rawTipo === 'NOTA_DEBITO' ||
+      rawFiscalType === 'NOTA_CREDITO' ||
+      rawFiscalType === 'NOTA_DEBITO' ||
+      /^(NC-|ND-|NE-NC-|NE-ND-|NOTA_CREDITO-|NOTA_DEBITO-)/i.test(rawNum) ||
+      /^(NC-|ND-|NE-NC-|NE-ND-|NOTA_CREDITO-|NOTA_DEBITO-)/i.test(rawId);
 
     if (cleanPrefix === 'NE') {
+      if (isCreditOrDebit) return;
       const isNe =
         rawTipo === 'NOTA_ENTREGA' ||
         rawTipo === 'N/E' ||
@@ -897,9 +913,9 @@ export const getNextNotaEntregaCorrelativo = (sales = [], invoices = [], prefix 
         /^(NE-|NDE-)/i.test(rawNum) ||
         /^(NE-|NDE-)/i.test(rawId);
       if (!isNe) return;
-    } else if (cleanPrefix === 'NC' && rawTipo !== 'NOTA_CREDITO' && !/^NC-/i.test(rawNum)) {
+    } else if (cleanPrefix === 'NC' && rawTipo !== 'NOTA_CREDITO' && rawFiscalType !== 'NOTA_CREDITO' && !/^(NC-|NE-NC-)/i.test(rawNum)) {
       return;
-    } else if (cleanPrefix === 'ND' && rawTipo !== 'NOTA_DEBITO' && !/^ND-/i.test(rawNum)) {
+    } else if (cleanPrefix === 'ND' && rawTipo !== 'NOTA_DEBITO' && rawFiscalType !== 'NOTA_DEBITO' && !/^(ND-|NE-ND-)/i.test(rawNum)) {
       return;
     }
 
@@ -1040,10 +1056,26 @@ const collectUsedCxcMovementNumbers = (collections = [], docs = []) => {
   const usedModernNums = new Set();
   const usedModernStrings = new Set();
 
-  const registerMov = (rawCode, fechaStr) => {
+  const registerMov = (rawCode, fechaStr, meta = null) => {
     if (!rawCode && rawCode !== 0) return;
     const rawStr = String(rawCode).trim();
     if (!rawStr) return;
+    if (/^(NC|ND)-/i.test(rawStr)) return;
+    if (meta) {
+      const metaForma = String(meta.formaPago || meta.forma_pago || '').toUpperCase().trim();
+      const metaTipo = String(meta.tipoDoc || meta.tipo_doc || meta.tipo || '').toUpperCase().trim();
+      const metaAcc = String(meta.accountType || meta.account_type || '').toUpperCase().trim();
+      if (
+        metaForma === 'NOTA_CREDITO' ||
+        metaForma === 'NOTA_DEBITO' ||
+        metaTipo === 'NOTA_CREDITO' ||
+        metaTipo === 'NOTA_DEBITO' ||
+        metaAcc === 'NOTA_CREDITO' ||
+        metaAcc === 'NOTA_DEBITO'
+      ) {
+        return;
+      }
+    }
     const isModernFormat =
       /^(MOV-|COB-)/i.test(rawStr) ||
       (/^0\d{5,}$/.test(rawStr));
@@ -1065,7 +1097,8 @@ const collectUsedCxcMovementNumbers = (collections = [], docs = []) => {
     if (!c || c.anulado) return;
     registerMov(
       String(c.correlativo || '').trim() || c.cobNum || c.cob_num,
-      c.fecha || c.fec_cob || c.fechaCobro || c.fechaSincronizacion
+      c.fecha || c.fec_cob || c.fechaCobro || c.fechaSincronizacion,
+      c
     );
   });
 
@@ -1073,7 +1106,7 @@ const collectUsedCxcMovementNumbers = (collections = [], docs = []) => {
     const hist = Array.isArray(d?.historialCobros) ? d.historialCobros : [];
     hist.forEach((h) => {
       if (!h) return;
-      registerMov(String(h.correlativo || '').trim() || h.cobNum || h.cob_num, h.fecha);
+      registerMov(String(h.correlativo || '').trim() || h.cobNum || h.cob_num, h.fecha, h);
     });
   });
 
@@ -1273,9 +1306,14 @@ const VALID_FISCAL_DOC_TYPES = new Set(['FACTURA', 'NOTA_CREDITO', 'NOTA_DEBITO'
 export const isFiscalDocEligible = (doc) => {
   if (!doc) return false;
   const rawTipo = String(doc.tipoDoc || doc.tipo_doc || 'FACTURA').toUpperCase().trim();
+  const rawFiscalType = String(doc.fiscalDocType || doc.fiscal_doc_type || '').toUpperCase().trim();
   const rawNum = String(doc.numeroDoc ?? doc.numero_doc ?? doc.factNum ?? doc.fact_num ?? '').toUpperCase().trim();
   const rawId = String(doc.id || '').toUpperCase().trim();
   if (/^(NE-|N\.E-|NDE-|COT-|PED-|PRE-)/.test(rawNum) || /^(NE-|N\.E-|NDE-|COT-|PED-|PRE-)/.test(rawId)) {
+    return false;
+  }
+  // Evitar que el documento interno CxC de Nota de Débito (marcado temporalmente como FACTURA) duplique al registro oficial NOTA_DEBITO
+  if (rawTipo === 'FACTURA' && rawFiscalType === 'NOTA_DEBITO') {
     return false;
   }
   return VALID_FISCAL_DOC_TYPES.has(rawTipo);

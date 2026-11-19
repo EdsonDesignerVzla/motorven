@@ -65,6 +65,47 @@ export function isCreditSaleRecord(s) {
 }
 
 /**
+ * Identifica si un documento es Nota de Crédito o Nota de Débito
+ * (ya sea por tipoDoc, fiscalDocType o prefijo NC-/ND-/NE-ND-).
+ * @returns {'NOTA_CREDITO' | 'NOTA_DEBITO' | ''}
+ */
+export function getCreditDebitNoteKind(doc) {
+  if (!doc || typeof doc !== 'object') return '';
+  const rawTipo = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
+  const fiscalType = String(doc.fiscalDocType || doc.fiscal_doc_type || '').toUpperCase().trim();
+  const rawId = String(doc.id || '').toUpperCase().trim();
+  const rawNum = String(
+    doc.factNum ?? doc.fact_num ?? doc.numeroDoc ?? doc.numero_doc ?? doc.nroFactura ?? doc.factura ?? ''
+  ).toUpperCase().trim();
+
+  if (
+    rawTipo === 'NOTA_CREDITO' ||
+    rawTipo === 'N/CR' ||
+    rawTipo === 'NC' ||
+    fiscalType === 'NOTA_CREDITO' ||
+    /^(NC-|NE-NC-|NOTA_CREDITO-)/.test(rawId) ||
+    /^(NC-|NE-NC-)/.test(rawNum)
+  ) {
+    return 'NOTA_CREDITO';
+  }
+  if (
+    rawTipo === 'NOTA_DEBITO' ||
+    rawTipo === 'N/DB' ||
+    rawTipo === 'ND' ||
+    fiscalType === 'NOTA_DEBITO' ||
+    /^(ND-|NE-ND-|NOTA_DEBITO-)/.test(rawId) ||
+    /^(ND-|NE-ND-)/.test(rawNum)
+  ) {
+    return 'NOTA_DEBITO';
+  }
+  return '';
+}
+
+export function isCreditOrDebitNoteDoc(doc) {
+  return Boolean(getCreditDebitNoteKind(doc));
+}
+
+/**
  * Infiere el tipo de documento CxC ('NOTA_ENTREGA' o 'FACTURA') sin colisión cruzada.
  */
 export function inferCxcDocType(raw) {
@@ -395,9 +436,10 @@ export function consolidateClientReceivables({
 
   // 2. Documentos de profit_invoices (deduplicados y sin anulados ni cobrados)
   dedupeCanonicalDocs(profitInvoices || []).forEach(inv => {
-    if (!inv || isCxcInvoiceSettled(inv)) return;
+    if (!inv) return;
     const eraKey = getEraScopedCanonicalDocKey(inv) || getCanonicalDocKey(inv);
     if (eraKey) seenDocKeys.add(eraKey);
+    if (isCxcInvoiceSettled(inv)) return;
     const invTasa = Number(inv.tasa || inv.tasaDolar || safeRate) || safeRate;
     const rawSaldo = Number(inv.saldoUsd ?? inv.saldo_usd ?? 0);
     const saldo = rawSaldo > 0.01
@@ -426,7 +468,8 @@ export function consolidateClientReceivables({
   dedupeCanonicalDocs(sales || []).forEach(sale => {
     if (!sale || isCxcInvoiceSettled(sale)) return;
     const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
-    if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
+    const saleIdUpper = String(sale.id || '').toUpperCase().trim();
+    if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION' || saleIdUpper.startsWith('NOTA_DEBITO-')) return;
     const eraKey = getEraScopedCanonicalDocKey(sale) || getCanonicalDocKey(sale);
     if (eraKey && seenDocKeys.has(eraKey)) return;
     if (eraKey) seenDocKeys.add(eraKey);
@@ -661,7 +704,8 @@ export function reconcileClientsWithRealCxc({
   dedupeCanonicalDocs(sales || []).forEach((sale) => {
     if (!sale || isCxcInvoiceCancelled(sale)) return;
     const rawTipo = String(sale.tipoDoc || sale.tipo_doc || '').toUpperCase().trim();
-    if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
+    const saleIdUpper = String(sale.id || '').toUpperCase().trim();
+    if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION' || saleIdUpper.startsWith('NOTA_DEBITO-')) return;
     const eraKey = getEraScopedCanonicalDocKey(sale) || getCanonicalDocKey(sale);
     if (eraKey && seenDocKeys.has(eraKey)) return;
     if (eraKey) seenDocKeys.add(eraKey);

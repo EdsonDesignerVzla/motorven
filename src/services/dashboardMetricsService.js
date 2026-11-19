@@ -127,7 +127,8 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
     dedupeCanonicalDocs(sales).forEach((s) => {
       if (!s || isCxcInvoiceCancelled(s)) return;
       const rawTipo = String(s.tipoDoc || s.tipo_doc || '').toUpperCase().trim();
-      if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION') return;
+      const rawId = String(s.id || '').toUpperCase().trim();
+      if (rawTipo === 'NOTA_CREDITO' || rawTipo === 'COTIZACION' || rawId.startsWith('NOTA_DEBITO-')) return;
       const ck = getEraScopedCanonicalDocKey(s);
       if (ck && seenCxcKeys.has(ck)) return;
       if (isCxcInvoiceSettled(s)) return;

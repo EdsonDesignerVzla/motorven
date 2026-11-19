@@ -12,7 +12,9 @@ import {
   groupMovementsByRateType,
   summarizeDailyMovementsByCaja,
   getNextCreditDebitNoteCorrelativo,
-  buildCxcCreditDebitNoteResult
+  buildCxcCreditDebitNoteResult,
+  getCreditDebitNoteKind,
+  isCreditOrDebitNoteDoc
 } from '../utils/cxcUtils.js';
 import { generateCreditDebitNotePDF } from '../services/pdfReportService.js';
 import {
@@ -29,7 +31,12 @@ import {
   getSupabaseProfitCollections,
   deleteSupabaseProfitCollection
 } from '../services/supabaseService.js';
-import { getNextCxcMovementCorrelativo } from '../services/fiscalService.js';
+import {
+  getNextCxcMovementCorrelativo,
+  getNextInvoiceCorrelativo,
+  getNextNotaEntregaCorrelativo,
+  isFiscalDocEligible
+} from '../services/fiscalService.js';
 
 const createMemoryStorage = () => {
   const store = new Map();
@@ -915,6 +922,111 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+// 15. Regresión: NC/ND no deben generar facturas fantasma ni alterar correlativos ni duplicar deuda al saldarse
+{
+  localStorage.clear();
+  const baseInvoice = {
+    id: '002149',
+    factNum: '002149',
+    tipoDoc: 'FACTURA',
+    clienteId: 'V257070898',
+    cliente: 'Oscar Alberto Cabrera Rodriguez',
+    rif: 'V-25707089-8',
+    fechaEmision: '2026-11-18',
+    montoFacturaUsd: 92,
+    abonosUsd: 0,
+    restanteUsd: 92,
+    tasa: 917.77,
+    historialCobros: []
+  };
+
+  const ncRes = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_CREDITO',
+    affectedDoc: baseInvoice,
+    noteNum: 'NC-000012',
+    fechaEmision: '2026-11-19',
+    subtotalUsd: 13,
+    aplicaIva: false,
+    tasa: 917.77,
+    motivo: 'Descuento acordado'
+  });
+
+  const ndRes = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: baseInvoice,
+    noteNum: 'ND-000015',
+    fechaEmision: '2026-11-19',
+    subtotalUsd: 25,
+    aplicaIva: true,
+    tasa: 917.77,
+    motivo: 'Diferencial cambiario'
+  });
+
+  const ndNeRes = buildCxcCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: { ...baseInvoice, factNum: 'NE-000010', tipoDoc: 'NOTA_ENTREGA', id: 'NE-000010' },
+    noteNum: 'ND-000016',
+    isFiscal: false,
+    fechaEmision: '2026-11-19',
+    subtotalUsd: 30,
+    aplicaIva: false,
+    tasa: 917.77
+  });
+
+  // Detección uniforme de NC/ND aunque createdDebitDoc porte tipoDoc FACTURA/NOTA_ENTREGA en CxC
+  assert.equal(getCreditDebitNoteKind(ncRes.fiscalSaleRecord), 'NOTA_CREDITO');
+  assert.equal(getCreditDebitNoteKind(ndRes.createdDebitDoc), 'NOTA_DEBITO');
+  assert.equal(getCreditDebitNoteKind(ndRes.fiscalSaleRecord), 'NOTA_DEBITO');
+  assert.equal(getCreditDebitNoteKind(ndNeRes.createdDebitDoc), 'NOTA_DEBITO');
+  assert.equal(isCreditOrDebitNoteDoc(ndRes.createdDebitDoc), true);
+  assert.equal(isCreditOrDebitNoteDoc(baseInvoice), false);
+
+  // Correlativos de Factura, NE y Movimientos CxC no deben contaminarse por NC/ND
+  localStorage.setItem('sm_invoice_correlativo_zero_init', 'true');
+  localStorage.setItem('sm_invoice_correlativo_seq', '1');
+  localStorage.setItem('sm_invoice_correlativo_force', '1');
+  const nextFac = getNextInvoiceCorrelativo(
+    [ncRes.fiscalSaleRecord, ndRes.fiscalSaleRecord],
+    [ndRes.createdDebitDoc, ndNeRes.createdDebitDoc]
+  );
+  assert.equal(nextFac, '000001', 'NC/ND no deben alterar el correlativo de Facturas');
+
+  const nextNe = getNextNotaEntregaCorrelativo(
+    [],
+    [{ id: 'NE-000002', factNum: 'NE-000002', tipoDoc: 'NOTA_ENTREGA', fechaEmision: '2026-11-19' }, ndNeRes.createdDebitDoc],
+    'NE'
+  );
+  assert.equal(nextNe, 'NE-000003', 'ND sobre NE (NE-ND-000016) no debe contaminar correlativo NE');
+
+  const nextMov = getNextCxcMovementCorrelativo(
+    [{ id: 'c1', correlativo: '000001', cobNum: '000001', fecha: '2026-11-19' }],
+    [ncRes.updatedAffectedDoc]
+  );
+  assert.equal(nextMov, '000002', 'Nota de Crédito NC-000012 en historialCobros no debe consumir correlativos de cobros');
+
+  // Elegibilidad Libro de Ventas SENIAT: admite registro fiscal NOTA_DEBITO pero bloquea envoltorio CxC internalizado como FACTURA
+  assert.equal(isFiscalDocEligible(ndRes.fiscalSaleRecord), true);
+  assert.equal(isFiscalDocEligible(ncRes.fiscalSaleRecord), true);
+  assert.equal(isFiscalDocEligible(ndRes.createdDebitDoc), false);
+
+  // Cuando la ND ya fue saldada en profit_invoices, su registro fiscal paralelo en sales NO debe resucitar deuda al cliente
+  const settledNdDoc = {
+    ...ndRes.createdDebitDoc,
+    abonosUsd: ndRes.createdDebitDoc.totNetoUsd,
+    saldoUsd: 0,
+    status: 'COBRADA'
+  };
+  const reconciled = reconcileClientsWithRealCxc({
+    clients: [{ id: 'V257070898', nombre: 'Oscar Alberto Cabrera Rodriguez', rif: 'V-25707089-8', saldoDeudorUsd: 999 }],
+    profitInvoices: [settledNdDoc],
+    sales: [ndRes.fiscalSaleRecord],
+    tasaBcv: 917.77
+  });
+  assert.equal(reconciled.clients[0].saldoDeudorUsd, 0, 'Una ND saldada en CxC no debe reaparecer como deuda desde fiscalSaleRecord en sales');
+
+  console.log('  ✓ 15. Regresión NC/ND (correlativos aislados, anti-factura fantasma, anti-deuda duplicada) verificada.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');
