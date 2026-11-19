@@ -361,7 +361,7 @@ const STORAGE_ACTIVE_USER_KEY = 'signum_active_user';
 
 export const SYSTEM_MODULES = [
   // I. SÍNTESIS EJECUTIVA (CONSOLIDADO GRUPOS 1 AL 6)
-  { id: 'dashboard', label: 'Dashboard Ejecutivo', badge: 'Estructural • Consolidado Grupos 1–6' },
+  { id: 'dashboard', label: 'Resumen General', badge: 'Estructural • Consolidado Grupos 1–6' },
 
   // II. CUENTAS REALES (BALANCE GENERAL / SITUACIÓN FINANCIERA)
   { id: 'caja', label: 'Caja Chica & Bancos', badge: 'Cuenta Real • 1.01 Activo Disponible' },

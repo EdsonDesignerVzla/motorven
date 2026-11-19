@@ -1,5 +1,6 @@
 import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
 import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord } from '../utils/cxcUtils.js';
+import { normalizeProfitCollectionUsd } from './commissionService.js';
 
 /**
  * Extrae el mes ('01'..'12') desde fechas ISO o formato DD/MM/YYYY / DD-MM-YYYY.
@@ -156,5 +157,204 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
     cxcTot,
     cxcDiaPct: cxcTot > 0 ? parseFloat(((cxcDia / cxcTot) * 100).toFixed(2)) : 0,
     cxcVenPct: cxcTot > 0 ? parseFloat(((cxcVen / cxcTot) * 100).toFixed(2)) : 0
+  };
+}
+
+const isForeignCollectionMethod = (label, codCaja = '', tipoTasa = '') => {
+  const m = String(label || '').toUpperCase().trim();
+  const caja = String(codCaja || '').toUpperCase().trim();
+  const tt = String(tipoTasa || '').toUpperCase().trim();
+  if (['USD', 'ZELLE', 'USDT', 'USDC'].includes(tt)) return true;
+  return (
+    m.includes('ZELLE') ||
+    m.includes('EFECTIVO_USD') ||
+    m.includes('DIVISA') ||
+    m.includes('CASH') ||
+    m.includes('USD') ||
+    m.includes('USDT') ||
+    m.includes('USDC') ||
+    m === 'EFEC' ||
+    caja.includes('USDT') ||
+    caja.includes('USD')
+  );
+};
+
+/**
+ * Normaliza un registro individual de `profit_collections` devolviendo montos reales en USD, Bs
+ * y su separación en divisas vs. bolívares sin distorsionar pagos directos en USD.
+ */
+export function normalizeCollectionRecordMetrics(col, tasaBcv = 1) {
+  if (!col || typeof col !== 'object') {
+    return { usd: 0, bsReal: 0, bsEquiv: 0, divisasUsd: 0, bsUsd: 0 };
+  }
+  const safeBcv = Number(tasaBcv) > 1 ? Number(tasaBcv) : 1;
+  const rawUsd = Number(col.montoUsd ?? col.monto_usd ?? 0) || 0;
+  const rawBs = Number(col.montoBs ?? col.monto_bs ?? 0) || 0;
+  const cTasaPago = Number(col.tasaPago ?? col.tasa_pago ?? 0) || 0;
+  const cTasaRaw = Number(col.tasa ?? 0) || 0;
+  const effectiveTasa = cTasaPago > 10 ? cTasaPago : (cTasaRaw > 10 ? cTasaRaw : safeBcv);
+
+  let usdVal = normalizeProfitCollectionUsd(col);
+  if (usdVal <= 0 && rawBs > 0 && effectiveTasa > 1) {
+    usdVal = Number((rawBs / effectiveTasa).toFixed(2));
+  }
+  if (usdVal <= 0 && rawUsd <= 0 && rawBs <= 0) {
+    return { usd: 0, bsReal: 0, bsEquiv: 0, divisasUsd: 0, bsUsd: 0 };
+  }
+
+  let divisasUsd = 0;
+  let bsUsd = 0;
+  let bsReal = 0;
+
+  const tipoTasaUp = String(col.tipoTasa ?? col.tipo_tasa ?? '').toUpperCase().trim();
+  const monedaUp = String(col.monedaPago ?? col.moneda_pago ?? col.moneda ?? '').toUpperCase().trim();
+  const formas = Array.isArray(col.formasPago) ? col.formasPago : [];
+
+  if (formas.length > 0 && usdVal > 0) {
+    const totalFpRaw = formas.reduce((acc, fp) => {
+      const v = Number(fp?.montoUsd ?? fp?.monto_usd ?? fp?.monto ?? 0) || 0;
+      return acc + v;
+    }, 0);
+    let anyBs = false;
+    formas.forEach((fp) => {
+      const fpLabel = fp?.tipo || fp?.formaPago || fp?.forma_pago || '';
+      const fpTipoTasa = fp?.tipoTasa || fp?.tipo_tasa || tipoTasaUp;
+      const fpUsdExplicit = Number(fp?.montoUsd ?? fp?.monto_usd ?? 0) || 0;
+      const fpRaw = Number(fp?.montoUsd ?? fp?.monto_usd ?? fp?.monto ?? 0) || 0;
+      const fpUsd = (fpUsdExplicit > 0 && !(effectiveTasa > 10 && rawBs > 0 && Math.abs(fpUsdExplicit - rawBs) < 0.05 && usdVal < fpUsdExplicit))
+        ? fpUsdExplicit
+        : (totalFpRaw > 0 ? (fpRaw / totalFpRaw) * usdVal : usdVal / formas.length);
+
+      if (isForeignCollectionMethod(fpLabel, fp?.codCaja, fpTipoTasa) || (monedaUp === 'USD' && rawBs <= 0)) {
+        divisasUsd += fpUsd;
+      } else {
+        bsUsd += fpUsd;
+        anyBs = true;
+      }
+    });
+    if (anyBs) {
+      bsReal = rawBs > 0 ? rawBs : (bsUsd * effectiveTasa);
+    }
+  } else {
+    const metodo = String(col.metodo || col.formaPago || col.forma_pago || col.tipo || '').toUpperCase().trim();
+    const isDirectUsd =
+      isForeignCollectionMethod(metodo, col.cuentaId || col.codCaja, tipoTasaUp) ||
+      ((monedaUp === 'USD' || monedaUp === 'US$') && rawBs <= 0);
+    if (isDirectUsd) {
+      divisasUsd = usdVal;
+    } else {
+      bsUsd = usdVal;
+      bsReal = rawBs > 0 ? rawBs : (usdVal * effectiveTasa);
+    }
+  }
+
+  const bsEquiv = rawBs > 0 ? rawBs : (usdVal * effectiveTasa);
+  return {
+    usd: Number(usdVal.toFixed(2)),
+    bsReal: Number(bsReal.toFixed(2)),
+    bsEquiv: Number(bsEquiv.toFixed(2)),
+    divisasUsd: Number(divisasUsd.toFixed(2)),
+    bsUsd: Number(bsUsd.toFixed(2))
+  };
+}
+
+/**
+ * Resume cobranzas reales del día (con comparativo vs. ayer) y acumulado del mes seleccionado.
+ */
+export function summarizeCollectionsWindow({
+  profitCollections = [],
+  tasaBcv = 1,
+  todayKey = toDateKey(new Date()),
+  monthPrefix = ''
+} = {}) {
+  const safeToday = todayKey || toDateKey(new Date());
+  const targetPrefix = monthPrefix || safeToday.substring(0, 7);
+
+  const [ty, tm, td] = safeToday.split('-').map(Number);
+  const ayerDate = new Date(ty, (tm || 1) - 1, (td || 1) - 1);
+  const ayerKey = toDateKey(ayerDate);
+
+  const seenIds = new Set();
+  const normalized = [];
+
+  (Array.isArray(profitCollections) ? profitCollections : []).forEach((c) => {
+    if (!c || isCxcInvoiceCancelled(c)) return;
+    const formaUp = String(c.formaPago || c.forma_pago || c.tipo || '').toUpperCase().trim();
+    if (formaUp === 'NOTA_CREDITO') return;
+
+    const idStr = c.id !== undefined && c.id !== null ? String(c.id).trim() : '';
+    if (idStr) {
+      if (seenIds.has(idStr)) return;
+      seenIds.add(idStr);
+    }
+
+    const dateKey = toDateKey(c.fecha || c.fec_cob || c.fecCob || c.fechaEmision || c.fecEmis || c.createdAt || '');
+    if (!dateKey) return;
+
+    const m = normalizeCollectionRecordMetrics(c, tasaBcv);
+    if (m.usd <= 0 && m.bsEquiv <= 0) return;
+
+    const clienteKey = String(c.clienteId || c.cliente_id || c.clienteRif || c.cliente_rif || c.clienteNombre || c.cliente_nombre || '').trim().toUpperCase();
+    normalized.push({ dateKey, clienteKey, ...m });
+  });
+
+  const aggregate = (items) => {
+    let usd = 0;
+    let bsReal = 0;
+    let bsEquiv = 0;
+    let divisasUsd = 0;
+    let bsUsd = 0;
+    const clientes = new Set();
+
+    items.forEach((it) => {
+      usd += it.usd;
+      bsReal += it.bsReal;
+      bsEquiv += it.bsEquiv;
+      divisasUsd += it.divisasUsd;
+      bsUsd += it.bsUsd;
+      if (it.clienteKey) clientes.add(it.clienteKey);
+    });
+
+    return {
+      usd: parseFloat(usd.toFixed(2)),
+      bsReal: parseFloat(bsReal.toFixed(2)),
+      bsEquiv: parseFloat(bsEquiv.toFixed(2)),
+      divisasUsd: parseFloat(divisasUsd.toFixed(2)),
+      bsUsd: parseFloat(bsUsd.toFixed(2)),
+      recibos: items.length,
+      clientes: clientes.size
+    };
+  };
+
+  const hoyAgg = aggregate(normalized.filter((c) => c.dateKey === safeToday));
+  const ayerAgg = aggregate(normalized.filter((c) => c.dateKey === ayerKey));
+  const mesAgg = aggregate(normalized.filter((c) => c.dateKey.startsWith(targetPrefix) && c.dateKey <= safeToday));
+
+  const [py, pm] = targetPrefix.split('-').map(Number);
+  const diasDelMes = new Date(py || ty, pm || tm, 0).getDate();
+  const currentPrefix = safeToday.substring(0, 7);
+  let diasTranscurridos = 0;
+  if (targetPrefix === currentPrefix) diasTranscurridos = Number(safeToday.substring(8, 10)) || 1;
+  else if (targetPrefix < currentPrefix) diasTranscurridos = diasDelMes;
+
+  const esMesEnCurso = targetPrefix === currentPrefix;
+  const esFuturo = targetPrefix > currentPrefix;
+  const promedioDiarioUsd = diasTranscurridos > 0 ? mesAgg.usd / diasTranscurridos : 0;
+
+  return {
+    hoy: {
+      ...hoyAgg,
+      ayerUsd: ayerAgg.usd,
+      ayerRecibos: ayerAgg.recibos
+    },
+    mes: {
+      ...mesAgg,
+      diasDelMes,
+      diasTranscurridos,
+      esMesEnCurso,
+      esFuturo,
+      promedioDiarioUsd: parseFloat(promedioDiarioUsd.toFixed(2)),
+      proyeccionUsd: esMesEnCurso ? parseFloat((promedioDiarioUsd * diasDelMes).toFixed(2)) : mesAgg.usd
+    }
   };
 }

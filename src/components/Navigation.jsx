@@ -76,7 +76,7 @@ export default function Navigation({
     // I. SÍNTESIS EJECUTIVA (CONSOLIDADO VEN-NIF 1 AL 6)
     {
       id: 'dashboard',
-      label: 'Dashboard Ejecutivo',
+      label: 'Resumen General',
       icon: LayoutDashboard,
       section: 'DIRECCIÓN & SÍNTESIS FINANCIERA',
       sectionBadge: 'GRUPOS 1–6',

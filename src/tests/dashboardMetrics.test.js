@@ -4,7 +4,8 @@ import {
   toDateKey,
   getUnduplicatedSales,
   summarizePendingOrders,
-  summarizeReceivablesAging
+  summarizeReceivablesAging,
+  summarizeCollectionsWindow
 } from '../services/dashboardMetricsService.js';
 import { matchesSeller } from '../services/commissionService.js';
 import { buildConsolidatedKardex } from '../utils/kardexUtils.js';
@@ -110,4 +111,42 @@ assert.equal(eraKardex.find(r => r.codigo === '100102')?.salidasVentas, 3);
 assert.equal(eraKardex.find(r => r.codigo === '001201')?.salidasVentas, 1);
 console.log('  ✓ 6. Serie histórica fac-18..21 no suprime facturas modernas 000018..000021 en Dashboard, CxC ni Kardex.');
 
-console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (6/6).');
+// 7. Cobranzas del día y acumulado mensual (USD directo, Bs normalizado, exclusión anulados/N/C y dedup)
+const cobSummary = summarizeCollectionsWindow({
+  tasaBcv: 900,
+  todayKey: '2026-11-19',
+  monthPrefix: '2026-11',
+  profitCollections: [
+    // Pago directo en Zelle hoy (montoBs = 0 con tasaPago = 917 -> NO debe dividirse por 917!)
+    { id: 'c1', fecha: '2026-11-19', clienteId: 'CLI-1', montoUsd: 250, montoBs: 0, tasaPago: 917.77, tipoTasa: 'ZELLE', monedaPago: 'USD', formaPago: 'ZELLE' },
+    // Duplicado exacto de c1 (debe ignorarse)
+    { id: 'c1', fecha: '2026-11-19', clienteId: 'CLI-1', montoUsd: 250, montoBs: 0, tasaPago: 917.77, tipoTasa: 'ZELLE', monedaPago: 'USD', formaPago: 'ZELLE' },
+    // Pago en Bs hoy con tasa 900
+    { id: 'c2', fecha: '2026-11-19', clienteId: 'CLI-2', montoUsd: 100, montoBs: 90000, tasaPago: 900, tipoTasa: 'BCV', monedaPago: 'BS', formaPago: 'TRANS' },
+    // Pago de ayer en efectivo USD
+    { id: 'c3', fecha: '2026-11-18', clienteId: 'CLI-3', montoUsd: 400, montoBs: 0, tasa: 1, tipoTasa: 'USD', monedaPago: 'USD', formaPago: 'EFEC' },
+    // Registro legacy Profit donde montoUsd vino igual a montoBs (90000 / 900 = $100)
+    { id: 'c4', fecha: '2026-11-10', clienteId: 'CLI-1', montoUsd: 90000, montoBs: 90000, tasa: 900, formaPago: 'DEPO' },
+    // Anulado (excluido)
+    { id: 'c5', fecha: '2026-11-19', clienteId: 'CLI-4', montoUsd: 500, montoBs: 0, anulado: true },
+    // Nota de crédito (excluida)
+    { id: 'c6', fecha: '2026-11-19', clienteId: 'CLI-5', montoUsd: 120, montoBs: 0, formaPago: 'NOTA_CREDITO' },
+    // Mes anterior (no entra en Nov 2026)
+    { id: 'c7', fecha: '2026-10-25', clienteId: 'CLI-6', montoUsd: 800, montoBs: 0, tipoTasa: 'USD', monedaPago: 'USD' }
+  ]
+});
+assert.equal(cobSummary.hoy.usd, 350);
+assert.equal(cobSummary.hoy.divisasUsd, 250);
+assert.equal(cobSummary.hoy.bsUsd, 100);
+assert.equal(cobSummary.hoy.bsReal, 90000);
+assert.equal(cobSummary.hoy.recibos, 2);
+assert.equal(cobSummary.hoy.clientes, 2);
+assert.equal(cobSummary.hoy.ayerUsd, 400);
+assert.equal(cobSummary.mes.usd, 850);
+assert.equal(cobSummary.mes.divisasUsd, 650);
+assert.equal(cobSummary.mes.bsUsd, 200);
+assert.equal(cobSummary.mes.recibos, 4);
+assert.equal(cobSummary.mes.clientes, 3);
+console.log('  ✓ 7. Resumen de Cobranzas del Día y Acumulado Mensual (divisas/Bs, dedup y exclusiones) verificado.');
+
+console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (7/7).');
