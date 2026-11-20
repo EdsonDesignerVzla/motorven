@@ -16,6 +16,8 @@ echo.
 echo ======================================================================
 echo.
 
+cd /d "%~dp0"
+node scripts\local-supabase\autoUpdateServer.js
 node scripts\local-supabase\server.js
 
 pause

@@ -341,6 +341,21 @@ async function initDatabase() {
           }
         });
       }
+      // Purgar al arranque documentos fantasma/duplicados marcados en tombstones (sin alterar stock)
+      if (Array.isArray(database.sales)) {
+        const beforeSales = database.sales.length;
+        database.sales = database.sales.filter((s) => !isRowBlockedByDeletedTombstone(s, false));
+        if (database.sales.length !== beforeSales) {
+          console.log(`[Supabase Local] Purgadas ${beforeSales - database.sales.length} venta(s) fantasma/duplicada(s) bloqueadas.`);
+        }
+      }
+      if (Array.isArray(database.profit_invoices)) {
+        const beforeInv = database.profit_invoices.length;
+        database.profit_invoices = database.profit_invoices.filter((inv) => !isRowBlockedByDeletedTombstone(inv, true));
+        if (database.profit_invoices.length !== beforeInv) {
+          console.log(`[Supabase Local] Purgadas ${beforeInv - database.profit_invoices.length} factura(s) fantasma/duplicada(s) bloqueadas.`);
+        }
+      }
       console.log(`[Supabase Local] Base de datos cargada: ${Object.keys(database).length} tablas activas.`);
       return;
     } catch (err) {
@@ -765,6 +780,55 @@ function releaseServerCorrelativeReservation(row) {
   const locks = correlativeReservations.get(seriesType);
   if (locks && !Number.isNaN(val)) {
     locks.delete(val);
+  }
+}
+
+const PERMANENT_PURGED_DOC_FINGERPRINTS = [
+  // Factura duplicada 000012 (12/11/2026, Multirepuestos Vrm, C.A., duplicada exacta de 000595)
+  { canonKey: 'FAC:12', datePrefix: '2026-11-12', clientRif: 'J503078081' }
+];
+const MAX_DELETED_DOC_FINGERPRINTS = 2000;
+
+function extractServerDocFingerprint(row, isProfitInvoice = false) {
+  if (!row || typeof row !== 'object') return null;
+  const canonKey = canonicalServerDocKey(row, isProfitInvoice);
+  if (!canonKey) return null;
+  const rawDate = String(row.fecha_emision || row.fechaEmision || row.fec_emis || row.fecha || '').trim();
+  const datePrefix = /^\d{4}-\d{2}-\d{2}/.test(rawDate) ? rawDate.slice(0, 10) : '';
+  const clientRif = String(row.cliente_rif || row.clienteRif || row.rif || row.cliente_id || row.clienteId || '')
+    .replace(/[^A-Z0-9]/gi, '')
+    .toUpperCase();
+  return { canonKey, datePrefix, clientRif };
+}
+
+function isRowBlockedByDeletedTombstone(row, isProfitInvoice = false) {
+  const fp = extractServerDocFingerprint(row, isProfitInvoice);
+  if (!fp) return false;
+  const allTombstones = [
+    ...PERMANENT_PURGED_DOC_FINGERPRINTS,
+    ...(Array.isArray(database._deleted_doc_fingerprints) ? database._deleted_doc_fingerprints : [])
+  ];
+  return allTombstones.some((t) => {
+    if (!t || t.canonKey !== fp.canonKey) return false;
+    if (t.datePrefix && fp.datePrefix && t.datePrefix !== fp.datePrefix) return false;
+    if (t.clientRif && fp.clientRif && t.clientRif !== fp.clientRif) return false;
+    // Exigir al menos coincidencia de fecha o cliente para no bloquear un correlativo reutilizado en otra fecha
+    return Boolean((t.datePrefix && fp.datePrefix) || (t.clientRif && fp.clientRif));
+  });
+}
+
+function recordDeletedDocTombstone(row, isProfitInvoice = false) {
+  const fp = extractServerDocFingerprint(row, isProfitInvoice);
+  if (!fp || (!fp.datePrefix && !fp.clientRif)) return;
+  if (!Array.isArray(database._deleted_doc_fingerprints)) database._deleted_doc_fingerprints = [];
+  const exists = database._deleted_doc_fingerprints.some(
+    (t) => t && t.canonKey === fp.canonKey && t.datePrefix === fp.datePrefix && t.clientRif === fp.clientRif
+  );
+  if (!exists) {
+    database._deleted_doc_fingerprints.push({ ...fp, deletedAt: new Date().toISOString() });
+    if (database._deleted_doc_fingerprints.length > MAX_DELETED_DOC_FINGERPRINTS) {
+      database._deleted_doc_fingerprints.splice(0, database._deleted_doc_fingerprints.length - MAX_DELETED_DOC_FINGERPRINTS);
+    }
   }
 }
 
@@ -2367,6 +2431,15 @@ const server = http.createServer(async (req, res) => {
             }
           }
 
+          if (tableName === 'sales' || tableName === 'profit_invoices') {
+            const isProfTable = tableName === 'profit_invoices';
+            if (isRowBlockedByDeletedTombstone(newRow, isProfTable)) {
+              // Evitar resurrección de documentos ya eliminados o duplicados desde cachés viejos de navegadores
+              inserted.push(newRow);
+              continue;
+            }
+          }
+
           if (tableName === 'sales' && !isUpsertMode) {
             const originOrderId = String(newRow.pedido_origen_id || newRow.pedidoOrigenId || '').trim();
             if (originOrderId) {
@@ -2748,6 +2821,9 @@ const server = http.createServer(async (req, res) => {
 
           if (matches) {
             deleted.push(row);
+            if (tableName === 'sales' || tableName === 'profit_invoices') {
+              recordDeletedDocTombstone(row, tableName === 'profit_invoices');
+            }
             emitRealtimeChange({
               table: tableName,
               eventType: 'DELETE',

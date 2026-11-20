@@ -3213,7 +3213,36 @@ export const reconcileCxcTombstonesWithServerDocs = (remoteDocs = []) => {
   return delSet;
 };
 
+const PERMANENTLY_PURGED_DUPLICATE_DOCS = [
+  { canonKey: 'FAC:12', datePrefix: '2026-11-12', clientRif: 'J503078081' }
+];
+
+export const isPermanentlyPurgedDuplicateDoc = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  const rawRef = String(doc.numeroDoc || doc.numero_doc || doc.factNum || doc.fact_num || doc.id || '').trim().toUpperCase();
+  if (!rawRef) return false;
+  const isNe = inferCxcDocType(doc) === 'NOTA_ENTREGA' || /^(NE-|NDE-|N\.E-)/i.test(rawRef);
+  const cleanNum = rawRef.replace(/^(FAC-|FACT-|INV-|NE-|NDE-|N\.E-|NC-|ND-|DOC-)/i, '').replace(/^0+(?=\d)/, '');
+  if (!cleanNum) return false;
+  const canonKey = `${isNe ? 'NE' : 'FAC'}:${cleanNum}`;
+  const rawDate = String(doc.fechaEmision || doc.fecha_emision || doc.fec_emis || doc.fecha || '').trim();
+  const datePrefix = /^\d{4}-\d{2}-\d{2}/.test(rawDate) ? rawDate.slice(0, 10) : '';
+  const clientRif = String(doc.clienteRif || doc.cliente_rif || doc.rif || doc.clienteId || doc.cliente_id || '')
+    .replace(/[^A-Z0-9]/gi, '')
+    .toUpperCase();
+  return PERMANENTLY_PURGED_DUPLICATE_DOCS.some(
+    (p) =>
+      p.canonKey === canonKey &&
+      (!p.datePrefix || !datePrefix || p.datePrefix === datePrefix) &&
+      (!p.clientRif || !clientRif || p.clientRif === clientRif) &&
+      Boolean(datePrefix || clientRif)
+  );
+};
+
 export const isCxcEntryDeleted = (docOrIds, delSet) => {
+  if (docOrIds && typeof docOrIds === 'object' && isPermanentlyPurgedDuplicateDoc(docOrIds)) {
+    return true;
+  }
   if (!delSet || delSet.size === 0 || !docOrIds) return false;
   const scopedKeys = getScopedCxcDeleteKeys(docOrIds);
   const matched = scopedKeys.filter(k => delSet.has(k));
@@ -6040,6 +6069,9 @@ export const pushSupplierToSupabase = async (supplierData) => {
 };
 
 export const pushSaleToSupabase = async (saleData) => {
+  if (isPermanentlyPurgedDuplicateDoc(saleData)) {
+    return saleData;
+  }
   let effectiveSaleData = { ...saleData };
   delete effectiveSaleData._createdOffline;
 
@@ -7738,7 +7770,7 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
 };
 
 export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
-  if (!docData) return null;
+  if (!docData || isPermanentlyPurgedDuplicateDoc(docData)) return null;
   const nowIso = new Date().toISOString();
   const rawNumInput = String(docData.factNum ?? docData.fact_num ?? docData.numeroDoc ?? docData.id ?? '').trim();
   const isNotaEntrega =

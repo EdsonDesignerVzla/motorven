@@ -7,7 +7,8 @@ echo ======================================================================
 echo    SIGNUM MOTORVEN - INICIO DEL SERVIDOR PRINCIPAL DE LA OFICINA
 echo ======================================================================
 echo.
-echo  [1/2] Iniciando Base de Datos local (puerto 54321) en otra ventana...
+echo  [1/2] Verificando version mas reciente de server.js e iniciando Base de Datos (puerto 54321)...
+node scripts\local-supabase\autoUpdateServer.js
 start "SIGNUM - BASE DE DATOS (NO CERRAR)" cmd /k "cd /d "%~dp0" && node scripts\local-supabase\server.js"
 
 timeout /t 3 /nobreak >nul

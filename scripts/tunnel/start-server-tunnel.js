@@ -3,12 +3,13 @@
  * Mantiene activo el servidor de base de datos central (puerto 54321) y el túnel
  * oficial fijo https://api.signummotorven.com con reconexión automática 24/7.
  */
-import { spawn, execSync } from 'child_process';
+import { spawn, execSync, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import net from 'net';
 import https from 'https';
 import http from 'http';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -31,6 +32,75 @@ const cloudflaredCandidates = [
 const PORT = Number(process.env.SUPABASE_LOCAL_PORT || 54321);
 const OFFICIAL_BACKEND_URL = process.env.OFFICIAL_BACKEND_URL || 'https://api.signummotorven.com';
 const OFFICIAL_TUNNEL_TOKEN = process.env.CLOUDFLARE_TUNNEL_TOKEN || '';
+const SERVER_AUTO_UPDATE_URL =
+  process.env.SIGNUM_SERVER_UPDATE_URL ||
+  'https://raw.githubusercontent.com/EdsonDesignerVzla/motorvenarreglo/main/scripts/local-supabase/server.js';
+
+function downloadHttpsText(urlStr, timeoutMs = 12000, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 3) return reject(new Error('Demasiadas redirecciones'));
+    const req = https.get(
+      urlStr,
+      {
+        timeout: timeoutMs,
+        headers: { 'User-Agent': 'SIGNUM-MOTORVEN-AutoUpdater/1.0', 'Cache-Control': 'no-cache' }
+      },
+      (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          return downloadHttpsText(res.headers.location, timeoutMs, redirects + 1).then(resolve, reject);
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('Timeout descargando server.js')));
+    req.on('error', reject);
+  });
+}
+
+async function autoUpdateServerScriptBeforeBoot() {
+  if (!fs.existsSync(serverScriptPath)) return { updated: false, reason: 'missing' };
+  try {
+    const remoteCode = await downloadHttpsText(SERVER_AUTO_UPDATE_URL, 12000);
+    if (
+      !remoteCode ||
+      remoteCode.length < 25000 ||
+      !remoteCode.includes('applyServerAtomicStockDelta') ||
+      !remoteCode.includes('initDatabase')
+    ) {
+      return { updated: false, reason: 'invalid_payload' };
+    }
+    const currentCode = fs.readFileSync(serverScriptPath, 'utf8');
+    const hash = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+    if (hash(remoteCode) === hash(currentCode)) {
+      console.log('✅ [AutoUpdate] server.js ya está actualizado con la última versión de producción.');
+      return { updated: false, reason: 'already_latest' };
+    }
+    const tmpPath = `${serverScriptPath}.next`;
+    const prevPath = `${serverScriptPath}.prev`;
+    fs.writeFileSync(tmpPath, remoteCode, 'utf8');
+    try {
+      execFileSync(process.execPath, ['--check', tmpPath], { stdio: 'ignore', timeout: 8000 });
+    } catch (syntaxErr) {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      console.warn('⚠️  [AutoUpdate] Descarga descartada por error de sintaxis; se mantiene server.js local.');
+      return { updated: false, reason: 'syntax_failed' };
+    }
+    try { fs.copyFileSync(serverScriptPath, prevPath); } catch (_) {}
+    fs.renameSync(tmpPath, serverScriptPath);
+    console.log('🚀 [AutoUpdate] server.js actualizado automáticamente desde GitHub (respaldo en server.js.prev).');
+    return { updated: true, reason: 'updated' };
+  } catch (err) {
+    console.log(`ℹ️  [AutoUpdate] No se pudo verificar actualización al arrancar (${err.message}); iniciando con versión local.`);
+    return { updated: false, reason: 'network_error' };
+  }
+}
 
 let currentCfProcess = null;
 let consecutiveHealthFailures = 0;
@@ -252,8 +322,23 @@ async function main() {
   console.log('🚀 INICIANDO SERVIDOR CENTRAL 24/7 - SIGNUM MOTORVEN');
   console.log('============================================================\n');
   killStaleTryCloudflareTunnels();
+  const bootUpdate = await autoUpdateServerScriptBeforeBoot();
   await ensureLocalDatabase({ initial: true });
   startOfficialPersistentTunnel();
+
+  // Si al volver la luz aún no había internet (router reiniciando), reintentar auto-actualización
+  // a los 60s y aplicar reinicio limpio automático si llegó un server.js más reciente.
+  if (bootUpdate.reason === 'network_error') {
+    setTimeout(async () => {
+      const lateUpdate = await autoUpdateServerScriptBeforeBoot();
+      if (lateUpdate.updated && localServerProcess && localServerProcess.exitCode === null) {
+        console.log('🔄 [AutoUpdate] Reiniciando server.js de forma limpia para activar la nueva versión...');
+        try {
+          localServerProcess.kill();
+        } catch (_) {}
+      }
+    }, 60000);
+  }
 }
 
 main().catch(err => {
