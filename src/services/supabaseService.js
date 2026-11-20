@@ -235,9 +235,9 @@ let backendDiscoveryInFlight = false;
 let initialDiscoveryCompleted = false;
 let lastDiscoveryAt = 0;
 
-// El túnel HTTPS (Cloudflare) añade 1-5 s de latencia real; con 2.5 s los equipos remotos
-// marcaban el servidor como caído aunque estuviera activo. En LAN se mantiene un timeout corto.
-const getHealthTimeoutFor = (url) => (/^https:\/\//i.test(String(url || '')) ? 9000 : 2500);
+// El túnel HTTPS (Cloudflare) o conexiones/equipos lentos pueden tardar varios segundos;
+// damos holgura amplia para no marcar el servidor como caído innecesariamente (si responde rápido, retorna al instante).
+const getHealthTimeoutFor = (url) => (/^https:\/\//i.test(String(url || '')) ? 20000 : 6000);
 
 async function probeBackendHealth(candidateUrl, timeoutMs = getHealthTimeoutFor(candidateUrl)) {
   if (!candidateUrl || typeof fetch === 'undefined') return false;
@@ -320,7 +320,7 @@ export async function discoverActiveBackendUrl(force = false) {
           : window.location.pathname.replace(/\/[^/]*$/, '/');
         const jsonUrl = `${window.location.origin}${basePath}backend_url.json?t=${Date.now()}`;
         const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 2500);
+        const tid = setTimeout(() => controller.abort(), 8000);
         const resp = await fetch(jsonUrl, { cache: 'no-store', signal: controller.signal });
         clearTimeout(tid);
         if (resp.ok) {
@@ -442,7 +442,7 @@ const dynamicSupabaseFetch = async (input, init) => {
     } catch (_) {}
   }
 
-  const maxAttempts = 2;
+  const maxAttempts = 3;
   let lastError = null;
   let lastResponse = null;
 
@@ -481,8 +481,8 @@ const dynamicSupabaseFetch = async (input, init) => {
       }
     }
 
-    // Reintento tras error transitorio de túnel (502/503/504/red) aunque la URL siga siendo la oficial
-    await sleepMs(550);
+    // Reintento tras error transitorio de túnel (502/503/504/530/red) aunque la URL siga siendo la oficial
+    await sleepMs(700 * (attempt + 1));
     try {
       await discoverActiveBackendUrl(false);
     } catch (_) {}
@@ -534,12 +534,14 @@ export const resetSupabaseOnlineStatus = () => {
 };
 
 const withTimeout = (promise, ms) => {
-  let timeoutMs = 25000;
+  let timeoutMs = 60000;
   try {
     const isLocal = typeof window !== 'undefined' && window.location && LOCAL_HOSTNAMES.includes(window.location.hostname);
-    timeoutMs = isLocal ? (ms || 10000) : (ms ? Math.max(ms, 12000) : 25000);
+    timeoutMs = isLocal
+      ? (ms ? Math.max(ms, 20000) : 35000)
+      : (ms ? Math.max(ms, 35000) : 60000);
   } catch (_) {
-    timeoutMs = ms || 25000;
+    timeoutMs = ms ? Math.max(ms, 35000) : 60000;
   }
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
@@ -565,7 +567,7 @@ const markStaticFallback = (list) => {
   return list;
 };
 
-const runSupabaseQueryWithRetry = async (queryFactory, timeoutMs = 45000, maxRetries = 1) => {
+const runSupabaseQueryWithRetry = async (queryFactory, timeoutMs = 65000, maxRetries = 2) => {
   let lastErr = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -3425,7 +3427,7 @@ export const reserveServerCorrelativo = async ({ tipoDoc = 'FACTURA', preferredN
   }
   try {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const tid = controller ? setTimeout(() => controller.abort(), 3500) : null;
+    const tid = controller ? setTimeout(() => controller.abort(), 15000) : null;
     const base = String(currentBackendUrl).replace(/\/+$/, '');
     const res = await dynamicSupabaseFetch(`${base}/correlativos/reserve`, {
       method: 'POST',
@@ -10587,7 +10589,7 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
     let allowNonAtomicFallback = false;
     try {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const tid = controller ? setTimeout(() => controller.abort(), 12000) : null;
+      const tid = controller ? setTimeout(() => controller.abort(), 45000) : null;
       const base = String(currentBackendUrl).replace(/\/+$/, '');
       const res = await dynamicSupabaseFetch(`${base}/inventory/apply-delta`, {
         method: 'POST',
