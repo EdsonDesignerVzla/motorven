@@ -4,6 +4,7 @@
  * oficial fijo https://api.signummotorven.com con reconexión automática 24/7.
  */
 import { spawn, execSync, execFileSync } from 'child_process';
+import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import net from 'net';
@@ -32,9 +33,15 @@ const cloudflaredCandidates = [
 const PORT = Number(process.env.SUPABASE_LOCAL_PORT || 54321);
 const OFFICIAL_BACKEND_URL = process.env.OFFICIAL_BACKEND_URL || 'https://api.signummotorven.com';
 const OFFICIAL_TUNNEL_TOKEN = process.env.CLOUDFLARE_TUNNEL_TOKEN || '';
-const SERVER_AUTO_UPDATE_URL =
-  process.env.SIGNUM_SERVER_UPDATE_URL ||
-  'https://raw.githubusercontent.com/EdsonDesignerVzla/motorvenarreglo/main/scripts/local-supabase/server.js';
+const SOURCE_REPO_URL =
+  process.env.SIGNUM_SOURCE_REPO_URL ||
+  'https://github.com/EdsonDesignerVzla/motorvenarreglo.git';
+const SERVER_AUTO_UPDATE_URL = process.env.SIGNUM_SERVER_UPDATE_URL || '';
+const NON_INTERACTIVE_GIT_ENV = {
+  ...process.env,
+  GIT_TERMINAL_PROMPT: '0',
+  GCM_INTERACTIVE: 'never'
+};
 
 function downloadHttpsText(urlStr, timeoutMs = 12000, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -64,42 +71,97 @@ function downloadHttpsText(urlStr, timeoutMs = 12000, redirects = 0) {
   });
 }
 
+function fetchLatestServerCodeViaGit() {
+  // 1. Si estamos dentro de un repo Git, usar git fetch + git show sin tocar local_database.json
+  let dir = path.resolve(path.dirname(serverScriptPath));
+  for (let i = 0; i < 5; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) {
+      execFileSync('git', ['fetch', 'origin', 'main', '--depth=1'], {
+        cwd: dir,
+        stdio: 'ignore',
+        timeout: 15000,
+        env: NON_INTERACTIVE_GIT_ENV
+      });
+      return execFileSync('git', ['show', 'origin/main:scripts/local-supabase/server.js'], {
+        cwd: dir,
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 8000,
+        env: NON_INTERACTIVE_GIT_ENV
+      });
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // 2. Carpeta standalone sin .git: clone ligero solo metadatos y extraer server.js
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'signum-srv-upd-'));
+  try {
+    execFileSync(
+      'git',
+      ['clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', 'main', SOURCE_REPO_URL, tmpDir],
+      { stdio: 'ignore', timeout: 20000, env: NON_INTERACTIVE_GIT_ENV }
+    );
+    return execFileSync('git', ['show', 'HEAD:scripts/local-supabase/server.js'], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 8000,
+      env: NON_INTERACTIVE_GIT_ENV
+    });
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 async function autoUpdateServerScriptBeforeBoot() {
   if (!fs.existsSync(serverScriptPath)) return { updated: false, reason: 'missing' };
+  let remoteCode = null;
+  let lastErr = null;
   try {
-    const remoteCode = await downloadHttpsText(SERVER_AUTO_UPDATE_URL, 12000);
-    if (
-      !remoteCode ||
-      remoteCode.length < 25000 ||
-      !remoteCode.includes('applyServerAtomicStockDelta') ||
-      !remoteCode.includes('initDatabase')
-    ) {
-      return { updated: false, reason: 'invalid_payload' };
-    }
-    const currentCode = fs.readFileSync(serverScriptPath, 'utf8');
-    const hash = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
-    if (hash(remoteCode) === hash(currentCode)) {
-      console.log('✅ [AutoUpdate] server.js ya está actualizado con la última versión de producción.');
-      return { updated: false, reason: 'already_latest' };
-    }
-    const tmpPath = `${serverScriptPath}.next`;
-    const prevPath = `${serverScriptPath}.prev`;
-    fs.writeFileSync(tmpPath, remoteCode, 'utf8');
-    try {
-      execFileSync(process.execPath, ['--check', tmpPath], { stdio: 'ignore', timeout: 8000 });
-    } catch (syntaxErr) {
-      try { fs.unlinkSync(tmpPath); } catch (_) {}
-      console.warn('⚠️  [AutoUpdate] Descarga descartada por error de sintaxis; se mantiene server.js local.');
-      return { updated: false, reason: 'syntax_failed' };
-    }
-    try { fs.copyFileSync(serverScriptPath, prevPath); } catch (_) {}
-    fs.renameSync(tmpPath, serverScriptPath);
-    console.log('🚀 [AutoUpdate] server.js actualizado automáticamente desde GitHub (respaldo en server.js.prev).');
-    return { updated: true, reason: 'updated' };
+    remoteCode = fetchLatestServerCodeViaGit();
   } catch (err) {
-    console.log(`ℹ️  [AutoUpdate] No se pudo verificar actualización al arrancar (${err.message}); iniciando con versión local.`);
+    lastErr = err;
+  }
+  if (!remoteCode && SERVER_AUTO_UPDATE_URL) {
+    try {
+      remoteCode = await downloadHttpsText(SERVER_AUTO_UPDATE_URL, 12000);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!remoteCode) {
+    console.log(`ℹ️  [AutoUpdate] No se pudo verificar actualización al arrancar (${lastErr?.message || 'offline'}); iniciando con versión local.`);
     return { updated: false, reason: 'network_error' };
   }
+  if (
+    remoteCode.length < 25000 ||
+    !remoteCode.includes('applyServerAtomicStockDelta') ||
+    !remoteCode.includes('initDatabase')
+  ) {
+    return { updated: false, reason: 'invalid_payload' };
+  }
+  const normalizeEol = (s) => String(s || '').replace(/\r\n/g, '\n');
+  const currentCode = fs.readFileSync(serverScriptPath, 'utf8');
+  const hash = (s) => crypto.createHash('sha256').update(normalizeEol(s), 'utf8').digest('hex');
+  if (hash(remoteCode) === hash(currentCode)) {
+    console.log('✅ [AutoUpdate] server.js ya está actualizado con la última versión de producción.');
+    return { updated: false, reason: 'already_latest' };
+  }
+  const tmpPath = path.join(path.dirname(serverScriptPath), '.server_update_check.mjs');
+  const prevPath = `${serverScriptPath}.prev`;
+  fs.writeFileSync(tmpPath, remoteCode, 'utf8');
+  try {
+    execFileSync(process.execPath, ['--check', tmpPath], { stdio: 'ignore', timeout: 8000 });
+  } catch (_) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    console.warn('⚠️  [AutoUpdate] Descarga descartada por error de sintaxis; se mantiene server.js local.');
+    return { updated: false, reason: 'syntax_failed' };
+  }
+  try { fs.copyFileSync(serverScriptPath, prevPath); } catch (_) {}
+  fs.renameSync(tmpPath, serverScriptPath);
+  console.log('🚀 [AutoUpdate] server.js actualizado automáticamente desde GitHub (respaldo en server.js.prev).');
+  return { updated: true, reason: 'updated' };
 }
 
 let currentCfProcess = null;
