@@ -5,7 +5,9 @@ import {
   getUnduplicatedSales,
   summarizePendingOrders,
   summarizeReceivablesAging,
-  summarizeCollectionsWindow
+  summarizeCollectionsWindow,
+  isKeystonePayableRecord,
+  summarizeKeystonePayables
 } from '../services/dashboardMetricsService.js';
 import { matchesSeller } from '../services/commissionService.js';
 import { buildConsolidatedKardex } from '../utils/kardexUtils.js';
@@ -149,4 +151,40 @@ assert.equal(cobSummary.mes.recibos, 4);
 assert.equal(cobSummary.mes.clientes, 3);
 console.log('  ✓ 7. Resumen de Cobranzas del Día y Acumulado Mensual (divisas/Bs, dedup y exclusiones) verificado.');
 
-console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (7/7).');
+// 8. Sumatoria actual de Cuentas por Pagar Keystone (dedup, RIF/nombre, excluye otros proveedores/anulados/solventes)
+assert.equal(isKeystonePayableRecord({ provRif: 'J-31115365-9', provNombre: 'Proveedor Principal' }), true);
+assert.equal(isKeystonePayableRecord({ co_prov: 'J311153659', prov_nombre: 'KEYSTONE  C.A.' }), true);
+assert.equal(isKeystonePayableRecord({ provNombre: 'Keistone Lubricantes' }), true);
+assert.equal(isKeystonePayableRecord({ provRif: 'J506639866', provNombre: 'Rs Mercadato, C.A.' }), false);
+
+const keystoneSummary = summarizeKeystonePayables({
+  tasaKeystone: 1000,
+  todayKey: '2026-11-20',
+  profitAccountsPayable: [
+    // Vigente (vence futuro)
+    { id: 'K1', tipoDoc: 'FACT', nroDoc: '16989', provRif: 'J-31115365-9', provNombre: 'Keystone, C.A.', saldoUsd: 1500.5, fechaVencimiento: '2026-11-30' },
+    // Duplicado exacto de K1 (no debe duplicar saldo)
+    { id: 'K1', tipoDoc: 'FACT', nroDoc: '16989', provRif: 'J311153659', provNombre: 'KEYSTONE  C.A.', saldoUsd: 1500.5, fechaVencimiento: '2026-11-30' },
+    // Vencida (vence antes de hoy)
+    { id: 'K2', tipoDoc: 'NE', nroDoc: '17033', co_prov: 'J311153659', prov_nombre: 'KEYSTONE  C.A.', saldo_usd: 499.5, fec_venc: '2026-11-10' },
+    // Sin saldoUsd explícito -> calcula desde saldoBs / tasaKeystone (500000 / 1000 = $500, vence hoy = vigente)
+    { id: 'K3', tipoDoc: 'N/DB', nroDoc: 'ND-0001', provNombre: 'Keistone C.A.', saldoBs: 500000, fechaVencimiento: '2026-11-20' },
+    // Solvente (saldo 0 -> no entra en pendientes)
+    { id: 'K4', tipoDoc: 'FACT', nroDoc: '16000', provRif: 'J-311153659', provNombre: 'Keystone, C.A.', montoNetUsd: 9000, saldoUsd: 0, fechaVencimiento: '2026-10-01' },
+    // Anulada (excluida)
+    { id: 'K5', tipoDoc: 'FACT', nroDoc: '16001', provRif: 'J-311153659', provNombre: 'Keystone, C.A.', saldoUsd: 3000, anulado: true, fechaVencimiento: '2026-10-01' },
+    // Otro proveedor (excluido)
+    { id: 'O1', tipoDoc: 'FACT', nroDoc: '2001', provRif: 'J506639866', provNombre: 'Rs Mercadato, C.A.', saldoUsd: 850, fechaVencimiento: '2026-11-01' }
+  ]
+});
+assert.equal(keystoneSummary.saldoTotalUsd, 2500);
+assert.equal(keystoneSummary.saldoTotalBs, 2500000);
+assert.equal(keystoneSummary.saldoVigenteUsd, 2000.5);
+assert.equal(keystoneSummary.saldoVencidoUsd, 499.5);
+assert.equal(keystoneSummary.documentosPendientes, 3);
+assert.equal(keystoneSummary.docsVigentes, 2);
+assert.equal(keystoneSummary.docsVencidos, 1);
+assert.equal(keystoneSummary.vencidoPct, 20);
+console.log('  ✓ 8. Sumatoria actual de Cuentas por Pagar Keystone (dedup, vigente/vencido, exclusiones) verificada.');
+
+console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (8/8).');

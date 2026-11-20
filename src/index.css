@@ -6792,6 +6792,9 @@ html, body {
 .rg-tab-pill.is-active.tone-cobranzas {
   background: linear-gradient(135deg, #047857 0%, #10b981 100%);
 }
+.rg-tab-pill.is-active.tone-cxp-keystone {
+  background: linear-gradient(135deg, #c2410c 0%, #f59e0b 100%);
+}
 
 .rg-actions-row {
   display: flex;
@@ -6825,6 +6828,9 @@ html, body {
 .rg-section-header.tone-cobranzas {
   border-bottom-color: rgba(16, 185, 129, 0.35);
 }
+.rg-section-header.tone-cxp-keystone {
+  border-bottom-color: rgba(245, 158, 11, 0.4);
+}
 
 .rg-section-title-group {
   display: flex;
@@ -6857,6 +6863,11 @@ html, body {
   color: #34d399;
   border: 1px solid rgba(52, 211, 153, 0.35);
 }
+.rg-section-badge-icon.tone-cxp-keystone {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.38);
+}
 
 [data-theme="light"] .rg-section-badge-icon.tone-facturacion {
   background: #e0f2fe;
@@ -6873,6 +6884,11 @@ html, body {
   color: #047857;
   border-color: #a7f3d0;
 }
+[data-theme="light"] .rg-section-badge-icon.tone-cxp-keystone {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fde68a;
+}
 
 .rg-section-title {
   margin: 0;
@@ -6886,10 +6902,12 @@ html, body {
 .rg-section-title.tone-facturacion { color: #38bdf8; }
 .rg-section-title.tone-inventario { color: #c084fc; }
 .rg-section-title.tone-cobranzas { color: #34d399; }
+.rg-section-title.tone-cxp-keystone { color: #fbbf24; }
 
 [data-theme="light"] .rg-section-title.tone-facturacion { color: #0369a1; }
 [data-theme="light"] .rg-section-title.tone-inventario { color: #6d28d9; }
 [data-theme="light"] .rg-section-title.tone-cobranzas { color: #047857; }
+[data-theme="light"] .rg-section-title.tone-cxp-keystone { color: #b45309; }
 
 .rg-section-sub {
   font-size: 0.76rem;
@@ -6962,6 +6980,20 @@ html, body {
   background: linear-gradient(90deg, #0d9488 0%, #2dd4bf 100%);
 }
 
+.rg-card.accent-amber {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.rg-card.accent-amber::before {
+  background: linear-gradient(90deg, #d97706 0%, #fbbf24 100%);
+}
+
+.rg-card.accent-rose {
+  border-color: rgba(239, 68, 68, 0.42);
+}
+.rg-card.accent-rose::before {
+  background: linear-gradient(90deg, #dc2626 0%, #f87171 100%);
+}
+
 .rg-card.is-clickable {
   cursor: pointer;
 }
@@ -6978,6 +7010,8 @@ html, body {
 [data-theme="light"] .rg-card.accent-cyan { border-color: rgba(2, 132, 199, 0.35); }
 [data-theme="light"] .rg-card.accent-violet { border-color: rgba(109, 40, 217, 0.35); }
 [data-theme="light"] .rg-card.accent-teal { border-color: rgba(13, 148, 136, 0.35); }
+[data-theme="light"] .rg-card.accent-amber { border-color: rgba(217, 119, 6, 0.38); }
+[data-theme="light"] .rg-card.accent-rose { border-color: rgba(220, 38, 38, 0.35); }
 [data-theme="light"] .rg-card.is-clickable:hover {
   box-shadow: 0 12px 28px rgba(0, 43, 122, 0.14);
 }
@@ -7094,11 +7128,15 @@ html, body {
 .rg-val-volume { color: #38bdf8; }
 .rg-val-stock { color: #f8fafc; }
 .rg-val-violet { color: #c084fc; }
+.rg-val-payable { color: #fbbf24; }
+.rg-val-danger { color: #f87171; }
 
 [data-theme="light"] .rg-val-money { color: #059669; }
 [data-theme="light"] .rg-val-volume { color: #0284c7; }
 [data-theme="light"] .rg-val-stock { color: #001f5c; }
 [data-theme="light"] .rg-val-violet { color: #6d28d9; }
+[data-theme="light"] .rg-val-payable { color: #b45309; }
+[data-theme="light"] .rg-val-danger { color: #dc2626; }
 
 .rg-metric-secondary {
   font-family: var(--font-code);
@@ -7207,6 +7245,12 @@ html, body {
   color: #34d399;
 }
 
+.rg-inv-icon-box.tone-amber {
+  background: rgba(245, 158, 11, 0.16);
+  border: 1.5px solid rgba(251, 191, 36, 0.45);
+  color: #fbbf24;
+}
+
 [data-theme="light"] .rg-inv-icon-box.tone-violet {
   background: #ede9fe;
   border-color: #c4b5fd;
@@ -7217,6 +7261,53 @@ html, body {
   background: #d1fae5;
   border-color: #6ee7b7;
   color: #059669;
+}
+
+[data-theme="light"] .rg-inv-icon-box.tone-amber {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #b45309;
+}
+
+.rg-cxp-pill {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #fde68a;
+  border: 1px solid rgba(251, 191, 36, 0.32);
+}
+
+[data-theme="light"] .rg-cxp-pill {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.rg-cxp-pill.is-danger {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+[data-theme="light"] .rg-cxp-pill.is-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.rg-cxp-pill.is-solvente {
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.32);
+}
+
+[data-theme="light"] .rg-cxp-pill.is-solvente {
+  background: #d1fae5;
+  color: #047857;
+  border-color: #a7f3d0;
 }
 
 .rg-cob-split-list {

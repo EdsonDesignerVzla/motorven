@@ -12,7 +12,8 @@ import {
   CheckCircle2,
   Eye,
   Receipt,
-  Wallet
+  Wallet,
+  Building2
 } from 'lucide-react';
 import {
   formatUsd,
@@ -27,7 +28,8 @@ import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from '../services/fi
 import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
 import {
   toDateKey,
-  summarizeCollectionsWindow
+  summarizeCollectionsWindow,
+  summarizeKeystonePayables
 } from '../services/dashboardMetricsService';
 import { isCxcInvoiceCancelled, isCreditOrDebitNoteDoc } from '../utils/cxcUtils';
 
@@ -95,6 +97,7 @@ export default function DashboardView({
   orders = [],
   profitInvoices = [],
   profitCollections = [],
+  profitAccountsPayable = [],
   profitSellers = [],
   config = {},
   currentUser,
@@ -105,7 +108,7 @@ export default function DashboardView({
   const [syncFeedback, setSyncFeedback] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Pestaña activa del Resumen General: 'ALL' | 'facturacion' | 'inventario' | 'cobranzas'
+  // Pestaña activa del Resumen General: 'ALL' | 'facturacion' | 'inventario' | 'cobranzas' | 'cxp-keystone'
   const [activeBlock, setActiveBlock] = useState('ALL');
 
   // Fecha local de hoy (refresca cada minuto para cubrir el cambio de día con la pantalla abierta)
@@ -118,7 +121,7 @@ export default function DashboardView({
     return () => clearInterval(id);
   }, []);
 
-  const { tasaBcv } = useMemo(() => resolveExchangeRates(config), [config]);
+  const { tasaBcv, tasaKeystone } = useMemo(() => resolveExchangeRates(config), [config]);
   const anioActivo = config?.ejercicioFiscalActivo || new Date().getFullYear();
 
   const MONTHS_LIST = useMemo(() => [
@@ -451,6 +454,19 @@ export default function DashboardView({
     return parseFloat(((cobranzaAcumuladaMes.usd / facturadoMesCobranzaUsd) * 100).toFixed(1));
   }, [cobranzaAcumuladaMes.usd, facturadoMesCobranzaUsd]);
 
+  // =========================================================================
+  // 4. CUENTAS POR PAGAR KEYSTONE — SUMATORIA DEL SALDO ACTUAL PENDIENTE
+  // =========================================================================
+  const cxpKeystone = useMemo(
+    () =>
+      summarizeKeystonePayables({
+        profitAccountsPayable,
+        tasaKeystone,
+        todayKey
+      }),
+    [profitAccountsPayable, tasaKeystone, todayKey]
+  );
+
   // Payload consolidado para Vista Previa / PDF si el gerente desea imprimir
   const ventasMesLabel = MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || ventasMesFilter;
   const cobranzasMesLabel = MONTHS_LIST.find(m => m.id === cobranzasMesFilter)?.label || cobranzasMesFilter;
@@ -621,14 +637,15 @@ export default function DashboardView({
         </div>
       </div>
 
-      {/* SELECTOR RÁPIDO DE LOS 3 APARTADOS */}
+      {/* SELECTOR RÁPIDO DE LOS 4 APARTADOS */}
       <div className="rg-tabs-row">
         <div className="rg-tabs-pills">
           {[
             { id: 'ALL', label: 'Todos los Apartados', tone: 'tone-all' },
             { id: 'facturacion', label: '1. Facturación', tone: 'tone-facturacion' },
             { id: 'inventario', label: '2. Inventario', tone: 'tone-inventario' },
-            { id: 'cobranzas', label: '3. Cobranzas', tone: 'tone-cobranzas' }
+            { id: 'cobranzas', label: '3. Cobranzas', tone: 'tone-cobranzas' },
+            { id: 'cxp-keystone', label: '4. CxP Keystone', tone: 'tone-cxp-keystone' }
           ].map(tab => (
             <button
               key={tab.id}
@@ -1090,6 +1107,155 @@ export default function DashboardView({
                     />
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 4. CUENTAS POR PAGAR KEYSTONE (SUMATORIA DEL SALDO ACTUAL PENDIENTE)      */}
+      {/* ========================================================================= */}
+      {(activeBlock === 'ALL' || activeBlock === 'cxp-keystone') && (
+        <section className="rg-section" aria-label="Cuentas por Pagar Keystone">
+          <div className="rg-section-header tone-cxp-keystone">
+            <div className="rg-section-title-group">
+              <div className="rg-section-badge-icon tone-cxp-keystone">
+                <Building2 size={19} />
+              </div>
+              <div>
+                <h2 className="rg-section-title tone-cxp-keystone">4. CUENTAS POR PAGAR KEYSTONE</h2>
+                <div className="rg-section-sub">Sumatoria actual de todas las cuentas por pagar pendientes a Keystone, C.A.</div>
+              </div>
+            </div>
+            <div className="rg-actions-row">
+              {onNavigate && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => onNavigate('cxp')}
+                  style={{ padding: '5px 12px', borderRadius: '8px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <span>Ir a Cuentas por Pagar</span>
+                  <ArrowUpRight size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="rg-grid-2">
+            {/* Tarjeta 4A: Saldo Actual Total CxP Keystone */}
+            <div
+              className="rg-card accent-amber is-clickable"
+              onClick={() => onNavigate && onNavigate('cxp')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxp');
+              }}
+              title="Clic para abrir el detalle de Cuentas por Pagar a Keystone"
+            >
+              <div className="rg-inv-hero-row">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1.1rem', minWidth: 0 }}>
+                  <div className="rg-inv-icon-box tone-amber">
+                    <Building2 size={28} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="rg-metric-label">Saldo Actual Por Pagar • Keystone</div>
+                    <div
+                      className={`rg-metric-value is-hero ${cxpKeystone.saldoTotalUsd > 0 ? 'rg-val-payable' : 'rg-val-money'}`}
+                      style={{ marginTop: '4px' }}
+                    >
+                      {formatUsd(cxpKeystone.saldoTotalUsd)}
+                    </div>
+                  </div>
+                </div>
+                <ArrowUpRight size={22} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+              </div>
+
+              <div className="rg-unit-pills">
+                {cxpKeystone.desglosePorTipo.length > 0 ? (
+                  cxpKeystone.desglosePorTipo.map(item => (
+                    <span key={item.label} className="rg-cxp-pill">
+                      {item.count} {item.label} • {formatUsd(item.usd)}
+                    </span>
+                  ))
+                ) : (
+                  <span className="rg-cxp-pill is-solvente">Solvente • Sin saldo pendiente</span>
+                )}
+              </div>
+
+              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                <span>
+                  <strong>{cxpKeystone.documentosPendientes}</strong>{' '}
+                  {cxpKeystone.documentosPendientes === 1 ? 'cuenta pendiente' : 'cuentas pendientes'}
+                </span>
+                <span>{formatBs(cxpKeystone.saldoTotalBs)}</span>
+              </div>
+            </div>
+
+            {/* Tarjeta 4B: Desglose Vigente vs. Vencido */}
+            <div
+              className={`rg-card ${cxpKeystone.saldoVencidoUsd > 0 ? 'accent-rose' : 'accent-amber'} is-clickable`}
+              onClick={() => onNavigate && onNavigate('cxp')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxp');
+              }}
+              title="Desglose de cartera pendiente por vencer y vencida con Keystone, C.A."
+            >
+              <div className="rg-card-head">
+                <span className="rg-card-title">
+                  <DollarSign size={18} color={cxpKeystone.saldoVencidoUsd > 0 ? 'var(--semaforo-rojo, #ef4444)' : '#f59e0b'} />
+                  ESTADO DEL SALDO KEYSTONE
+                </span>
+                <span
+                  className={`rg-cxp-pill ${
+                    cxpKeystone.saldoTotalUsd <= 0
+                      ? 'is-solvente'
+                      : cxpKeystone.saldoVencidoUsd > 0
+                        ? 'is-danger'
+                        : ''
+                  }`}
+                >
+                  {cxpKeystone.saldoTotalUsd <= 0
+                    ? 'Solvente'
+                    : cxpKeystone.saldoVencidoUsd > 0
+                      ? `${cxpKeystone.vencidoPct}% Vencido`
+                      : 'Al Día'}
+                </span>
+              </div>
+
+              <div className="rg-metrics-split">
+                <div className="rg-metric-tile">
+                  <div className="rg-metric-label">Por Vencer (Vigente)</div>
+                  <div className="rg-metric-value rg-val-money">
+                    {formatUsd(cxpKeystone.saldoVigenteUsd)}
+                  </div>
+                  <div className="rg-metric-note">
+                    {cxpKeystone.docsVigentes} {cxpKeystone.docsVigentes === 1 ? 'documento' : 'documentos'}
+                  </div>
+                </div>
+
+                <div className="rg-metric-tile">
+                  <div className="rg-metric-label">Vencido (En Mora)</div>
+                  <div className={`rg-metric-value ${cxpKeystone.saldoVencidoUsd > 0 ? 'rg-val-danger' : 'rg-val-stock'}`}>
+                    {formatUsd(cxpKeystone.saldoVencidoUsd)}
+                  </div>
+                  <div className="rg-metric-note">
+                    {cxpKeystone.docsVencidos} {cxpKeystone.docsVencidos === 1 ? 'documento' : 'documentos'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                <span>
+                  Proveedor: <strong>Keystone, C.A.</strong> (J-31115365-9)
+                </span>
+                <span>
+                  Tasa Keystone: <strong>{formatBs(tasaKeystone)}</strong>
+                </span>
               </div>
             </div>
           </div>

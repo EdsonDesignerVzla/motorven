@@ -1,6 +1,12 @@
 import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
 import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord } from '../utils/cxcUtils.js';
 import { normalizeProfitCollectionUsd } from './commissionService.js';
+import {
+  dedupePayablesList,
+  normalizeProviderRif,
+  normalizeProviderName,
+  normalizeDocType
+} from '../utils/cxpUtils.js';
 
 /**
  * Extrae el mes ('01'..'12') desde fechas ISO o formato DD/MM/YYYY / DD-MM-YYYY.
@@ -356,5 +362,128 @@ export function summarizeCollectionsWindow({
       promedioDiarioUsd: parseFloat(promedioDiarioUsd.toFixed(2)),
       proyeccionUsd: esMesEnCurso ? parseFloat((promedioDiarioUsd * diasDelMes).toFixed(2)) : mesAgg.usd
     }
+  };
+}
+
+/**
+ * Identifica si un documento CxP pertenece al proveedor Keystone, C.A. (RIF J-31115365-9
+ * o variantes de razón social Keystone / Keistone / Keyton).
+ */
+export function isKeystonePayableRecord(doc) {
+  if (!doc || typeof doc !== 'object') return false;
+  const rif = normalizeProviderRif(
+    doc.provRif ?? doc.prov_rif ?? doc.rif ?? doc.coProv ?? doc.co_prov
+  );
+  if (rif === 'J311153659' || rif === '311153659' || rif.includes('311153659')) {
+    return true;
+  }
+  const name = normalizeProviderName(
+    doc.provNombre ?? doc.prov_nombre ?? doc.provDes ?? doc.prov_des ?? doc.proveedor ?? doc.nombre
+  );
+  return /KEYST|KEIST|KEYTON/.test(name);
+}
+
+/**
+ * Resume la sumatoria actual de todas las Cuentas por Pagar (CxP) pendientes a Keystone, C.A.,
+ * replicando la lógica de deduplicación, exclusión de anulados y cálculo de saldo de AccountsPayableModal.
+ */
+export function summarizeKeystonePayables({
+  profitAccountsPayable = [],
+  tasaKeystone = 1,
+  todayKey = toDateKey(new Date())
+} = {}) {
+  const safeRate = Number(tasaKeystone) > 1 ? Number(tasaKeystone) : 1;
+  const safeToday = todayKey || toDateKey(new Date());
+
+  const uniqueDocs = dedupePayablesList(
+    Array.isArray(profitAccountsPayable) ? profitAccountsPayable : []
+  );
+
+  let saldoTotalUsd = 0;
+  let saldoVigenteUsd = 0;
+  let saldoVencidoUsd = 0;
+  let documentosPendientes = 0;
+  let docsVigentes = 0;
+  let docsVencidos = 0;
+  let documentosTotales = 0;
+  const byTypeMap = new Map();
+
+  const DOC_TYPE_LABELS = {
+    FACT: 'Facturas',
+    FACTURA: 'Facturas',
+    NE: 'Notas Entrega',
+    NOTA_ENTREGA: 'Notas Entrega',
+    'N/DB': 'Notas Débito',
+    ND: 'Notas Débito',
+    'N/CR': 'Notas Crédito',
+    NC: 'Notas Crédito',
+    ADEL: 'Adelantos'
+  };
+
+  uniqueDocs.forEach((doc) => {
+    if (!doc || typeof doc !== 'object') return;
+    if (doc.anulado === true) return;
+    const statusUp = String(doc.status || doc.estado || '').trim().toUpperCase();
+    if (statusUp === 'ANULADO' || statusUp === 'ANULADA') return;
+    if (!isKeystonePayableRecord(doc)) return;
+
+    documentosTotales += 1;
+
+    const montoNetBs = Number(doc.montoNetBs ?? doc.monto_net_bs ?? 0) || 0;
+    const montoNetUsd = Number(
+      doc.montoNetUsd ?? doc.monto_net_usd ?? (safeRate > 1 ? montoNetBs / safeRate : 0)
+    ) || 0;
+    const saldoBsRaw = Number(doc.saldoBs ?? doc.saldo_bs ?? 0) || 0;
+    const explicitSaldoUsd = doc.saldoUsd ?? doc.saldo_usd;
+    const hasExplicitSaldo = explicitSaldoUsd !== undefined && explicitSaldoUsd !== null && explicitSaldoUsd !== '';
+    const rawSaldoUsd = hasExplicitSaldo
+      ? Number(explicitSaldoUsd)
+      : (saldoBsRaw > 0 && safeRate > 1 ? saldoBsRaw / safeRate : montoNetUsd);
+
+    const saldoUsd = Math.max(0, parseFloat((Number.isFinite(rawSaldoUsd) ? rawSaldoUsd : 0).toFixed(2)));
+    if (saldoUsd <= 0.01) return;
+
+    documentosPendientes += 1;
+    saldoTotalUsd += saldoUsd;
+
+    const fecVencRaw = doc.fechaVencimiento || doc.fec_venc || doc.fecVenc || doc.fechaEmision || doc.fec_emis || '';
+    const fecVencKey = toDateKey(fecVencRaw);
+    const isVencido = Boolean(fecVencKey && fecVencKey < safeToday);
+
+    if (isVencido) {
+      saldoVencidoUsd += saldoUsd;
+      docsVencidos += 1;
+    } else {
+      saldoVigenteUsd += saldoUsd;
+      docsVigentes += 1;
+    }
+
+    const tipoDoc = normalizeDocType(doc.tipoDoc ?? doc.tipo_doc);
+    const label = DOC_TYPE_LABELS[tipoDoc] || tipoDoc;
+    const cur = byTypeMap.get(label) || { label, count: 0, usd: 0 };
+    cur.count += 1;
+    cur.usd = parseFloat((cur.usd + saldoUsd).toFixed(2));
+    byTypeMap.set(label, cur);
+  });
+
+  const cleanTotalUsd = parseFloat(saldoTotalUsd.toFixed(2));
+  const cleanVigenteUsd = parseFloat(saldoVigenteUsd.toFixed(2));
+  const cleanVencidoUsd = parseFloat(saldoVencidoUsd.toFixed(2));
+  const cleanTotalBs = parseFloat((cleanTotalUsd * safeRate).toFixed(2));
+  const vencidoPct = cleanTotalUsd > 0
+    ? parseFloat(((cleanVencidoUsd / cleanTotalUsd) * 100).toFixed(1))
+    : 0;
+
+  return {
+    saldoTotalUsd: cleanTotalUsd,
+    saldoTotalBs: cleanTotalBs,
+    saldoVigenteUsd: cleanVigenteUsd,
+    saldoVencidoUsd: cleanVencidoUsd,
+    documentosPendientes,
+    docsVigentes,
+    docsVencidos,
+    documentosTotales,
+    vencidoPct,
+    desglosePorTipo: Array.from(byTypeMap.values())
   };
 }
