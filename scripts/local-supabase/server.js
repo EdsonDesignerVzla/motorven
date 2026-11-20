@@ -332,7 +332,12 @@ async function initDatabase() {
       if (Array.isArray(database._applied_stock_delta_keys)) {
         database._applied_stock_delta_keys.forEach((entry) => {
           if (entry && entry.key) {
-            APPLIED_STOCK_DELTA_KEYS.set(String(entry.key), entry.updatedProducts || []);
+            const rawKey = String(entry.key).trim();
+            const normKey = normalizeServerStockDeltaKey(rawKey);
+            APPLIED_STOCK_DELTA_KEYS.set(rawKey, entry.updatedProducts || []);
+            if (normKey) {
+              APPLIED_STOCK_DELTA_KEYS.set(normKey, entry.updatedProducts || []);
+            }
           }
         });
       }
@@ -764,7 +769,166 @@ function releaseServerCorrelativeReservation(row) {
 }
 
 const APPLIED_STOCK_DELTA_KEYS = new Map();
-const MAX_APPLIED_DELTA_KEYS = 1000;
+const MAX_APPLIED_DELTA_KEYS = 5000;
+const MAX_STOCK_LEDGER_ENTRIES = 2000;
+
+function normalizeServerStockDeltaKey(rawKey) {
+  const clean = String(rawKey || '').trim();
+  if (!clean) return '';
+  // Normalizar claves de ventas/reversiones para que variantes como
+  // sale_000616_deduct, sale_FAC-000616_deduct y sale_FAC_000616_deduct colapsen a la misma clave canónica
+  const saleMatch = clean.match(/^sale_(?:(FAC|FACT|NE|NDE|N\.E|NC|ND)[-_])?([^_]+?)(?:_(\d{8,14}))?_(deduct|revert)$/i);
+  if (saleMatch) {
+    const rawPrefix = String(saleMatch[1] || '').toUpperCase();
+    const rawDoc = String(saleMatch[2] || '').trim().toUpperCase();
+    const tsPart = saleMatch[3] ? `_${saleMatch[3]}` : '';
+    const op = saleMatch[4].toLowerCase();
+    let docType = 'FAC';
+    if (rawPrefix === 'NE' || rawPrefix === 'NDE' || rawPrefix === 'N.E' || /^(NE|NDE|N\.E)[-\s]/i.test(rawDoc)) {
+      docType = 'NE';
+    } else if (rawPrefix === 'NC' || /^NC[-\s]/i.test(rawDoc)) {
+      docType = 'NC';
+    } else if (rawPrefix === 'ND' || /^ND[-\s]/i.test(rawDoc)) {
+      docType = 'ND';
+    }
+    const cleanNum = rawDoc
+      .replace(/^(FAC-|FACT-|INV-|NE-|NDE-|N\.E-|NC-|ND-|DOC-)/i, '')
+      .replace(/^0+(?=\d)/, '');
+    if (cleanNum) {
+      return `sale_${docType}:${cleanNum}${tsPart}_${op}`;
+    }
+  }
+  return clean;
+}
+
+function sanitizeServerTextEncoding(text) {
+  if (typeof text !== 'string' || !text.includes('\uFFFD')) return text;
+  return text
+    .replace(/Almac\uFFFD+n/gi, 'Almacén')
+    .replace(/C\uFFFD+digo/gi, 'Código')
+    .replace(/Descripci\uFFFD+n/gi, 'Descripción')
+    .replace(/\uFFFD+/g, '');
+}
+
+function syncProductRowToWarehouseTable(savedProd, nowIso = new Date().toISOString()) {
+  if (!savedProd || typeof savedProd !== 'object') return;
+  if (!Array.isArray(database.profit_stock_by_warehouse)) database.profit_stock_by_warehouse = [];
+  const prodId = String(savedProd.id || savedProd.codigo || '').trim();
+  const prodCode = String(savedProd.codigo || savedProd.id || '').trim();
+  if (!prodId) return;
+  const stocks = resolveServerWarehouseStocks(savedProd);
+  for (const [whCode, nextVal] of [['01', stocks.stock01], ['02', stocks.stock02]]) {
+    const whId = `${prodId}_${whCode}`;
+    const whIdx = database.profit_stock_by_warehouse.findIndex(
+      (w) => w && (String(w.id || '') === whId || (String(w.co_art || w.codigo || '') === prodId && String(w.co_alma || '') === whCode))
+    );
+    if (whIdx >= 0) {
+      database.profit_stock_by_warehouse[whIdx] = {
+        ...database.profit_stock_by_warehouse[whIdx],
+        stock_act: nextVal,
+        stock_disp: nextVal,
+        updated_at: nowIso
+      };
+    } else {
+      database.profit_stock_by_warehouse.push({
+        id: whId,
+        co_art: prodId,
+        codigo: prodCode,
+        co_alma: whCode,
+        stock_act: nextVal,
+        stock_disp: nextVal,
+        updated_at: nowIso
+      });
+    }
+  }
+}
+
+function buildNormalizedItemsSignature(items = []) {
+  if (!Array.isArray(items) || items.length === 0) return '';
+  const grouped = new Map();
+  for (const it of items) {
+    const code = String(it?.codigo || it?.co_art || it?.articulo_id || it?.articuloId || it?.id || '').trim().toUpperCase();
+    const qty = Number(it?.cantidad ?? it?.qty ?? it?.total_art ?? 0);
+    if (!code || !(qty > 0)) continue;
+    grouped.set(code, Number(((grouped.get(code) || 0) + qty).toFixed(4)));
+  }
+  if (grouped.size === 0) return '';
+  return Array.from(grouped.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([k, v]) => `${k}:${v}`)
+    .join('|');
+}
+
+function syncOrderStatusOnSaleInsert(savedSale) {
+  if (!savedSale || typeof savedSale !== 'object' || !Array.isArray(database.orders)) return;
+  const saleTipo = String(savedSale.tipo_doc || savedSale.tipoDoc || 'FACTURA').toUpperCase();
+  if (saleTipo === 'NOTA_CREDITO' || saleTipo === 'NOTA_DEBITO') return;
+
+  let targetOrderIdx = -1;
+  const explicitOrderId = String(savedSale.pedido_origen_id || savedSale.pedidoOrigenId || '').trim();
+  if (explicitOrderId) {
+    targetOrderIdx = database.orders.findIndex(
+      (o) => o && (String(o.id || '').trim() === explicitOrderId || String(o.numero_pedido || o.numeroPedido || '').trim() === explicitOrderId)
+    );
+  } else {
+    // Auto-vincular solo si existe UN ÚNICO pedido APROBADO reciente (< 24h) del mismo cliente con exactamente los mismos ítems y cantidades
+    const saleSig = buildNormalizedItemsSignature(savedSale.items);
+    const saleCliId = String(savedSale.cliente_id || savedSale.clienteId || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const saleCliRif = String(savedSale.cliente_rif || savedSale.clienteRif || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const saleTs = Date.parse(savedSale.fecha_emision || savedSale.fechaEmision || savedSale.fecha || '') || Date.now();
+    if (saleSig && (saleCliId || saleCliRif)) {
+      const candidates = [];
+      for (let idx = 0; idx < database.orders.length; idx++) {
+        const o = database.orders[idx];
+        if (!o || String(o.id || '').startsWith('SOL-') || String(o.id || '').startsWith('COT-')) continue;
+        const st = String(o.estado || o.status || '').toUpperCase().trim();
+        if (st !== 'APROBADO' && st !== 'PENDIENTE') continue;
+        const oTs = Date.parse(o.fecha_emision || o.fechaEmision || o.fecha || '') || 0;
+        if (oTs > 0 && Math.abs(saleTs - oTs) > 24 * 60 * 60 * 1000) continue;
+        const oCliId = String(o.cliente_id || o.clienteId || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const oCliRif = String(o.cliente_rif || o.clienteRif || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const sameClient =
+          (saleCliId && (saleCliId === oCliId || saleCliId === oCliRif)) ||
+          (saleCliRif && (saleCliRif === oCliId || saleCliRif === oCliRif));
+        if (!sameClient) continue;
+        const oItems = Array.isArray(o.items) && o.items.length > 0 ? o.items : (Array.isArray(o.order_items) ? o.order_items : []);
+        if (buildNormalizedItemsSignature(oItems) === saleSig) {
+          candidates.push(idx);
+        }
+      }
+      if (candidates.length === 1) {
+        targetOrderIdx = candidates[0];
+        const matchedOrder = database.orders[targetOrderIdx];
+        savedSale.pedido_origen_id = matchedOrder.id;
+        savedSale.pedido_origen_doc = matchedOrder.numero_pedido || matchedOrder.numeroPedido || matchedOrder.id;
+      }
+    }
+  }
+
+  if (targetOrderIdx >= 0) {
+    const ord = database.orders[targetOrderIdx];
+    const docNum = String(savedSale.numero_doc || savedSale.numeroDoc || savedSale.id || '').trim();
+    const saleIdVal = String(savedSale.id || docNum).trim();
+    const nowIso = new Date().toISOString();
+    database.orders[targetOrderIdx] = {
+      ...ord,
+      estado: 'FACTURADO',
+      status: 'FACTURADO',
+      factura_id: saleIdVal,
+      facturaId: saleIdVal,
+      nro_factura: docNum,
+      nroFactura: docNum,
+      fecha_factura: savedSale.fecha_emision || savedSale.fecha || nowIso,
+      updated_at: nowIso
+    };
+    emitRealtimeChange({
+      table: 'orders',
+      eventType: 'UPDATE',
+      key: ord.id,
+      item: database.orders[targetOrderIdx]
+    });
+  }
+}
 
 function resolveServerWarehouseStocks(p) {
   const rawTotal = Math.max(0, Number(p?.stock ?? 0) || 0);
@@ -790,9 +954,13 @@ function resolveServerWarehouseStocks(p) {
 }
 
 function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idempotencyKey = '' } = {}) {
-  const cleanKey = String(idempotencyKey || '').trim();
+  const rawKey = String(idempotencyKey || '').trim();
+  const cleanKey = normalizeServerStockDeltaKey(rawKey);
   if (cleanKey && APPLIED_STOCK_DELTA_KEYS.has(cleanKey)) {
     return { ok: true, deduplicated: true, updatedProducts: APPLIED_STOCK_DELTA_KEYS.get(cleanKey) };
+  }
+  if (rawKey && rawKey !== cleanKey && APPLIED_STOCK_DELTA_KEYS.has(rawKey)) {
+    return { ok: true, deduplicated: true, updatedProducts: APPLIED_STOCK_DELTA_KEYS.get(rawKey) };
   }
   if (!Array.isArray(lines) || lines.length === 0) {
     return { ok: true, updatedProducts: [] };
@@ -849,14 +1017,26 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
     const next01 = Math.max(0, rawNext01);
     const next02 = Math.max(0, rawNext02);
     const nextTotal = Number((next01 + next02).toFixed(2));
-    staged.push({ prodIdx, prod, prodCode, next01, next02, nextTotal, delta01, delta02 });
+    staged.push({
+      prodIdx,
+      prod,
+      prodCode,
+      prev01: stocks.stock01,
+      prev02: stocks.stock02,
+      next01,
+      next02,
+      nextTotal,
+      delta01,
+      delta02
+    });
   }
 
   const nowIso = new Date().toISOString();
   const updatedProducts = [];
+  const ledgerLines = [];
 
   for (const entry of staged) {
-    const { prodIdx, prod, prodCode, next01, next02, nextTotal, delta01, delta02 } = entry;
+    const { prodIdx, prod, prodCode, prev01, prev02, next01, next02, nextTotal, delta01, delta02 } = entry;
     const patch = {
       stock: nextTotal,
       stockAlmacen01: next01,
@@ -872,6 +1052,13 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
       id: savedProd.id,
       codigo: prodCode,
       ...patch
+    });
+    ledgerLines.push({
+      codigo: prodCode,
+      delta01,
+      delta02,
+      before: { a01: prev01, a02: prev02 },
+      after: { a01: next01, a02: next02 }
     });
 
     emitRealtimeChange({
@@ -908,6 +1095,19 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
 
     if (delta01 !== 0) syncWhRow('01', next01);
     if (delta02 !== 0) syncWhRow('02', next02);
+  }
+
+  if (ledgerLines.length > 0) {
+    if (!Array.isArray(database._stock_ledger)) database._stock_ledger = [];
+    database._stock_ledger.push({
+      ts: nowIso,
+      key: cleanKey || rawKey || '',
+      rawKey: rawKey || '',
+      lines: ledgerLines
+    });
+    if (database._stock_ledger.length > MAX_STOCK_LEDGER_ENTRIES) {
+      database._stock_ledger.splice(0, database._stock_ledger.length - MAX_STOCK_LEDGER_ENTRIES);
+    }
   }
 
   if (cleanKey) {
@@ -2162,6 +2362,9 @@ const server = http.createServer(async (req, res) => {
             }
             newRow.litrosPorUnidad = realL;
             newRow.litros_por_unidad = realL;
+            if (typeof newRow.ubicacion === 'string') {
+              newRow.ubicacion = sanitizeServerTextEncoding(newRow.ubicacion);
+            }
           }
 
           if (tableName === 'sales' && !isUpsertMode) {
@@ -2311,11 +2514,32 @@ const server = http.createServer(async (req, res) => {
           shouldPersist = true;
           let savedRow;
           if (existingIdx >= 0) {
-            tableData[existingIdx] = { ...tableData[existingIdx], ...newRow };
+            if (tableName === 'products' && newRow._preserveServerStock) {
+              const sanitizedUpdate = { ...newRow };
+              delete sanitizedUpdate._preserveServerStock;
+              delete sanitizedUpdate.stock;
+              delete sanitizedUpdate.stockAlmacen01;
+              delete sanitizedUpdate.stock_almacen_01;
+              delete sanitizedUpdate.stockAlmacen02;
+              delete sanitizedUpdate.stock_almacen_02;
+              tableData[existingIdx] = { ...tableData[existingIdx], ...sanitizedUpdate };
+            } else {
+              const cleanNew = { ...newRow };
+              delete cleanNew._preserveServerStock;
+              tableData[existingIdx] = { ...tableData[existingIdx], ...cleanNew };
+            }
             savedRow = tableData[existingIdx];
           } else {
-            tableData.push(newRow);
-            savedRow = newRow;
+            const cleanNew = { ...newRow };
+            delete cleanNew._preserveServerStock;
+            tableData.push(cleanNew);
+            savedRow = cleanNew;
+          }
+          if (tableName === 'products' && !newRow._preserveServerStock) {
+            syncProductRowToWarehouseTable(savedRow, savedRow.updated_at || new Date().toISOString());
+          }
+          if (tableName === 'sales') {
+            syncOrderStatusOnSaleInsert(savedRow);
           }
           if (tableName === 'sales' || tableName === 'profit_invoices') {
             releaseServerCorrelativeReservation(savedRow);
@@ -2413,7 +2637,30 @@ const server = http.createServer(async (req, res) => {
           }
 
           if (matches) {
-            tableData[i] = { ...row, ...body };
+            let patchBody = body;
+            if (tableName === 'products' && body && typeof body === 'object') {
+              patchBody = { ...body };
+              if (typeof patchBody.ubicacion === 'string') {
+                patchBody.ubicacion = sanitizeServerTextEncoding(patchBody.ubicacion);
+              }
+              if (patchBody._preserveServerStock) {
+                delete patchBody._preserveServerStock;
+                delete patchBody.stock;
+                delete patchBody.stockAlmacen01;
+                delete patchBody.stock_almacen_01;
+                delete patchBody.stockAlmacen02;
+                delete patchBody.stock_almacen_02;
+              }
+            }
+            tableData[i] = { ...row, ...patchBody };
+            if (
+              tableName === 'products' &&
+              body &&
+              !body._preserveServerStock &&
+              (body.stock !== undefined || body.stockAlmacen01 !== undefined || body.stock_almacen_01 !== undefined || body.stockAlmacen02 !== undefined || body.stock_almacen_02 !== undefined)
+            ) {
+              syncProductRowToWarehouseTable(tableData[i], tableData[i].updated_at || new Date().toISOString());
+            }
             updated.push(tableData[i]);
             emitRealtimeChange({
               table: tableName,

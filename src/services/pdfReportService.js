@@ -3875,10 +3875,14 @@ export function generateInventoryPDF({
         else estado = `SOBRANTE (+${diff})`;
       }
 
+      const rawUbicacion = String(p.ubicacion || 'Palet A-01')
+        .replace(/Almac\uFFFD+n/gi, 'Almacén')
+        .replace(/\uFFFD+/g, '');
+
       return [
         p.codigo || 'SKU-00',
         p.descripcion || 'Producto',
-        p.ubicacion || 'Palet A-01',
+        rawUbicacion,
         `${stock} ${resolveProductUnit(p, 'Caja')}`,
         hasCount ? `${count} ${resolveProductUnit(p, 'Caja')}` : '[               ]',
         hasCount ? (diff > 0 ? `+${diff}` : `${diff}`) : '[       ]',

@@ -69,10 +69,15 @@ export const enqueueSyncAction = (entity, action, data) => {
 
   const queue = getSyncQueue();
   
-  // Evitar duplicación innecesaria para updates repetidos del mismo ID
+  // Evitar duplicación innecesaria para updates repetidos del mismo ID o misma clave idempotente de stock_delta
   const itemId = data?.id;
+  const stockDeltaKey = entity === 'stock_delta' ? String(data?.idempotencyKey || data?.id || '').trim() : '';
   let existingIndex = -1;
-  if (itemId && action !== 'DELETE') {
+  if (stockDeltaKey) {
+    existingIndex = queue.findIndex(
+      item => item.entity === 'stock_delta' && String(item.data?.idempotencyKey || item.data?.id || '').trim() === stockDeltaKey
+    );
+  } else if (itemId && action !== 'DELETE') {
     existingIndex = queue.findIndex(item => item.entity === entity && item.data?.id === itemId);
   }
 

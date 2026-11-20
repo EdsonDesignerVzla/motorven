@@ -2290,6 +2290,24 @@ export const getSupabaseProducts = async () => {
 export const saveSupabaseProduct = async (product) => {
   // 1. Normalizar presentación, almacenes, precios y factor de litros antes de guardar
   const stocks = getProductWarehouseStocks(product);
+  const existingLocal = getStorageProducts().find(
+    (p) => p && (
+      (product.id && String(p.id) === String(product.id)) ||
+      (product.codigo && String(p.codigo) === String(product.codigo))
+    )
+  );
+  const prevStocks = existingLocal ? getProductWarehouseStocks(existingLocal) : null;
+  const stockUnchangedOnExisting = Boolean(
+    existingLocal &&
+    !product._explicitStockEdit &&
+    prevStocks &&
+    Number(stocks.stock01) === Number(prevStocks.stock01) &&
+    Number(stocks.stock02) === Number(prevStocks.stock02)
+  );
+  const cleanUbicacion = typeof product.ubicacion === 'string'
+    ? product.ubicacion.replace(/Almac\uFFFD+n/gi, 'Almacén').replace(/\uFFFD+/g, '')
+    : product.ubicacion;
+
   const detal = Number(product.precioUsdDetal ?? product.precio_usd_detal ?? product.precio ?? product.precioUsd ?? product.precioVenta ?? 0) || 0;
   const mayorRaw = Number(product.precioUsdMayor ?? product.precio_usd_mayor ?? product.precioMayor ?? 0) || 0;
   const mayor = mayorRaw > 0 ? mayorRaw : detal;
@@ -2306,6 +2324,7 @@ export const saveSupabaseProduct = async (product) => {
     ...product,
     id: product.id || product.codigo || `OIL_${Date.now()}`,
     codigo: product.codigo || product.id || `OIL_${Date.now()}`,
+    ubicacion: cleanUbicacion,
     costoUsd: costo,
     costo_usd: costo,
     costo: costo,
@@ -2339,10 +2358,13 @@ export const saveSupabaseProduct = async (product) => {
     litros_por_unidad: lpu,
     updated_at: new Date().toISOString()
   };
+  const queuePayload = stockUnchangedOnExisting
+    ? { ...normalized, _preserveServerStock: true }
+    : normalized;
 
   if (!isNetworkOnline() || !isSupabaseAvailable) {
     try { saveStorageProduct(normalized); } catch (_) {}
-    enqueueSyncAction('product', 'UPDATE', normalized);
+    enqueueSyncAction('product', 'UPDATE', queuePayload);
     broadcastReconcileChange({
       tableId: 'products',
       action: 'RECONCILE',
@@ -2354,9 +2376,28 @@ export const saveSupabaseProduct = async (product) => {
 
   try {
     const payload = mapProductToDb(normalized);
-    const { data, error } = await withTimeout(
-      supabase.from('products').upsert(payload).select().single()
-    );
+    let data = null;
+    let error = null;
+    if (stockUnchangedOnExisting) {
+      // Editar precios/metadatos SIN sobrescribir stock del servidor para evitar pisar ventas concurrentes
+      const metaPayload = { ...payload, _preserveServerStock: true };
+      delete metaPayload.stock;
+      delete metaPayload.stockAlmacen01;
+      delete metaPayload.stock_almacen_01;
+      delete metaPayload.stockAlmacen02;
+      delete metaPayload.stock_almacen_02;
+      const res = await withTimeout(
+        supabase.from('products').update(metaPayload).eq('id', payload.id).select().single()
+      );
+      data = res.data;
+      error = res.error;
+    } else {
+      const res = await withTimeout(
+        supabase.from('products').upsert(payload).select().single()
+      );
+      data = res.data;
+      error = res.error;
+    }
 
     if (error) throw error;
     isSupabaseAvailable = true;
@@ -2437,7 +2478,7 @@ export const saveSupabaseProduct = async (product) => {
     console.warn('[saveSupabaseProduct] Supabase error:', err?.message || err);
     try { saveStorageProduct(normalized); } catch (_) {}
     markSupabaseOffline(err, 'saveSupabaseProduct');
-    enqueueSyncAction('product', 'UPDATE', normalized);
+    enqueueSyncAction('product', 'UPDATE', queuePayload);
     return normalized;
   }
 };
@@ -2950,13 +2991,26 @@ export const buildSaleRevertIdempotencyKey = (doc, fallbackRef = '') => {
   return `sale_${isNe ? 'NE' : 'FAC'}_${cleanNum || 'SN'}${ts ? `_${ts}` : ''}_revert`;
 };
 
+export const buildSaleDeductIdempotencyKey = (doc, fallbackRef = '') => {
+  const src = doc && typeof doc === 'object' ? doc : {};
+  const rawRef = String(
+    src.numeroDoc || src.numero_doc || src.factNum || src.fact_num || src.id || fallbackRef || ''
+  ).trim();
+  const isNe = resolveOutgoingDocType(src) === 'NOTA_ENTREGA' || /^(NE-|NDE-|N\.E-)/i.test(rawRef);
+  const cleanNum = rawRef
+    .replace(/^(FAC-|FACT-|NE-|NDE-|N\.E-|fac-|doc-|inv-)/i, '')
+    .trim()
+    .replace(/^0+(?=\d)/, '');
+  return `sale_${isNe ? 'NE' : 'FAC'}_${cleanNum || 'SN'}_deduct`;
+};
+
 const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false, idempotencyKey = '', skipLocalStoragePatch = false } = {}) => {
   const lines = buildSaleStockDeltaLines(saleRecord, { reverse });
   if (lines.length === 0) return [];
   const docId = String(saleRecord?.id || saleRecord?.numeroDoc || saleRecord?.factNum || saleRecord?.fact_num || '').trim();
   const resolvedKey =
     idempotencyKey ||
-    (reverse ? buildSaleRevertIdempotencyKey(saleRecord, docId) : (docId ? `sale_${docId}_deduct` : ''));
+    (reverse ? buildSaleRevertIdempotencyKey(saleRecord, docId) : buildSaleDeductIdempotencyKey(saleRecord, docId));
   return applyStockDeltaForWarehouseLines(lines, {
     validateStrict: false,
     idempotencyKey: resolvedKey,
@@ -3316,10 +3370,20 @@ const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
   localSale._offlineQueued = true;
   const queuedSalePayload = { ...localSale, _createdOffline: true };
   unmarkCxcDeletedDoc(localSale);
+
+  // Encolar primero la venta para que al reconectar se verifique/persista antes del delta de inventario
+  enqueueSyncAction('sale', 'INSERT', queuedSalePayload);
+  broadcastReconcileChange({
+    tableId: 'sales',
+    action: 'CREATE',
+    key: localSale.numeroDoc || localSale.id,
+    item: localSale
+  });
+
   try {
     const deltaLines = buildSaleStockDeltaLines(localSale, { reverse: false });
     if (deltaLines.length > 0) {
-      const deltaKey = `sale_${localSale.id || localSale.numeroDoc}_deduct`;
+      const deltaKey = buildSaleDeductIdempotencyKey(localSale);
       enqueueSyncAction('stock_delta', 'UPDATE', {
         id: deltaKey,
         idempotencyKey: deltaKey,
@@ -3346,13 +3410,6 @@ const syncOfflineSaleInventoryAndCxc = (localSale, saleData = {}) => {
     });
   } catch (_) {}
 
-  enqueueSyncAction('sale', 'INSERT', queuedSalePayload);
-  broadcastReconcileChange({
-    tableId: 'sales',
-    action: 'CREATE',
-    key: localSale.numeroDoc || localSale.id,
-    item: localSale
-  });
   const invoicePayload = buildProfitInvoicePayloadFromSale(
     localSale,
     saleData.vendedorId || saleData.vendedorCoVen || localSale.vendedorId || ''
@@ -3368,9 +3425,9 @@ export const reserveServerCorrelativo = async ({ tipoDoc = 'FACTURA', preferredN
   }
   try {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const tid = controller ? setTimeout(() => controller.abort(), 3000) : null;
+    const tid = controller ? setTimeout(() => controller.abort(), 3500) : null;
     const base = String(currentBackendUrl).replace(/\/+$/, '');
-    const res = await fetch(`${base}/correlativos/reserve`, {
+    const res = await dynamicSupabaseFetch(`${base}/correlativos/reserve`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3398,6 +3455,8 @@ export const processSupabaseSale = async (saleData) => {
     syncOfflineSaleInventoryAndCxc(localSale, saleData);
     return localSale;
   }
+  let savedSale = null;
+  let lastAttemptedSale = null;
   try {
     const isNotaEntrega =
       String(saleData.tipoDoc || '').toUpperCase() === 'NOTA_ENTREGA' ||
@@ -3591,7 +3650,9 @@ export const processSupabaseSale = async (saleData) => {
         numeroDoc: numDocStr,
         numeroControl:
           (useExplicitControl && saleData.numeroControl) ||
-          generateFiscalControlNumber(!isNaN(ctrlDigits) ? ctrlDigits : ((count || 0) + 1)),
+          (isNotaEntrega
+            ? generateDeliveryNoteControlNumber(!isNaN(ctrlDigits) ? ctrlDigits : ((count || 0) + 1))
+            : generateFiscalControlNumber(!isNaN(ctrlDigits) ? ctrlDigits : ((count || 0) + 1))),
         tipoDoc: effectiveTipoDoc,
         documentoAfectado: saleData.documentoAfectado || '',
         fecha: effectiveFechaEmision,
@@ -3653,11 +3714,13 @@ export const processSupabaseSale = async (saleData) => {
     // Insertar venta primero con reintento automático si otro equipo tomó el mismo correlativo (HTTP 409 / 23505),
     // antes de descontar inventario o registrar movimientos en caja/saldo cliente.
     let newSale = buildSaleCandidate(resolvedNumeroDoc, true);
-    let savedSale = null;
+    lastAttemptedSale = newSale;
+    savedSale = null;
     let saleErr = null;
     const attemptedIds = new Set();
     const attemptedDocNums = new Set();
     for (let attempt = 0; attempt < 3; attempt++) {
+      lastAttemptedSale = newSale;
       if (newSale?.id) attemptedIds.add(String(newSale.id).trim());
       if (newSale?.numeroDoc) attemptedDocNums.add(String(newSale.numeroDoc).trim());
       let insertRes = null;
@@ -3764,20 +3827,20 @@ export const processSupabaseSale = async (saleData) => {
     unmarkCxcDeletedDoc(newSale);
 
     // Ejecutar ajuste de inventario y movimiento de caja / saldo cliente tras confirmar la inserción en sales
+    const saleDeductKey = buildSaleDeductIdempotencyKey(newSale);
     const stockPromise = saleData.skipStockAdjustment
       ? Promise.resolve([])
       : adjustSupabaseProductsStockForSale(newSale, {
           reverse: false,
-          idempotencyKey: `sale_${newSale.id || newSale.numeroDoc}_deduct`
+          idempotencyKey: saleDeductKey
         }).catch(stockErr => {
           console.warn('[processSupabaseSale] Aviso ajustando inventario tras venta confirmada:', stockErr?.message || stockErr);
           try {
             const deltaLines = buildSaleStockDeltaLines(newSale, { reverse: false });
             if (deltaLines.length > 0) {
-              const stockKey = `sale_${newSale.id || newSale.numeroDoc}_deduct`;
               enqueueSyncAction('stock_delta', 'UPDATE', {
-                id: stockKey,
-                idempotencyKey: stockKey,
+                id: saleDeductKey,
+                idempotencyKey: saleDeductKey,
                 lines: deltaLines,
                 validateStrict: false,
                 alreadyAppliedLocally: false
@@ -3886,8 +3949,17 @@ export const processSupabaseSale = async (saleData) => {
     }
     console.warn("Fallo o indisponibilidad en Supabase procesando venta, ejecutando fallback local:", err);
     markSupabaseOffline(err, 'processSupabaseSale');
-    const localSale = saveStorageSale(saleData);
-    syncOfflineSaleInventoryAndCxc(localSale, saleData);
+    const offlineFallbackPayload = lastAttemptedSale
+      ? {
+          ...saleData,
+          id: lastAttemptedSale.id || saleData.id,
+          numeroDoc: lastAttemptedSale.numeroDoc || saleData.numeroDoc,
+          numeroControl: lastAttemptedSale.numeroControl || saleData.numeroControl,
+          tipoDoc: lastAttemptedSale.tipoDoc || saleData.tipoDoc
+        }
+      : saleData;
+    const localSale = saveStorageSale(offlineFallbackPayload);
+    syncOfflineSaleInventoryAndCxc(localSale, offlineFallbackPayload);
     return localSale;
   }
 };
@@ -5899,9 +5971,24 @@ export const pushConfigToSupabase = async (configData) => {
 
 export const pushProductToSupabase = async (productData) => {
   const payload = mapProductToDb(productData);
+  if (productData?._preserveServerStock) {
+    const metaPayload = { ...payload, _preserveServerStock: true };
+    delete metaPayload.stock;
+    delete metaPayload.stockAlmacen01;
+    delete metaPayload.stock_almacen_01;
+    delete metaPayload.stockAlmacen02;
+    delete metaPayload.stock_almacen_02;
+    const { data, error } = await withTimeout(
+      supabase.from('products').update(metaPayload).eq('id', payload.id).select().single(),
+      6000
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+    return mapProductFromDb(data);
+  }
   const { data, error } = await withTimeout(
     supabase.from('products').upsert([payload]).select().single(),
-    4000
+    6000
   );
   if (error) throw error;
   isSupabaseAvailable = true;
@@ -5968,6 +6055,12 @@ export const pushSaleToSupabase = async (saleData) => {
         existing &&
         (String(existing.cliente_rif || '').trim() !== String(effectiveSaleData.clienteRif || effectiveSaleData.cliente_rif || '').trim() ||
           Math.abs(Number(existing.total_usd || 0) - Number(effectiveSaleData.totalUsd || effectiveSaleData.total_usd || 0)) > 0.01);
+
+      if (existing && !isDifferentSale) {
+        // La venta ya llegó intacta al servidor antes de la desconexión: no re-insertar ni sobrescribir
+        isSupabaseAvailable = true;
+        return mapSaleFromDb(existing);
+      }
 
       if (isDifferentSale) {
         const [{ data: dbSales }, { data: dbInvoices }] = await Promise.all([
@@ -10494,9 +10587,9 @@ export async function applyStockDeltaForWarehouseLines(lines = [], options = {})
     let allowNonAtomicFallback = false;
     try {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const tid = controller ? setTimeout(() => controller.abort(), 8000) : null;
+      const tid = controller ? setTimeout(() => controller.abort(), 12000) : null;
       const base = String(currentBackendUrl).replace(/\/+$/, '');
-      const res = await fetch(`${base}/inventory/apply-delta`, {
+      const res = await dynamicSupabaseFetch(`${base}/inventory/apply-delta`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

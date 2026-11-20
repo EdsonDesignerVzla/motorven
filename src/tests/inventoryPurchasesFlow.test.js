@@ -8,7 +8,9 @@ import {
   resolveStockItemProductKey,
   buildSaleStockDeltaLines,
   buildDocTypeChangeWarehouseDeltaLines,
+  buildSaleDeductIdempotencyKey,
   buildSaleRevertIdempotencyKey,
+  saveSupabaseProduct,
   deleteSupabaseSale,
   resetSupabaseOnlineStatus,
   saveSupabaseProfitWarehouseTransfer,
@@ -588,6 +590,79 @@ try {
   } finally {
     supabase.from = prevFromForPartialFail;
     clearSyncQueue();
+  }
+  // 12. Clave canónica de descuento de venta, deduplicación en cola offline y blindaje de stock en ediciones de metadatos
+  const dedKeyA = buildSaleDeductIdempotencyKey({ id: '000616', numeroDoc: '000616', tipoDoc: 'FACTURA' });
+  const dedKeyB = buildSaleDeductIdempotencyKey({ id: 'FAC-000616', numeroDoc: '616', tipo_doc: 'FACTURA' });
+  assert.strictEqual(dedKeyA, 'sale_FAC_616_deduct', 'buildSaleDeductIdempotencyKey debe normalizar facturas sin ceros iniciales');
+  assert.strictEqual(dedKeyA, dedKeyB, 'Variantes del mismo correlativo de factura deben compartir idempotencyKey');
+
+  const dedNeA = buildSaleDeductIdempotencyKey({ id: 'NE-002235', numeroDoc: 'NE-002235', tipoDoc: 'NOTA_ENTREGA' });
+  const dedNeB = buildSaleDeductIdempotencyKey({ id: 'N.E-002235', numeroDoc: '2235', tipo_doc: 'NOTA_ENTREGA' });
+  assert.strictEqual(dedNeA, 'sale_NE_2235_deduct', 'buildSaleDeductIdempotencyKey debe normalizar notas de entrega');
+  assert.strictEqual(dedNeA, dedNeB, 'Variantes de NE deben compartir la misma clave idempotente');
+
+  // 12b. Deduplicación de stock_delta en offlineSyncService por idempotencyKey aunque el campo id difiera
+  clearSyncQueue();
+  enqueueSyncAction('stock_delta', 'UPDATE', {
+    id: 'local_1',
+    idempotencyKey: 'sale_FAC_616_deduct',
+    lines: [{ codigo: 'TEST-SKU-01', delta01: -1, delta02: 0 }]
+  });
+  enqueueSyncAction('stock_delta', 'UPDATE', {
+    id: 'local_2',
+    idempotencyKey: 'sale_FAC_616_deduct',
+    lines: [{ codigo: 'TEST-SKU-01', delta01: -1, delta02: 0 }]
+  });
+  assert.strictEqual(
+    getSyncQueue().filter(q => q.entity === 'stock_delta' && q.data?.idempotencyKey === 'sale_FAC_616_deduct').length,
+    1,
+    'La cola offline nunca debe acumular dos stock_delta con la misma idempotencyKey'
+  );
+  clearSyncQueue();
+
+  // 12c. saveSupabaseProduct al editar precio/ubicación SIN cambiar stock debe preservar el stock del servidor y sanear Almacén
+  let capturedMetaPatch = null;
+  const prevFromForMetaEdit = supabase.from;
+  supabase.from = (table) => {
+    const baseChain = mockQueryChain();
+    if (table === 'products') {
+      return {
+        ...baseChain,
+        update: (patch) => {
+          capturedMetaPatch = patch;
+          return {
+            ...baseChain,
+            eq: () => ({
+              ...baseChain,
+              select: () => ({
+                single: () => Promise.resolve({
+                  data: { ...prodWithSplit, ...patch, stock: 99, stockAlmacen01: 49, stockAlmacen02: 50 },
+                  error: null
+                })
+              })
+            })
+          };
+        }
+      };
+    }
+    return baseChain;
+  };
+  try {
+    resetSupabaseOnlineStatus();
+    const curLocal = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+    await saveSupabaseProduct({
+      ...curLocal,
+      precioUsdDetal: 88,
+      ubicacion: '01: Almacén Principal • 02: Almac\uFFFD\uFFFDn Central'
+    });
+    assert.ok(capturedMetaPatch, 'Editar metadatos de un producto existente debe usar UPDATE parcial');
+    assert.strictEqual(capturedMetaPatch._preserveServerStock, true, 'Debe marcar _preserveServerStock: true');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(capturedMetaPatch, 'stock'), false, 'No debe enviar stock al editar solo precio/ubicación');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(capturedMetaPatch, 'stockAlmacen01'), false, 'No debe sobrescribir stockAlmacen01');
+    assert.strictEqual(capturedMetaPatch.ubicacion, '01: Almacén Principal • 02: Almacén Central', 'Debe sanear caracteres corruptos en ubicacion');
+  } finally {
+    supabase.from = prevFromForMetaEdit;
   }
 } finally {
   clearSyncQueue();
