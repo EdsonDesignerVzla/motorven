@@ -30,13 +30,48 @@ const cloudflaredCandidates = [
   'C:\\Program Files\\cloudflared\\cloudflared.exe'
 ];
 
-const PORT = Number(process.env.SUPABASE_LOCAL_PORT || 54321);
-const OFFICIAL_BACKEND_URL = process.env.OFFICIAL_BACKEND_URL || 'https://api.signummotorven.com';
-const OFFICIAL_TUNNEL_TOKEN = process.env.CLOUDFLARE_TUNNEL_TOKEN || '';
+function loadLocalTunnelConfig() {
+  const candidates = [
+    path.join(__dirname, '.tunnel_config.json'),
+    path.join(projectRoot, '.tunnel_config.json')
+  ];
+  for (const fp of candidates) {
+    try {
+      if (fs.existsSync(fp)) {
+        const parsed = JSON.parse(fs.readFileSync(fp, 'utf8'));
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (_) {}
+  }
+  return {};
+}
+
+const tunnelConfig = loadLocalTunnelConfig();
+const PORT = Number(process.env.SUPABASE_LOCAL_PORT || tunnelConfig.port || 54321);
+const OFFICIAL_BACKEND_URL =
+  process.env.OFFICIAL_BACKEND_URL ||
+  tunnelConfig.officialUrl ||
+  tunnelConfig.url ||
+  'https://api.signummotorven.com';
+const OFFICIAL_TUNNEL_TOKEN =
+  process.env.CLOUDFLARE_TUNNEL_TOKEN ||
+  tunnelConfig.CLOUDFLARE_TUNNEL_TOKEN ||
+  tunnelConfig.cloudflareTunnelToken ||
+  tunnelConfig.tunnelToken ||
+  tunnelConfig.token ||
+  '';
 const SOURCE_REPO_URL =
   process.env.SIGNUM_SOURCE_REPO_URL ||
+  tunnelConfig.sourceRepoUrl ||
   'https://github.com/EdsonDesignerVzla/motorvenarreglo.git';
-const SERVER_AUTO_UPDATE_URL = process.env.SIGNUM_SERVER_UPDATE_URL || '';
+const SERVER_AUTO_UPDATE_URL =
+  process.env.SIGNUM_SERVER_UPDATE_URL ||
+  tunnelConfig.serverUpdateUrl ||
+  '';
+const GITHUB_UPDATE_TOKEN =
+  process.env.SIGNUM_GITHUB_TOKEN ||
+  tunnelConfig.githubToken ||
+  '';
 const NON_INTERACTIVE_GIT_ENV = {
   ...process.env,
   GIT_TERMINAL_PROMPT: '0',
@@ -46,11 +81,15 @@ const NON_INTERACTIVE_GIT_ENV = {
 function downloadHttpsText(urlStr, timeoutMs = 12000, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 3) return reject(new Error('Demasiadas redirecciones'));
+    const headers = { 'User-Agent': 'SIGNUM-MOTORVEN-AutoUpdater/1.0', 'Cache-Control': 'no-cache' };
+    if (GITHUB_UPDATE_TOKEN && /github/i.test(urlStr)) {
+      headers.Authorization = `Bearer ${GITHUB_UPDATE_TOKEN}`;
+    }
     const req = https.get(
       urlStr,
       {
         timeout: timeoutMs,
-        headers: { 'User-Agent': 'SIGNUM-MOTORVEN-AutoUpdater/1.0', 'Cache-Control': 'no-cache' }
+        headers
       },
       (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -131,8 +170,13 @@ async function autoUpdateServerScriptBeforeBoot() {
     }
   }
   if (!remoteCode) {
-    console.log(`ℹ️  [AutoUpdate] No se pudo verificar actualización al arrancar (${lastErr?.message || 'offline'}); iniciando con versión local.`);
-    return { updated: false, reason: 'network_error' };
+    const isNoGit = /ENOENT/i.test(String(lastErr?.message || ''));
+    if (isNoGit) {
+      console.log('ℹ️  [AutoUpdate] Git no instalado en este equipo; usando server.js local (actualizado manualmente o vía githubToken).');
+    } else {
+      console.log(`ℹ️  [AutoUpdate] No se pudo verificar actualización al arrancar (${lastErr?.message || 'offline'}); iniciando con versión local.`);
+    }
+    return { updated: false, reason: isNoGit ? 'no_git' : 'network_error' };
   }
   if (
     remoteCode.length < 25000 ||
@@ -280,14 +324,19 @@ function killStaleTryCloudflareTunnels() {
   } catch (_) {}
 }
 
-function startOfficialPersistentTunnel() {
-  if (!OFFICIAL_TUNNEL_TOKEN) {
-    console.error('❌ [2/2] CLOUDFLARE_TUNNEL_TOKEN no está configurado en el entorno. Define la variable para iniciar el túnel.');
+async function startOfficialPersistentTunnel() {
+  saveLocalBackendUrlFiles();
+  const alreadyOnline = await checkUrlHealth(OFFICIAL_BACKEND_URL);
+  if (alreadyOnline) {
+    console.log(`✅ [2/2] Túnel Oficial ya activo vía Servicio de Windows (${OFFICIAL_BACKEND_URL}).`);
     return;
   }
+  if (!OFFICIAL_TUNNEL_TOKEN) {
+    console.log(`ℹ️  [2/2] Sin CLOUDFLARE_TUNNEL_TOKEN en entorno/.tunnel_config.json; esperando servicio de Windows de Cloudflare para ${OFFICIAL_BACKEND_URL}.`);
+    return;
+  }
+  killStaleTryCloudflareTunnels();
   console.log(`🌐 [2/2] Conectando Túnel Oficial Permanente (${OFFICIAL_BACKEND_URL})...`);
-
-  saveLocalBackendUrlFiles();
 
   const foundBin = cloudflaredCandidates.find(p => fs.existsSync(p)) || 'cloudflared';
 
@@ -383,10 +432,9 @@ async function main() {
   console.log('============================================================');
   console.log('🚀 INICIANDO SERVIDOR CENTRAL 24/7 - SIGNUM MOTORVEN');
   console.log('============================================================\n');
-  killStaleTryCloudflareTunnels();
   const bootUpdate = await autoUpdateServerScriptBeforeBoot();
   await ensureLocalDatabase({ initial: true });
-  startOfficialPersistentTunnel();
+  await startOfficialPersistentTunnel();
 
   // Si al volver la luz aún no había internet (router reiniciando), reintentar auto-actualización
   // a los 60s y aplicar reinicio limpio automático si llegó un server.js más reciente.
