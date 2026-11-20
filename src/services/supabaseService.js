@@ -157,7 +157,7 @@ import {
   normalizeDocNumber,
   normalizeDocType
 } from '../utils/cxpUtils.js';
-import { dedupeCashMovements } from '../utils/treasuryAccountUtils.js';
+import { dedupeCashMovements, resolveOpeningBalanceMeta, mergeOpeningBalanceFields } from '../utils/treasuryAccountUtils.js';
 import { round2 } from './formatService.js';
 
 const OFFICIAL_BACKEND_URL = 'https://api.signummotorven.com';
@@ -6271,6 +6271,7 @@ const buildBankAccountFullRow = (r) => {
     : Number(r.saldoUsd ?? r.saldo_usd ?? 0);
 
   const fechaActualizacion = (snakeIsNewer ? r.fecha_actualizacion : (r.fechaActualizacion || r.fecha_actualizacion)) || new Date().toISOString();
+  const opening = resolveOpeningBalanceMeta(r);
 
   return {
     id,
@@ -6298,6 +6299,19 @@ const buildBankAccountFullRow = (r) => {
     saldoUsd,
     saldo_usd: saldoUsd,
     moneda: String(r.moneda || 'BS').trim().toUpperCase(),
+    ...(opening.hasOpeningBalance
+      ? {
+          saldoInicialUsd: opening.saldoInicialUsd,
+          saldo_inicial_usd: opening.saldoInicialUsd,
+          saldoInicialBs: opening.saldoInicialBs,
+          saldo_inicial_bs: opening.saldoInicialBs,
+          fechaSaldoInicial: opening.fechaSaldoInicial,
+          fecha_saldo_inicial: opening.fechaSaldoInicial,
+          ...(opening.usuarioSaldoInicial
+            ? { usuarioSaldoInicial: opening.usuarioSaldoInicial, usuario_saldo_inicial: opening.usuarioSaldoInicial }
+            : {})
+        }
+      : {}),
     fechaActualizacion,
     fecha_actualizacion: fechaActualizacion
   };
@@ -6449,6 +6463,7 @@ const normalizeCashDeskRecord = (r) => {
   const saldoBs = round2(r.saldoBs ?? r.saldo_bs ?? 0);
   const activa = r.activa !== false;
   const fechaActualizacion = r.fechaActualizacion || r.fecha_actualizacion || new Date().toISOString();
+  const opening = resolveOpeningBalanceMeta(r);
 
   return {
     id,
@@ -6466,6 +6481,19 @@ const normalizeCashDeskRecord = (r) => {
     saldoActual: saldoBs,
     responsable,
     activa,
+    ...(opening.hasOpeningBalance
+      ? {
+          saldo_inicial_usd: opening.saldoInicialUsd,
+          saldoInicialUsd: opening.saldoInicialUsd,
+          saldo_inicial_bs: opening.saldoInicialBs,
+          saldoInicialBs: opening.saldoInicialBs,
+          fecha_saldo_inicial: opening.fechaSaldoInicial,
+          fechaSaldoInicial: opening.fechaSaldoInicial,
+          ...(opening.usuarioSaldoInicial
+            ? { usuario_saldo_inicial: opening.usuarioSaldoInicial, usuarioSaldoInicial: opening.usuarioSaldoInicial }
+            : {})
+        }
+      : {}),
     fecha_actualizacion: fechaActualizacion,
     fechaActualizacion
   };
@@ -6592,9 +6620,26 @@ export const deleteProfitCashDeskDirect = async (deskIdOrCode) => {
 
 export const updateSupabaseProfitCashDesk = async (cashDesk) => {
   const nowIso = new Date().toISOString();
+  const targetId = cashDesk.id || String(cashDesk.coCaja || cashDesk.co_caja || 'caja-01').toLowerCase();
+  const targetCode = String(cashDesk.coCaja || cashDesk.co_caja || targetId).trim().toUpperCase();
+  let existingCached = null;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CUSTOM_CASH_DESKS_STORAGE_KEY);
+      const customList = rawCustom ? JSON.parse(rawCustom) : [];
+      if (Array.isArray(customList)) {
+        existingCached = customList.find(
+          item => String(item?.id || '').toLowerCase() === String(targetId).toLowerCase()
+            || String(item?.coCaja || item?.co_caja || '').toUpperCase() === targetCode
+        ) || null;
+      }
+    }
+  } catch (_) {}
+
+  const mergedWithOpening = mergeOpeningBalanceFields(cashDesk, existingCached, { nowIso });
   const normalized = normalizeCashDeskRecord({
-    ...cashDesk,
-    id: cashDesk.id || String(cashDesk.coCaja || cashDesk.co_caja || 'caja-01').toLowerCase(),
+    ...mergedWithOpening,
+    id: targetId,
     fechaActualizacion: nowIso,
     fecha_actualizacion: nowIso
   });
@@ -7401,8 +7446,24 @@ export const deleteProfitBankAccountDirect = async (ref) => {
 export const updateSupabaseProfitBankAccount = async (bankAcc) => {
   if (!bankAcc) return null;
   const nowIso = new Date().toISOString();
+  const targetCode = String(bankAcc.codCta || bankAcc.cod_cta || bankAcc.id?.replace(/^CTA-/i, '') || '').trim().toUpperCase();
+  const targetId = String(bankAcc.id || (targetCode ? `CTA-${targetCode}` : '')).trim().toUpperCase();
+  let existingCached = null;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawCustom = localStorage.getItem(CUSTOM_BANK_ACCOUNTS_STORAGE_KEY);
+      const customList = rawCustom ? JSON.parse(rawCustom) : [];
+      if (Array.isArray(customList)) {
+        existingCached = customList.find(
+          c => String(c?.id || '').toUpperCase() === targetId || String(c?.codCta || c?.cod_cta || '').toUpperCase() === targetCode
+        ) || null;
+      }
+    }
+  } catch (_) {}
+
+  const mergedWithOpening = mergeOpeningBalanceFields(bankAcc, existingCached, { nowIso });
   const normalized = buildBankAccountFullRow({
-    ...bankAcc,
+    ...mergedWithOpening,
     fechaActualizacion: nowIso,
     fecha_actualizacion: nowIso
   });
@@ -7458,6 +7519,34 @@ export const updateSupabaseProfitBankAccount = async (bankAcc) => {
     markSupabaseOffline(err, 'updateSupabaseProfitBankAccount');
     enqueueSyncAction('profit_bank_account', 'UPDATE', normalized);
     return normalized;
+  }
+};
+
+export const fetchTreasuryOpeningBalancesHistory = async () => {
+  const baseUrl = String(currentBackendUrl || OFFICIAL_BACKEND_URL).trim().replace(/\/+$/, '');
+  const url = `${baseUrl}/api/treasury/opening-balances-history`;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const tid = controller ? setTimeout(() => controller.abort(), 15000) : null;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`
+      },
+      cache: 'no-store',
+      ...(controller ? { signal: controller.signal } : {})
+    });
+    if (tid) clearTimeout(tid);
+    if (!res.ok) {
+      const errTxt = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${errTxt ? `: ${errTxt.slice(0, 120)}` : ''}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (tid) clearTimeout(tid);
+    throw err;
   }
 };
 

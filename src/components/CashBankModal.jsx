@@ -26,10 +26,16 @@ import {
   Calendar,
   Layers,
   List,
-  ArrowRightLeft
+  ArrowRightLeft,
+  History,
+  Clock,
+  CheckCircle2,
+  Scale
 } from 'lucide-react';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
+import { fetchTreasuryOpeningBalancesHistory } from '../services/supabaseService';
 import { generateCashflowPDF, generateExpenseVoucherPDF } from '../services/pdfReportService';
+import OpeningBalancesEvolutionModal from './OpeningBalancesEvolutionModal';
 import { buildExpenseAccountOptions } from '../utils/profitabilityUtils';
 import {
   matchesCashDesk,
@@ -52,7 +58,10 @@ import {
   saveCajaFiscalSplitOverride,
   computeCashDeskFiscalBreakdown,
   computeCashDesksFiscalTotals,
-  loadPartnerPayableAccounts
+  loadPartnerPayableAccounts,
+  resolveOpeningBalanceMeta,
+  mergeOpeningBalanceFields,
+  formatTreasuryTimestampVe
 } from '../utils/treasuryAccountUtils';
 import {
   loadPartnerLiabilityMovements,
@@ -195,8 +204,21 @@ export default function CashBankModal({
     saldoFiscalUsd: '0',
     saldoNoFiscalUsd: '0',
     saldoFiscalBs: '0',
-    saldoNoFiscalBs: '0'
+    saldoNoFiscalBs: '0',
+    saldoInicialUsd: '0',
+    saldoInicialBs: '0',
+    fechaSaldoInicial: '',
+    usuarioSaldoInicial: '',
+    updateOpeningBalance: true
   });
+
+  // Panel de auditoría de saldos iniciales e historial de respaldos del servidor
+  const [showOpeningEvolutionModal, setShowOpeningEvolutionModal] = useState(false);
+  const [showOpeningHistoryPanel, setShowOpeningHistoryPanel] = useState(false);
+  const [openingHistoryLoading, setOpeningHistoryLoading] = useState(false);
+  const [openingHistoryError, setOpeningHistoryError] = useState('');
+  const [openingHistoryData, setOpeningHistoryData] = useState(null);
+  const [applyingOpeningKey, setApplyingOpeningKey] = useState(null);
 
   // Estado para crear / editar / guardar cuentas bancarias
   const [showBankForm, setShowBankForm] = useState(false);
@@ -208,7 +230,12 @@ export default function CashBankModal({
     numCta: '',
     moneda: 'BS',
     saldoBs: '0',
-    saldoUsd: '0'
+    saldoUsd: '0',
+    saldoInicialBs: '0',
+    saldoInicialUsd: '0',
+    fechaSaldoInicial: '',
+    usuarioSaldoInicial: '',
+    updateOpeningBalance: true
   });
 
   // Edición rápida en línea por fila de cuenta bancaria
@@ -1521,6 +1548,84 @@ export default function CashBankModal({
     }
   };
 
+  const activeActorName = String(currentUser?.nombre || currentUser?.username || 'Administración').trim() || 'Administración';
+
+  // Consultar historial real de respaldos del servidor SVR-MOTORVEN
+  const handleLoadOpeningHistory = async () => {
+    setOpeningHistoryLoading(true);
+    setOpeningHistoryError('');
+    try {
+      const data = await fetchTreasuryOpeningBalancesHistory();
+      setOpeningHistoryData(data);
+    } catch (err) {
+      setOpeningHistoryError(
+        err?.message || 'No se pudo consultar el historial de respaldos del servidor.'
+      );
+    } finally {
+      setOpeningHistoryLoading(false);
+    }
+  };
+
+  // Adoptar un saldo histórico del respaldo (o el saldo actual) como Saldo Inicial oficial sin alterar el saldo actual
+  const handleApplyHistoricalOpening = async (kind, codeOrId, { saldoUsd = 0, saldoBs = 0, fechaIso = null } = {}) => {
+    const applyKey = `${kind}:${codeOrId}:${fechaIso || 'now'}`;
+    try {
+      setApplyingOpeningKey(applyKey);
+      const effectiveFecha = fechaIso || new Date().toISOString();
+      if (kind === 'CAJA') {
+        const desk = cashDesks.find(d => matchesCashDesk(d, codeOrId));
+        if (!desk) {
+          notify.warning(`No se encontró la caja ${codeOrId} en el catálogo activo.`);
+          return;
+        }
+        const payload = mergeOpeningBalanceFields(
+          {
+            ...desk,
+            saldoInicialUsd: round2(saldoUsd),
+            saldo_inicial_usd: round2(saldoUsd),
+            saldoInicialBs: round2(saldoBs),
+            saldo_inicial_bs: round2(saldoBs),
+            fechaSaldoInicial: effectiveFecha,
+            fecha_saldo_inicial: effectiveFecha,
+            usuarioSaldoInicial: activeActorName,
+            usuario_saldo_inicial: activeActorName
+          },
+          desk,
+          { nowIso: effectiveFecha, actorName: activeActorName, markAsOpening: true }
+        );
+        if (onUpdateCashDesk) await onUpdateCashDesk(payload);
+        notify.success(`Saldo inicial oficial fijado para ${desk.coCaja || codeOrId}: ${formatUsd(saldoUsd)} (${formatTreasuryTimestampVe(effectiveFecha)})`);
+      } else {
+        const bank = bankAccounts.find(b => matchesBankAccount(b, codeOrId));
+        if (!bank) {
+          notify.warning(`No se encontró la cuenta bancaria ${codeOrId} en el catálogo activo.`);
+          return;
+        }
+        const payload = mergeOpeningBalanceFields(
+          {
+            ...bank,
+            saldoInicialUsd: round2(saldoUsd),
+            saldo_inicial_usd: round2(saldoUsd),
+            saldoInicialBs: round2(saldoBs),
+            saldo_inicial_bs: round2(saldoBs),
+            fechaSaldoInicial: effectiveFecha,
+            fecha_saldo_inicial: effectiveFecha,
+            usuarioSaldoInicial: activeActorName,
+            usuario_saldo_inicial: activeActorName
+          },
+          bank,
+          { nowIso: effectiveFecha, actorName: activeActorName, markAsOpening: true }
+        );
+        if (onUpdateBankAccount) await onUpdateBankAccount(payload);
+        notify.success(`Saldo inicial oficial fijado para CTA-${bank.codCta || codeOrId}: ${formatBs(saldoBs)} (${formatTreasuryTimestampVe(effectiveFecha)})`);
+      }
+    } catch (err) {
+      notify.error('No se pudo fijar el saldo inicial: ' + (err?.message || 'Error desconocido'));
+    } finally {
+      setApplyingOpeningKey(null);
+    }
+  };
+
   // Abrir formulario para crear nueva caja con correlativo automático CAJA-XX
   const handleOpenCreateCaja = () => {
     const nextCode = getNextCajaCorrelative(cashDesks);
@@ -1536,7 +1641,12 @@ export default function CashBankModal({
       saldoFiscalUsd: '0',
       saldoNoFiscalUsd: '0',
       saldoFiscalBs: '0',
-      saldoNoFiscalBs: '0'
+      saldoNoFiscalBs: '0',
+      saldoInicialUsd: '0',
+      saldoInicialBs: '0',
+      fechaSaldoInicial: '',
+      usuarioSaldoInicial: activeActorName,
+      updateOpeningBalance: true
     });
     setShowCajaForm(true);
     setShowNewMovForm(false);
@@ -1553,6 +1663,7 @@ export default function CashBankModal({
       { tasaDolar: tasaBcv, tasaKeystone },
       fiscalSplitOverrides
     );
+    const opening = resolveOpeningBalanceMeta(desk);
     setEditingCajaId(desk.id);
     setCajaForm({
       coCaja: desk.coCaja || desk.co_caja || 'CAJA-01',
@@ -1565,7 +1676,12 @@ export default function CashBankModal({
       saldoFiscalUsd: String(bd.fiscalUsd),
       saldoNoFiscalUsd: String(bd.noFiscalUsd),
       saldoFiscalBs: String(bd.fiscalBs),
-      saldoNoFiscalBs: String(bd.noFiscalBs)
+      saldoNoFiscalBs: String(bd.noFiscalBs),
+      saldoInicialUsd: String(opening.hasOpeningBalance ? opening.saldoInicialUsd : bd.totalUsd),
+      saldoInicialBs: String(opening.hasOpeningBalance ? opening.saldoInicialBs : bd.totalBs),
+      fechaSaldoInicial: opening.fechaSaldoInicial || '',
+      usuarioSaldoInicial: opening.usuarioSaldoInicial || activeActorName,
+      updateOpeningBalance: !opening.hasOpeningBalance
     });
     setShowCajaForm(true);
     setShowNewMovForm(false);
@@ -1599,7 +1715,8 @@ export default function CashBankModal({
     try {
       setIsSubmitting(true);
       const id = editingCajaId || cleanCode.toLowerCase();
-      const targetDesk = cashDesks.find(d => matchesCashDesk(d, id) || matchesCashDesk(d, cleanCode)) || { id, coCaja: cleanCode };
+      const existingDesk = cashDesks.find(d => matchesCashDesk(d, id) || matchesCashDesk(d, cleanCode)) || null;
+      const targetDesk = existingDesk || { id, coCaja: cleanCode };
       const bd = computeCashDeskFiscalBreakdown(
         targetDesk,
         cashMovements,
@@ -1617,7 +1734,20 @@ export default function CashBankModal({
       });
       setFiscalSplitOverrides(nextOverrides);
 
-      const payload = {
+      const nowIso = new Date().toISOString();
+      const shouldSetOpening = !editingCajaId || Boolean(cajaForm.updateOpeningBalance);
+      const initUsdVal = !editingCajaId
+        ? parsedUsd
+        : round2(parseFloat(cajaForm.saldoInicialUsd) || 0);
+      const initBsVal = !editingCajaId
+        ? parsedBs
+        : round2(parseFloat(cajaForm.saldoInicialBs) || 0);
+      const rawInitDate = String(cajaForm.fechaSaldoInicial || '').trim();
+      const resolvedInitIso = rawInitDate
+        ? (Number.isNaN(Date.parse(rawInitDate)) ? nowIso : new Date(rawInitDate).toISOString())
+        : nowIso;
+
+      const basePayload = {
         id,
         coCaja: cleanCode,
         co_caja: cleanCode,
@@ -1630,8 +1760,26 @@ export default function CashBankModal({
         saldoUsd: parsedUsd,
         saldo_usd: parsedUsd,
         saldoBs: parsedBs,
-        saldo_bs: parsedBs
+        saldo_bs: parsedBs,
+        ...(shouldSetOpening
+          ? {
+              saldoInicialUsd: initUsdVal,
+              saldo_inicial_usd: initUsdVal,
+              saldoInicialBs: initBsVal,
+              saldo_inicial_bs: initBsVal,
+              fechaSaldoInicial: resolvedInitIso,
+              fecha_saldo_inicial: resolvedInitIso,
+              usuarioSaldoInicial: activeActorName,
+              usuario_saldo_inicial: activeActorName
+            }
+          : {})
       };
+
+      const payload = mergeOpeningBalanceFields(basePayload, existingDesk, {
+        nowIso: resolvedInitIso,
+        actorName: activeActorName,
+        markAsOpening: shouldSetOpening
+      });
 
       if (onUpdateCashDesk) {
         await onUpdateCashDesk(payload);
@@ -1642,7 +1790,7 @@ export default function CashBankModal({
       notify.success(
         editingCajaId
           ? `Caja ${cleanCode} (${cleanDesc}) actualizada exitosamente`
-          : `Nueva caja ${cleanCode} (${cleanDesc}) creada exitosamente`
+          : `Nueva caja ${cleanCode} (${cleanDesc}) creada con saldo inicial registrado`
       );
     } catch (err) {
       console.error(err);
@@ -1745,8 +1893,12 @@ export default function CashBankModal({
 
     try {
       setIsSubmitting(true);
+      const nowIso = new Date().toISOString();
       const id = recordData.id || editingBankId || `CTA-${cleanCode}`;
-      const payload = {
+      const existingBank = bankAccounts.find(b => matchesBankAccount(b, id) || matchesBankAccount(b, cleanCode)) || null;
+      const isNewBank = !isInline && !editingBankId && !existingBank;
+      const shouldSetOpening = isNewBank || Boolean(recordData.updateOpeningBalance);
+      const basePayload = {
         id,
         codCta: cleanCode,
         cod_cta: cleanCode,
@@ -1762,8 +1914,25 @@ export default function CashBankModal({
         saldo_bs: parsedBs,
         saldoUsd: parsedUsd,
         saldo_usd: parsedUsd,
-        fechaActualizacion: new Date().toISOString()
+        ...(shouldSetOpening
+          ? {
+              saldoInicialBs: parsedBs,
+              saldo_inicial_bs: parsedBs,
+              saldoInicialUsd: parsedUsd,
+              saldo_inicial_usd: parsedUsd,
+              fechaSaldoInicial: nowIso,
+              fecha_saldo_inicial: nowIso,
+              usuarioSaldoInicial: activeActorName,
+              usuario_saldo_inicial: activeActorName
+            }
+          : {}),
+        fechaActualizacion: nowIso
       };
+      const payload = mergeOpeningBalanceFields(basePayload, existingBank, {
+        nowIso,
+        actorName: activeActorName,
+        markAsOpening: shouldSetOpening
+      });
 
       if (onUpdateBankAccount) {
         await onUpdateBankAccount(payload);
@@ -1906,7 +2075,27 @@ export default function CashBankModal({
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginLeft: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => setShowOpeningEvolutionModal(true)}
+              className="btn btn-secondary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.52rem 0.95rem',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                borderColor: 'rgba(2, 132, 199, 0.45)',
+                color: 'var(--brand-blue)'
+              }}
+              title="Abrir Tabla Estructurada de Saldos Iniciales y Evolución de Cajas Activas (VET) para editar y cuadrar"
+            >
+              <Scale size={16} />
+              <span>Tabla Saldos Iniciales y Evolución</span>
+            </button>
+
             <button
               onClick={handlePrint}
               className="btn btn-print-report"
@@ -2119,6 +2308,53 @@ export default function CashBankModal({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                   <button
                     type="button"
+                    onClick={() => setShowOpeningEvolutionModal(true)}
+                    className="btn"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.5rem 0.95rem',
+                      fontSize: '0.84rem',
+                      fontWeight: 700,
+                      borderRadius: '10px',
+                      background: 'linear-gradient(135deg, var(--motorven-navy, #002b7a), #0284c7)',
+                      color: '#ffffff',
+                      border: 'none'
+                    }}
+                    title="Ver y editar la Tabla Estructurada de Saldos Iniciales y Evolución de todas las Cajas Activas (VET UTC-4)"
+                  >
+                    <Scale size={16} />
+                    <span>Editar Saldos Iniciales (Tabla Evolución)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextOpen = !showOpeningHistoryPanel;
+                      setShowOpeningHistoryPanel(nextOpen);
+                      if (nextOpen && !openingHistoryData && !openingHistoryLoading) {
+                        handleLoadOpeningHistory();
+                      }
+                    }}
+                    className="btn btn-secondary"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.5rem 0.95rem',
+                      fontSize: '0.84rem',
+                      borderColor: showOpeningHistoryPanel ? 'var(--brand-blue)' : 'var(--border-glass)',
+                      color: showOpeningHistoryPanel ? 'var(--brand-blue)' : 'var(--text-primary)'
+                    }}
+                    title="Ver saldos iniciales guardados y consultar el historial de respaldos diarios del servidor"
+                  >
+                    <History size={16} />
+                    <span>{showOpeningHistoryPanel ? 'Ocultar Saldos Iniciales' : 'Saldos Iniciales / Respaldos'}</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => {
                       if (showCajaForm && !editingCajaId) {
                         setShowCajaForm(false);
@@ -2156,6 +2392,156 @@ export default function CashBankModal({
                   </button>
                 </div>
               </div>
+
+              {/* PANEL DE AUDITORÍA DE SALDOS INICIALES E HISTORIAL DE RESPALDOS DEL SERVIDOR */}
+              {showOpeningHistoryPanel && (
+                <div style={{
+                  background: 'var(--bg-surface)',
+                  padding: '1.25rem',
+                  borderRadius: '12px',
+                  border: '1px solid var(--border-glass)',
+                  marginBottom: '1.5rem',
+                  boxShadow: 'var(--shadow-card)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.9rem' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <History size={17} color="var(--brand-blue)" />
+                        Auditoría de Saldos Iniciales & Respaldos del Servidor
+                      </h4>
+                      <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                        Los saldos iniciales se almacenan de forma permanente en <code>profit_cash_desks</code> y no se sobrescriben al registrar cobros CxC, pagos CxP o movimientos.
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <button
+                        type="button"
+                        onClick={handleLoadOpeningHistory}
+                        disabled={openingHistoryLoading}
+                        className="btn btn-secondary"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.42rem 0.8rem', fontSize: '0.78rem' }}
+                      >
+                        <RefreshCw size={14} className={openingHistoryLoading ? 'animate-spin' : ''} />
+                        <span>{openingHistoryLoading ? 'Consultando...' : 'Consultar Respaldos del Servidor'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowOpeningHistoryPanel(false)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                        title="Cerrar panel"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {openingHistoryError && (
+                    <div style={{
+                      padding: '0.65rem 0.9rem',
+                      borderRadius: '8px',
+                      marginBottom: '0.85rem',
+                      background: 'rgba(245, 158, 11, 0.12)',
+                      border: '1px solid rgba(245, 158, 11, 0.35)',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.8rem'
+                    }}>
+                      <strong>Aviso del servidor:</strong> {openingHistoryError}. Si el servidor central <code>SVR-MOTORVEN</code> aún no se ha reiniciado con la nueva versión, puedes consultar los respaldos directamente ejecutando <code>npm run audit:cajas</code> o reiniciar el servidor para habilitar esta consulta en vivo.
+                    </div>
+                  )}
+
+                  {openingHistoryData && (
+                    <div style={{ marginBottom: '0.85rem' }}>
+                      <div style={{ fontSize: '0.77rem', color: 'var(--text-muted)', marginBottom: '0.65rem', display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <span><strong>Respaldos escaneados:</strong> {openingHistoryData.backupsScanned ?? 0}</span>
+                        <span><strong>Ubicación en servidor:</strong> <code>{openingHistoryData.backupDir || 'backups/'}</code></span>
+                        <span><strong>Consultado:</strong> {formatTreasuryTimestampVe(openingHistoryData.generatedAt)}</span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '0.75rem' }}>
+                        {(openingHistoryData.cashDesks || []).filter(item => item.activeInCurrent).map(item => (
+                          <div
+                            key={item.code}
+                            style={{
+                              padding: '0.85rem',
+                              borderRadius: '10px',
+                              background: 'var(--bg-card-glass)',
+                              border: '1px solid var(--border-glass)'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                              <strong style={{ fontSize: '0.84rem', color: 'var(--text-primary)' }}>
+                                <span style={{ fontFamily: 'var(--font-code)', color: 'var(--brand-blue)', marginRight: '0.35rem' }}>{item.code}</span>
+                                {item.descripcion}
+                              </strong>
+                              <span style={{ fontSize: '0.7rem', padding: '0.12rem 0.45rem', borderRadius: '6px', background: 'rgba(2, 132, 199, 0.14)', color: 'var(--brand-blue)', fontWeight: 700 }}>
+                                {item.moneda}
+                              </span>
+                            </div>
+
+                            {item.explicitOpening ? (
+                              <div style={{ fontSize: '0.76rem', color: '#059669', marginBottom: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <CheckCircle2 size={13} />
+                                <span>
+                                  Inicial fijado: <strong>{formatUsd(item.explicitOpening.saldoInicialUsd)}</strong> ({formatBs(item.explicitOpening.saldoInicialBs)}) · {formatTreasuryTimestampVe(item.explicitOpening.fechaSaldoInicial)}
+                                </span>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.45rem' }}>
+                                Sin saldo inicial fijado todavía. Selecciona un respaldo abajo para adoptarlo:
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '150px', overflowY: 'auto' }}>
+                              {(item.timeline || []).map((snap, sIdx) => {
+                                const keyBtn = `CAJA:${item.code}:${snap.fechaActualizacion || sIdx}`;
+                                return (
+                                  <div
+                                    key={keyBtn}
+                                    style={{
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      gap: '0.5rem',
+                                      padding: '0.35rem 0.5rem',
+                                      borderRadius: '6px',
+                                      background: 'var(--bg-surface)',
+                                      border: '1px solid var(--border-glass)',
+                                      fontSize: '0.74rem'
+                                    }}
+                                  >
+                                    <div>
+                                      <div style={{ fontFamily: 'var(--font-code)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                        {formatUsd(snap.saldoUsd)} <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>({formatBs(snap.saldoBs)})</span>
+                                      </div>
+                                      <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                                        {formatTreasuryTimestampVe(snap.fechaActualizacion)} · {snap.source}
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      disabled={applyingOpeningKey === keyBtn}
+                                      onClick={() => handleApplyHistoricalOpening('CAJA', item.code, {
+                                        saldoUsd: snap.saldoUsd,
+                                        saldoBs: snap.saldoBs,
+                                        fechaIso: snap.fechaActualizacion
+                                      })}
+                                      className="btn btn-secondary"
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', whiteSpace: 'nowrap' }}
+                                      title="Fijar este monto y fecha como Saldo Inicial permanente de la caja"
+                                    >
+                                      {applyingOpeningKey === keyBtn ? '...' : 'Fijar Inicial'}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* FORMULARIO PARA CREAR O EDITAR CAJA REGISTRADORA */}
               {showCajaForm && (
@@ -2367,6 +2753,100 @@ export default function CashBankModal({
                             : `${formatUsd(cajaForm.saldoUsd)} (${formatBs(cajaForm.saldoBs)})`}
                         </div>
                       </div>
+                    </div>
+
+                    {/* BLOQUE DE SALDO INICIAL / APERTURA PERMANENTE */}
+                    <div style={{
+                      padding: '0.9rem 1rem',
+                      borderRadius: '10px',
+                      background: 'var(--bg-card-glass)',
+                      border: '1px solid var(--border-glass)',
+                      marginBottom: '1rem'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: editingCajaId ? '0.75rem' : '0' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                          <Clock size={15} color="var(--brand-blue)" />
+                          <span>Saldo Inicial de Apertura (Referencia Permanente)</span>
+                        </div>
+                        {editingCajaId ? (
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(cajaForm.updateOpeningBalance)}
+                              onChange={(e) => setCajaForm(prev => ({ ...prev, updateOpeningBalance: e.target.checked }))}
+                            />
+                            <span>Fijar / actualizar saldo inicial al guardar</span>
+                          </label>
+                        ) : (
+                          <span style={{ fontSize: '0.74rem', color: '#059669', fontWeight: 600 }}>
+                            Se registrará automáticamente con la fecha y hora actual al crear la caja.
+                          </span>
+                        )}
+                      </div>
+
+                      {editingCajaId && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '0.8rem', opacity: cajaForm.updateOpeningBalance ? 1 : 0.65 }}>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+                              Saldo Inicial USD ($)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              disabled={!cajaForm.updateOpeningBalance}
+                              className="input-modern"
+                              value={cajaForm.saldoInicialUsd}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const n = parseFloat(raw) || 0;
+                                setCajaForm(prev => ({
+                                  ...prev,
+                                  saldoInicialUsd: raw,
+                                  saldoInicialBs: tasaBcv > 0 ? String(round2(n * tasaBcv)) : prev.saldoInicialBs
+                                }));
+                              }}
+                              style={{ width: '100%', fontFamily: 'var(--font-code)' }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+                              Saldo Inicial Bs.
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              disabled={!cajaForm.updateOpeningBalance}
+                              className="input-modern"
+                              value={cajaForm.saldoInicialBs}
+                              onChange={(e) => setCajaForm(prev => ({ ...prev, saldoInicialBs: e.target.value }))}
+                              style={{ width: '100%', fontFamily: 'var(--font-code)' }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+                              Fecha / Hora Apertura (ISO o vacío = ahora)
+                            </label>
+                            <input
+                              type="text"
+                              disabled={!cajaForm.updateOpeningBalance}
+                              className="input-modern"
+                              placeholder="Dejar vacío para fecha/hora actual"
+                              value={cajaForm.fechaSaldoInicial}
+                              onChange={(e) => setCajaForm(prev => ({ ...prev, fechaSaldoInicial: e.target.value }))}
+                              style={{ width: '100%', fontFamily: 'var(--font-code)', fontSize: '0.76rem' }}
+                            />
+                            {cajaForm.fechaSaldoInicial && (
+                              <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                VET: {formatTreasuryTimestampVe(cajaForm.fechaSaldoInicial)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -2830,6 +3310,7 @@ export default function CashBankModal({
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Responsable</th>
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Estado</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--brand-blue)', textAlign: 'right' }}>Saldo Inicial</th>
                       {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'FISCAL') && (
                         <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#c084fc', textAlign: 'right' }}>Saldo Fiscal</th>
                       )}
@@ -2858,6 +3339,8 @@ export default function CashBankModal({
                       const isBsDesk = String(desk.moneda || '').toUpperCase() === 'BS';
                       const fmtPrimary = (usd, bs) => (isBsDesk ? formatBs(bs) : formatUsd(usd));
                       const fmtSecondary = (usd, bs) => (isBsDesk ? formatUsd(usd) : formatBs(bs));
+                      const opening = resolveOpeningBalanceMeta(desk);
+                      const lastUpdatedVe = formatTreasuryTimestampVe(desk.fechaActualizacion || desk.fecha_actualizacion);
                       const isExpanded = !collapsedCajas.has(code);
 
                       const jumpToSubMovs = (docScope) => {
@@ -2939,6 +3422,22 @@ export default function CashBankModal({
                               }}>
                                 ● {isActiva ? 'Activa' : 'Inactiva'}
                               </span>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                              {opening.hasOpeningBalance ? (
+                                <>
+                                  <div style={{ fontWeight: 700, color: 'var(--brand-blue)' }}>
+                                    {fmtPrimary(opening.saldoInicialUsd, opening.saldoInicialBs)}
+                                  </div>
+                                  {opening.fechaSaldoInicial && (
+                                    <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)' }}>
+                                      {formatTreasuryTimestampVe(opening.fechaSaldoInicial)}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                '—'
+                              )}
                             </td>
                             <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
                               <div style={{ fontWeight: 700, color: isF ? '#c084fc' : '#f59e0b' }}>
@@ -3068,6 +3567,41 @@ export default function CashBankModal({
                                 ● {isActiva ? 'Activa' : 'Inactiva'}
                               </span>
                             </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                              {opening.hasOpeningBalance ? (
+                                <>
+                                  <div style={{ fontWeight: 700, color: 'var(--brand-blue)' }}>
+                                    {fmtPrimary(opening.saldoInicialUsd, opening.saldoInicialBs)}
+                                  </div>
+                                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                    {opening.fechaSaldoInicial ? formatTreasuryTimestampVe(opening.fechaSaldoInicial) : 'Sin fecha'}
+                                  </div>
+                                  {opening.usuarioSaldoInicial && (
+                                    <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                      Por: {opening.usuarioSaldoInicial}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowOpeningEvolutionModal(true)}
+                                  style={{
+                                    background: 'rgba(148, 163, 184, 0.14)',
+                                    border: '1px dashed var(--border-glass)',
+                                    color: 'var(--text-muted)',
+                                    borderRadius: '6px',
+                                    padding: '0.2rem 0.45rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer'
+                                  }}
+                                  title="Clic para abrir la Tabla de Saldos Iniciales y definir la apertura de esta caja"
+                                >
+                                  Sin fijar · Definir
+                                </button>
+                              )}
+                            </td>
                             <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#c084fc', fontWeight: 700 }}>
                               {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
                             </td>
@@ -3081,6 +3615,11 @@ export default function CashBankModal({
                               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                                 {fmtSecondary(bd.totalUsd, bd.totalBs)}
                               </div>
+                              {lastUpdatedVe && (
+                                <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }} title="Última actualización de saldo">
+                                  Act: {lastUpdatedVe}
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
                               <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
@@ -3177,6 +3716,7 @@ export default function CashBankModal({
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{monedaDisplay}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-muted)', fontSize: '0.76rem' }}>{desk.responsable || 'Administración'}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#c084fc' }}>
                                   {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
                                 </td>
@@ -3235,6 +3775,7 @@ export default function CashBankModal({
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{monedaDisplay}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-muted)', fontSize: '0.76rem' }}>{desk.responsable || 'Administración'}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>—</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#f59e0b' }}>
                                   {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
@@ -3279,6 +3820,31 @@ export default function CashBankModal({
                           : cajaScopeFilter === 'NO_FISCAL'
                             ? 'Total Cajas No Fiscales'
                             : 'Sumatoria Total Cajas (Fiscal + No Fiscal)'}
+                      </td>
+                      <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
+                        {(() => {
+                          let initUsd = 0;
+                          let initBs = 0;
+                          let countSet = 0;
+                          cashDesks.forEach((d) => {
+                            const om = resolveOpeningBalanceMeta(d);
+                            if (om.hasOpeningBalance) {
+                              countSet += 1;
+                              initUsd += Number(om.saldoInicialUsd || 0);
+                              initBs += Number(om.saldoInicialBs || 0);
+                            }
+                          });
+                          return countSet > 0 ? (
+                            <>
+                              <div>{formatUsd(round2(initUsd))}</div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                                {countSet}/{cashDesks.length} fijadas
+                              </div>
+                            </>
+                          ) : (
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 500 }}>Sin fijar</span>
+                          );
+                        })()}
                       </td>
                       {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'FISCAL') && (
                         <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#c084fc' }}>
@@ -3638,6 +4204,7 @@ export default function CashBankModal({
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Cuenta a Nombre de:</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Número de Cuenta</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--brand-blue)', textAlign: 'right' }}>Saldo Inicial</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo en Bs</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Contravalor USD</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
@@ -3653,6 +4220,7 @@ export default function CashBankModal({
                       const saldoUsd = valuation.usd;
                       const isNegative = saldoBs < 0;
                       const titularNombre = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
+                      const bankOpening = resolveOpeningBalanceMeta(b);
 
                       return (
                         <tr 
@@ -3779,6 +4347,34 @@ export default function CashBankModal({
                               }}>
                                 {b.moneda || 'BS'}
                               </span>
+                            )}
+                          </td>
+
+                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem' }}>
+                            {isEditingRow ? (
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', fontFamily: 'var(--font-main)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(inlineBankDraft.updateOpeningBalance)}
+                                  onChange={(e) => setInlineBankDraft(prev => ({ ...prev, updateOpeningBalance: e.target.checked }))}
+                                />
+                                <span>Fijar como Inicial</span>
+                              </label>
+                            ) : bankOpening.hasOpeningBalance ? (
+                              <>
+                                <div style={{ fontWeight: 700, color: 'var(--brand-blue)' }}>
+                                  {String(b.moneda || 'BS').toUpperCase() === 'BS'
+                                    ? formatBs(bankOpening.saldoInicialBs)
+                                    : formatUsd(bankOpening.saldoInicialUsd)}
+                                </div>
+                                {bankOpening.fechaSaldoInicial && (
+                                  <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                    {formatTreasuryTimestampVe(bankOpening.fechaSaldoInicial)}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>Sin fijar</span>
                             )}
                           </td>
 
@@ -4776,6 +5372,18 @@ export default function CashBankModal({
             </div>
           );
         })()}
+
+        {/* MODAL TABLA ESTRUCTURADA DE SALDOS INICIALES Y EVOLUCIÓN */}
+        <OpeningBalancesEvolutionModal
+          isOpen={showOpeningEvolutionModal}
+          onClose={() => setShowOpeningEvolutionModal(false)}
+          cashDesks={cashDesks}
+          cashMovements={cashMovements}
+          bankAccounts={bankAccounts}
+          config={config}
+          currentUser={currentUser}
+          onUpdateCashDesk={onUpdateCashDesk}
+        />
 
     </section>
   );

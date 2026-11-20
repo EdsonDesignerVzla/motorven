@@ -36,7 +36,13 @@ import {
   upsertPartnerPayableAccountInList,
   removePartnerPayableAccountFromList,
   applyPartnerPayableBalanceDeltaInList,
-  computePartnerPayableSummary
+  computePartnerPayableSummary,
+  resolveOpeningBalanceMeta,
+  mergeOpeningBalanceFields,
+  formatTreasuryTimestampVe,
+  isoToVetDatetimeLocal,
+  vetDatetimeLocalToIso,
+  buildCashDesksOpeningEvolutionRows
 } from '../utils/treasuryAccountUtils.js';
 import { generateCashflowPDF, generateBankAccountsPDF } from '../services/pdfReportService.js';
 
@@ -610,6 +616,118 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   assert.equal(list.length, 1);
   assert.equal(list[0].id, 'cta-socio-01');
   console.log('✓ 12. CRUD y acumulación de pasivo en Cuentas por Pagar Socio (2.02.01.001) verificado');
+}
+
+// 13. Persistencia inmutable de Saldo Inicial (USD, Bs, Fecha/Hora y Usuario) ante abonos/egresos CxC/CxP
+{
+  const openingIso = '2026-11-11T12:40:18.075Z';
+  const createdDesk = mergeOpeningBalanceFields(
+    {
+      id: 'caja-01',
+      coCaja: 'CAJA-01',
+      descripcion: 'Caja Efectivo $ (Valencia)',
+      moneda: 'USD',
+      saldoUsd: 1500,
+      saldoBs: 1365000
+    },
+    null,
+    { nowIso: openingIso, actorName: 'Edson Designer', markAsOpening: true }
+  );
+
+  const meta0 = resolveOpeningBalanceMeta(createdDesk);
+  assert.equal(meta0.hasOpeningBalance, true);
+  assert.equal(meta0.saldoInicialUsd, 1500);
+  assert.equal(meta0.saldoInicialBs, 1365000);
+  assert.equal(meta0.fechaSaldoInicial, openingIso);
+  assert.equal(meta0.usuarioSaldoInicial, 'Edson Designer');
+
+  // Aplicar un ingreso (CxC) y un egreso (abono CxP): el saldo actual cambia, pero el saldo inicial NO se sobrescribe
+  const afterIngreso = applyTreasuryBalanceDelta(createdDesk, {
+    deltaUsd: 250,
+    deltaBs: 227500,
+    nowIso: '2026-11-20T14:00:00.000Z'
+  });
+  const afterEgreso = applyTreasuryBalanceDelta(afterIngreso, {
+    deltaUsd: -100,
+    deltaBs: -91000,
+    nowIso: '2026-11-20T15:00:00.000Z'
+  });
+
+  assert.equal(afterEgreso.saldoUsd, 1650);
+  assert.equal(afterEgreso.saldoBs, 1501500);
+  assert.equal(afterEgreso.fechaActualizacion, '2026-11-20T15:00:00.000Z');
+  const metaAfter = resolveOpeningBalanceMeta(afterEgreso);
+  assert.equal(metaAfter.saldoInicialUsd, 1500, 'Saldo inicial USD debe permanecer intacto tras deltas');
+  assert.equal(metaAfter.saldoInicialBs, 1365000, 'Saldo inicial Bs debe permanecer intacto tras deltas');
+  assert.equal(metaAfter.fechaSaldoInicial, openingIso, 'Fecha de saldo inicial no debe cambiar con deltas');
+  assert.equal(metaAfter.usuarioSaldoInicial, 'Edson Designer');
+
+  // Edición operativa sin markAsOpening debe preservar los datos de apertura previos
+  const editedWithoutOpening = mergeOpeningBalanceFields(
+    { id: 'caja-01', coCaja: 'CAJA-01', descripcion: 'Caja Valencia Editada', saldoUsd: 1650, saldoBs: 1501500 },
+    afterEgreso,
+    { nowIso: '2026-11-20T16:00:00.000Z', actorName: 'Otro Usuario', markAsOpening: false }
+  );
+  assert.equal(editedWithoutOpening.saldoInicialUsd, 1500);
+  assert.equal(editedWithoutOpening.fechaSaldoInicial, openingIso);
+  assert.equal(editedWithoutOpening.usuarioSaldoInicial, 'Edson Designer');
+
+  // Formato VET
+  const formatted = formatTreasuryTimestampVe(openingIso);
+  assert.ok(formatted && formatted.includes('11/11/2026'), `Formato VET esperado con fecha 11/11/2026, recibido: ${formatted}`);
+  console.log('✓ 13. Persistencia de Saldo Inicial (USD/Bs/Fecha/Usuario) inmutable ante abonos/egresos verificada');
+}
+
+// 14. Tabla estructurada de Saldos Iniciales y Evolución (VET UTC-4) + aislamiento Banco '02' vs CAJA-02
+{
+  const desks = [
+    {
+      id: 'caja-01',
+      coCaja: 'CAJA-01',
+      descripcion: 'Caja Efectivo $ (Valencia)',
+      moneda: 'USD',
+      saldoUsd: 1200,
+      saldoBs: 1080000,
+      saldoInicialUsd: 1000,
+      saldoInicialBs: 900000,
+      fechaSaldoInicial: '2026-11-11T12:40:00.000Z',
+      usuarioSaldoInicial: 'Edson Designer'
+    },
+    {
+      id: 'caja-02',
+      coCaja: 'CAJA-02',
+      descripcion: 'Caja Efectivo Caracas $',
+      moneda: 'USD',
+      saldoUsd: 0,
+      saldoBs: 0
+    }
+  ];
+  const banks = [
+    { id: 'CTA-02', codCta: '02', bancoNombre: 'BANCO PLAZA', moneda: 'BS', saldoBs: 191752.5, saldoUsd: 200 }
+  ];
+  const movs = [
+    { id: 'M-1', tipo: 'INGRESO', caja_id: 'caja-01', monto_usd: 250, monto_bs: 225000 },
+    { id: 'M-2', tipo: 'EGRESO', caja_id: 'caja-01', monto_usd: 50, monto_bs: 45000 },
+    // Movimiento bancario con cuenta_id '02' y account_kind 'BANCO' NO debe asignarse a CAJA-02
+    { id: 'M-B2', tipo: 'INGRESO', cuenta_id: '02', account_kind: 'BANCO', cuenta_nombre: 'BANCO PLAZA', monto_usd: 100, monto_bs: 91162 }
+  ];
+
+  const evo = buildCashDesksOpeningEvolutionRows(desks, movs, banks, { tasaDolar: 911.62 });
+  const c1 = evo.rows.find(r => r.code === 'CAJA-01');
+  const c2 = evo.rows.find(r => r.code === 'CAJA-02');
+  assert.equal(c1.movNetoUsd, 200);
+  assert.equal(c1.expectedUsd, 1200);
+  assert.equal(c1.diffUsd, 0);
+  assert.equal(c1.isBalanced, true);
+  assert.equal(c2.movCount, 0, 'Movimiento de BANCO PLAZA (cuenta_id 02) no debe contaminar CAJA-02');
+  assert.equal(c2.movNetoUsd, 0);
+  assert.equal(c2.impliedBaseUsd, 0);
+
+  // Round-trip fecha VET UTC-4
+  const vetLocal = isoToVetDatetimeLocal('2026-11-11T12:40:00.000Z');
+  assert.equal(vetLocal, '2026-11-11T08:40', '12:40 UTC debe ser 08:40 en VET (UTC-4)');
+  assert.equal(vetDatetimeLocalToIso('2026-11-11T08:40'), '2026-11-11T12:40:00.000Z');
+  console.log('✓ 14. Tabla de Saldos Iniciales y Evolución (cuadre, VET UTC-4 y aislamiento Banco 02 vs CAJA-02) verificada');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

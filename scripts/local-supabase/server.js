@@ -1846,6 +1846,162 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 2.1. Auditoría de Saldos Iniciales de Cajas y Bancos desde los respaldos del servidor
+  if (req.method === 'GET' && pathname === '/api/treasury/opening-balances-history') {
+    try {
+      const backupDir = path.join(path.dirname(DB_FILE), 'backups');
+      const snapshotSources = [];
+      if (fs.existsSync(backupDir)) {
+        const files = fs.readdirSync(backupDir)
+          .filter(f => f.endsWith('.json') && /^local_database/i.test(f))
+          .map(f => {
+            const fullPath = path.join(backupDir, f);
+            let mtimeIso = '';
+            try { mtimeIso = fs.statSync(fullPath).mtime.toISOString(); } catch (_) {}
+            const m = f.match(/(\d{4}-\d{2}-\d{2})(?:_(\d{2}-\d{2}-\d{2}))?/);
+            const sortKey = m ? `${m[1]}_${m[2] || '23-59-59'}` : mtimeIso;
+            return { file: f, fullPath, sortKey, mtimeIso };
+          })
+          .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+        files.forEach(item => snapshotSources.push(item));
+      }
+
+      const cashHistoryMap = new Map();
+      const bankHistoryMap = new Map();
+
+      const recordSnapshot = (map, kind, row, sourceLabel, sourceMtime) => {
+        if (!row || typeof row !== 'object') return;
+        const code = kind === 'CAJA'
+          ? String(row.co_caja || row.coCaja || row.id || '').trim().toUpperCase()
+          : String(row.cod_cta || row.codCta || row.id || '').trim().toUpperCase();
+        if (!code) return;
+        const id = String(row.id || (kind === 'CAJA' ? code.toLowerCase() : `CTA-${code}`)).trim();
+        const descripcion = kind === 'CAJA'
+          ? String(row.descripcion || row.des_caja || row.desCaja || code).trim()
+          : String(row.banco_nombre || row.bancoNombre || row.des_ban || code).trim();
+        const moneda = String(row.moneda || (kind === 'CAJA' ? 'USD' : 'BS')).trim().toUpperCase();
+        const saldoUsd = Number((Number(row.saldo_usd ?? row.saldoUsd ?? 0) || 0).toFixed(2));
+        const saldoBs = Number((Number(row.saldo_bs ?? row.saldoBs ?? 0) || 0).toFixed(2));
+        const fechaActualizacion = row.fecha_actualizacion || row.fechaActualizacion || sourceMtime || null;
+        const saldoInicialUsd = row.saldo_inicial_usd ?? row.saldoInicialUsd ?? null;
+        const saldoInicialBs = row.saldo_inicial_bs ?? row.saldoInicialBs ?? null;
+        const fechaSaldoInicial = row.fecha_saldo_inicial || row.fechaSaldoInicial || null;
+        const usuarioSaldoInicial = row.usuario_saldo_inicial || row.usuarioSaldoInicial || null;
+
+        if (!map.has(code)) {
+          map.set(code, {
+            id,
+            code,
+            descripcion,
+            moneda,
+            responsable: row.responsable || row.cuenta_a_nombre_de || row.titular || null,
+            timeline: []
+          });
+        }
+        const entry = map.get(code);
+        entry.descripcion = descripcion;
+        entry.moneda = moneda;
+        if (row.responsable || row.cuenta_a_nombre_de || row.titular) {
+          entry.responsable = row.responsable || row.cuenta_a_nombre_de || row.titular;
+        }
+
+        const prev = entry.timeline[entry.timeline.length - 1];
+        const changed = !prev
+          || prev.saldoUsd !== saldoUsd
+          || prev.saldoBs !== saldoBs
+          || prev.fechaActualizacion !== fechaActualizacion
+          || (prev.saldoInicialUsd ?? null) !== (saldoInicialUsd ?? null)
+          || (prev.saldoInicialBs ?? null) !== (saldoInicialBs ?? null)
+          || (prev.fechaSaldoInicial || null) !== (fechaSaldoInicial || null);
+
+        if (changed) {
+          entry.timeline.push({
+            source: sourceLabel,
+            saldoUsd,
+            saldoBs,
+            fechaActualizacion,
+            ...(fechaSaldoInicial || saldoInicialUsd !== null || saldoInicialBs !== null
+              ? { saldoInicialUsd, saldoInicialBs, fechaSaldoInicial, usuarioSaldoInicial }
+              : {})
+          });
+        }
+      };
+
+      for (const src of snapshotSources) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(src.fullPath, 'utf8'));
+          (parsed.profit_cash_desks || []).forEach(d => recordSnapshot(cashHistoryMap, 'CAJA', d, src.file, src.mtimeIso));
+          (parsed.profit_bank_accounts || []).forEach(b => recordSnapshot(bankHistoryMap, 'BANCO', b, src.file, src.mtimeIso));
+        } catch (_) {}
+      }
+
+      const nowIso = new Date().toISOString();
+      (database.profit_cash_desks || []).forEach(d => recordSnapshot(cashHistoryMap, 'CAJA', d, 'LIVE_CURRENT', nowIso));
+      (database.profit_bank_accounts || []).forEach(b => recordSnapshot(bankHistoryMap, 'BANCO', b, 'LIVE_CURRENT', nowIso));
+
+      const summarizeMap = (map, currentList, kind) => {
+        const currentByCode = new Map();
+        (currentList || []).forEach(r => {
+          const c = kind === 'CAJA'
+            ? String(r.co_caja || r.coCaja || r.id || '').trim().toUpperCase()
+            : String(r.cod_cta || r.codCta || r.id || '').trim().toUpperCase();
+          if (c) currentByCode.set(c, r);
+        });
+
+        return Array.from(map.values()).map(item => {
+          const currentRow = currentByCode.get(item.code) || null;
+          const firstNonZeroPostSeed = item.timeline.find(t =>
+            (t.saldoUsd !== 0 || t.saldoBs !== 0)
+            && (!t.fechaActualizacion || String(t.fechaActualizacion) > '2026-11-10T21:00:00Z')
+          ) || item.timeline.find(t => t.saldoUsd !== 0 || t.saldoBs !== 0) || item.timeline[0] || null;
+
+          const explicitOpening = currentRow && (
+            currentRow.fecha_saldo_inicial || currentRow.fechaSaldoInicial
+            || currentRow.saldo_inicial_usd !== undefined || currentRow.saldoInicialUsd !== undefined
+          )
+            ? {
+                saldoInicialUsd: currentRow.saldo_inicial_usd ?? currentRow.saldoInicialUsd ?? 0,
+                saldoInicialBs: currentRow.saldo_inicial_bs ?? currentRow.saldoInicialBs ?? 0,
+                fechaSaldoInicial: currentRow.fecha_saldo_inicial || currentRow.fechaSaldoInicial || null,
+                usuarioSaldoInicial: currentRow.usuario_saldo_inicial || currentRow.usuarioSaldoInicial || null
+              }
+            : null;
+
+          return {
+            ...item,
+            activeInCurrent: Boolean(currentRow),
+            current: currentRow
+              ? {
+                  saldoUsd: Number((Number(currentRow.saldo_usd ?? currentRow.saldoUsd ?? 0) || 0).toFixed(2)),
+                  saldoBs: Number((Number(currentRow.saldo_bs ?? currentRow.saldoBs ?? 0) || 0).toFixed(2)),
+                  fechaActualizacion: currentRow.fecha_actualizacion || currentRow.fechaActualizacion || null
+                }
+              : null,
+            explicitOpening,
+            detectedOpening: firstNonZeroPostSeed
+          };
+        }).sort((a, b) => a.code.localeCompare(b.code, 'es', { numeric: true }));
+      };
+
+      const payload = {
+        ok: true,
+        generatedAt: nowIso,
+        dbFile: path.basename(DB_FILE),
+        backupDir,
+        backupsScanned: snapshotSources.length,
+        backupFiles: snapshotSources.map(s => s.file),
+        cashDesks: summarizeMap(cashHistoryMap, database.profit_cash_desks, 'CAJA'),
+        bankAccounts: summarizeMap(bankHistoryMap, database.profit_bank_accounts, 'BANCO')
+      };
+
+      sendJson(req, res, 200, payload);
+      return;
+    } catch (err) {
+      sendJson(req, res, 500, { ok: false, error: err.message });
+      return;
+    }
+  }
+
   // 2.2. Admin Sync Endpoint (protegido para sincronización atómica entre servidores)
   if (req.method === 'POST' && pathname === '/admin/v1/sync-database') {
     const expectedAdminKey = process.env.SIGNUM_ADMIN_KEY || '';
@@ -2596,6 +2752,30 @@ const server = http.createServer(async (req, res) => {
               delete sanitizedUpdate.stockAlmacen02;
               delete sanitizedUpdate.stock_almacen_02;
               tableData[existingIdx] = { ...tableData[existingIdx], ...sanitizedUpdate };
+            } else if (tableName === 'profit_cash_desks' || tableName === 'profit_bank_accounts') {
+              const prevRow = tableData[existingIdx] || {};
+              const cleanNew = { ...newRow };
+              delete cleanNew._preserveServerStock;
+              const incomingHasOpening = Boolean(
+                cleanNew.fecha_saldo_inicial || cleanNew.fechaSaldoInicial
+                || cleanNew.saldo_inicial_usd !== undefined || cleanNew.saldoInicialUsd !== undefined
+                || cleanNew.saldo_inicial_bs !== undefined || cleanNew.saldoInicialBs !== undefined
+              );
+              const mergedRow = { ...prevRow, ...cleanNew };
+              if (!incomingHasOpening) {
+                const openingKeys = [
+                  'saldo_inicial_usd', 'saldoInicialUsd',
+                  'saldo_inicial_bs', 'saldoInicialBs',
+                  'fecha_saldo_inicial', 'fechaSaldoInicial',
+                  'usuario_saldo_inicial', 'usuarioSaldoInicial'
+                ];
+                openingKeys.forEach((k) => {
+                  if (prevRow[k] !== undefined && prevRow[k] !== null) {
+                    mergedRow[k] = prevRow[k];
+                  }
+                });
+              }
+              tableData[existingIdx] = mergedRow;
             } else {
               const cleanNew = { ...newRow };
               delete cleanNew._preserveServerStock;

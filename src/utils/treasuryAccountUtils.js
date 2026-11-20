@@ -98,6 +98,153 @@ export const matchesBankAccount = (bank, targetRef) => {
   });
 };
 
+export const resolveOpeningBalanceMeta = (record) => {
+  if (!record || typeof record !== 'object') {
+    return {
+      hasOpeningBalance: false,
+      saldoInicialUsd: null,
+      saldoInicialBs: null,
+      fechaSaldoInicial: null,
+      usuarioSaldoInicial: null
+    };
+  }
+  const rawUsd = record.saldoInicialUsd ?? record.saldo_inicial_usd;
+  const rawBs = record.saldoInicialBs ?? record.saldo_inicial_bs;
+  const rawFecha = record.fechaSaldoInicial || record.fecha_saldo_inicial || null;
+  const rawUser = record.usuarioSaldoInicial || record.usuario_saldo_inicial || null;
+
+  const hasUsd = rawUsd !== undefined && rawUsd !== null && rawUsd !== '' && Number.isFinite(Number(rawUsd));
+  const hasBs = rawBs !== undefined && rawBs !== null && rawBs !== '' && Number.isFinite(Number(rawBs));
+  const hasFecha = Boolean(rawFecha && String(rawFecha).trim());
+  const hasOpeningBalance = hasFecha || hasUsd || hasBs;
+
+  return {
+    hasOpeningBalance,
+    saldoInicialUsd: hasUsd ? round2(Number(rawUsd)) : (hasOpeningBalance ? 0 : null),
+    saldoInicialBs: hasBs ? round2(Number(rawBs)) : (hasOpeningBalance ? 0 : null),
+    fechaSaldoInicial: hasFecha ? String(rawFecha).trim() : null,
+    usuarioSaldoInicial: rawUser && String(rawUser).trim() ? String(rawUser).trim() : null
+  };
+};
+
+export const mergeOpeningBalanceFields = (
+  incoming = {},
+  existing = null,
+  { nowIso = new Date().toISOString(), actorName = null, markAsOpening = false } = {}
+) => {
+  const incMeta = resolveOpeningBalanceMeta(incoming);
+  const extMeta = resolveOpeningBalanceMeta(existing);
+
+  if (markAsOpening) {
+    const usdVal = incMeta.saldoInicialUsd !== null
+      ? incMeta.saldoInicialUsd
+      : round2(Number(incoming.saldoUsd ?? incoming.saldo_usd ?? 0) || 0);
+    const bsVal = incMeta.saldoInicialBs !== null
+      ? incMeta.saldoInicialBs
+      : round2(Number(incoming.saldoBs ?? incoming.saldo_bs ?? 0) || 0);
+    const fechaVal = incMeta.fechaSaldoInicial || nowIso;
+    const userVal = incMeta.usuarioSaldoInicial || (actorName && String(actorName).trim()) || extMeta.usuarioSaldoInicial || 'Sistema';
+    return {
+      ...incoming,
+      saldoInicialUsd: usdVal,
+      saldo_inicial_usd: usdVal,
+      saldoInicialBs: bsVal,
+      saldo_inicial_bs: bsVal,
+      fechaSaldoInicial: fechaVal,
+      fecha_saldo_inicial: fechaVal,
+      usuarioSaldoInicial: userVal,
+      usuario_saldo_inicial: userVal
+    };
+  }
+
+  if (incMeta.hasOpeningBalance) {
+    const usdVal = incMeta.saldoInicialUsd ?? extMeta.saldoInicialUsd ?? 0;
+    const bsVal = incMeta.saldoInicialBs ?? extMeta.saldoInicialBs ?? 0;
+    const fechaVal = incMeta.fechaSaldoInicial || extMeta.fechaSaldoInicial || nowIso;
+    const userVal = incMeta.usuarioSaldoInicial || extMeta.usuarioSaldoInicial || (actorName && String(actorName).trim()) || null;
+    return {
+      ...incoming,
+      saldoInicialUsd: usdVal,
+      saldo_inicial_usd: usdVal,
+      saldoInicialBs: bsVal,
+      saldo_inicial_bs: bsVal,
+      fechaSaldoInicial: fechaVal,
+      fecha_saldo_inicial: fechaVal,
+      ...(userVal ? { usuarioSaldoInicial: userVal, usuario_saldo_inicial: userVal } : {})
+    };
+  }
+
+  if (extMeta.hasOpeningBalance) {
+    return {
+      ...incoming,
+      saldoInicialUsd: extMeta.saldoInicialUsd,
+      saldo_inicial_usd: extMeta.saldoInicialUsd,
+      saldoInicialBs: extMeta.saldoInicialBs,
+      saldo_inicial_bs: extMeta.saldoInicialBs,
+      fechaSaldoInicial: extMeta.fechaSaldoInicial,
+      fecha_saldo_inicial: extMeta.fechaSaldoInicial,
+      ...(extMeta.usuarioSaldoInicial
+        ? { usuarioSaldoInicial: extMeta.usuarioSaldoInicial, usuario_saldo_inicial: extMeta.usuarioSaldoInicial }
+        : {})
+    };
+  }
+
+  return { ...incoming };
+};
+
+export const formatTreasuryTimestampVe = (isoValue) => {
+  if (!isoValue) return '';
+  const dt = isoValue instanceof Date ? isoValue : new Date(isoValue);
+  if (Number.isNaN(dt.getTime())) return String(isoValue);
+  try {
+    return dt.toLocaleString('es-VE', {
+      timeZone: 'America/Caracas',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (_) {
+    return dt.toISOString().replace('T', ' ').slice(0, 16);
+  }
+};
+
+/**
+ * Convierte un ISO UTC a valor 'YYYY-MM-DDTHH:mm' en hora oficial de Venezuela (UTC-4)
+ * para usar en <input type="datetime-local" />.
+ */
+export const isoToVetDatetimeLocal = (isoValue) => {
+  if (!isoValue) return '';
+  const dt = isoValue instanceof Date ? isoValue : new Date(isoValue);
+  if (Number.isNaN(dt.getTime())) return '';
+  // Venezuela es UTC-4 fijo (sin horario de verano)
+  const vetMs = dt.getTime() - (4 * 60 * 60 * 1000);
+  const vetDate = new Date(vetMs);
+  const y = vetDate.getUTCFullYear();
+  const m = String(vetDate.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(vetDate.getUTCDate()).padStart(2, '0');
+  const hh = String(vetDate.getUTCHours()).padStart(2, '0');
+  const mm = String(vetDate.getUTCMinutes()).padStart(2, '0');
+  return `${y}-${m}-${d}T${hh}:${mm}`;
+};
+
+/**
+ * Convierte un valor 'YYYY-MM-DDTHH:mm' en hora oficial de Venezuela (UTC-4) a ISO UTC.
+ */
+export const vetDatetimeLocalToIso = (localValue) => {
+  const raw = String(localValue || '').trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(raw)) {
+    const withSeconds = raw.length === 16 ? `${raw}:00` : raw;
+    const parsed = new Date(`${withSeconds}-04:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  const fallback = new Date(raw);
+  return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
+};
+
 export const applyTreasuryBalanceDelta = (
   record,
   { deltaUsd = 0, deltaBs = 0, clampZero = false, nowIso = new Date().toISOString() } = {}
@@ -113,6 +260,8 @@ export const applyTreasuryBalanceDelta = (
     nextBs = Math.max(0, nextBs);
   }
 
+  const opening = resolveOpeningBalanceMeta(record);
+
   return {
     ...record,
     saldoUsd: nextUsd,
@@ -121,6 +270,19 @@ export const applyTreasuryBalanceDelta = (
     saldo_bs: nextBs,
     saldoActual: nextBs,
     saldo_actual: nextBs,
+    ...(opening.hasOpeningBalance
+      ? {
+          saldoInicialUsd: opening.saldoInicialUsd,
+          saldo_inicial_usd: opening.saldoInicialUsd,
+          saldoInicialBs: opening.saldoInicialBs,
+          saldo_inicial_bs: opening.saldoInicialBs,
+          fechaSaldoInicial: opening.fechaSaldoInicial,
+          fecha_saldo_inicial: opening.fechaSaldoInicial,
+          ...(opening.usuarioSaldoInicial
+            ? { usuarioSaldoInicial: opening.usuarioSaldoInicial, usuario_saldo_inicial: opening.usuarioSaldoInicial }
+            : {})
+        }
+      : {}),
     fechaActualizacion: nowIso,
     fecha_actualizacion: nowIso
   };
@@ -359,8 +521,9 @@ export const resolveTreasuryAccountForMovement = (movement, cashDesks = [], bank
   };
 
   // 1. Identificador explícito de caja
+  const explicitKind = String(movement.accountKind || movement.account_kind || '').trim().toUpperCase();
   const rawCajaId = String(movement.cajaId || movement.caja_id || '').trim();
-  if (rawCajaId) {
+  if (rawCajaId && explicitKind !== 'BANCO') {
     const desk = desks.find((d) => matchesCashDesk(d, rawCajaId));
     if (desk) return toResult('CAJA', desk);
   }
@@ -368,13 +531,21 @@ export const resolveTreasuryAccountForMovement = (movement, cashDesks = [], bank
   // 2. Identificador explícito de cuenta (cuentaId / cuenta_id)
   const rawCuentaId = String(movement.cuentaId || movement.cuenta_id || '').trim();
   if (rawCuentaId) {
-    const inferredKind = inferTreasuryAccountKind(rawCuentaId);
+    const inferredKind = (explicitKind === 'BANCO' || explicitKind === 'CAJA')
+      ? explicitKind
+      : inferTreasuryAccountKind(rawCuentaId);
     if (inferredKind === 'BANCO') {
       const bank = banks.find((b) => matchesBankAccount(b, rawCuentaId));
       if (bank) return toResult('BANCO', bank);
     } else if (inferredKind === 'CAJA') {
       const desk = desks.find((d) => matchesCashDesk(d, rawCuentaId));
       if (desk) return toResult('CAJA', desk);
+    }
+    // Los códigos numéricos cortos ("01", "02", "03"...) sin cajaId corresponden a cod_cta bancarios
+    const isPlainNumericBankCode = /^\d{1,3}$/.test(rawCuentaId) && !rawCajaId;
+    if (isPlainNumericBankCode) {
+      const anyBankFirst = banks.find((b) => matchesBankAccount(b, rawCuentaId));
+      if (anyBankFirst) return toResult('BANCO', anyBankFirst);
     }
     const anyDesk = desks.find((d) => matchesCashDesk(d, rawCuentaId));
     if (anyDesk) return toResult('CAJA', anyDesk);
@@ -1056,5 +1227,136 @@ export const computePartnerPayableSummary = (list = [], config = {}) => {
     totalBs: round2(totalBs),
     activeCount,
     totalCount: items.length
+  };
+};
+
+/**
+ * Construye la tabla estructurada de Saldos Iniciales y Evolución de todas las Cajas Activas:
+ * - Saldo Inicial fijado (o null si no se ha fijado)
+ * - Neto de movimientos registrados en cash_movements para cada caja
+ * - Saldo Esperado (Saldo Inicial + Neto Movs.)
+ * - Saldo Actual en BD
+ * - Diferencia (Saldo Actual - Saldo Esperado) y Saldo Base Sugerido (Saldo Actual - Neto Movs.)
+ */
+export const buildCashDesksOpeningEvolutionRows = (
+  cashDesks = [],
+  cashMovements = [],
+  bankAccounts = [],
+  config = {}
+) => {
+  const desks = (Array.isArray(cashDesks) ? cashDesks : []).filter(Boolean);
+  const movs = Array.isArray(cashMovements) ? cashMovements : [];
+  const banks = Array.isArray(bankAccounts) ? bankAccounts : [];
+  const { tasaBcv } = resolveExchangeRates(config);
+
+  let totalOpeningUsd = 0;
+  let totalOpeningBs = 0;
+  let totalMovCount = 0;
+  let totalMovEntradasUsd = 0;
+  let totalMovSalidasUsd = 0;
+  let totalMovNetoUsd = 0;
+  let totalMovNetoBs = 0;
+  let totalBaseSugeridaUsd = 0;
+  let totalBaseSugeridaBs = 0;
+  let totalExpectedUsd = 0;
+  let totalExpectedBs = 0;
+  let totalCurrentUsd = 0;
+  let totalCurrentBs = 0;
+  let totalDiffUsd = 0;
+  let totalDiffBs = 0;
+
+  const rows = desks.map((desk, idx) => {
+    const code = String(desk.coCaja || desk.co_caja || desk.id || `CAJA-0${idx + 1}`).trim().toUpperCase();
+    const id = String(desk.id || code.toLowerCase()).trim();
+    const moneda = String(desk.moneda || 'USD').trim().toUpperCase();
+    const isBsDesk = moneda === 'BS';
+    const rawCurUsd = round2(Number(desk.saldoUsd ?? desk.saldo_usd ?? 0) || 0);
+    const rawCurBs = round2(Number(desk.saldoBs ?? desk.saldo_bs ?? 0) || 0);
+    const currentUsd = isBsDesk && rawCurBs !== 0 && tasaBcv > 0 ? round2(rawCurBs / tasaBcv) : rawCurUsd;
+    const currentBs = rawCurBs;
+
+    const deskMovs = movs.filter((m) => doesMovementBelongToAccount(m, 'CAJA', desk, desks, banks));
+    const movSummary = summarizeAccountMovements(deskMovs);
+
+    const opening = resolveOpeningBalanceMeta(desk);
+    const openingUsd = opening.hasOpeningBalance ? round2(opening.saldoInicialUsd || 0) : 0;
+    const openingBs = opening.hasOpeningBalance ? round2(opening.saldoInicialBs || 0) : 0;
+
+    const impliedBaseUsd = round2(currentUsd - movSummary.netoUsd);
+    const impliedBaseBs = round2(currentBs - movSummary.netoBs);
+
+    const expectedUsd = round2(openingUsd + movSummary.netoUsd);
+    const expectedBs = round2(openingBs + movSummary.netoBs);
+
+    const diffUsd = round2(currentUsd - expectedUsd);
+    const diffBs = round2(currentBs - expectedBs);
+
+    totalOpeningUsd = round2(totalOpeningUsd + openingUsd);
+    totalOpeningBs = round2(totalOpeningBs + openingBs);
+    totalMovCount += movSummary.totalCount;
+    totalMovEntradasUsd = round2(totalMovEntradasUsd + movSummary.entradasUsd);
+    totalMovSalidasUsd = round2(totalMovSalidasUsd + movSummary.salidasUsd);
+    totalMovNetoUsd = round2(totalMovNetoUsd + movSummary.netoUsd);
+    totalMovNetoBs = round2(totalMovNetoBs + movSummary.netoBs);
+    totalBaseSugeridaUsd = round2(totalBaseSugeridaUsd + impliedBaseUsd);
+    totalBaseSugeridaBs = round2(totalBaseSugeridaBs + impliedBaseBs);
+    totalExpectedUsd = round2(totalExpectedUsd + expectedUsd);
+    totalExpectedBs = round2(totalExpectedBs + expectedBs);
+    totalCurrentUsd = round2(totalCurrentUsd + currentUsd);
+    totalCurrentBs = round2(totalCurrentBs + currentBs);
+    totalDiffUsd = round2(totalDiffUsd + diffUsd);
+    totalDiffBs = round2(totalDiffBs + diffBs);
+
+    return {
+      desk,
+      id,
+      code,
+      descripcion: desk.descripcion || desk.desCaja || desk.des_caja || code,
+      moneda,
+      isBsDesk,
+      responsable: desk.responsable || 'Administración',
+      activa: desk.activa !== false,
+      hasOpeningBalance: opening.hasOpeningBalance,
+      openingUsd,
+      openingBs,
+      fechaSaldoInicial: opening.fechaSaldoInicial,
+      usuarioSaldoInicial: opening.usuarioSaldoInicial,
+      movCount: movSummary.totalCount,
+      movEntradasUsd: movSummary.entradasUsd,
+      movSalidasUsd: movSummary.salidasUsd,
+      movNetoUsd: movSummary.netoUsd,
+      movNetoBs: movSummary.netoBs,
+      impliedBaseUsd,
+      impliedBaseBs,
+      expectedUsd,
+      expectedBs,
+      currentUsd,
+      currentBs,
+      fechaActualizacion: desk.fechaActualizacion || desk.fecha_actualizacion || null,
+      diffUsd,
+      diffBs,
+      isBalanced: isBsDesk ? Math.abs(diffBs) < 0.01 : Math.abs(diffUsd) < 0.01
+    };
+  });
+
+  return {
+    rows,
+    totals: {
+      openingUsd: totalOpeningUsd,
+      openingBs: totalOpeningBs,
+      movCount: totalMovCount,
+      movEntradasUsd: totalMovEntradasUsd,
+      movSalidasUsd: totalMovSalidasUsd,
+      movNetoUsd: totalMovNetoUsd,
+      movNetoBs: totalMovNetoBs,
+      impliedBaseUsd: totalBaseSugeridaUsd,
+      impliedBaseBs: totalBaseSugeridaBs,
+      expectedUsd: totalExpectedUsd,
+      expectedBs: totalExpectedBs,
+      currentUsd: totalCurrentUsd,
+      currentBs: totalCurrentBs,
+      diffUsd: totalDiffUsd,
+      diffBs: totalDiffBs
+    }
   };
 };

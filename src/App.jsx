@@ -15,7 +15,9 @@ import {
   loadPartnerPayableAccounts,
   upsertPartnerPayableAccountInList,
   removePartnerPayableAccountFromList,
-  applyPartnerPayableBalanceDeltaInList
+  applyPartnerPayableBalanceDeltaInList,
+  resolveOpeningBalanceMeta,
+  mergeOpeningBalanceFields
 } from './utils/treasuryAccountUtils';
 import { removePartnerLiabilityMovementByCashId } from './utils/liabilityAccountUtils';
 import { normalizeRateType, isDirectCurrencyRateType } from './utils/rateClassificationUtils';
@@ -3059,9 +3061,35 @@ function MainApp() {
   };
 
   const handleUpdateCashDesk = async (desk) => {
-    await updateSupabaseProfitCashDesk(desk);
+    const existing = (profitCashDesks || []).find((d) => matchesCashDesk(d, desk)) || null;
+    const prevOpening = resolveOpeningBalanceMeta(existing);
+    const enriched = mergeOpeningBalanceFields(desk, existing, {
+      actorName: currentUser?.nombre || currentUser?.username || 'Sistema'
+    });
+    const nextOpening = resolveOpeningBalanceMeta(enriched);
+
+    await updateSupabaseProfitCashDesk(enriched);
     const fresh = await getSupabaseProfitCashDesks();
     if (fresh) setProfitCashDesks(fresh);
+
+    if (
+      nextOpening.hasOpeningBalance && (
+        !prevOpening.hasOpeningBalance
+        || prevOpening.saldoInicialUsd !== nextOpening.saldoInicialUsd
+        || prevOpening.saldoInicialBs !== nextOpening.saldoInicialBs
+        || prevOpening.fechaSaldoInicial !== nextOpening.fechaSaldoInicial
+      )
+    ) {
+      const code = enriched.coCaja || enriched.co_caja || enriched.id || 'CAJA';
+      logUserActivity({
+        usuarioId: currentUser?.id || 'system',
+        usuarioNombre: currentUser?.nombre || currentUser?.username || 'Operador',
+        usuarioRol: currentUser?.rol || 'SISTEMA',
+        accion: 'SALDO_INICIAL_CAJA',
+        modulo: 'TESORERIA',
+        detalles: `Saldo inicial ${code} (${enriched.descripcion || code}): $${Number(nextOpening.saldoInicialUsd || 0).toFixed(2)} / Bs. ${Number(nextOpening.saldoInicialBs || 0).toFixed(2)} | Fecha apertura: ${nextOpening.fechaSaldoInicial || ''}`
+      }).catch(() => {});
+    }
   };
 
   const handleDeleteCashDesk = async (deskId) => {
@@ -3071,9 +3099,35 @@ function MainApp() {
   };
 
   const handleUpdateBankAccount = async (bankAcc) => {
-    await updateSupabaseProfitBankAccount(bankAcc);
+    const existing = (profitBankAccounts || []).find((b) => matchesBankAccount(b, bankAcc)) || null;
+    const prevOpening = resolveOpeningBalanceMeta(existing);
+    const enriched = mergeOpeningBalanceFields(bankAcc, existing, {
+      actorName: currentUser?.nombre || currentUser?.username || 'Sistema'
+    });
+    const nextOpening = resolveOpeningBalanceMeta(enriched);
+
+    await updateSupabaseProfitBankAccount(enriched);
     const fresh = await getSupabaseProfitBankAccounts();
     if (fresh) setProfitBankAccounts(fresh);
+
+    if (
+      nextOpening.hasOpeningBalance && (
+        !prevOpening.hasOpeningBalance
+        || prevOpening.saldoInicialUsd !== nextOpening.saldoInicialUsd
+        || prevOpening.saldoInicialBs !== nextOpening.saldoInicialBs
+        || prevOpening.fechaSaldoInicial !== nextOpening.fechaSaldoInicial
+      )
+    ) {
+      const code = enriched.codCta || enriched.cod_cta || enriched.id || 'CTA';
+      logUserActivity({
+        usuarioId: currentUser?.id || 'system',
+        usuarioNombre: currentUser?.nombre || currentUser?.username || 'Operador',
+        usuarioRol: currentUser?.rol || 'SISTEMA',
+        accion: 'SALDO_INICIAL_BANCO',
+        modulo: 'TESORERIA',
+        detalles: `Saldo inicial CTA-${code} (${enriched.bancoNombre || enriched.banco_nombre || code}): Bs. ${Number(nextOpening.saldoInicialBs || 0).toFixed(2)} / $${Number(nextOpening.saldoInicialUsd || 0).toFixed(2)} | Fecha apertura: ${nextOpening.fechaSaldoInicial || ''}`
+      }).catch(() => {});
+    }
   };
 
   const handleDeleteBankAccount = async (bankId) => {
