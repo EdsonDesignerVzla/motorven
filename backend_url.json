@@ -1,9 +1,10 @@
 {
-  "url": "https://api.signummotorven.com",
+  "url": "https://allowing-volvo-friendly-trained.trycloudflare.com",
   "lanUrls": [
-    "http://192.168.0.3:54321",
+    "http://192.168.0.6:54321",
     "http://26.45.7.149:54321",
+    "http://192.168.0.5:54321",
     "http://26.229.220.202:54321"
   ],
-  "updatedAt": "2026-11-26T15:41:35.478Z"
+  "updatedAt": "2026-11-26T21:52:11.103Z"
 }
