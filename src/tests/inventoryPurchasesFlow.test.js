@@ -8,6 +8,8 @@ import {
   resolveStockItemProductKey,
   buildSaleStockDeltaLines,
   buildDocTypeChangeWarehouseDeltaLines,
+  buildInvoiceEditStockDeltaLines,
+  updateSupabaseInvoiceDocument,
   buildSaleDeductIdempotencyKey,
   buildSaleRevertIdempotencyKey,
   saveSupabaseProduct,
@@ -16,6 +18,10 @@ import {
   saveSupabaseProfitWarehouseTransfer,
   saveSupabaseProfitInventoryAdjustment,
   saveSupabasePurchase,
+  updateSupabasePurchase,
+  saveSupabaseProfitPurchase,
+  deleteSupabasePurchase,
+  getSupabasePurchases,
   saveSupabaseGoodsReceiptNote,
   supabase
 } from '../services/supabaseService.js';
@@ -256,7 +262,44 @@ await saveSupabasePurchase({
 });
 storedProd = getProducts().find(p => p.codigo === 'TEST-SKU-01');
 assert.strictEqual(storedProd.stockAlmacen01, 6, 'Compra vinculada a recepción previa no debe volver a incrementar Alm 01');
-console.log('  ✓ Compras, mapeo extendido y protección anti-doble-stock verificados.');
+
+// 3b. Edición, Guardado y Eliminación de Historial de Cargas Locales SENIAT
+console.log('3b. Verificando edición, guardado y eliminación de Historial de Cargas Locales SENIAT...');
+const updatedPurchase = await updateSupabasePurchase(savedPurchase.id, {
+  ...savedPurchase,
+  numeroFacturaProv: 'FAC-EDITED-777',
+  numeroControl: '00-007778',
+  cantidad: 8,
+  totalUsd: 194.88,
+  items: [{
+    productoId: 'TEST-SKU-01',
+    codigo: 'TEST-SKU-01',
+    descripcion: 'Oilstone Prueba Inventario',
+    cantidad: 8,
+    costoUnitarioUsd: 21,
+    subtotalUsd: 168,
+    almacen: '02'
+  }]
+});
+assert.strictEqual(updatedPurchase.numeroFacturaProv, 'FAC-EDITED-777', 'Debe actualizar el número de factura de la compra SENIAT');
+assert.strictEqual(updatedPurchase.numeroControl, '00-007778', 'Debe actualizar el número de control');
+storedProd = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+assert.strictEqual(storedProd.stockAlmacen02, 27, 'Al editar cantidad de compra de 5 a 8 en Alm 02, el stock debe ajustarse +3 (24 -> 27)');
+
+// Eliminar la compra SENIAT debe revertir las 8 unidades de Alm 02 (27 -> 19) y excluirla del listado
+await deleteSupabasePurchase(updatedPurchase);
+storedProd = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+assert.strictEqual(storedProd.stockAlmacen02, 19, 'Al eliminar la compra SENIAT de 8 unidades, el stock en Alm 02 debe revertirse (27 -> 19)');
+const currentPurchasesAfterDelete = await getSupabasePurchases();
+assert.strictEqual(
+  currentPurchasesAfterDelete.some(p => p && p.id === savedPurchase.id),
+  false,
+  'La compra eliminada no debe aparecer en getSupabasePurchases'
+);
+// Restaurar las 5 unidades en Alm 02 para que las aserciones subsiguientes del Kardex mantengan stock02 === 24
+await applyStockDeltaForWarehouseLines([{ codigo: 'TEST-SKU-01', delta01: 0, delta02: 5 }]);
+storedProd = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+console.log('  ✓ Compras, edición/guardado/eliminación SENIAT, mapeo extendido y protección anti-doble-stock verificados.');
 
 // 4. Kardex consolidado y exclusión de documentos anulados
 console.log('4. Verificando Kardex consolidado real y filtrado de anulados...');
@@ -602,6 +645,12 @@ try {
   assert.strictEqual(dedNeA, 'sale_NE_2235_deduct', 'buildSaleDeductIdempotencyKey debe normalizar notas de entrega');
   assert.strictEqual(dedNeA, dedNeB, 'Variantes de NE deben compartir la misma clave idempotente');
 
+  const dedDatedA = buildSaleDeductIdempotencyKey({ id: '000631', numeroDoc: '000631', tipoDoc: 'FACTURA', fechaEmision: '2026-11-24T12:38:35.000Z' });
+  const dedDatedB = buildSaleDeductIdempotencyKey({ id: 'FAC-000631', numeroDoc: '631', tipo_doc: 'FACTURA', fec_emis: '2026-11-24T12:38:35.000Z' });
+  const dedDatedC = buildSaleDeductIdempotencyKey({ id: '000631', numeroDoc: '000631', tipoDoc: 'FACTURA', fechaEmision: '2026-11-24T12:48:34.000Z' });
+  assert.strictEqual(dedDatedA, dedDatedB, 'Variantes del mismo documento con la misma fecha deben compartir idempotencyKey');
+  assert.notStrictEqual(dedDatedA, dedDatedC, 'Un correlativo reutilizado en otra fecha/hora no debe quedar bloqueado por una clave anterior');
+
   // 12b. Deduplicación de stock_delta en offlineSyncService por idempotencyKey aunque el campo id difiera
   clearSyncQueue();
   enqueueSyncAction('stock_delta', 'UPDATE', {
@@ -664,6 +713,163 @@ try {
   } finally {
     supabase.from = prevFromForMetaEdit;
   }
+
+  // Test: buildInvoiceEditStockDeltaLines - ajuste neto de inventario al editar cantidades/renglones de Factura o Nota de Entrega
+  // 1) Aumentar cantidad en Factura: guardado 2, editado 4 (+2) => solo resta 2 del almacén 01
+  assert.deepStrictEqual(
+    buildInvoiceEditStockDeltaLines(
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 2 }] },
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 4 }] }
+    ),
+    [{ codigo: '100403', delta01: -2, delta02: 0 }],
+    'Aumentar de 2 a 4 en Factura debe restar solo 2 del almacén 01'
+  );
+
+  // 2) Disminuir cantidad en Factura: guardado 2, editado 1 (-1) => suma 1 al almacén 01
+  assert.deepStrictEqual(
+    buildInvoiceEditStockDeltaLines(
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 2 }] },
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 1 }] }
+    ),
+    [{ codigo: '100403', delta01: 1, delta02: 0 }],
+    'Disminuir de 2 a 1 en Factura debe sumar 1 al almacén 01'
+  );
+
+  // 3) Nota de Entrega: guardado 2, editado 5 (+3) y otro renglón quitado (3 -> 0) => almacén 02
+  assert.deepStrictEqual(
+    buildInvoiceEditStockDeltaLines(
+      {
+        id: 'NE-002250',
+        tipoDoc: 'NOTA_ENTREGA',
+        items: [
+          { codigo: '100403', cantidad: 2 },
+          { codigo: '001208', cantidad: 3 }
+        ]
+      },
+      {
+        id: 'NE-002250',
+        tipoDoc: 'NOTA_ENTREGA',
+        items: [
+          { codigo: '100403', cantidad: 5 },
+          { codigo: '001308', cantidad: 1 }
+        ]
+      }
+    ),
+    [
+      { codigo: '100403', delta01: 0, delta02: -3 },
+      { codigo: '001308', delta01: 0, delta02: -1 },
+      { codigo: '001208', delta01: 0, delta02: 3 }
+    ],
+    'Editar renglones en Nota de Entrega debe restar aumentos/nuevos y sumar eliminados en almacén 02'
+  );
+
+  // 4) Cambio simultáneo de tipoDoc (FACTURA -> NOTA_ENTREGA) + cambio de cantidad (2 -> 4)
+  assert.deepStrictEqual(
+    buildInvoiceEditStockDeltaLines(
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 2 }] },
+      { id: 'NE-000614', tipoDoc: 'NOTA_ENTREGA', items: [{ codigo: '100403', cantidad: 4 }] }
+    ),
+    [{ codigo: '100403', delta01: 2, delta02: -4 }],
+    'Cambiar de FACTURA (2) a NOTA_ENTREGA (4) debe devolver 2 a alm01 y restar 4 de alm02'
+  );
+
+  // 5) Sin cambios en renglones ni almacén => []
+  assert.deepStrictEqual(
+    buildInvoiceEditStockDeltaLines(
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 2 }] },
+      { id: '000614', tipoDoc: 'FACTURA', items: [{ codigo: '100403', cantidad: 2 }] }
+    ),
+    [],
+    'Sin cambios en cantidades ni tipoDoc no debe generar delta de inventario'
+  );
+
+  // 6) updateSupabaseInvoiceDocument actualiza stock local al editar cantidad en modo offline/cola
+  clearSyncQueue();
+  const prevSku01 = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+  const prevAlmacen01 = Number(prevSku01?.stockAlmacen01 ?? prevSku01?.stock ?? 0);
+  const origDocEdit = {
+    id: '009901',
+    factNum: '009901',
+    numeroDoc: '009901',
+    tipoDoc: 'FACTURA',
+    items: [{ codigo: 'TEST-SKU-01', cantidad: 2, precioUsd: 10 }]
+  };
+  await updateSupabaseInvoiceDocument(origDocEdit, {
+    ...origDocEdit,
+    items: [{ codigo: 'TEST-SKU-01', cantidad: 4, precioUsd: 10 }]
+  });
+  const afterIncreaseSku = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+  assert.strictEqual(
+    Number(afterIncreaseSku?.stockAlmacen01 ?? 0),
+    prevAlmacen01 - 2,
+    'updateSupabaseInvoiceDocument debe restar solo 2 cuando pasa de 2 a 4'
+  );
+
+  await updateSupabaseInvoiceDocument(
+    { ...origDocEdit, items: [{ codigo: 'TEST-SKU-01', cantidad: 4, precioUsd: 10 }] },
+    { ...origDocEdit, items: [{ codigo: 'TEST-SKU-01', cantidad: 3, precioUsd: 10 }] }
+  );
+  const afterDecreaseSku = getProducts().find(p => p.codigo === 'TEST-SKU-01');
+  assert.strictEqual(
+    Number(afterDecreaseSku?.stockAlmacen01 ?? 0),
+    prevAlmacen01 - 1,
+    'updateSupabaseInvoiceDocument debe sumar 1 cuando pasa de 4 a 3'
+  );
+
+  // 14. Regresión edición de precio unitario en Nota de Entrega multi-renglón (60.26 -> 60.29 => 35087.37)
+  const neInit = await saveSupabasePurchase({
+    id: 'COMP-TEST-17591',
+    numeroFacturaProv: 'NOTA DE ENTREGA',
+    numeroControl: '17591',
+    tipoDoc: 'FACTURA',
+    almacen: '02',
+    tasaDolar: 918.76,
+    condicionPago: 'CREDITO',
+    diasCredito: 15,
+    subtotalUsd: 35082.81,
+    baseExentaUsd: 35082.81,
+    totalUsd: 35082.81,
+    montoNetoPagarUsd: 35082.81,
+    items: [
+      { productoId: '100403', codigo: '100403', descripcion: 'Lubricante Oilstone 4 tiempos API SL motos (LT)', cantidad: 152, costoUnitarioUsd: 60.26, fleteUsd: 0, subtotalUsd: 9159.52, tipoAlicuota: 'EXENTO_0', almacen: '02' },
+      { productoId: '100403', codigo: '100403', descripcion: 'Lubricante Oilstone 4 tiempos API SL motos (LT)', cantidad: 108, costoUnitarioUsd: 60.29, fleteUsd: 0, subtotalUsd: 6511.32, tipoAlicuota: 'EXENTO_0', almacen: '02' },
+      { productoId: 'TEST-SKU-01', codigo: 'TEST-SKU-01', descripcion: 'Resto renglones', cantidad: 310, costoUnitarioUsd: 62.619258, fleteUsd: 0, subtotalUsd: 19411.97, tipoAlicuota: 'EXENTO_0', almacen: '02' }
+    ]
+  });
+  const updatedItemsNe = neInit.items.map((it, idx) =>
+    idx === 0 ? { ...it, costoUnitarioUsd: 60.29, subtotalUsd: Number((152 * 60.29).toFixed(2)) } : it
+  );
+  const newNeTotal = Number(updatedItemsNe.reduce((s, it) => s + Number(it.subtotalUsd || 0), 0).toFixed(2));
+  assert.strictEqual(newNeTotal, 35087.37, 'El total recalculado al cambiar 60.26 -> 60.29 en 152 uds debe ser 35087.37');
+
+  const neUpdated = await updateSupabasePurchase(neInit.id, {
+    ...neInit,
+    subtotalUsd: newNeTotal,
+    baseExentaUsd: newNeTotal,
+    totalUsd: newNeTotal,
+    montoNetoPagarUsd: newNeTotal,
+    items: updatedItemsNe
+  });
+  assert.strictEqual(neUpdated.totalUsd, 35087.37, 'updateSupabasePurchase debe guardar totalUsd 35087.37');
+  assert.strictEqual(neUpdated.montoNetoPagarUsd, 35087.37, 'updateSupabasePurchase debe guardar montoNetoPagarUsd 35087.37');
+  assert.strictEqual(neUpdated.items[0].costoUnitarioUsd, 60.29, 'El primer renglón 100403 debe guardar costoUnitarioUsd 60.29');
+  assert.ok(neUpdated.updatedAt, 'updateSupabasePurchase debe estampar updatedAt');
+
+  const savedMirror = await saveSupabaseProfitPurchase({
+    id: 'COM-TEST-17591',
+    compraId: neInit.id,
+    factNum: 'NOTA DE ENTREGA',
+    nroControl: '17591',
+    totBrutoUsd: newNeTotal,
+    totNetoUsd: newNeTotal,
+    saldoUsd: newNeTotal,
+    items: updatedItemsNe
+  });
+  assert.strictEqual(savedMirror.totNetoUsd, 35087.37, 'saveSupabaseProfitPurchase debe persistir totNetoUsd 35087.37');
+  const localProfitList = JSON.parse(globalThis.localStorage.getItem('signum_profit_purchases_v1') || '[]');
+  const mirroredRow = localProfitList.find((r) => r && r.id === 'COM-TEST-17591');
+  assert.strictEqual(mirroredRow?.totNetoUsd, 35087.37, 'El espejo local profit_purchases debe reflejar 35087.37');
+  await deleteSupabasePurchase(neUpdated).catch(() => {});
 } finally {
   clearSyncQueue();
   globalThis.fetch = origFetchForStockTest;

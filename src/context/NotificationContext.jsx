@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { 
   CheckCircle2, 
   AlertCircle, 
@@ -118,7 +118,7 @@ export function NotificationProvider({ children, config }) {
     });
   }, []);
 
-  const notify = {
+  const notify = useMemo(() => ({
     success: (msg, opts) => addToast('success', msg, opts),
     error: (msg, opts) => addToast('error', msg, opts),
     warning: (msg, opts) => addToast('warning', msg, opts),
@@ -127,7 +127,7 @@ export function NotificationProvider({ children, config }) {
     confirm: showConfirm,
     alert: (msg, opts) => addToast('warning', msg, opts), // Por defecto toast rápido
     modalAlert: showAlertModal
-  };
+  }), [addToast, removeToast, showConfirm, showAlertModal]);
 
   // Instalar puente global para llamadas fuera de React y reemplazar window.alert
   useEffect(() => {
@@ -253,7 +253,7 @@ function ToastItem({ toast, onDismiss }) {
           const next = prev - step;
           if (next <= 0) {
             clearInterval(timer);
-            onDismiss();
+            setTimeout(() => onDismiss(), 0);
             return 0;
           }
           return next;

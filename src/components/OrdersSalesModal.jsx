@@ -42,7 +42,8 @@ import {
   Pencil,
   Save,
   Users,
-  UserPlus
+  UserPlus,
+  Ban
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, validateWarehouseStockForDocument } from '../services/formatService';
 import { getProductWholesalePrice, lineSubtotal } from '../services/pricingService';
@@ -73,6 +74,7 @@ import {
   generateLetterInvoiceSeniatPDF,
   generateDeliveryNotePDF,
   generateSalesPOSPDF,
+  outputCreditDebitNoteDocument,
   resolveDeliveryNoteLineItems,
   pickPreferredLineItems
 } from '../services/pdfReportService';
@@ -160,12 +162,15 @@ export default function OrdersSalesModal({
   profitTransports = [],
   profitSellers = [],
   profitInvoices = [],
+  profitReturns = [],
   sales = [],
   onSaveOrder,
   onUpdateOrderStatus,
   onProcessSale,
   onDeleteOrder,
   onDeleteSale,
+  onAnnulSale,
+  onProcessCustomerReturn,
   onSyncProfit,
   currentUser,
   initialTab = 'nuevo',
@@ -224,6 +229,17 @@ export default function OrdersSalesModal({
   const [invoiceToDelete, setInvoiceToDelete] = useState(null);
   const [deleteConfirmKeyword, setDeleteConfirmKeyword] = useState('');
   const [isDeletingInvoice, setIsDeletingInvoice] = useState(false);
+  const [invoiceToAnnul, setInvoiceToAnnul] = useState(null);
+  const [annulStep, setAnnulStep] = useState(1);
+  const [annulConfirmKeyword, setAnnulConfirmKeyword] = useState('');
+  const [annulReason, setAnnulReason] = useState('');
+  const [annulAutoPrint, setAnnulAutoPrint] = useState(true);
+  const [isAnnullingInvoice, setIsAnnullingInvoice] = useState(false);
+  const [invoiceToReturn, setInvoiceToReturn] = useState(null);
+  const [returnSelections, setReturnSelections] = useState({});
+  const [returnReason, setReturnReason] = useState('Devolución de mercancía');
+  const [returnAutoPrint, setReturnAutoPrint] = useState(true);
+  const [isProcessingReturn, setIsProcessingReturn] = useState(false);
   const [localDeletedInvoiceKeys, setLocalDeletedInvoiceKeys] = useState(() => new Map());
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [isSavingEditedInvoice, setIsSavingEditedInvoice] = useState(false);
@@ -2194,15 +2210,16 @@ export default function OrdersSalesModal({
       totalBs: totalBsRaw.toFixed(2),
       abonosUsd: Number.isFinite(abonosUsdRaw) ? abonosUsdRaw.toFixed(2) : '0.00',
       observaciones: inv.observaciones || inv.comentario || '',
-      items: editableItems
+      items: editableItems,
+      _lockedOriginalItems: editableItems
     });
   };
 
-  // Guardar cambios editados de Factura o Nota de Entrega (sin afectar inventario)
+  // Guardar cambios editados de Factura o Nota de Entrega (solo datos administrativos y conversión segura; ítems/cantidades bloqueados)
   const handleSaveEditedInvoice = async (e) => {
     if (e?.preventDefault) e.preventDefault();
     if (!isAdmin) {
-      notify.error('Solo Master Admin / Gerencia pueden guardar cambios sobre facturas emitidas.');
+      notify.error('Solo usuarios autorizados (Gerencia / Master / Administración / TI / Vanesa Sánchez) pueden guardar cambios administrativos.');
       return;
     }
     if (!editingInvoice || isSavingEditedInvoice) return;
@@ -2278,7 +2295,11 @@ export default function OrdersSalesModal({
     const newId = collision.newId;
     const resolvedSeriesEra = collision.seriesEra || '';
 
-    const cleanItems = (editingInvoice.items || []).map((it) => {
+    const sourceLockedItems = Array.isArray(editingInvoice._lockedOriginalItems) && editingInvoice._lockedOriginalItems.length > 0
+      ? editingInvoice._lockedOriginalItems
+      : (editingInvoice.items || []);
+
+    const cleanItems = sourceLockedItems.map((it) => {
       const cant = Math.max(0, Number(it.cantidad) || 0);
       const precio = Math.max(0, Number(it.precioUsd) || 0);
       const sub = Number((cant * precio).toFixed(2));
@@ -2453,6 +2474,194 @@ export default function OrdersSalesModal({
       notify.error('Error al eliminar la factura: ' + (err.message || err));
     } finally {
       setIsDeletingInvoice(false);
+    }
+  };
+
+  // Anulación con doble seguridad de Factura / Nota de Entrega (conserva registro como ANULADA, devuelve stock y elimina CxC)
+  const handleAnnulInvoiceConfirm = async () => {
+    if (!invoiceToAnnul) return;
+    const canAnnul = isAdmin || canManageInvoices(currentUser);
+    if (!canAnnul) {
+      notify.error('No posee permisos autorizados para anular documentos emitidos.');
+      return;
+    }
+    const factNum = formatInvoiceCorrelativo(invoiceToAnnul);
+    const cleanTargetNum = String(factNum || '').replace(/^(FAC-|FACT-|NE-|NDE-)/i, '').trim();
+    const typed = annulConfirmKeyword.trim().toUpperCase();
+    const isValid =
+      typed === 'ANULAR' ||
+      typed === String(factNum || '').toUpperCase() ||
+      (cleanTargetNum && typed === cleanTargetNum.toUpperCase());
+    if (!isValid) return;
+
+    try {
+      setIsAnnullingInvoice(true);
+      if (onAnnulSale) {
+        await onAnnulSale(invoiceToAnnul, { motivo: annulReason.trim() });
+      }
+      if (annulAutoPrint) {
+        const annulledForPrint = {
+          ...invoiceToAnnul,
+          anulada: true,
+          anulado: true,
+          status: 'ANULADA',
+          estado: 'ANULADA',
+          motivoAnulacion: annulReason.trim() || 'Anulada desde Flujo Comercial'
+        };
+        handlePrintIndividualInvoice(annulledForPrint);
+      }
+      setInvoiceToAnnul(null);
+      setAnnulStep(1);
+      setAnnulConfirmKeyword('');
+      setAnnulReason('');
+    } catch (err) {
+      console.error('Error anulando documento:', err);
+      notify.error('Error al anular el documento: ' + (err?.message || err));
+    } finally {
+      setIsAnnullingInvoice(false);
+    }
+  };
+
+  // Índice de cantidades ya devueltas por documento (clave canónica -> { sku: qty })
+  const returnedQtyByDocMap = useMemo(() => {
+    const docMap = new Map();
+    (Array.isArray(profitReturns) ? profitReturns : []).forEach((ret) => {
+      if (!ret || ret.anulada || ret.anulado || ['ANULADA', 'ANULADO'].includes(String(ret.status || ret.estado || '').toUpperCase())) return;
+      const factRef = String(ret.factNum || ret.fact_num || ret.documentoAfectado || '').trim();
+      if (!factRef) return;
+      const cleanRef = factRef.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').replace(/^0+(?=\d)/, '').toUpperCase();
+      const isNeRef = ret.tipoDoc === 'NOTA_ENTREGA' || /^(NE-|NDE-)/i.test(factRef);
+      const docKey = `${isNeRef ? 'NE' : 'FAC'}:${cleanRef}`;
+      if (!docMap.has(docKey)) docMap.set(docKey, {});
+      const skuMap = docMap.get(docKey);
+      const lines = Array.isArray(ret.renglones) ? ret.renglones : (Array.isArray(ret.items) ? ret.items : []);
+      lines.forEach((r) => {
+        const sku = String(r.co_art || r.codigo || r.articuloId || '').trim();
+        const q = Number(r.total_art ?? r.cantidad ?? 0) || 0;
+        if (sku && q > 0) skuMap[sku] = (skuMap[sku] || 0) + q;
+      });
+    });
+    return docMap;
+  }, [profitReturns]);
+
+  const getReturnedMapForInvoice = (inv) => {
+    if (!inv) return {};
+    const corr = formatInvoiceCorrelativo(inv);
+    const isNe = resolveInvoiceTipoDoc(inv) === 'NOTA_ENTREGA';
+    const cleanRef = String(corr || '').replace(/^(FAC-|FACT-|NE-|NDE-)/i, '').replace(/^0+(?=\d)/, '').toUpperCase();
+    return returnedQtyByDocMap.get(`${isNe ? 'NE' : 'FAC'}:${cleanRef}`) || {};
+  };
+
+  const handleOpenReturnModal = (inv) => {
+    if (!inv) return;
+    const printable = buildPrintableInvoice(inv);
+    const prevReturned = getReturnedMapForInvoice(inv);
+    const initialSel = {};
+    (printable?.items || []).forEach((it, idx) => {
+      const sku = String(it.codigo || it.articuloId || it.co_art || it.id || `ITEM-${idx}`).trim();
+      const origQty = Number(it.cantidad ?? it.qty ?? 0) || 0;
+      const alreadyRet = Number(prevReturned[sku] || 0) || 0;
+      const avail = Math.max(0, Number((origQty - alreadyRet).toFixed(4)));
+      initialSel[sku] = { selected: false, qty: avail > 0 ? avail : 0, maxQty: avail, origQty, alreadyRet };
+    });
+    setInvoiceToReturn(printable);
+    setReturnSelections(initialSel);
+    setReturnReason('Devolución de mercancía');
+    setReturnAutoPrint(true);
+  };
+
+  const returnSummary = useMemo(() => {
+    if (!invoiceToReturn) return { items: [], units: 0, liters: 0, subtotalUsd: 0, ivaUsd: 0, totalUsd: 0, totalBs: 0 };
+    const isNe = resolveInvoiceTipoDoc(invoiceToReturn) === 'NOTA_ENTREGA';
+    const tasa = Number(invoiceToReturn.tasaDolar || invoiceToReturn.tasa || tasaBcv || 827.73);
+    const selectedItems = [];
+    let units = 0;
+    let liters = 0;
+    let subtotalUsd = 0;
+    let ivaUsd = 0;
+
+    (invoiceToReturn.items || []).forEach((it, idx) => {
+      const sku = String(it.codigo || it.articuloId || it.co_art || it.id || `ITEM-${idx}`).trim();
+      const sel = returnSelections[sku];
+      if (!sel || !sel.selected) return;
+      const qty = Math.min(sel.maxQty, Math.max(0, Number(sel.qty || 0)));
+      if (!(qty > 0)) return;
+      const unitPriceUsd = Number(it.precioUnitarioUsd ?? it.precioUsd ?? it.prec_vta ?? 0) || 0;
+      const lineSub = Number((qty * unitPriceUsd).toFixed(2));
+      const alicuota = isNe ? 0 : (it.exento === true || String(it.tipoAlicuota || '').includes('EXENTO') ? 0 : 0.16);
+      const lineIva = Number((lineSub * alicuota).toFixed(2));
+      const ltsUnit = Number(it.litrosUnitarios ?? it.litros_unitarios ?? 11.35) || 11.35;
+      const lineLts = Number((qty * ltsUnit).toFixed(2));
+
+      units += qty;
+      liters += lineLts;
+      subtotalUsd += lineSub;
+      ivaUsd += lineIva;
+      selectedItems.push({ ...it, codigo: sku, returnQty: qty, precioUnitarioUsd: unitPriceUsd, litrosUnitarios: ltsUnit });
+    });
+
+    const totalUsd = Number((subtotalUsd + ivaUsd).toFixed(2));
+    return {
+      items: selectedItems,
+      units: Number(units.toFixed(2)),
+      liters: Number(liters.toFixed(2)),
+      subtotalUsd: Number(subtotalUsd.toFixed(2)),
+      ivaUsd: Number(ivaUsd.toFixed(2)),
+      totalUsd,
+      totalBs: Number((totalUsd * tasa).toFixed(2)),
+      tasa
+    };
+  }, [invoiceToReturn, returnSelections, tasaBcv]);
+
+  const handleConfirmReturn = async () => {
+    if (!invoiceToReturn || returnSummary.items.length === 0) {
+      notify.warning('Seleccione al menos un producto y una cantidad válida para devolver.');
+      return;
+    }
+    try {
+      setIsProcessingReturn(true);
+      const res = onProcessCustomerReturn
+        ? await onProcessCustomerReturn({
+            originalDoc: invoiceToReturn,
+            selectedItems: returnSummary.items,
+            motivo: returnReason.trim() || 'Devolución de mercancía'
+          })
+        : null;
+
+      if (returnAutoPrint && res) {
+        const isNe = res.isNe;
+        const docNum = isNe ? `DEV-NE-${formatInvoiceCorrelativo(invoiceToReturn)}` : (res.savedCreditNote?.numeroDoc || res.savedReturn?.ncNum || `NC-${formatInvoiceCorrelativo(invoiceToReturn)}`);
+        outputCreditDebitNoteDocument({
+          docData: {
+            tipoDoc: 'NOTA_CREDITO',
+            isFiscal: !isNe,
+            numeroDoc: docNum,
+            documentoAfectado: formatInvoiceCorrelativo(invoiceToReturn),
+            fecha: new Date().toISOString(),
+            clienteNombre: invoiceToReturn.clienteNombre,
+            clienteRif: invoiceToReturn.clienteRif,
+            tasaDolar: returnSummary.tasa,
+            subtotalUsd: res.returnSubtotalUsd,
+            ivaUsd: res.returnIvaUsd,
+            totalUsd: res.returnTotalUsd,
+            observaciones: returnReason.trim() || 'Devolución de mercancía',
+            items: res.renglones
+          },
+          config,
+          currentUser,
+          clients: safeClients,
+          sellers: profitSellers,
+          autoPrint: true
+        });
+      }
+
+      setInvoiceToReturn(null);
+      setReturnSelections({});
+    } catch (err) {
+      console.error('Error confirmando devolución:', err);
+      notify.error('Error al procesar la devolución: ' + (err?.message || err));
+    } finally {
+      setIsProcessingReturn(false);
     }
   };
 
@@ -2769,81 +2978,6 @@ export default function OrdersSalesModal({
           </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-            <button
-              type="button"
-              onClick={() => setShowCxcInvoiceModal(true)}
-              className="btn btn-sm"
-              style={{
-                background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-                color: '#ffffff',
-                border: 'none',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                fontWeight: 800,
-                fontSize: '0.80rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 2px 10px rgba(16, 185, 129, 0.35)',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap'
-              }}
-              title="Cargar Factura o Nota de Entrega editable a Cobranzas (CxC) para cuadrar facturas de noviembre"
-            >
-              <Plus size={15} color="#ffffff" />
-              <span>+ Cargar a Cobranzas (CxC)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleOpenCorrelativoModal('FACTURA')}
-              className="btn btn-sm"
-              style={{
-                background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
-                color: '#ffffff',
-                border: 'none',
-                padding: '6px 13px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                fontSize: '0.80rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap'
-              }}
-              title={`Decidir manualmente a partir de cuál número de factura fiscal empezar (Próxima: #${currentNextCorrelativo})`}
-            >
-              <RotateCcw size={14} color="#ffffff" />
-              <span>Fijar N° Factura ({currentNextCorrelativo})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleOpenCorrelativoModal('NOTA_ENTREGA')}
-              className="btn btn-sm"
-              style={{
-                background: 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)',
-                color: '#ffffff',
-                border: 'none',
-                padding: '6px 13px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                fontSize: '0.80rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 2px 8px rgba(13, 148, 136, 0.35)',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap'
-              }}
-              title={`Decidir manualmente a partir de cuál número de Nota de Entrega empezar (Próxima: ${currentNextNeCorrelativo})`}
-            >
-              <RotateCcw size={14} color="#ffffff" />
-              <span>Fijar N° Nota Entrega ({currentNextNeCorrelativo.replace(/^NE-/i, '')})</span>
-            </button>
-
             <button
               type="button"
               onClick={() => generateOrdersPDF({ orders, config, currentUser, selectedOrder })}
@@ -3354,7 +3488,7 @@ export default function OrdersSalesModal({
                               </button>
                             ) : (
                               <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fca5a5' }}>
-                                Requiere Gerencia / Master Admin
+                                Requiere acceso a Flujo Comercial & Pedidos
                               </span>
                             )
                           )}
@@ -4500,7 +4634,7 @@ export default function OrdersSalesModal({
                           <AlertTriangle size={18} /> Orden Bloqueada: Crédito Negado
                         </div>
                         <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
-                          Esta orden posee condición a crédito <strong>NEGADA</strong>. Por políticas comerciales, <strong>NO se enviará ni facturará en Caja</strong> hasta que sea aprobada por Gerencia o Cobranzas.
+                          Esta orden posee condición a crédito <strong>NEGADA</strong>. Por políticas comerciales, <strong>NO se enviará ni facturará en Caja</strong> hasta que sea aprobada por un usuario con acceso a Flujo Comercial & Pedidos.
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '6px' }}>
                           {userCanGrantCreditOverride ? (
@@ -5756,7 +5890,7 @@ export default function OrdersSalesModal({
                                 </>
                               ) : (
                                 <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fca5a5', padding: '4px 8px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-                                  🔒 Solo Gerencia / Cobranzas / Caja pueden aprobar clientes
+                                  🔒 Solo usuarios con acceso a Flujo Comercial pueden aprobar clientes
                                 </span>
                               )}
                             </div>
@@ -6413,13 +6547,27 @@ export default function OrdersSalesModal({
                                 const cliName = resolveInvoiceClientName(inv);
                                 const cliRif = resolveInvoiceClientRif(inv);
                                 const sellerName = resolveInvoiceSellerName(inv);
+                                const isAnnulled = Boolean(
+                                  inv.anulada ||
+                                  inv.anulado ||
+                                  ['ANULADA', 'ANULADO', 'VOID'].includes(String(inv.status || inv.estado || '').trim().toUpperCase())
+                                );
+                                const annulLabel = tipoDocNorm === 'NOTA_ENTREGA' ? 'NOTA DE ENTREGA ANULADA' : 'FACTURA ANULADA';
+                                const prevRetMap = getReturnedMapForInvoice(inv);
+                                const returnedSkusCount = Object.values(prevRetMap).reduce((a, b) => a + Number(b || 0), 0);
+                                const docItemsList = Array.isArray(inv.items) ? inv.items : (Array.isArray(inv.renglones) ? inv.renglones : []);
+                                const totalDocQty = docItemsList.reduce((a, it) => a + (Number(it?.cantidad ?? it?.total_art ?? it?.qty ?? 0) || 0), 0);
+                                const isTotalReturned = returnedSkusCount > 0 && totalDocQty > 0 && returnedSkusCount >= totalDocQty;
+                                const isPartialReturned = returnedSkusCount > 0 && !isTotalReturned;
 
                                 return (
                                   <tr
                                     key={inv.id || inv.numeroDoc || idx}
                                     style={{
                                       borderBottom: '1px solid var(--border-glass, rgba(255, 255, 255, 0.05))',
-                                      transition: 'background 0.15s ease'
+                                      transition: 'background 0.15s ease',
+                                      opacity: isAnnulled ? 0.72 : 1,
+                                      background: isAnnulled ? 'rgba(239, 68, 68, 0.04)' : 'transparent'
                                     }}
                                     onMouseEnter={(e) => e.currentTarget.style.background = isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)'}
                                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
@@ -6454,6 +6602,38 @@ export default function OrdersSalesModal({
                                         >
                                           {tipoDocNorm}
                                         </span>
+                                        {isAnnulled && (
+                                          <span
+                                            style={{
+                                              fontSize: '0.66rem',
+                                              fontWeight: 800,
+                                              padding: '2px 7px',
+                                              borderRadius: '5px',
+                                              color: '#ef4444',
+                                              background: 'rgba(239, 68, 68, 0.16)',
+                                              border: '1px solid rgba(239, 68, 68, 0.4)',
+                                              textTransform: 'uppercase'
+                                            }}
+                                          >
+                                            {annulLabel}
+                                          </span>
+                                        )}
+                                        {!isAnnulled && (isTotalReturned || isPartialReturned) && (
+                                          <span
+                                            style={{
+                                              fontSize: '0.66rem',
+                                              fontWeight: 800,
+                                              padding: '2px 7px',
+                                              borderRadius: '5px',
+                                              color: '#f59e0b',
+                                              background: 'rgba(245, 158, 11, 0.16)',
+                                              border: '1px solid rgba(245, 158, 11, 0.4)',
+                                              textTransform: 'uppercase'
+                                            }}
+                                          >
+                                            {isTotalReturned ? 'DEV. TOTAL' : 'DEV. PARCIAL'}
+                                          </span>
+                                        )}
                                       </div>
                                     </td>
 
@@ -6528,14 +6708,14 @@ export default function OrdersSalesModal({
 
                                     {/* TOTAL USD */}
                                     <td style={{ padding: '0.85rem 0.85rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                      <div style={{ fontWeight: 800, color: 'var(--semaforo-verde)', fontSize: '0.88rem' }}>
+                                      <div style={{ fontWeight: 800, color: isAnnulled ? '#ef4444' : 'var(--semaforo-verde)', fontSize: '0.88rem', textDecoration: isAnnulled ? 'line-through' : 'none' }}>
                                         {formatUsd(totalUsdVal)}
                                       </div>
                                     </td>
 
                                     {/* TOTAL BS */}
                                     <td style={{ padding: '0.85rem 0.85rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                      <div style={{ fontSize: '0.80rem', color: 'var(--motorven-gold)', fontWeight: 600 }}>
+                                      <div style={{ fontSize: '0.80rem', color: isAnnulled ? 'var(--text-muted)' : 'var(--motorven-gold)', fontWeight: 600, textDecoration: isAnnulled ? 'line-through' : 'none' }}>
                                         {formatBs(totalBsVal)}
                                       </div>
                                     </td>
@@ -6620,6 +6800,64 @@ export default function OrdersSalesModal({
                                              <span>Editar</span>
                                            </button>
                                          )}
+
+                                        {/* Botón Devolución Parcial / Total */}
+                                        {(isAdmin || canManageInvoices(currentUser)) && !isAnnulled && !isTotalReturned && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenReturnModal(inv)}
+                                            className="btn btn-sm"
+                                            style={{
+                                              background: 'rgba(6, 182, 212, 0.14)',
+                                              color: '#22d3ee',
+                                              border: '1px solid rgba(6, 182, 212, 0.42)',
+                                              borderRadius: '6px',
+                                              padding: '5px 8px',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              fontWeight: 700,
+                                              fontSize: '0.74rem',
+                                              cursor: 'pointer'
+                                            }}
+                                            title={`Procesar devolución parcial o total de #${correlativo}`}
+                                          >
+                                            <RotateCcw size={13} />
+                                            <span>Devolución</span>
+                                          </button>
+                                        )}
+
+                                        {/* Botón Anular Documento con Doble Seguridad */}
+                                        {(isAdmin || canManageInvoices(currentUser)) && !isAnnulled && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setInvoiceToAnnul(inv);
+                                              setAnnulStep(1);
+                                              setAnnulConfirmKeyword('');
+                                              setAnnulReason('');
+                                              setAnnulAutoPrint(true);
+                                            }}
+                                            className="btn btn-sm"
+                                            style={{
+                                              background: 'rgba(220, 38, 38, 0.14)',
+                                              color: '#f87171',
+                                              border: '1px solid rgba(220, 38, 38, 0.42)',
+                                              borderRadius: '6px',
+                                              padding: '5px 8px',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              fontWeight: 700,
+                                              fontSize: '0.74rem',
+                                              cursor: 'pointer'
+                                            }}
+                                            title={`Anular ${tipoDocNorm === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${correlativo} (devuelve stock, elimina CxC y genera PDF ANULADA)`}
+                                          >
+                                            <Ban size={13} />
+                                            <span>Anular</span>
+                                          </button>
+                                        )}
 
                                         {/* Botón Eliminar con Doble Seguridad (Solo Administradores) */}
                                         {isAdmin && (
@@ -6891,6 +7129,529 @@ export default function OrdersSalesModal({
                             <span>Confirmar Eliminación</span>
                           </>
                         )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL DE ANULACIÓN CON DOBLE SEGURIDAD (FACTURA / NOTA DE ENTREGA) */}
+              {invoiceToAnnul && (
+                <div
+                  style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.82)',
+                    backdropFilter: 'blur(8px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 100001,
+                    padding: '1rem'
+                  }}
+                  onClick={() => !isAnnullingInvoice && setInvoiceToAnnul(null)}
+                >
+                  <div
+                    className="modal-content"
+                    style={{
+                      maxWidth: '540px',
+                      width: '100%',
+                      background: 'var(--bg-card, #111827)',
+                      borderRadius: '16px',
+                      border: '1.5px solid rgba(239, 68, 68, 0.55)',
+                      boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.78), 0 0 32px rgba(239, 68, 68, 0.25)',
+                      overflow: 'hidden'
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div style={{
+                      padding: '1.2rem 1.5rem',
+                      background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.24) 0%, rgba(185, 28, 28, 0.12) 100%)',
+                      borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{
+                          width: '42px',
+                          height: '42px',
+                          borderRadius: '10px',
+                          background: 'rgba(239, 68, 68, 0.22)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#ef4444'
+                        }}>
+                          <Ban size={22} />
+                        </div>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: '1.12rem', fontWeight: 800, color: '#ef4444' }}>
+                            Anular {resolveInvoiceTipoDoc(invoiceToAnnul) === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #{formatInvoiceCorrelativo(invoiceToAnnul)}
+                          </h3>
+                          <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                            Doble Seguridad • Paso {annulStep} de 2
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => !isAnnullingInvoice && setInvoiceToAnnul(null)}
+                        style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+
+                    <div style={{ padding: '1.4rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {annulStep === 1 ? (
+                        <>
+                          <div style={{
+                            background: 'rgba(239, 68, 68, 0.09)',
+                            border: '1px solid rgba(239, 68, 68, 0.28)',
+                            borderRadius: '10px',
+                            padding: '1rem',
+                            fontSize: '0.88rem',
+                            color: 'var(--text-primary)',
+                            lineHeight: 1.55
+                          }}>
+                            <div style={{ fontWeight: 800, color: '#ef4444', marginBottom: '0.4rem', fontSize: '0.96rem' }}>
+                              ¿Estás seguro de anular documento?
+                            </div>
+                            <p style={{ margin: '0 0 0.5rem 0' }}>
+                              Documento: <strong>{resolveInvoiceTipoDoc(invoiceToAnnul) === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #{formatInvoiceCorrelativo(invoiceToAnnul)}</strong> — {resolveInvoiceClientName(invoiceToAnnul)} ({formatUsd(resolveInvoiceTotalUsd(invoiceToAnnul))}).
+                            </p>
+                            <ul style={{ margin: 0, paddingLeft: '1.15rem', fontSize: '0.81rem', color: 'var(--text-secondary)' }}>
+                              <li>Devolverá todos los productos a su almacén correspondiente ({resolveInvoiceTipoDoc(invoiceToAnnul) === 'NOTA_ENTREGA' ? 'Almacén 02' : 'Almacén 01'}).</li>
+                              <li>Eliminará la Cuenta por Cobrar y descontará el saldo deudor del cliente.</li>
+                              <li>Permanecerá visible en el listado con estado <strong>ANULADA</strong>.</li>
+                              <li>Descontará los litros vendidos del mes, comisiones y metas de vendedores.</li>
+                            </ul>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{
+                            background: 'rgba(245, 158, 11, 0.1)',
+                            border: '1px solid rgba(245, 158, 11, 0.35)',
+                            borderRadius: '10px',
+                            padding: '0.85rem 1rem',
+                            fontSize: '0.82rem',
+                            color: 'var(--text-primary)'
+                          }}>
+                            Confirmación final para <strong>{resolveInvoiceTipoDoc(invoiceToAnnul) === 'NOTA_ENTREGA' ? 'NOTA DE ENTREGA' : 'FACTURA'} #{formatInvoiceCorrelativo(invoiceToAnnul)}</strong>. Esta operación revertirá stock, CxC y métricas comerciales.
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                              Motivo de Anulación (opcional)
+                            </label>
+                            <input
+                              type="text"
+                              className="input-modern"
+                              placeholder="Ej: Error de facturación, devolución total, pedido duplicado..."
+                              value={annulReason}
+                              onChange={(e) => setAnnulReason(e.target.value)}
+                              style={{ width: '100%', padding: '0.55rem 0.85rem', borderRadius: '8px' }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.80rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                              🔒 Escriba <span style={{ color: '#ef4444', fontWeight: 800 }}>ANULAR</span> o el número <span style={{ color: 'var(--neon-cyan)', fontWeight: 800 }}>{formatInvoiceCorrelativo(invoiceToAnnul)}</span> para confirmar:
+                            </label>
+                            <input
+                              type="text"
+                              className="input-modern"
+                              placeholder={`Escriba ANULAR o ${formatInvoiceCorrelativo(invoiceToAnnul)}`}
+                              value={annulConfirmKeyword}
+                              onChange={(e) => setAnnulConfirmKeyword(e.target.value)}
+                              style={{
+                                width: '100%',
+                                padding: '0.62rem 0.9rem',
+                                borderRadius: '8px',
+                                border: '1.5px solid rgba(239, 68, 68, 0.45)',
+                                fontWeight: 700,
+                                fontSize: '0.9rem'
+                              }}
+                            />
+                          </div>
+
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.80rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={annulAutoPrint}
+                              onChange={(e) => setAnnulAutoPrint(e.target.checked)}
+                            />
+                            <span>
+                              Generar / imprimir documento <strong>ANULADA</strong> en su formato respectivo ({resolveInvoiceTipoDoc(invoiceToAnnul) === 'NOTA_ENTREGA' ? 'PDF Nota de Entrega' : 'Factura Forma Libre'})
+                            </span>
+                          </label>
+                        </>
+                      )}
+                    </div>
+
+                    <div style={{
+                      padding: '1rem 1.5rem',
+                      background: 'rgba(0, 0, 0, 0.25)',
+                      borderTop: '1px solid var(--border-glass)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      gap: '0.75rem'
+                    }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInvoiceToAnnul(null);
+                          setAnnulStep(1);
+                          setAnnulConfirmKeyword('');
+                        }}
+                        disabled={isAnnullingInvoice}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
+                      >
+                        Cancelar
+                      </button>
+
+                      {annulStep === 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => setAnnulStep(2)}
+                          className="btn"
+                          style={{
+                            background: '#ef4444',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '0.55rem 1.25rem',
+                            fontWeight: 800,
+                            fontSize: '0.85rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Sí, continuar
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleAnnulInvoiceConfirm}
+                          disabled={
+                            isAnnullingInvoice ||
+                            !(
+                              annulConfirmKeyword.trim().toUpperCase() === 'ANULAR' ||
+                              annulConfirmKeyword.trim().toUpperCase() === String(formatInvoiceCorrelativo(invoiceToAnnul) || '').toUpperCase() ||
+                              annulConfirmKeyword.trim().toUpperCase() === String(formatInvoiceCorrelativo(invoiceToAnnul) || '').replace(/^(FAC-|FACT-|NE-|NDE-)/i, '').trim().toUpperCase()
+                            )
+                          }
+                          className="btn"
+                          style={{
+                            background: '#dc2626',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '0.55rem 1.3rem',
+                            fontWeight: 800,
+                            fontSize: '0.85rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            cursor: 'pointer',
+                            opacity: (
+                              isAnnullingInvoice ||
+                              !(
+                                annulConfirmKeyword.trim().toUpperCase() === 'ANULAR' ||
+                                annulConfirmKeyword.trim().toUpperCase() === String(formatInvoiceCorrelativo(invoiceToAnnul) || '').toUpperCase() ||
+                                annulConfirmKeyword.trim().toUpperCase() === String(formatInvoiceCorrelativo(invoiceToAnnul) || '').replace(/^(FAC-|FACT-|NE-|NDE-)/i, '').trim().toUpperCase()
+                              )
+                            ) ? 0.5 : 1
+                          }}
+                        >
+                          <Ban size={15} />
+                          <span>{isAnnullingInvoice ? 'Anulando...' : 'Confirmar Anulación'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL DE DEVOLUCIÓN PARCIAL / TOTAL DE FACTURA O NOTA DE ENTREGA */}
+              {invoiceToReturn && (
+                <div
+                  style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.82)',
+                    backdropFilter: 'blur(8px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 100002,
+                    padding: '1rem'
+                  }}
+                  onClick={() => !isProcessingReturn && setInvoiceToReturn(null)}
+                >
+                  <div
+                    className="modal-content"
+                    style={{
+                      maxWidth: '780px',
+                      width: '100%',
+                      maxHeight: '90vh',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      background: 'var(--bg-card, #111827)',
+                      borderRadius: '16px',
+                      border: '1.5px solid rgba(6, 182, 212, 0.5)',
+                      boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.78)',
+                      overflow: 'hidden'
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div style={{
+                      padding: '1.15rem 1.5rem',
+                      background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.22) 0%, rgba(14, 116, 144, 0.1) 100%)',
+                      borderBottom: '1px solid rgba(6, 182, 212, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{
+                          width: '40px',
+                          height: '40px',
+                          borderRadius: '10px',
+                          background: 'rgba(6, 182, 212, 0.22)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#22d3ee'
+                        }}>
+                          <RotateCcw size={20} />
+                        </div>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#22d3ee' }}>
+                            Devolución de {resolveInvoiceTipoDoc(invoiceToReturn) === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #{formatInvoiceCorrelativo(invoiceToReturn)}
+                          </h3>
+                          <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                            {invoiceToReturn.clienteNombre} • RIF: {invoiceToReturn.clienteRif} • Almacén destino: {resolveInvoiceTipoDoc(invoiceToReturn) === 'NOTA_ENTREGA' ? 'Almacén 02' : 'Almacén 01'}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => !isProcessingReturn && setInvoiceToReturn(null)}
+                        style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+
+                    <div style={{ padding: '1.25rem 1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {/* Datos del Documento */}
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                        gap: '0.75rem',
+                        padding: '0.85rem 1rem',
+                        borderRadius: '10px',
+                        background: 'var(--bg-surface, rgba(255,255,255,0.03))',
+                        border: '1px solid var(--border-glass)'
+                      }}>
+                        <div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Vendedor</div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{resolveInvoiceSellerName(invoiceToReturn)}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Fecha Emisión</div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{formatInvoiceDateTimeDisplay(invoiceToReturn)}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total Documento</div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{formatUsd(resolveInvoiceTotalUsd(invoiceToReturn))}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Saldo CxC Actual</div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 800, color: Number(invoiceToReturn.saldoUsd ?? 0) > 0 ? '#f59e0b' : '#10b981' }}>
+                            {formatUsd(Number(invoiceToReturn.saldoUsd ?? 0))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Tabla de Productos Seleccionables */}
+                      <div style={{ border: '1px solid var(--border-glass)', borderRadius: '10px', overflow: 'hidden' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.80rem' }}>
+                          <thead>
+                            <tr style={{ background: 'rgba(255,255,255,0.04)', borderBottom: '1px solid var(--border-glass)' }}>
+                              <th style={{ padding: '0.6rem', textAlign: 'center' }}>Sel.</th>
+                              <th style={{ padding: '0.6rem', textAlign: 'left' }}>Código / Producto</th>
+                              <th style={{ padding: '0.6rem', textAlign: 'center' }}>Facturado</th>
+                              <th style={{ padding: '0.6rem', textAlign: 'center' }}>Disponible</th>
+                              <th style={{ padding: '0.6rem', textAlign: 'center' }}>Cant. Devolver</th>
+                              <th style={{ padding: '0.6rem', textAlign: 'right' }}>Precio Unit.</th>
+                              <th style={{ padding: '0.6rem', textAlign: 'right' }}>Subtotal</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(invoiceToReturn.items || []).map((it, idx) => {
+                              const sku = String(it.codigo || it.articuloId || it.co_art || it.id || `ITEM-${idx}`).trim();
+                              const sel = returnSelections[sku] || { selected: false, qty: 0, maxQty: 0, origQty: 0, alreadyRet: 0 };
+                              const unitPrice = Number(it.precioUnitarioUsd ?? it.precioUsd ?? it.prec_vta ?? 0) || 0;
+                              const lineSub = sel.selected ? Number((Math.min(sel.maxQty, Number(sel.qty || 0)) * unitPrice).toFixed(2)) : 0;
+                              return (
+                                <tr key={sku + idx} style={{ borderBottom: '1px solid var(--border-glass)', opacity: sel.maxQty <= 0 ? 0.5 : 1 }}>
+                                  <td style={{ padding: '0.6rem', textAlign: 'center' }}>
+                                    <input
+                                      type="checkbox"
+                                      disabled={sel.maxQty <= 0}
+                                      checked={Boolean(sel.selected)}
+                                      onChange={(e) => setReturnSelections(prev => ({
+                                        ...prev,
+                                        [sku]: { ...sel, selected: e.target.checked, qty: e.target.checked ? (sel.qty > 0 ? sel.qty : sel.maxQty) : sel.qty }
+                                      }))}
+                                    />
+                                  </td>
+                                  <td style={{ padding: '0.6rem' }}>
+                                    <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{it.descripcion || it.nombre || sku}</div>
+                                    <div style={{ fontSize: '0.70rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                                      {sku}{sel.alreadyRet > 0 ? ` • Ya devuelto: ${sel.alreadyRet}` : ''}
+                                    </div>
+                                  </td>
+                                  <td style={{ padding: '0.6rem', textAlign: 'center' }}>{sel.origQty}</td>
+                                  <td style={{ padding: '0.6rem', textAlign: 'center', fontWeight: 700, color: '#22d3ee' }}>{sel.maxQty}</td>
+                                  <td style={{ padding: '0.6rem', textAlign: 'center' }}>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max={sel.maxQty}
+                                      step="any"
+                                      disabled={!sel.selected || sel.maxQty <= 0}
+                                      value={sel.qty}
+                                      onChange={(e) => {
+                                        const val = Math.min(sel.maxQty, Math.max(0, Number(e.target.value || 0)));
+                                        setReturnSelections(prev => ({ ...prev, [sku]: { ...sel, qty: val } }));
+                                      }}
+                                      style={{
+                                        width: '74px',
+                                        padding: '0.35rem 0.45rem',
+                                        borderRadius: '6px',
+                                        border: '1px solid var(--border-glass)',
+                                        textAlign: 'center',
+                                        fontWeight: 700
+                                      }}
+                                    />
+                                  </td>
+                                  <td style={{ padding: '0.6rem', textAlign: 'right' }}>{formatUsd(unitPrice)}</td>
+                                  <td style={{ padding: '0.6rem', textAlign: 'right', fontWeight: 700, color: 'var(--semaforo-verde)' }}>{formatUsd(lineSub)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Motivo y Resumen */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', alignItems: 'start' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                              Motivo de Devolución
+                            </label>
+                            <input
+                              type="text"
+                              className="input-modern"
+                              value={returnReason}
+                              onChange={(e) => setReturnReason(e.target.value)}
+                              style={{ width: '100%', padding: '0.55rem 0.85rem', borderRadius: '8px' }}
+                            />
+                          </div>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={returnAutoPrint}
+                              onChange={(e) => setReturnAutoPrint(e.target.checked)}
+                            />
+                            <span>Generar PDF de {resolveInvoiceTipoDoc(invoiceToReturn) === 'NOTA_ENTREGA' ? 'Nota de Devolución N/E' : 'Nota de Crédito SENIAT'}</span>
+                          </label>
+                        </div>
+
+                        <div style={{
+                          padding: '0.9rem 1rem',
+                          borderRadius: '10px',
+                          background: 'rgba(6, 182, 212, 0.08)',
+                          border: '1px solid rgba(6, 182, 212, 0.3)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.35rem',
+                          fontSize: '0.82rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>Unidades / Litros a devolver:</span>
+                            <strong>{returnSummary.units} unid. ({formatUnitVe(returnSummary.liters)} L)</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>Base + IVA devuelto:</span>
+                            <strong>{formatUsd(returnSummary.subtotalUsd)} + {formatUsd(returnSummary.ivaUsd)}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.92rem', color: '#22d3ee', borderTop: '1px solid rgba(6,182,212,0.25)', paddingTop: '0.35rem', marginTop: '0.2rem' }}>
+                            <span><strong>Total a descontar de CxC:</strong></span>
+                            <strong>{formatUsd(returnSummary.totalUsd)} ({formatBs(returnSummary.totalBs)})</strong>
+                          </div>
+                          {returnSummary.totalUsd > Number(invoiceToReturn.saldoUsd ?? 0) && (
+                            <div style={{ fontSize: '0.73rem', color: '#f59e0b', marginTop: '0.2rem' }}>
+                              * Excedente de {formatUsd(returnSummary.totalUsd - Number(invoiceToReturn.saldoUsd ?? 0))} quedará como Saldo a Favor del cliente.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      padding: '1rem 1.5rem',
+                      background: 'rgba(0, 0, 0, 0.25)',
+                      borderTop: '1px solid var(--border-glass)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      gap: '0.75rem'
+                    }}>
+                      <button
+                        type="button"
+                        onClick={() => setInvoiceToReturn(null)}
+                        disabled={isProcessingReturn}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConfirmReturn}
+                        disabled={isProcessingReturn || returnSummary.items.length === 0}
+                        className="btn"
+                        style={{
+                          background: '#0891b2',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '8px',
+                          padding: '0.55rem 1.3rem',
+                          fontWeight: 800,
+                          fontSize: '0.85rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          cursor: returnSummary.items.length > 0 ? 'pointer' : 'not-allowed',
+                          opacity: (isProcessingReturn || returnSummary.items.length === 0) ? 0.5 : 1
+                        }}
+                      >
+                        <RotateCcw size={15} />
+                        <span>{isProcessingReturn ? 'Procesando...' : 'Confirmar Devolución'}</span>
                       </button>
                     </div>
                   </div>
@@ -7499,112 +8260,58 @@ export default function OrdersSalesModal({
                       </div>
                     </div>
 
-                    {/* 4. Renglones / Artículos */}
+                    {/* 4. Renglones / Artículos (Solo Lectura — bloqueado para evitar descuadres) */}
                     <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '0.95rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem', gap: '8px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
-                          4. Renglones ({(editingInvoice.items || []).length})
+                          4. Renglones ({(editingInvoice.items || []).length}) — Solo Lectura
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingInvoice(prev =>
-                              applyRecalculatedEditingInvoice(prev, [
-                                ...(prev.items || []),
-                                { id: `ITEM-${Date.now()}`, codigo: '', articuloId: '', descripcion: 'Artículo Lubricante', cantidad: 1, precioUsd: 0, subtotalUsd: 0, litros: 0 }
-                              ])
-                            );
-                          }}
-                          style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.4)', background: 'rgba(16,185,129,0.14)', color: '#10b981', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}
-                        >
-                          + Agregar Renglón
-                        </button>
+                        <span style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.12)', color: '#f59e0b', fontSize: '0.7rem', fontWeight: 700 }}>
+                          🔒 Productos y cantidades bloqueados (use Anular o Devolución)
+                        </span>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '170px', overflowY: 'auto' }}>
                         {(editingInvoice.items || []).map((it, rIdx) => (
-                          <div key={it.id || rIdx} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 70px 85px 85px 28px', gap: '6px', alignItems: 'center' }}>
+                          <div key={it.id || rIdx} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 70px 85px 85px', gap: '6px', alignItems: 'center', opacity: 0.85 }}>
                             <input
                               type="text"
                               className="form-control"
                               value={it.codigo || it.articuloId || ''}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditingInvoice(prev => ({
-                                  ...prev,
-                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, codigo: v, articuloId: v } : row)
-                                }));
-                              }}
+                              readOnly
+                              disabled
                               placeholder="Código"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', cursor: 'not-allowed' }}
                             />
                             <input
                               type="text"
                               className="form-control"
                               value={it.descripcion || ''}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditingInvoice(prev => ({
-                                  ...prev,
-                                  items: prev.items.map((row, i) => i === rIdx ? { ...row, descripcion: v } : row)
-                                }));
-                              }}
+                              readOnly
+                              disabled
                               placeholder="Descripción"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', cursor: 'not-allowed' }}
                             />
                             <input
                               type="number"
-                              step="0.01"
-                              min="0"
                               className="form-control"
                               value={it.cantidad}
-                              onChange={(e) => {
-                                const q = Number(e.target.value) || 0;
-                                setEditingInvoice(prev =>
-                                  applyRecalculatedEditingInvoice(
-                                    prev,
-                                    (prev.items || []).map((row, i) => i === rIdx ? { ...row, cantidad: q } : row)
-                                  )
-                                );
-                              }}
+                              readOnly
+                              disabled
                               placeholder="Cant"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right', cursor: 'not-allowed' }}
                             />
                             <input
                               type="number"
-                              step="0.01"
-                              min="0"
                               className="form-control"
                               value={it.precioUsd}
-                              onChange={(e) => {
-                                const p = Number(e.target.value) || 0;
-                                setEditingInvoice(prev =>
-                                  applyRecalculatedEditingInvoice(
-                                    prev,
-                                    (prev.items || []).map((row, i) => i === rIdx ? { ...row, precioUsd: p } : row)
-                                  )
-                                );
-                              }}
+                              readOnly
+                              disabled
                               placeholder="Precio $"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right', cursor: 'not-allowed' }}
                             />
                             <div style={{ fontSize: '0.76rem', fontWeight: 700, textAlign: 'right', color: 'var(--semaforo-verde)' }}>
                               {formatUsd((Number(it.cantidad) || 0) * (Number(it.precioUsd) || 0))}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditingInvoice(prev =>
-                                  applyRecalculatedEditingInvoice(
-                                    prev,
-                                    (prev.items || []).filter((_, i) => i !== rIdx)
-                                  )
-                                )
-                              }
-                              style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: '6px', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
-                              title="Quitar renglón"
-                            >
-                              <Trash2 size={12} />
-                            </button>
                           </div>
                         ))}
                       </div>
@@ -8077,7 +8784,7 @@ export default function OrdersSalesModal({
                     }}
                     title={
                       !userCanGrantCreditOverride
-                        ? 'Requiere permisos de Gerencia / Master Admin'
+                        ? 'Requiere acceso al módulo Flujo Comercial & Pedidos'
                         : (String(creditOverrideJustification || '').trim().length < 5 ? 'Escriba una justificación de al menos 5 caracteres para aprobar' : 'Aprobar y liberar crédito excepcionalmente')
                     }
                   >

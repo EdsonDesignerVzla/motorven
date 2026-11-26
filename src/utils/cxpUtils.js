@@ -427,38 +427,67 @@ export function buildCxpCreditDebitNoteResult({
       historialPagos: [ncEntry, ...existingHist]
     };
   } else {
-    const ndDocNum = !effectiveIsFiscal && !cleanNoteNum.startsWith('NE-')
-      ? `NE-${cleanNoteNum}`
-      : cleanNoteNum;
-    createdDebitDoc = {
-      id: buildCxpStableId({ tipoDoc: 'N/DB', nroDoc: ndDocNum, provRif, provNombre }),
-      tipoDoc: 'N/DB',
-      isFiscal: effectiveIsFiscal,
-      documentoAfectado: affectedNro,
+    // Nota de Débito CxP: suma el cargo adicional al documento afectado y registra el movimiento en historialPagos
+    const ndEntry = {
+      id: `nd-cxp-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
+      correlativo: cleanNoteNum,
+      pagoNum: cleanNoteNum,
       numeroControl: resolvedControl,
-      nroDoc: ndDocNum,
-      coProv: provRif,
-      provNombre,
-      provRif,
-      fechaEmision: cleanFecha,
-      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
-      diasCredito: Number(affectedDoc.diasCredito || 0),
-      baseImponibleUsd: cleanSub,
-      baseImponibleBs: subtotalBs,
+      isFiscal: effectiveIsFiscal,
+      tipo: 'NOTA_DEBITO',
+      tipoDoc: 'N/DB',
+      nroDoc: affectedNro,
+      documentoAfectado: affectedNro,
+      fecha: cleanFecha,
+      tasa: cleanTasa,
+      tasaPago: cleanTasa,
+      tipoTasa: effectiveIsFiscal ? 'BCV' : (affectedDoc.tipoTasa || 'KEYSTONE'),
+      monedaPago: 'BS',
+      subtotalUsd: cleanSub,
+      subtotalBs,
       ivaUsd: cleanIva,
       ivaBs,
-      exentoIva: !effectiveAplicaIva,
-      montoNetUsd: cleanTotal,
-      montoNetBs: totalBs,
-      abonosUsd: 0,
-      saldoUsd: cleanTotal,
-      saldoBs: totalBs,
-      tasa: cleanTasa,
-      tipoTasa: effectiveIsFiscal ? 'BCV' : (affectedDoc.tipoTasa || 'KEYSTONE'),
-      moneda: 'US$',
-      observaciones: `Nota de Débito CxP #${cleanNoteNum} (Afecta #${affectedNro}) • ${cleanMotivo}`,
-      historialPagos: [],
-      _customCreated: true
+      montoUsd: cleanTotal,
+      montoBs: totalBs,
+      formaPago: 'NOTA_DEBITO',
+      cuentaId: effectiveIsFiscal ? 'ND-CXP-FISCAL' : 'ND-CXP-NOFISCAL',
+      cuentaNombre: `N/DB CxP #${cleanNoteNum}`,
+      accountType: 'NOTA_DEBITO',
+      referencia: cleanNoteNum,
+      observaciones: `Nota de Débito CxP #${cleanNoteNum} • ${cleanMotivo}`
+    };
+
+    const newMontoNetUsd = round2Cxp(montoOrigUsd + cleanTotal);
+    const newMontoNetBs = round2Cxp(newMontoNetUsd * docTasa);
+    const newSaldoUsd = round2Cxp(Math.max(0, saldoOrigUsd + cleanTotal));
+    const newSaldoBs = round2Cxp(newSaldoUsd * docTasa);
+    const currentBaseUsd = round2Cxp(Number(affectedDoc.baseImponibleUsd ?? affectedDoc.base_imponible_usd ?? montoOrigUsd));
+    const newBaseImponibleUsd = round2Cxp(currentBaseUsd + cleanSub);
+    const currentIvaUsd = round2Cxp(Number(affectedDoc.ivaUsd ?? affectedDoc.iva_usd ?? 0));
+    const newIvaUsd = effectiveAplicaIva ? round2Cxp(currentIvaUsd + cleanIva) : currentIvaUsd;
+    const existingHist = Array.isArray(affectedDoc.historialPagos)
+      ? affectedDoc.historialPagos
+      : (Array.isArray(affectedDoc.historial_pagos) ? affectedDoc.historial_pagos : []);
+
+    updatedAffectedDoc = {
+      ...affectedDoc,
+      id: buildCxpStableId(affectedDoc),
+      tipoDoc: affectedTipo,
+      nroDoc: affectedNro,
+      coProv: provRif,
+      provRif,
+      provNombre,
+      fechaEmision: affectedDoc.fechaEmisionIso || affectedDoc.fechaEmision || cleanFecha,
+      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
+      baseImponibleUsd: newBaseImponibleUsd,
+      ivaUsd: newIvaUsd,
+      montoNetUsd: newMontoNetUsd,
+      montoNetBs: newMontoNetBs,
+      abonosUsd: abonosOrigUsd,
+      saldoUsd: newSaldoUsd,
+      saldoBs: newSaldoBs,
+      tasa: docTasa,
+      historialPagos: [ndEntry, ...existingHist]
     };
   }
 

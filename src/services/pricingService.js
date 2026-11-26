@@ -71,18 +71,88 @@ export const getProductWholesalePrice = (p, warehouse = null) => {
   );
 };
 
-/** Costo Unitario (USD) con soporte opcional por almacén. */
+/** Costo Unitario (USD) con soporte opcional por almacén y promedio ponderado consolidado. */
 export const getProductCost = (p, warehouse = null) => {
   if (!p) return 0;
   const wh = normalizeWarehouseCode(warehouse);
-  if (wh === '01') {
-    const c01 = firstPositive(p.costoUsd01, p.costo_usd_01, p.costo01);
-    if (c01 > 0) return c01;
-  } else if (wh === '02') {
-    const c02 = firstPositive(p.costoUsd02, p.costo_usd_02, p.costo02);
-    if (c02 > 0) return c02;
+  const base = firstPositive(p.costoUsd, p.costo_usd, p.costoUnitarioUsd, p.costo);
+  const c01 = firstPositive(p.costoUsd01, p.costo_usd_01, p.costo01, base);
+  const c02 = firstPositive(p.costoUsd02, p.costo_usd_02, p.costo02, base);
+  if (wh === '01') return c01;
+  if (wh === '02') return c02;
+
+  const hasSpecificWhCosts =
+    firstPositive(p.costoUsd01, p.costo_usd_01, p.costo01) > 0 ||
+    firstPositive(p.costoUsd02, p.costo_usd_02, p.costo02) > 0;
+  if (hasSpecificWhCosts) {
+    const s01 = Math.max(0, Number(p.stockAlmacen01 ?? p.stock_almacen_01 ?? 0) || 0);
+    const s02 = Math.max(0, Number(p.stockAlmacen02 ?? p.stock_almacen_02 ?? 0) || 0);
+    if (s01 + s02 > 0) {
+      return Number(((s01 * c01 + s02 * c02) / (s01 + s02)).toFixed(6));
+    }
   }
-  return firstPositive(p.costoUsd, p.costo_usd, p.costoUnitarioUsd, p.costo);
+  return firstPositive(base, c01, c02);
+};
+
+/**
+ * Calcula el nuevo Costo Promedio Ponderado Independiente por Almacén (Opción 1)
+ * conservando el valor acumulado de las unidades existentes y sumando el valor
+ * exacto de las nuevas entradas de compra.
+ */
+export const calculateWeightedAverageCostPatch = (
+  product,
+  {
+    prev01 = 0,
+    prev02 = 0,
+    next01 = 0,
+    next02 = 0,
+    costDeltaVal01 = 0,
+    costDeltaQty01 = 0,
+    lastCost01 = 0,
+    costDeltaVal02 = 0,
+    costDeltaQty02 = 0,
+    lastCost02 = 0
+  } = {}
+) => {
+  const baseCost = firstPositive(product?.costoUsd, product?.costo_usd, product?.costoUnitarioUsd, product?.costo);
+  const prevCost01 = firstPositive(product?.costoUsd01, product?.costo_usd_01, product?.costo01, baseCost);
+  const prevCost02 = firstPositive(product?.costoUsd02, product?.costo_usd_02, product?.costo02, baseCost);
+
+  let nextCost01 = prevCost01;
+  let nextCost02 = prevCost02;
+  let hasCostUpdate = false;
+
+  if (costDeltaQty01 !== 0 && lastCost01 > 0) {
+    hasCostUpdate = true;
+    const prevVal01 = Math.max(0, Number(prev01) || 0) * prevCost01;
+    const nextVal01 = Math.max(0, prevVal01 + Number(costDeltaVal01 || 0));
+    nextCost01 = next01 > 0 ? Number((nextVal01 / next01).toFixed(6)) : Number(lastCost01.toFixed(6));
+  }
+
+  if (costDeltaQty02 !== 0 && lastCost02 > 0) {
+    hasCostUpdate = true;
+    const prevVal02 = Math.max(0, Number(prev02) || 0) * prevCost02;
+    const nextVal02 = Math.max(0, prevVal02 + Number(costDeltaVal02 || 0));
+    nextCost02 = next02 > 0 ? Number((nextVal02 / next02).toFixed(6)) : Number(lastCost02.toFixed(6));
+  }
+
+  if (!hasCostUpdate) return null;
+
+  const nextTotal = Math.max(0, Number(next01 || 0) + Number(next02 || 0));
+  const nextCostGlobal =
+    nextTotal > 0
+      ? Number(((next01 * nextCost01 + next02 * nextCost02) / nextTotal).toFixed(6))
+      : Number((lastCost02 || lastCost01 || baseCost || 0).toFixed(6));
+
+  return {
+    costoUsd: nextCostGlobal,
+    costo_usd: nextCostGlobal,
+    costo: nextCostGlobal,
+    costoUsd01: nextCost01,
+    costo_usd_01: nextCost01,
+    costoUsd02: nextCost02,
+    costo_usd_02: nextCost02
+  };
 };
 
 const normalize = (txt) =>

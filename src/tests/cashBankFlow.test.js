@@ -27,11 +27,14 @@ import {
   filterMovementsByDocOrigin,
   computeCashDeskFiscalBreakdown,
   computeCashDesksFiscalTotals,
+  isOpeningBalanceLockedForDesk,
   saveCajaFiscalSplitOverride,
   computeMovementEditAccountAdjustments,
   dedupeCashMovements,
   upsertCashMovementInList,
   removeCashMovementFromList,
+  computeAccountDebeHaberSummary,
+  computeMovementsRunningBalanceMap,
   loadPartnerPayableAccounts,
   upsertPartnerPayableAccountInList,
   removePartnerPayableAccountFromList,
@@ -728,6 +731,104 @@ console.log('--- INICIANDO PRUEBAS MÓDULO CAJA CHICA & BANCOS ---');
   assert.equal(vetLocal, '2026-11-11T08:40', '12:40 UTC debe ser 08:40 en VET (UTC-4)');
   assert.equal(vetDatetimeLocalToIso('2026-11-11T08:40'), '2026-11-11T12:40:00.000Z');
   console.log('✓ 14. Tabla de Saldos Iniciales y Evolución (cuadre, VET UTC-4 y aislamiento Banco 02 vs CAJA-02) verificada');
+}
+
+// 15. Bloqueo de edición de Saldo Inicial en CAJA-04 (Caja Zelle)
+{
+  assert.equal(isOpeningBalanceLockedForDesk('CAJA-04'), true);
+  assert.equal(isOpeningBalanceLockedForDesk('caja-04'), true);
+  assert.equal(isOpeningBalanceLockedForDesk({ id: 'caja-04', coCaja: 'CAJA-04' }), true);
+  assert.equal(isOpeningBalanceLockedForDesk('CAJA-01'), false);
+  assert.equal(isOpeningBalanceLockedForDesk({ id: 'caja-02', co_caja: 'CAJA-02' }), false);
+  assert.equal(isOpeningBalanceLockedForDesk(null), false);
+  console.log('✓ 15. Bloqueo de edición de Saldo Inicial en CAJA-04 verificado');
+}
+
+// 16. Debe, Haber y Saldo corrido vinculado a Cajas y Bancos
+{
+  const desks = [
+    {
+      id: 'CAJA-01',
+      coCaja: 'CAJA-01',
+      descripcion: 'Caja Efectivo $ (Valencia)',
+      moneda: 'USD',
+      saldoInicialUsd: 100,
+      saldoInicialBs: 90000,
+      saldoUsd: 260,
+      saldoBs: 234000
+    }
+  ];
+  const banks = [
+    {
+      id: 'CTA-01',
+      codCta: '01',
+      bancoNombre: 'BANCO MERCANTIL',
+      moneda: 'BS',
+      saldoInicialBs: 50000,
+      saldoInicialUsd: 55.56,
+      saldoBs: 140000,
+      saldoUsd: 155.56
+    }
+  ];
+  const movs = [
+    {
+      id: 'MV-1',
+      fecha: '2026-11-20T10:00:00.000Z',
+      tipo: 'INGRESO',
+      concepto: '[FISCAL] Cobro Factura #001',
+      montoUsd: 200,
+      montoBs: 180000,
+      cajaId: 'CAJA-01'
+    },
+    {
+      id: 'MV-2',
+      fecha: '2026-11-21T15:00:00.000Z',
+      tipo: 'EGRESO',
+      concepto: '[NO FISCAL] Pago viáticos',
+      montoUsd: 40,
+      montoBs: 36000,
+      cajaId: 'CAJA-01'
+    },
+    {
+      id: 'MV-3',
+      fecha: '2026-11-22T09:00:00.000Z',
+      tipo: 'INGRESO',
+      concepto: 'Transferencia cliente',
+      montoUsd: 100,
+      montoBs: 90000,
+      cuentaId: 'CTA-01'
+    }
+  ];
+
+  const rateCfg = { tasaDolar: 900 };
+  const cajaDh = computeAccountDebeHaberSummary('CAJA', desks[0], movs, desks, banks, rateCfg);
+  assert.equal(cajaDh.debeUsd, 200);
+  assert.equal(cajaDh.debeCount, 1);
+  assert.equal(cajaDh.haberUsd, 40);
+  assert.equal(cajaDh.haberCount, 1);
+  assert.equal(cajaDh.netoUsd, 160);
+  assert.equal(cajaDh.saldoCalculadoUsd, 260);
+  assert.equal(cajaDh.saldoActualUsd, 260);
+  assert.equal(cajaDh.fiscal.debeUsd, 200);
+  assert.equal(cajaDh.noFiscal.haberUsd, 40);
+
+  const bankDh = computeAccountDebeHaberSummary('BANCO', banks[0], movs, desks, banks, rateCfg);
+  assert.equal(bankDh.debeBs, 90000);
+  assert.equal(bankDh.haberBs, 0);
+  assert.equal(bankDh.saldoCalculadoBs, 140000);
+  assert.equal(bankDh.saldoActualBs, 140000);
+
+  const runMap = computeMovementsRunningBalanceMap(movs, desks, banks, rateCfg);
+  const r2 = runMap.get(movs[1]); // más reciente de CAJA-01 (EGRESO 40 -> saldo final 260)
+  const r1 = runMap.get(movs[0]); // anterior de CAJA-01 (INGRESO 200 -> saldo 300, antes 100)
+  const r3 = runMap.get(movs[2]); // CTA-01 (INGRESO 90000 Bs -> saldo final 140000 Bs)
+  assert.equal(r2.saldoDespuesUsd, 260);
+  assert.equal(r2.saldoAntesUsd, 300);
+  assert.equal(r1.saldoDespuesUsd, 300);
+  assert.equal(r1.saldoAntesUsd, 100);
+  assert.equal(r3.saldoDespuesBs, 140000);
+  assert.equal(r3.saldoAntesBs, 50000);
+  console.log('✓ 16. Debe, Haber y Saldo corrido vinculado a Cajas y Bancos verificado');
 }
 
 console.log('=== TODAS LAS PRUEBAS DE CAJA CHICA & BANCOS PASARON EXITOSAMENTE ===');

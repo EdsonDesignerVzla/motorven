@@ -15,7 +15,7 @@ import qrcode from 'qrcode-generator';
 import { MOTORVEN_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks, round2 } from './formatService.js';
 import { parseInvoiceDateInfo } from './creditPolicyService.js';
-import { getProductRetailPrice } from './pricingService.js';
+import { getProductRetailPrice, getProductCost as resolveWarehouseProductCost } from './pricingService.js';
 import { resolveProductListPrice, safePct, PRICE_LIST_TIERS } from '../utils/profitabilityUtils.js';
 import { REAL_PRODUCTS, REAL_CLIENTS, REAL_PROFIT_BANK_ACCOUNTS, REAL_PROFIT_SELLERS } from '../data/supabaseRealData.js';
 import { buildTrialBalance, buildGeneralLedger, buildFinancialStatements } from './accountingService.js';
@@ -3692,7 +3692,14 @@ export function generateInventoryPDF({
       }
     : null;
 
-  const getProductCost = (p) => Number(p?.costoUsd ?? p?.costo_usd ?? p?.costo ?? 0) || 0;
+  const getProductCost = (p, targetWh = is01 ? '01' : is02 ? '02' : null) =>
+    resolveWarehouseProductCost(p, targetWh) || Number(p?.costoUsd ?? p?.costo_usd ?? p?.costo ?? 0) || 0;
+  const getProductTotalValuation = (p) => {
+    const wStocks = getProductWarehouseStocks(p);
+    if (is01) return Number(wStocks.stock01 || 0) * getProductCost(p, '01');
+    if (is02) return Number(wStocks.stock02 || 0) * getProductCost(p, '02');
+    return Number(wStocks.stock01 || 0) * getProductCost(p, '01') + Number(wStocks.stock02 || 0) * getProductCost(p, '02');
+  };
   const getStockForWarehouse = (p) => {
     const wStocks = getProductWarehouseStocks(p);
     if (whSpec) return Number(wStocks[whSpec.stockKey] || 0);
@@ -3745,10 +3752,10 @@ export function generateInventoryPDF({
     : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * resolveProductLitersPerUnit(p)), 0);
   const alm01ValorUsdSummary = kpis?.alm01TotalValorUsd != null
     ? Number(kpis.alm01TotalValorUsd)
-    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock01 * getProductCost(p)), 0);
+    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock01 * getProductCost(p, '01')), 0);
   const alm02ValorUsdSummary = kpis?.alm02TotalValorUsd != null
     ? Number(kpis.alm02TotalValorUsd)
-    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * getProductCost(p)), 0);
+    : products.reduce((acc, p) => acc + (getProductWarehouseStocks(p).stock02 * getProductCost(p, '02')), 0);
 
   const breakdownByUnit = { Caja: 0, Paila: 0, Tambor: 0, Totem: 0, Litros: 0 };
   products.forEach((p) => {
@@ -3768,7 +3775,7 @@ export function generateInventoryPDF({
 
   const tasa = Number(config?.tasaDolar) || 827.73;
   const computedValorUsd = products.reduce(
-    (acc, p) => acc + (getStockForWarehouse(p) * getProductCost(p)),
+    (acc, p) => acc + getProductTotalValuation(p),
     0
   );
   const kpiValorUsd = is01 ? kpis?.alm01TotalValorUsd : is02 ? kpis?.alm02TotalValorUsd : kpis?.totalValorUsd;
@@ -3959,7 +3966,7 @@ export function generateInventoryPDF({
       const min = getMinForWarehouse(p);
       const costo = getProductCost(p);
       const precio = getProductRetailPrice(p) || Number(p.precioA || 0);
-      const valTotal = stock * costo;
+      const valTotal = getProductTotalValuation(p);
       const lts = formatUnitVe(stock * resolveProductLitersPerUnit(p));
       const estado = stock <= 0 ? 'AGOTADO' : stock <= min ? 'CRÍTICO' : 'ÓPTIMO';
 
@@ -3993,9 +4000,9 @@ export function generateInventoryPDF({
       const wStocks = getProductWarehouseStocks(p);
       const stock = Number(wStocks.total || 0);
       const min = Number(p.stockMinimo || 5);
-      const costo = getProductCost(p);
+      const costo = getProductCost(p, null);
       const precio = getProductRetailPrice(p) || Number(p.precioA || 0);
-      const valTotal = stock * costo;
+      const valTotal = getProductTotalValuation(p);
       const lts = formatUnitVe(stock * resolveProductLitersPerUnit(p));
       const estado = stock <= 0 ? 'AGOTADO' : stock <= min ? 'CRÍTICO' : 'ÓPTIMO';
 
@@ -5256,6 +5263,35 @@ export function resolveDeliveryNoteLineItems(docData = {}, products = null, fall
  * - Bloque tripartito de firmas: Despachador, Transportista y Cliente Receptor
  * - Código QR vectorial de verificación en esquina inferior izquierda y paginación X/Y en esquina inferior derecha
  */
+/**
+ * Dibuja un sello diagonal y banda superior discreta de ANULADA en la página activa de un PDF.
+ */
+function drawAnnulledStampOnCurrentPage(doc, label = 'ANULADA') {
+  if (!doc) return;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const text = String(label || 'ANULADA').toUpperCase();
+
+  doc.saveGraphicsState();
+  if (typeof doc.GState === 'function') {
+    doc.setGState(new doc.GState({ opacity: 0.16 }));
+  }
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(48);
+  doc.setTextColor(220, 38, 38);
+  doc.text(text, pageW / 2, pageH / 2 + 12, { align: 'center', angle: 35 });
+  doc.restoreGraphicsState();
+
+  doc.setFillColor(254, 226, 226);
+  doc.setDrawColor(220, 38, 38);
+  doc.setLineWidth(0.5);
+  doc.roundedRect(pageW / 2 - 28, 7, 56, 6.5, 1.5, 1.5, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(185, 28, 28);
+  doc.text(text, pageW / 2, 11.4, { align: 'center' });
+}
+
 export function generateDeliveryNotePDF({
   deliveryNote = null,
   sale = null,
@@ -5571,8 +5607,17 @@ export function generateDeliveryNotePDF({
   const qrSize = 21.5;
   const qrY = 233.5;
 
+  const isAnnulledDeliveryNote = Boolean(
+    docData.anulada ||
+    docData.anulado ||
+    ['ANULADA', 'ANULADO'].includes(String(docData.status || docData.estado || '').toUpperCase().trim())
+  );
+
   for (let p = 1; p <= totalPages; p++) {
     base.doc.setPage(p);
+    if (isAnnulledDeliveryNote) {
+      drawAnnulledStampOnCurrentPage(base.doc, 'NOTA DE ENTREGA ANULADA');
+    }
 
     // Si hay desbordamiento y no es la última página, indicar que continúa en la siguiente hoja
     if (p < totalPages) {
@@ -6262,9 +6307,18 @@ export function generateLetterInvoiceSeniatPDF({ sale, config = {}, currentUser 
   doc.text(formatBs(totBs), totalsX + totalsWidth - 3, boxY + 25, { align: 'right' });
 
   // 5. Paginación en todas las hojas al pie: "Página X/Y" (1/2, 2/2) y Leyenda Legal
+  const isAnnulledSeniatDoc = Boolean(
+    sale.anulada ||
+    sale.anulado ||
+    ['ANULADA', 'ANULADO'].includes(String(sale.status || sale.estado || '').toUpperCase().trim())
+  );
+  const annulStampLabel = isNe ? 'NOTA DE ENTREGA ANULADA' : 'FACTURA ANULADA';
   const totalPagesCount = doc.internal.getNumberOfPages();
   for (let p = 1; p <= totalPagesCount; p++) {
     doc.setPage(p);
+    if (isAnnulledSeniatDoc) {
+      drawAnnulledStampOnCurrentPage(doc, annulStampLabel);
+    }
 
     if (p > 1 && totalPagesCount > 1) {
       doc.setFont('helvetica', 'bold');
@@ -7311,11 +7365,30 @@ export function generateConsolidatedCxcPDF({
       }
     });
   } else {
+    const resolveCreditDays = (d) => {
+      if (d?.diasCredito !== undefined && d?.diasCredito !== null && d?.diasCredito !== '') {
+        const parsed = Number(d.diasCredito);
+        if (!Number.isNaN(parsed) && parsed >= 0) return parsed;
+      }
+      const emisRaw = d?.fechaEmision || d?.fechaEmisionIso;
+      const vencRaw = d?.fechaVencimiento || d?.fechaVencimientoIso;
+      if (emisRaw && vencRaw) {
+        const emis = emisRaw instanceof Date ? emisRaw : new Date(emisRaw);
+        const venc = vencRaw instanceof Date ? vencRaw : new Date(vencRaw);
+        if (!Number.isNaN(emis.getTime()) && !Number.isNaN(venc.getTime())) {
+          const diff = Math.round((venc.getTime() - emis.getTime()) / (1000 * 60 * 60 * 24));
+          if (diff >= 0) return diff;
+        }
+      }
+      return 0;
+    };
+
     const body = docList.map(d => {
       const isNe = d.tipoDoc === 'NOTA_ENTREGA';
       const statusLabel = d.estado === 'VENCIDA' ? 'VENCIDA' : (d.estado === 'PAGADA' ? 'SOLVENTE' : 'AL DÍA');
       const rawDocNum = String(d.factura || d.factNum || d.nroDoc || d.id || '0000');
       const formattedDocNum = rawDocNum.startsWith('#') ? rawDocNum : `#${rawDocNum}`;
+      const creditDays = resolveCreditDays(d);
       return [
         isNe ? 'NOTA ENT.' : 'FACTURA',
         formattedDocNum,
@@ -7325,6 +7398,7 @@ export function generateConsolidatedCxcPDF({
         fmtShortDate(d.fechaEmision || d.fechaEmisionIso),
         fmtShortDate(d.fechaVencimiento || d.fechaVencimientoIso),
         String(Number(d.diasVencidos ?? 0)),
+        `${creditDays}d`,
         formatUsd(d.montoFacturaUsd ?? 0),
         formatUsd(d.abonosUsd ?? 0),
         formatUsd(d.restanteUsd ?? 0),
@@ -7336,10 +7410,10 @@ export function generateConsolidatedCxcPDF({
       startY: currentY,
       margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
       tableWidth: base.tableWidth,
-      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'COBR.', 'EMISIÓN', 'VENCE', 'DÍAS', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
-      body: body.length > 0 ? body : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
+      head: [['TIPO', 'N° DOC.', 'CLIENTE', 'RIF', 'COBR.', 'EMISIÓN', 'VENCE', 'DÍAS', 'CRÉD.', 'MONTO ($)', 'ABONOS ($)', 'RESTANTE ($)', 'ESTADO']],
+      body: body.length > 0 ? body : [['-', '-', 'No hay documentos que coincidan con los filtros.', '-', '-', '-', '-', '0', '0d', '$ 0.00', '$ 0.00', '$ 0.00', '-']],
       foot: [[
-        { content: `TOTAL (${docList.length} documentos)`, colSpan: 8, styles: { halign: 'left' } },
+        { content: `TOTAL (${docList.length} documentos)`, colSpan: 9, styles: { halign: 'left' } },
         formatUsd(visibleSummary.monto),
         formatUsd(visibleSummary.abonos),
         formatUsd(visibleSummary.restante),
@@ -7354,29 +7428,30 @@ export function generateConsolidatedCxcPDF({
       columnStyles: {
         0: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
         1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
-        2: { cellWidth: 52.4 },
+        2: { cellWidth: 40.4 },
         3: { cellWidth: 21, halign: 'center' },
         4: { cellWidth: 13, halign: 'center' },
         5: { cellWidth: 17, halign: 'center' },
         6: { cellWidth: 17, halign: 'center' },
         7: { cellWidth: 11, halign: 'right', fontStyle: 'bold' },
-        8: { cellWidth: 19, halign: 'right' },
-        9: { cellWidth: 19, halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold' },
-        10: { cellWidth: 19, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
-        11: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }
+        8: { cellWidth: 12, halign: 'center', fontStyle: 'bold', textColor: COLORS.navy },
+        9: { cellWidth: 19, halign: 'right' },
+        10: { cellWidth: 19, halign: 'right', textColor: COLORS.emerald, fontStyle: 'bold' },
+        11: { cellWidth: 19, halign: 'right', textColor: COLORS.red, fontStyle: 'bold' },
+        12: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }
       },
       didParseCell: (data) => {
         if (data.section === 'body') {
           if (data.column.index === 0) {
             const isNota = String(data.cell.raw || '').includes('NOTA');
             data.cell.styles.textColor = isNota ? COLORS.amber : COLORS.cyan;
-          } else if (data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+          } else if (data.column.index === 12 && data.cell.raw && data.cell.raw !== '-') {
             data.cell.text = '';
           }
         }
       },
       didDrawCell: (data) => {
-        if (data.section === 'body' && data.column.index === 11 && data.cell.raw && data.cell.raw !== '-') {
+        if (data.section === 'body' && data.column.index === 12 && data.cell.raw && data.cell.raw !== '-') {
           drawStatusBadge(base.doc, data.cell, data.cell.raw);
         }
       }
@@ -10763,6 +10838,156 @@ export function generateAnnualArcRetentionPDF({
 
   return base.doc;
 }
+
+// =========================================================================
+// 41. INFORME EJECUTIVO DE INTELIGENCIA PREDICTIVA (SIGNUM FORESIGHT)
+// =========================================================================
+export function generatePredictiveReportPDF({
+  earlyWarnings = [],
+  stockoutProjections = [],
+  marginAnalysis = [],
+  cashflowForecast = {},
+  horizonDays = 30,
+  tasaBcv = 827.73,
+  config = {},
+  currentUser = null
+} = {}) {
+  const base = createBaseReport({
+    title: 'SIGNUM FORESIGHT — INFORME DE INTELIGENCIA PREDICTIVA & PROYECCIONES',
+    subtitle: `Proyección de Agotamiento de Stock por Almacén, Compresión de Márgenes y Flujo de Fondos (${horizonDays} Días)`,
+    moduleCode: 'FORESIGHT',
+    currentUser,
+    config
+  });
+
+  const criticalAlertsCount = (earlyWarnings || []).filter(w => w.severidad === 'CRITICA').length;
+  const criticalStockCount = (stockoutProjections || []).filter(p => p.urgencia === 'CRITICO' || p.urgencia === 'AGOTADO').length;
+  const squeezedMarginCount = (marginAnalysis || []).filter(m => m.tieneCompresion || m.tienePerdida).length;
+  const saldoFinalUsd = Number(cashflowForecast?.saldoFinalProyectadoUsd || 0);
+
+  const cards = [
+    { label: 'Alertas Críticas', value: `${criticalAlertsCount} Alertas`, subtext: 'Atención Inmediata', color: criticalAlertsCount > 0 ? COLORS.red : COLORS.emerald },
+    { label: 'Riesgo Quiebre Stock', value: `${criticalStockCount} SKUs`, subtext: `Agotamiento en < 7 días`, color: criticalStockCount > 0 ? COLORS.amber : COLORS.emerald },
+    { label: 'Márgenes en Riesgo', value: `${squeezedMarginCount} SKUs`, subtext: 'Por debajo del umbral mínimo', color: squeezedMarginCount > 0 ? COLORS.purple : COLORS.emerald },
+    { label: 'Saldo Proyectado', value: formatUsd(saldoFinalUsd), subtext: cashflowForecast?.tieneBrechaLiquidez ? `Déficit mín: ${formatUsd(cashflowForecast.saldoMinimoUsd)}` : 'Liquidez cubierta', color: saldoFinalUsd >= 0 ? COLORS.emerald : COLORS.red }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  // 1. TABLA DE ALERTAS TEMPRANAS PRIORITARIAS
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(8.5);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text('1. RADAR DE ALERTAS TEMPRANAS PRIORITARIAS', base.startX, currentY);
+  currentY += 4;
+
+  const alertsTableData = (earlyWarnings || []).slice(0, 10).map(w => [
+    w.severidad || 'INFO',
+    w.categoria || 'GENERAL',
+    w.titulo || '-',
+    w.descripcion || '-'
+  ]);
+
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['SEVERIDAD', 'CATEGORÍA', 'ALERTA / RIESGO', 'DESCRIPCIÓN Y ACCIÓN SUGERIDA']],
+    body: alertsTableData.length > 0 ? alertsTableData : [['INFO', 'SISTEMA', 'Sin alertas activas', 'Todos los indicadores se encuentran en rangos saludables.']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 6.8,
+      fontStyle: 'bold',
+      cellPadding: 1.5
+    },
+    styles: {
+      fontSize: 6.2,
+      cellPadding: 1.4,
+      textColor: COLORS.dark
+    },
+    alternateRowStyles: {
+      fillColor: COLORS.lightBg
+    },
+    columnStyles: {
+      0: { cellWidth: 20, fontStyle: 'bold' },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 45, fontStyle: 'bold' },
+      3: { cellWidth: 'auto' }
+    }
+  });
+
+  currentY = base.doc.lastAutoTable.finalY + 7;
+
+  // 2. TABLA DE RIESGO DE QUIEBRE DE STOCK
+  base.doc.setFont('helvetica', 'bold');
+  base.doc.setFontSize(8.5);
+  base.doc.setTextColor(...COLORS.navy);
+  base.doc.text('2. ESTIMACIÓN DE QUIEBRE DE STOCK & SUGERENCIAS DE COMPRA', base.startX, currentY);
+  currentY += 4;
+
+  const stockRows = (stockoutProjections || [])
+    .filter(p => p.urgencia === 'CRITICO' || p.urgencia === 'REORDEN' || p.urgencia === 'AGOTADO')
+    .slice(0, 15)
+    .map(p => [
+      p.codigo || '-',
+      p.descripcion || '-',
+      String(p.stock01 || 0),
+      String(p.stock02 || 0),
+      String(p.stockDisponibleAtp || 0),
+      p.consumoDiario > 0 ? `${p.consumoDiario}/d` : '0',
+      p.diasCobertura >= 999 ? '∞' : `${p.diasCobertura} d`,
+      p.fechaEstimadaQuiebre || 'Sin fecha',
+      p.urgencia || 'OPTIMO',
+      p.sugerenciaCompra > 0 ? `+${p.sugerenciaCompra} (${formatUsd(p.costoEstimadoReposicionUsd)})` : 'Cubierto'
+    ]);
+
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['SKU', 'DESCRIPCIÓN', 'ALM 01', 'ALM 02', 'ATP LIBRE', 'CONSUMO/D', 'COBERTURA', 'QUIEBRE ETA', 'ESTADO', 'SUG. COMPRA']],
+    body: stockRows.length > 0 ? stockRows : [['-', 'No hay productos en riesgo inminente de quiebre', '0', '0', '0', '0', '0', '-', 'OPTIMO', 'Cubierto']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 6.5,
+      fontStyle: 'bold',
+      cellPadding: 1.5
+    },
+    styles: {
+      fontSize: 6.0,
+      cellPadding: 1.3,
+      textColor: COLORS.dark
+    },
+    alternateRowStyles: {
+      fillColor: COLORS.lightBg
+    },
+    columnStyles: {
+      0: { cellWidth: 20, fontStyle: 'bold' },
+      1: { cellWidth: 42 },
+      2: { cellWidth: 12, halign: 'center' },
+      3: { cellWidth: 12, halign: 'center' },
+      4: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+      5: { cellWidth: 15, halign: 'center' },
+      6: { cellWidth: 15, halign: 'center' },
+      7: { cellWidth: 18, halign: 'center' },
+      8: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
+      9: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' }
+    }
+  });
+
+  currentY = base.doc.lastAutoTable.finalY + 8;
+
+  finalizeAndSave(base.doc, `Informe_Predictivo_Foresight_${horizonDays}D.pdf`, currentUser, {
+    legalFooter: `Informe confidencial de proyecciones SIGNUM MOTORVEN • Generado para Dirección y Gerencia General.`
+  });
+
+  return base.doc;
+}
+
 
 
 

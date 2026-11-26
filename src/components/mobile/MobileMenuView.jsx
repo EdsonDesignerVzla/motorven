@@ -2,22 +2,49 @@ import React, { useMemo, useState } from 'react';
 import {
   ChevronRight,
   ClipboardList,
+  LayoutDashboard,
   LogOut,
   Monitor,
   Moon,
   Package,
   RefreshCw,
   Settings,
+  ShoppingCart,
+  Sparkles,
   Sun,
   Wallet
 } from 'lucide-react';
-import { canAccessModule } from '../../services/authService';
-import { canAccessMobileCxC, canAccessMobileInventory } from './mobileOrderHelpers';
+import { canAccessModule, canAccessMobileModule } from '../../services/authService';
+import {
+  canAccessMobileCxC,
+  canAccessMobileDashboard,
+  canAccessMobileInventory,
+  canAccessMobilePredictibilidad,
+  canAccessMobilePresale
+} from './mobileOrderHelpers';
 
 const MENU_SECTIONS = [
   {
     title: 'Módulos Móviles Activos',
     items: [
+      {
+        id: 'dashboard',
+        accessKey: 'dashboard',
+        label: 'Resumen General Ejecutivo',
+        sub: '1. Facturación, 2. Inventario, 3. Cobranzas y 4. CxP Keystone',
+        icon: LayoutDashboard,
+        color: 'var(--mob-navy)',
+        bg: 'var(--mob-navy-soft)'
+      },
+      {
+        id: 'predictibilidad',
+        accessKey: 'predictibilidad',
+        label: 'Predictibilidad & Alertas (Foresight)',
+        sub: 'Proyecciones de demanda, quiebre de stock, márgenes y flujo de caja',
+        icon: Sparkles,
+        color: '#8b5cf6',
+        bg: 'rgba(139, 92, 246, 0.14)'
+      },
       {
         id: 'pedidos',
         accessKey: 'pedidos',
@@ -44,6 +71,15 @@ const MENU_SECTIONS = [
         icon: Package,
         color: 'var(--mob-green)',
         bg: 'var(--mob-green-soft)'
+      },
+      {
+        id: 'ventas',
+        accessKey: 'ventas',
+        label: 'Facturación POS Caja',
+        sub: 'Facturación directa de pedidos desde móvil',
+        icon: ShoppingCart,
+        color: 'var(--mob-amber)',
+        bg: 'var(--mob-amber-soft)'
       }
     ]
   },
@@ -87,8 +123,14 @@ export default function MobileMenuView({
     return MENU_SECTIONS.map((sec) => ({
       ...sec,
       items: sec.items.filter((item) => {
+        if (item.id === 'dashboard') return canAccessMobileDashboard(currentUser);
+        if (item.id === 'predictibilidad') return canAccessMobilePredictibilidad(currentUser);
+        if (item.id === 'pedidos') return canAccessMobilePresale(currentUser);
         if (item.id === 'inventario') return canAccessMobileInventory(currentUser);
         if (item.id === 'cxc') return canAccessMobileCxC(currentUser);
+        if (Array.isArray(currentUser?.modulosMovil)) {
+          return canAccessMobileModule(currentUser, item.accessKey);
+        }
         return canAccessModule(currentUser?.rol, item.accessKey, currentUser);
       })
     })).filter((sec) => sec.items.length > 0);

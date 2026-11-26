@@ -473,6 +473,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
                                         <SortableTh field="fechaEmisionIso" label="Emisión" />
                                         <SortableTh field="fechaVencimientoIso" label="Vence" />
                                         <SortableTh field="diasVencidos" label="Días Venc." numeric />
+                                        <SortableTh field="diasCredito" label="Días Créd." numeric />
                                         <SortableTh field="montoFacturaUsd" label="Monto" numeric />
                                         <SortableTh field="abonosUsd" label="Abonos" numeric />
                                         <SortableTh field="restanteUsd" label="Restante" numeric />
@@ -483,7 +484,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
                                 <tbody>
                                     {visibleDocs.length === 0 && (
                                         <tr>
-                                            <td colSpan={13} style={{ ...tdStyle, textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                            <td colSpan={14} style={{ ...tdStyle, textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                                                 No hay documentos que coincidan con los filtros.
                                             </td>
                                         </tr>
@@ -505,6 +506,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
                                                 <td style={tdStyle}>{formatDate(doc.fechaEmision)}</td>
                                                 <td style={tdStyle}>{formatDate(doc.fechaVencimiento)}</td>
                                                 <td style={{ ...tdNum, color: doc.diasVencidos > 0 ? '#ef4444' : 'var(--text-muted)' }}>{doc.diasVencidos}</td>
+                                                <td style={{ ...tdNum, color: 'var(--text-muted)' }}>{Number(doc.diasCredito ?? 0)}d</td>
                                                 <td style={tdNum}>{formatUsd(doc.montoFacturaUsd)}</td>
                                                 <td style={{ ...tdNum, color: '#10b981' }}>{formatUsd(doc.abonosUsd)}</td>
                                                 <td style={{ ...tdNum, color: '#ef4444', fontWeight: 700 }}>{formatUsd(doc.restanteUsd)}</td>
@@ -533,7 +535,7 @@ export function CxcConsolidatedModal({ isOpen, onClose, documents = [], tasaBcv 
                                 {visibleDocs.length > 0 && (
                                     <tfoot>
                                         <tr>
-                                            <td colSpan={8} style={{ ...tfStyle, textAlign: 'left', fontFamily: 'inherit' }}>
+                                            <td colSpan={9} style={{ ...tfStyle, textAlign: 'left', fontFamily: 'inherit' }}>
                                                 TOTAL ({visibleTotals.count} documentos)
                                             </td>
                                             <td style={tfStyle}>{formatUsd(visibleTotals.monto)}</td>

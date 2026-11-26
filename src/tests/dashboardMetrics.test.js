@@ -7,10 +7,20 @@ import {
   summarizeReceivablesAging,
   summarizeCollectionsWindow,
   isKeystonePayableRecord,
-  summarizeKeystonePayables
+  summarizeKeystonePayables,
+  normalizeDashboardSalesDocs,
+  summarizeSalesWindows,
+  summarizeInventoryStock
 } from '../services/dashboardMetricsService.js';
+import { canAccessMobileDashboard } from '../components/mobile/mobileOrderHelpers.js';
+import {
+  applyTempCollectionsAdjustment,
+  canManageTempCollectionsAdjustment,
+  TEMP_COLLECTIONS_ADJUSTMENT
+} from '../config/tempCollectionsAdjustment.js';
 import { matchesSeller } from '../services/commissionService.js';
 import { buildConsolidatedKardex } from '../utils/kardexUtils.js';
+import { getProductCost, calculateWeightedAverageCostPatch } from '../services/pricingService.js';
 
 console.log('--- INICIANDO PRUEBAS DE MÉTRICAS DEL DASHBOARD EJECUTIVO ---');
 
@@ -187,4 +197,184 @@ assert.equal(keystoneSummary.docsVencidos, 1);
 assert.equal(keystoneSummary.vencidoPct, 20);
 console.log('  ✓ 8. Sumatoria actual de Cuentas por Pagar Keystone (dedup, vigente/vencido, exclusiones) verificada.');
 
-console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (8/8).');
+// 9. Resumen General Móvil y Escritorio (Facturación Día/Mes, Stock e Inventario, Acceso Móvil)
+assert.equal(canAccessMobileDashboard({ id: 'u1', rol: 'GERENCIA' }), true);
+assert.equal(canAccessMobileDashboard({ id: 'u2', rol: 'VENTAS' }), true);
+assert.equal(canAccessMobileDashboard(null), false);
+
+const rgProducts = [
+  { id: '001201', codigo: '001201', descripcion: '15W40 CAJA', stock: 10, unidad: 'Caja', litrosPorUnidad: 11.35, costoUsd: 40 },
+  { id: '001202', codigo: '001202', descripcion: '20W50 PAILA', stock: 5, unidad: 'Paila', litrosPorUnidad: 18.92, costoUsd: 70 }
+];
+const normDocs = normalizeDashboardSalesDocs({
+  profitInvoices: [
+    { id: 'F-101', numeroDoc: 'FAC-101', tipoDoc: 'FACTURA', fechaEmision: '2026-11-20', totNetoUsd: 200, items: [{ codigo: '001201', cantidad: 2 }] }
+  ],
+  sales: [
+    { id: 'F-101', numeroDoc: 'FAC-101', tipoDoc: 'FACTURA', fecha: '2026-11-20', totalUsd: 200, items: [{ codigo: '001201', cantidad: 2 }] }, // duplicado
+    { id: 'NE-201', numeroDoc: 'NE-201', tipoDoc: 'NOTA_ENTREGA', fecha: '2026-11-19', totalUsd: 150, items: [{ codigo: '001202', cantidad: 1 }] }
+  ],
+  products: rgProducts,
+  tasaBcv: 900
+});
+assert.equal(normDocs.length, 2);
+
+const salesWin = summarizeSalesWindows({
+  ventasDocsNormalizados: normDocs,
+  todayKey: '2026-11-20',
+  anioActivo: 2026,
+  ventasMesFilter: '11',
+  metaMensualBase: 1000
+});
+assert.equal(salesWin.ventasDelDia.usd, 200);
+assert.equal(salesWin.ventasDelDia.litros, 22.7);
+assert.equal(salesWin.ventasDelDia.ayerUsd, 150);
+assert.equal(salesWin.ventasAcumuladoMes.usd, 350);
+assert.equal(salesWin.ventasAcumuladoMes.documentos, 2);
+
+const invSum = summarizeInventoryStock(rgProducts);
+assert.equal(invSum.stockTotalLitros, 208.1);
+assert.equal(invSum.stockValorizadoUsd, 750);
+assert.equal(invSum.stockBreakdownItems.length, 2);
+console.log('  ✓ 9. Resumen General Móvil (Facturación Día/Mes, Inventario Valorizado y Permisos Móviles) verificado.');
+
+// 10. Ajuste temporal de Cobranzas del 2026-11-20 en memoria (hoy -> ayer al día siguiente, mes Nov, y control exclusivo MASTER)
+assert.equal(canManageTempCollectionsAdjustment({ rol: 'ADMINISTRADOR MASTER' }), true);
+assert.equal(canManageTempCollectionsAdjustment({ rol: 'GERENCIA' }), false);
+assert.equal(canManageTempCollectionsAdjustment({ rol: 'ADMINISTRACIÓN' }), false);
+assert.equal(canManageTempCollectionsAdjustment({ rol: 'VENTAS' }), false);
+assert.equal(canManageTempCollectionsAdjustment(null), false);
+
+assert.equal(
+  parseFloat(
+    (
+      TEMP_COLLECTIONS_ADJUSTMENT.banksBs.bancoPlaza +
+      TEMP_COLLECTIONS_ADJUSTMENT.banksBs.bancaribe +
+      TEMP_COLLECTIONS_ADJUSTMENT.banksBs.bancoVenezuela
+    ).toFixed(2)
+  ),
+  1362214.67
+);
+assert.equal(TEMP_COLLECTIONS_ADJUSTMENT.bsUsd, 1349.57);
+assert.equal(TEMP_COLLECTIONS_ADJUSTMENT.divisasUsd, 927);
+assert.equal(TEMP_COLLECTIONS_ADJUSTMENT.totalUsd, 2276.57);
+
+const nov20Base = summarizeCollectionsWindow({
+  tasaBcv: 918.76,
+  todayKey: '2026-11-20',
+  monthPrefix: '2026-11',
+  profitCollections: [
+    { id: 'nov-1', fecha: '2026-11-10', clienteId: 'CLI-1', montoUsd: 1000, montoBs: 0, tipoTasa: 'USD', monedaPago: 'USD' }
+  ]
+});
+const nov20Adjusted = applyTempCollectionsAdjustment({
+  summary: nov20Base,
+  todayKey: '2026-11-20',
+  monthPrefix: '2026-11',
+  tasaBcv: 918.76,
+  enabled: true,
+  localReverted: false
+});
+assert.equal(nov20Adjusted.hoy.usd, 2276.57);
+assert.equal(nov20Adjusted.hoy.divisasUsd, 927);
+assert.equal(nov20Adjusted.hoy.bsUsd, 1349.57);
+assert.equal(nov20Adjusted.hoy.bsReal, 1362214.67);
+assert.equal(nov20Adjusted.hoy.ayerUsd, 0);
+assert.equal(nov20Adjusted.mes.usd, 3276.57);
+assert.equal(nov20Adjusted.mes.divisasUsd, 1927);
+assert.equal(nov20Adjusted.mes.bsUsd, 1349.57);
+assert.equal(nov20Adjusted.mes.bsReal, 1362214.67);
+
+// Al día siguiente (2026-11-21), pasa a Ayer y sigue sumado en Noviembre 2026
+const nov21Base = summarizeCollectionsWindow({
+  tasaBcv: 918.76,
+  todayKey: '2026-11-21',
+  monthPrefix: '2026-11',
+  profitCollections: [
+    { id: 'nov-1', fecha: '2026-11-10', clienteId: 'CLI-1', montoUsd: 1000, montoBs: 0, tipoTasa: 'USD', monedaPago: 'USD' }
+  ]
+});
+const nov21Adjusted = applyTempCollectionsAdjustment({
+  summary: nov21Base,
+  todayKey: '2026-11-21',
+  monthPrefix: '2026-11',
+  tasaBcv: 918.76,
+  enabled: true,
+  localReverted: false
+});
+assert.equal(nov21Adjusted.hoy.usd, 0);
+assert.equal(nov21Adjusted.hoy.ayerUsd, 2276.57);
+assert.equal(nov21Adjusted.mes.usd, 3276.57);
+
+// Otro mes no se altera, y al revertir (localReverted o enabled=false) vuelve exacto al real
+const octAdjusted = applyTempCollectionsAdjustment({
+  summary: nov21Base,
+  todayKey: '2026-11-21',
+  monthPrefix: '2026-10',
+  tasaBcv: 918.76,
+  enabled: true
+});
+assert.equal(octAdjusted.mes.usd, 1000);
+
+const revertedSummary = applyTempCollectionsAdjustment({
+  summary: nov20Base,
+  todayKey: '2026-11-20',
+  monthPrefix: '2026-11',
+  tasaBcv: 918.76,
+  enabled: true,
+  localReverted: true
+});
+assert.deepEqual(revertedSummary, nov20Base);
+console.log('  ✓ 10. Ajuste temporal de Cobranzas 2026-11-20 (hoy -> ayer, acumulado mensual, reversión y control MASTER) verificado.');
+
+// 11. Costo Promedio Ponderado Independiente por Almacén (Opción 1: conserva costo previo y suma compra nueva)
+const prod0804Before = {
+  id: '000804',
+  codigo: '000804',
+  stockAlmacen01: 0,
+  stockAlmacen02: 1,
+  stock: 1,
+  costoUsd: 837.22
+};
+const patch0804 = calculateWeightedAverageCostPatch(prod0804Before, {
+  prev01: 0,
+  prev02: 1,
+  next01: 0,
+  next02: 2,
+  costDeltaVal02: 879.08,
+  costDeltaQty02: 1,
+  lastCost02: 879.08
+});
+assert.equal(patch0804.costoUsd01, 837.22);
+assert.equal(patch0804.costoUsd02, 858.15);
+assert.equal(patch0804.costoUsd, 858.15);
+
+const prod1312Before = {
+  id: '001312',
+  codigo: '001312',
+  stockAlmacen01: 0,
+  stockAlmacen02: 0,
+  stock: 0,
+  costoUsd: 738.3
+};
+const patch1312 = calculateWeightedAverageCostPatch(prod1312Before, {
+  prev01: 0,
+  prev02: 0,
+  next01: 0,
+  next02: 1,
+  costDeltaVal02: 891.5,
+  costDeltaQty02: 1,
+  lastCost02: 891.5
+});
+assert.equal(patch1312.costoUsd01, 738.3);
+assert.equal(patch1312.costoUsd02, 891.5);
+assert.equal(patch1312.costoUsd, 891.5);
+
+const prod0804After = { ...prod0804Before, stockAlmacen02: 2, stock: 2, ...patch0804 };
+const prod1312After = { ...prod1312Before, stockAlmacen02: 1, stock: 1, ...patch1312 };
+assert.equal(getProductCost(prod0804After, '01'), 837.22);
+assert.equal(getProductCost(prod0804After, '02'), 858.15);
+assert.equal(Number((2 * getProductCost(prod0804After, '02') + 1 * getProductCost(prod1312After, '02')).toFixed(2)), 2607.8);
+console.log('  ✓ 11. Costo Promedio Ponderado Independiente por Almacén (Opción 1) verificado.');
+
+console.log('\n🎉 Todas las pruebas de dashboardMetrics.test.js pasaron (11/11).');

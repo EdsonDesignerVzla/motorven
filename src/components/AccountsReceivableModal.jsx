@@ -30,6 +30,10 @@ import {
     inferCxcDocType,
     getCxcScopedDocKey,
     doesCollectionMatchInvoice,
+    resolveCollectionAppliedAmountForInvoice,
+    sumLinkedCollectionsUsdForInvoice,
+    buildCollectionsByDocDigitsIndex,
+    normalizeRefDigits,
     classifyCollectionRateType,
     getNextCreditDebitNoteCorrelativo,
     suggestCreditDebitControlNumber
@@ -628,6 +632,7 @@ export function AccountsReceivableModal({
             });
         });
 
+        const collectionsByDigitsIndex = buildCollectionsByDocDigitsIndex(collections);
         const processed = [];
 
         rawMap.forEach((inv, mapKey) => {
@@ -679,8 +684,11 @@ export function AccountsReceivableModal({
             const hasCobroHistory = Array.isArray(inv.historialCobros) && inv.historialCobros.length > 0;
             const matchingScopedOverride = localDocOverrides[scopedOverrideKey];
             const hasManualOverride = Boolean(matchingScopedOverride) || recentlyPaidKeys.has(scopedOverrideKey) || recentlyPaidKeys.has(factNum);
+            const invDigits = normalizeRefDigits(factNum || inv.factura || inv.numeroDoc || inv.id);
+            const candidateCollections = invDigits ? (collectionsByDigitsIndex.get(invDigits) || []) : [];
+            const linkedCobrosUsd = sumLinkedCollectionsUsdForInvoice(candidateCollections, { ...inv, factNum, tipoDoc }, tasaBcv);
             let abonosUsd = 0;
-            if (isPosDoc && !isExplicitlySettled && !hasCobroHistory && !hasManualOverride && Number(rawSaldoField ?? 0) <= 0.01) {
+            if (isPosDoc && !isExplicitlySettled && !hasCobroHistory && !hasManualOverride && Number(rawSaldoField ?? 0) <= 0.01 && linkedCobrosUsd <= 0.01) {
                 // Facturas emitidas desde el POS sin cobros ni edición registrados en CxC inician pendientes por cobrar en CxC
                 abonosUsd = 0;
             } else if (rawAbonosField !== undefined && rawAbonosField !== null && !isNaN(Number(rawAbonosField))) {
@@ -689,6 +697,9 @@ export function AccountsReceivableModal({
                 const numericSaldo = Number(rawSaldoField);
                 const baseForAbonos = (!isNotaEntrega || numericSaldo <= montoFacturaUsd) ? montoFacturaUsd : rawNeto;
                 abonosUsd = round2(Math.max(0, baseForAbonos - numericSaldo));
+            }
+            if (linkedCobrosUsd > abonosUsd) {
+                abonosUsd = round2(linkedCobrosUsd);
             }
             if (abonosUsd > montoFacturaUsd) {
                 abonosUsd = montoFacturaUsd;
@@ -807,7 +818,7 @@ export function AccountsReceivableModal({
         });
 
         return processed;
-    }, [isOpen, profitInvoices, effectiveSales, clients, sellerCatalog, tasaBcv, localDocOverrides, recentlyPaidKeys]);
+    }, [isOpen, profitInvoices, effectiveSales, collections, clients, sellerCatalog, tasaBcv, localDocOverrides, recentlyPaidKeys]);
 
     // Contadores para el selector superior (cartera activa por cobrar)
     const docTypeCounts = useMemo(() => {
@@ -4713,7 +4724,7 @@ export function AccountsReceivableModal({
                                     </h3>
                                     <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                                         {isDebit
-                                            ? `Genera un cargo adicional por cobrar vinculado a #${doc.factNum}`
+                                            ? `Aplica cargo adicional que suma al saldo de #${doc.factNum}`
                                             : `Aplica rebaja / descuento contable que disminuye el saldo de #${doc.factNum}`}
                                     </p>
                                 </div>
@@ -4743,7 +4754,7 @@ export function AccountsReceivableModal({
                                         className={`ncnd-choice-btn ${isDebit ? 'active-debit' : ''}`}
                                     >
                                         <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>Nota de Débito (N/DB)</div>
-                                        <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Aumenta deuda / crea cargo adicional</div>
+                                        <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Suma cargo adicional al documento</div>
                                     </button>
                                 </div>
 
@@ -4787,7 +4798,19 @@ export function AccountsReceivableModal({
                                     <div style={{ textAlign: 'right' }}>
                                         <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Restante Actual</div>
                                         <strong style={{ color: 'var(--semaforo-rojo)', fontFamily: 'var(--font-code)', fontSize: '0.95rem', display: 'block' }}>{formatUsd(doc.restanteUsd)}</strong>
-                                        <span style={{ color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontSize: '0.72rem', fontWeight: 600 }}>{formatBs(restanteBsVal)}</span>
+                                        <span style={{ color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontSize: '0.72rem', fontWeight: 600, display: 'block' }}>{formatBs(restanteBsVal)}</span>
+                                        {totVal > 0 && (
+                                            <span style={{
+                                                fontSize: '0.7rem',
+                                                fontFamily: 'var(--font-code)',
+                                                fontWeight: 700,
+                                                color: isDebit ? 'var(--accent-amber)' : 'var(--accent-emerald)',
+                                                display: 'block',
+                                                marginTop: '2px'
+                                            }}>
+                                                Nuevo Restante ({isDebit ? '+Suma' : '-Resta'}): {formatUsd(isDebit ? round2(Number(doc.restanteUsd || 0) + totVal) : round2(Math.max(0, Number(doc.restanteUsd || 0) - totVal)))}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -5251,18 +5274,8 @@ export function AccountsReceivableModal({
                                 const linkedCollections = (collections || [])
                                     .filter(col => doesCollectionMatchInvoice(col, selectedInvoiceDetail))
                                     .map(col => {
-                                        const docEntries = Array.isArray(col.documentosAfectados) ? col.documentosAfectados : [];
-                                        const firstDocEntry = docEntries[0] || {};
                                         const firstForma = Array.isArray(col.formasPago) && col.formasPago[0] ? col.formasPago[0] : {};
-                                        const cTasa = Number(col.tasa || selectedInvoiceDetail.tasa || tasaBcv || 1) || 1;
-                                        const rawUsd = Number(firstDocEntry.montoCobradoUsd ?? col.montoUsd ?? 0);
-                                        const rawBs = Number(firstDocEntry.montoCobrado ?? col.montoBs ?? 0);
-                                        const usd = (cTasa > 10 && rawUsd > 0 && Math.abs(rawUsd - rawBs) < 1)
-                                            ? round2(rawUsd / cTasa)
-                                            : round2(rawUsd || (cTasa > 0 ? rawBs / cTasa : 0));
-                                        const bs = (cTasa > 1 && usd > 0 && Math.abs(rawBs - usd) < 0.01)
-                                            ? round2(usd * cTasa)
-                                            : round2(rawBs || usd * cTasa);
+                                        const { usd, bs, tasa: cTasa } = resolveCollectionAppliedAmountForInvoice(col, selectedInvoiceDetail, tasaBcv);
                                         return {
                                             id: col.id || `col-${col.cobNum}`,
                                             cobNum: col.cobNum || col.correlativo || 'COB',

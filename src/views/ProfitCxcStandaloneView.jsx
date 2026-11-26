@@ -933,12 +933,29 @@ export default function ProfitCxcStandaloneView() {
     const totalRestanteUsd = round2(
       filteredRows.reduce((acc, r) => acc + Number(getRowEffective(r).restanteUsd || 0), 0)
     );
-    const countVencidas = filteredRows.filter((r) => getRowEffective(r).estado === 'VENCIDA').length;
-    const countPorVencer = filteredRows.filter((r) => getRowEffective(r).estado === 'POR_VENCER').length;
+    let totalVencidoUsd = 0;
+    let totalPorVencerUsd = 0;
+    let countVencidas = 0;
+    let countPorVencer = 0;
+    filteredRows.forEach((r) => {
+      const eff = getRowEffective(r);
+      const restante = Number(eff.restanteUsd || 0);
+      if (eff.estado === 'VENCIDA') {
+        countVencidas++;
+        totalVencidoUsd += restante;
+      } else if (eff.estado === 'POR_VENCER') {
+        countPorVencer++;
+        totalPorVencerUsd += restante;
+      }
+    });
+    totalVencidoUsd = round2(totalVencidoUsd);
+    totalPorVencerUsd = round2(totalPorVencerUsd);
     return {
       totalMontoFacturaUsd,
       totalAbonosUsd,
       totalRestanteUsd,
+      totalVencidoUsd,
+      totalPorVencerUsd,
       countTotal: filteredRows.length,
       countVencidas,
       countPorVencer
@@ -1338,7 +1355,7 @@ export default function ProfitCxcStandaloneView() {
         }
         .profit-cxc-kpis {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
           gap: 12px;
           margin-bottom: 16px;
         }
@@ -1735,16 +1752,31 @@ export default function ProfitCxcStandaloneView() {
           </div>
         </div>
 
+        <div className="profit-cxc-kpi-card" style={{ borderLeft: '4px solid #e11d48', background: '#fff1f2' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#9f1239', textTransform: 'uppercase' }}>
+            Monto Vencido (En Mora)
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: 800, color: '#be123c', marginTop: '2px' }}>
+            {formatUsd(summaryMetrics.totalVencidoUsd)}
+          </div>
+          <div style={{ fontSize: '11.5px', color: '#881337' }}>
+            {formatBs(summaryMetrics.totalVencidoUsd * tasaBcv)}
+            {summaryMetrics.totalRestanteUsd > 0 && (
+              <span> • {((summaryMetrics.totalVencidoUsd / summaryMetrics.totalRestanteUsd) * 100).toFixed(1)}%</span>
+            )}
+          </div>
+        </div>
+
         <div className="profit-cxc-kpi-card" style={{ borderLeft: '4px solid #7c3aed' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
             Estado de Cartera
           </div>
-          <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
             <span style={{ color: '#b91c1c' }}>{summaryMetrics.countVencidas} Vencidas</span> /{' '}
             <span style={{ color: '#047857' }}>{summaryMetrics.countPorVencer} Al Día</span>
           </div>
           <div style={{ fontSize: '11.5px', color: '#334155' }}>
-            Total listados: {summaryMetrics.countTotal} documentos
+            Al día: {formatUsd(summaryMetrics.totalPorVencerUsd)} • {summaryMetrics.countTotal} docs
           </div>
         </div>
       </div>

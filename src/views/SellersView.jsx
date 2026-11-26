@@ -43,9 +43,8 @@ import SellerDetailModal from '../components/SellerDetailModal';
 import SellerCommissionModal from '../components/SellerCommissionModal';
 import DebtCollectionIntelligenceModal from '../components/DebtCollectionIntelligenceModal';
 import SellerAvatar from '../components/SellerAvatar';
-import { isMasterOrGerencia, normalizeRole } from '../services/authService';
+import { isMasterOrGerencia } from '../services/authService';
 import { generateSellersPDF } from '../services/pdfReportService';
-import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { getCommissionSettlements } from '../services/storageService';
 import {
   getSupabaseCommissionSettlements,
@@ -59,6 +58,7 @@ import {
   normalizeProfitCollectionUsd,
   calculateSellerCommissionSummary,
   countDistinctActiveMonths,
+  buildSalesDepartmentSellers,
   MOTORVEN_TIER_ORDER,
   MOTORVEN_COMMISSION_TIERS
 } from '../services/commissionService';
@@ -122,6 +122,7 @@ export default function SellersView({
   profitSellers = [],
   usersList = [],
   profitInvoices = [],
+  profitReturns = [],
   profitCollections = [],
   profitBankAccounts = [],
   clients = [],
@@ -202,155 +203,12 @@ export default function SellersView({
     }
   };
 
-  // Lista activa de vendedores con respaldo automático, deduplicación e incorporación de todos los usuarios activos de Ventas
-  const effectiveSellers = useMemo(() => {
-    const stripAcc = (str) =>
-      String(str || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim()
-        .toLowerCase();
-
-    const rawList = (Array.isArray(profitSellers) && profitSellers.length > 0)
-      ? profitSellers
-      : DEFAULT_PROFIT_SELLERS;
-
-    const byCode = new Map();
-    const codeByName = new Map();
-
-    rawList.forEach((s) => {
-      if (!s) return;
-      const name = (s.venDes || s.ven_des || s.nombre || '').trim();
-      const rawCode = (s.coVen || s.co_ven || s.id || '').trim();
-      const cleanCode = rawCode.replace(/^usr-seller-/i, '').trim().toUpperCase();
-      if ((!name && !cleanCode) || cleanCode.startsWith('USR-')) return;
-
-      const nameKey = stripAcc(name);
-      const codeKey = cleanCode || nameKey;
-      const existingByCode = byCode.get(codeKey);
-      const existingCodeForName = nameKey ? codeByName.get(nameKey) : null;
-      const existing = existingByCode || (existingCodeForName ? byCode.get(existingCodeForName) : null);
-
-      const preservedFoto = s.foto || existing?.foto || '';
-      const preservedAvatar = s.avatar || existing?.avatar || '';
-      const rawIsPrefixed = /^usr-seller-/i.test(rawCode);
-      const existingIsPrefixed = existing ? /^usr-seller-/i.test(existing.coVen || '') : false;
-
-      if (!existing || (existingIsPrefixed && !rawIsPrefixed)) {
-        const finalCode = cleanCode || existing?.coVen || '';
-        const merged = {
-          ...(existing || {}),
-          ...s,
-          id: s.id && !/^usr-seller-/i.test(String(s.id)) ? s.id : (finalCode || s.id),
-          coVen: finalCode,
-          co_ven: finalCode,
-          venDes: name || existing?.venDes || finalCode,
-          ven_des: name || existing?.ven_des || finalCode,
-          foto: preservedFoto,
-          avatar: preservedAvatar,
-          coZon: s.coZon || s.co_zon || existing?.coZon || '',
-          zona: s.zona || existing?.zona || '',
-          metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? existing?.metaLitrosMes ?? 3000)
-        };
-        byCode.set(codeKey, merged);
-        if (nameKey) codeByName.set(nameKey, codeKey);
-      } else if (preservedFoto && !existing.foto) {
-        const updated = {
-          ...existing,
-          foto: preservedFoto,
-          avatar: preservedAvatar || existing.avatar
-        };
-        byCode.set(existingCodeForName || codeKey, updated);
-      }
-    });
-
-    // Incorporar todos los usuarios activos del departamento de Ventas (ej. Rosibel Briceño / @rosibelventas)
-    const usedCodes = new Set(Array.from(byCode.keys()).map((k) => String(k || '').toUpperCase()));
-    const genInitialsCode = (nombre) => {
-      const words = stripAcc(nombre).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
-      let base = words.length >= 2 ? `${words[0][0]}${words[1][0]}`.toUpperCase() : (words[0] || 'VN').slice(0, 2).toUpperCase();
-      if (!base || base.length < 2) base = (base || 'VN').padEnd(2, 'X').slice(0, 2);
-      if (!usedCodes.has(base)) return base;
-      if (words.length >= 2 && words[1].length >= 2) {
-        const three = `${words[0][0]}${words[1].slice(0, 2)}`.toUpperCase();
-        if (!usedCodes.has(three)) return three;
-      }
-      for (let i = 2; i < 99; i++) {
-        const c = `${base}${i}`;
-        if (!usedCodes.has(c)) return c;
-      }
-      return `${base}${Date.now().toString(36).slice(-2).toUpperCase()}`;
-    };
-
-    (Array.isArray(usersList) ? usersList : []).forEach((u) => {
-      if (!u || u.activo === false || u.active === false) return;
-      const uname = String(u.username || '').trim().toLowerCase();
-      const uid = String(u.id || '').trim().toLowerCase();
-      if (/^autotest_/i.test(uname) || /^usr-autotest-/i.test(uid)) return;
-      const dept = String(u.departamento || '').trim().toUpperCase();
-      const normRol = normalizeRole(u.rol || u.role || '');
-      if (dept !== 'VEN' && normRol !== 'VENTAS') return;
-
-      const rawUserCoVen = String(u.co_ven || u.coVen || '').trim();
-      const derivedFromId = uid.startsWith('usr-seller-')
-        ? String(u.id).replace(/^usr-seller-/i, '').trim().toUpperCase()
-        : '';
-      const candidateCode = (rawUserCoVen || derivedFromId).toUpperCase();
-      const uName = String(u.nombre || u.name || u.username || '').trim();
-      const uNameKey = stripAcc(uName);
-
-      // Si ya existe en profit_sellers por código o nombre, enriquecer foto/cédula/teléfono si faltan
-      const existingMatchKey =
-        (candidateCode && !candidateCode.startsWith('USR-') && byCode.has(candidateCode) ? candidateCode : null) ||
-        (uNameKey && codeByName.has(uNameKey) ? codeByName.get(uNameKey) : null);
-
-      if (existingMatchKey) {
-        const cur = byCode.get(existingMatchKey);
-        if (cur && ((!cur.foto && u.foto) || (!cur.cedula && u.cedula) || (!cur.telefonos && (u.phone || u.telefono)))) {
-          byCode.set(existingMatchKey, {
-            ...cur,
-            foto: cur.foto || u.foto || '',
-            avatar: cur.avatar || u.avatar || '',
-            cedula: cur.cedula || u.cedula || '',
-            telefonos: cur.telefonos || u.phone || u.telefono || ''
-          });
-        }
-        return;
-      }
-
-      const assignedCode =
-        candidateCode && !candidateCode.startsWith('USR-') && !usedCodes.has(candidateCode)
-          ? candidateCode
-          : genInitialsCode(uName || uname);
-
-      usedCodes.add(assignedCode);
-      if (uNameKey) codeByName.set(uNameKey, assignedCode);
-
-      byCode.set(assignedCode, {
-        id: assignedCode,
-        coVen: assignedCode,
-        co_ven: assignedCode,
-        venDes: uName || assignedCode,
-        ven_des: uName || assignedCode,
-        cedula: u.cedula || '',
-        telefonos: u.phone || u.telefono || '',
-        direccion: '',
-        tipo: 'A',
-        comisionPct: 3.0,
-        metaLitrosMes: 3000,
-        activo: true,
-        foto: u.foto || '',
-        avatar: u.avatar || '',
-        coZon: '',
-        co_zon: '',
-        zona: '',
-        userId: u.id,
-        username: u.username
-      });
-    });
-
-    return Array.from(byCode.values());
-  }, [profitSellers, usersList]);
+  // Lista oficial de Fuerza de Ventas: EXCLUSIVAMENTE usuarios activos configurados en el departamento Ventas (VEN),
+  // enriquecidos con su metadata comercial (zona, meta, comisión) desde profitSellers.
+  const effectiveSellers = useMemo(
+    () => buildSalesDepartmentSellers(usersList, profitSellers),
+    [usersList, profitSellers]
+  );
 
   // Todas las cobranzas válidas con montoUsd normalizado (evita Bs guardados como USD)
   const normalizedCollectionsAll = useMemo(() => {
@@ -395,19 +253,30 @@ export default function SellersView({
       const venDes = (seller?.venDes || seller?.ven_des || seller?.nombre || '').toString().trim();
 
       const sInvoices = (filteredProfitInvoices || []).filter(f => matchesSeller(seller, f));
+      const sReturns = (profitReturns || []).filter(r => {
+        if (!r || isDocAnulada(r) || !matchesSeller(seller, r)) return false;
+        if (selectedMonth === 'ALL') return true;
+        const raw = r?.fecEmis || r?.fec_emis || r?.fecha || '';
+        return !raw || extractMonthNumber(raw) === selectedMonth;
+      });
       const sCollections = (filteredProfitCollections || []).filter(c => matchesSeller(seller, c));
       const sClients = (clients || []).filter(c => matchesSeller(seller, c?.vendedorAsignado || c?.co_ven || c?.vendedor || c));
       const sOrders = (orders || []).filter(o => matchesSeller(seller, o));
 
-      const totalLitros = sInvoices.reduce((acc, f) => acc + resolveInvoiceLitros(f), 0);
-      const totalCajas = sInvoices.reduce((acc, f) => acc + resolveInvoiceCajas(f), 0);
-      const totalVentasUsd = sInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0);
-      const totalVentasBs = sInvoices.reduce((acc, f) => acc + (Number(f?.totNetoBs) || 0), 0);
+      const retLitros = sReturns.reduce((acc, r) => acc + Math.abs(Number(r?.litrosTotales ?? r?.litros_totales ?? 0) || 0), 0);
+      const retUsd = sReturns.reduce((acc, r) => acc + Math.abs(Number(r?.totNeto ?? r?.tot_neto ?? 0) || 0), 0);
+      const retBs = sReturns.reduce((acc, r) => acc + Math.abs((Number(r?.totNeto ?? r?.tot_neto ?? 0) || 0) * (Number(r?.tasa) > 1 ? Number(r.tasa) : tasaBcv)), 0);
+
+      const totalLitros = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + resolveInvoiceLitros(f), 0) - retLitros).toFixed(2)));
+      const totalCajas = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + resolveInvoiceCajas(f), 0) - (retLitros / 11.35)).toFixed(1)));
+      const totalVentasUsd = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0) - retUsd).toFixed(2)));
+      const totalVentasBs = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + (Number(f?.totNetoBs) || 0), 0) - retBs).toFixed(2)));
       const totalSaldoUsd = sInvoices.reduce((acc, f) => acc + (Number(f?.saldoUsd) || 0), 0);
       const totalCobradoUsd = sCollections.reduce((acc, c) => acc + normalizeProfitCollectionUsd(c), 0);
       const totalCobradoBs = sCollections.reduce((acc, c) => acc + (Number(c?.montoBs ?? c?.monto_bs) || 0), 0);
 
-      const metaLitrosBase = Number(seller?.metaLitrosMes) || 3000;
+      const metaRaw = Number(seller?.metaLitrosMes ?? seller?.meta_litros_mes);
+      const metaLitrosBase = Number.isFinite(metaRaw) && metaRaw >= 0 ? metaRaw : 3000;
       const metaLitros = selectedMonth === 'ALL' ? metaLitrosBase * Math.max(1, activeMonthsCount) : metaLitrosBase;
       const cumplimientoPct = metaLitros > 0 ? parseFloat(((totalLitros / metaLitros) * 100).toFixed(1)) : 0;
       const efectividadCobranzaPct = totalVentasUsd > 0 ? parseFloat(((totalCobradoUsd / totalVentasUsd) * 100).toFixed(1)) : (totalCobradoUsd > 0 ? 100 : 0);
@@ -416,6 +285,7 @@ export default function SellersView({
       const commissionSummary = calculateSellerCommissionSummary(seller, {
         invoices: sInvoices,
         collections: normalizedCollectionsAll,
+        returns: sReturns,
         tasaBcv
       });
 
@@ -453,7 +323,7 @@ export default function SellersView({
         comisionEstimadaBs: commissionSummary.totalComisionBs
       };
     }).sort((a, b) => b.totalLitros - a.totalLitros);
-  }, [effectiveSellers, filteredProfitInvoices, filteredProfitCollections, normalizedCollectionsAll, clients, orders, profitZones, selectedMonth, activeMonthsCount, config?.tasaDolar]);
+  }, [effectiveSellers, filteredProfitInvoices, filteredProfitCollections, profitReturns, normalizedCollectionsAll, clients, orders, profitZones, selectedMonth, activeMonthsCount, config?.tasaDolar]);
 
   // KPIs Generales
   const kpis = useMemo(() => {
@@ -490,6 +360,7 @@ export default function SellersView({
       if (!s) return false;
       const vDes = s.venDes || s.ven_des || s.nombre || '';
       const cVen = s.coVen || s.co_ven || s.codigo || '';
+      const uName = s.username || '';
       const ced = s.cedula || s.rif || '';
       const sZona = s.zona || '';
       const sCoZon = s.coZon || '';
@@ -497,6 +368,7 @@ export default function SellersView({
       const matchesSearch = !q ||
         vDes.toLowerCase().includes(q) ||
         cVen.toLowerCase().includes(q) ||
+        uName.toLowerCase().includes(q) ||
         ced.toLowerCase().includes(q) ||
         sZona.toLowerCase().includes(q);
 
@@ -613,6 +485,40 @@ export default function SellersView({
     setInlineNewZoneOpen(false);
     setInlineNewZoneCode(getNextSuggestedZoneCode());
     setInlineNewZoneName('');
+  };
+
+  // Liberar zona inmediatamente y guardar en tiempo real para permitir reasignación
+  const handleReleaseSellerZone = async (targetSeller) => {
+    const sellerObj = targetSeller || editingZoneSeller;
+    if (!sellerObj) return;
+    const coVen = (sellerObj.coVen || sellerObj.co_ven || sellerObj.id || '').toString().trim();
+    const prevZoneCode = String(sellerObj.coZon || sellerObj.co_zon || '').trim().toUpperCase();
+    const prevZoneName = sellerObj.zona || (prevZoneCode ? `Zona ${prevZoneCode}` : '');
+
+    setModalZoneCoZon('');
+    setInlineNewZoneOpen(false);
+    setSavingZoneChange(true);
+    try {
+      if (onUpdateSellerZone) {
+        await onUpdateSellerZone(coVen, { coZon: '', zona: '' });
+      }
+      setEditingZoneSeller(prev => (prev && ((prev.coVen || prev.id || '').toString().trim() === coVen)
+        ? { ...prev, coZon: '', co_zon: '', zona: '' }
+        : prev));
+      if (selectedSeller && ((selectedSeller.coVen || selectedSeller.id || '').toString().trim() === coVen)) {
+        setSelectedSeller(prev => prev ? ({ ...prev, coZon: '', co_zon: '', zona: '' }) : null);
+      }
+      notify.success(
+        prevZoneCode
+          ? `Zona [Z-${prevZoneCode}] ${prevZoneName ? `(${prevZoneName}) ` : ''}liberada y guardada. Ya está disponible para reasignar.`
+          : `${sellerObj.venDes} quedó sin zona asignada.`
+      );
+    } catch (err) {
+      notify.error(err?.message || 'Error liberando la zona del asesor');
+      console.warn('Error releasing seller zone:', err);
+    } finally {
+      setSavingZoneChange(false);
+    }
   };
 
   // Guardar nueva zona exclusiva de asesor
@@ -737,19 +643,37 @@ export default function SellersView({
   };
 
   const handleSaveTarget = async (coVen) => {
-    if (onUpdateSellerTarget) {
-      await onUpdateSellerTarget(coVen, {
-        metaLitrosMes: editTargetValue,
-        comisionPct: editCommissionValue
-      });
+    const meta = Number(editTargetValue);
+    if (editTargetValue === '' || !Number.isFinite(meta) || meta < 0) {
+      notify.warning('La meta mensual debe ser un número igual o mayor a 0 litros.');
+      return;
     }
-    setEditingTargetId(null);
+    const comision = Number(editCommissionValue);
+    if (!Number.isFinite(comision) || comision < 0) {
+      notify.warning('El % de comisión debe ser igual o mayor a 0.');
+      return;
+    }
+    const seller = (effectiveSellers || []).find(s => String(s.coVen) === String(coVen));
+    try {
+      if (onUpdateSellerTarget) {
+        await onUpdateSellerTarget(coVen, {
+          metaLitrosMes: meta,
+          comisionPct: comision,
+          venDes: seller?.venDes || seller?.ven_des || ''
+        });
+      }
+      setEditingTargetId(null);
+      notify.success(`Meta de ${seller?.venDes || coVen} actualizada: ${formatUnitVe(meta, 0)} L`);
+    } catch (err) {
+      console.error(err);
+      notify.error(err?.message || 'Error guardando la meta del asesor.');
+    }
   };
 
   const handleSaveGlobalTarget = async () => {
     const total = Number(globalTargetInput);
-    if (isNaN(total) || total <= 0) {
-      notify.warning('Por favor ingrese una meta mensual en litros válida (mayor a 0).');
+    if (globalTargetInput === '' || isNaN(total) || total < 0) {
+      notify.warning('Por favor ingrese una meta mensual en litros válida (igual o mayor a 0).');
       return;
     }
     setSavingGlobalTarget(true);
@@ -1253,7 +1177,7 @@ export default function SellersView({
                                 {seller.venDes}
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                                Cód: {seller.coVen} | C.I.: {seller.cedula || 'N/A'}
+                                Cód: {seller.coVen}{seller.username ? ` | @${seller.username}` : ''} | C.I.: {seller.cedula || 'N/A'}
                               </div>
                             </div>
                           </div>
@@ -1758,6 +1682,7 @@ export default function SellersView({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <input
                     type="number"
+                    min="0"
                     step="500"
                     className="form-control"
                     value={globalTargetInput}
@@ -1795,7 +1720,7 @@ export default function SellersView({
                     <button
                       className="btn btn-secondary"
                       onClick={() => {
-                        setGlobalTargetInput(kpis.totalMetaGlobal || 30000);
+                        setGlobalTargetInput(kpis.totalMetaGlobal ?? 0);
                         setIsEditingGlobalTarget(true);
                       }}
                       style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '4px' }}
@@ -1840,15 +1765,27 @@ export default function SellersView({
                           {isEditing ? (
                             <input
                               type="number"
+                              min="0"
                               step="100"
                               className="form-control"
                               value={editTargetValue}
-                              onChange={(e) => setEditTargetValue(Number(e.target.value))}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === '') { setEditTargetValue(''); return; }
+                                const n = Number(v);
+                                setEditTargetValue(Number.isFinite(n) ? Math.max(0, n) : 0);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === '-' || e.key === 'e') e.preventDefault();
+                                if (e.key === 'Enter') handleSaveTarget(seller.coVen);
+                                if (e.key === 'Escape') setEditingTargetId(null);
+                              }}
+                              autoFocus
                               style={{ width: '110px', margin: '0 auto', fontSize: '0.82rem', textAlign: 'center' }}
                             />
                           ) : (
                             <strong style={{ fontFamily: 'var(--font-tech)', fontSize: '0.92rem' }}>
-                              {formatUnitVe(seller.metaLitrosMes || 3000, 0)} L
+                              {formatUnitVe(seller.metaLitrosMes ?? 0, 0)} L
                             </strong>
                           )}
                         </td>
@@ -1856,10 +1793,11 @@ export default function SellersView({
                           {isEditing ? (
                             <input
                               type="number"
+                              min="0"
                               step="0.5"
                               className="form-control"
                               value={editCommissionValue}
-                              onChange={(e) => setEditCommissionValue(Number(e.target.value))}
+                              onChange={(e) => setEditCommissionValue(Math.max(0, Number(e.target.value) || 0))}
                               style={{ width: '80px', margin: '0 auto', fontSize: '0.82rem', textAlign: 'center' }}
                             />
                           ) : (
@@ -1902,7 +1840,7 @@ export default function SellersView({
                               className="btn btn-secondary"
                               onClick={() => {
                                 setEditingTargetId(seller.coVen);
-                                setEditTargetValue(seller.metaLitrosMes || 3000);
+                                setEditTargetValue(seller.metaLitrosMes ?? 0);
                                 setEditCommissionValue(seller.comisionPct || 3.0);
                               }}
                               style={{ padding: '4px 8px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
@@ -1958,7 +1896,7 @@ export default function SellersView({
                         {seller.venDes}
                       </h3>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
-                        Cód: {seller.coVen} | C.I.: {seller.cedula || 'N/A'}
+                        Cód: {seller.coVen}{seller.username ? ` | @${seller.username}` : ''} | C.I.: {seller.cedula || 'N/A'}
                       </div>
                     </div>
                   </div>
@@ -2123,34 +2061,73 @@ export default function SellersView({
               </div>
 
               {!inlineNewZoneOpen ? (
-                <select
-                  className="form-control"
-                  value={modalZoneCoZon}
-                  onChange={(e) => setModalZoneCoZon(e.target.value)}
-                  style={{ width: '100%', fontSize: '0.84rem' }}
-                >
-                  <option value="">-- Aún no tiene Zona Asignada (Liberar Zona) --</option>
-                  {(profitZones || []).map((z) => {
-                    const cZon = String(z.coZon || z.co_zon || '').trim().toUpperCase();
-                    const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
-                    const selfCode = String(editingZoneSeller.coVen || editingZoneSeller.co_ven || editingZoneSeller.id || '')
-                      .trim()
-                      .replace(/^usr-seller-/i, '')
-                      .toUpperCase();
-                    const otherOccupants = (zoneOccupantsMap.get(cZon) || []).filter(
-                      (o) => String(o.coVen || o.co_ven || o.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase() !== selfCode
-                    );
-                    const isTakenByOther = otherOccupants.length > 0;
-                    const statusSuffix = isTakenByOther
-                      ? ` — [Ocupada por: ${otherOccupants.map((o) => o.venDes).join(', ')}]`
-                      : (String(editingZoneSeller.coZon || '').trim().toUpperCase() === cZon ? ' — [Actual]' : ' — [Disponible]');
-                    return (
-                      <option key={cZon} value={cZon} disabled={isTakenByOther}>
-                        Zona {cZon}: {dZon}{statusSuffix}
-                      </option>
-                    );
-                  })}
-                </select>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  <select
+                    className="form-control"
+                    value={modalZoneCoZon}
+                    disabled={savingZoneChange}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setModalZoneCoZon(nextVal);
+                      const currentlyHasZone = Boolean(
+                        String(editingZoneSeller.coZon || editingZoneSeller.co_zon || editingZoneSeller.zona || '').trim()
+                      );
+                      if (nextVal === '' && currentlyHasZone) {
+                        handleReleaseSellerZone(editingZoneSeller);
+                      }
+                    }}
+                    style={{ width: '100%', fontSize: '0.84rem' }}
+                  >
+                    <option value="">-- Aún no tiene Zona Asignada (Liberar Zona) --</option>
+                    {(profitZones || []).map((z) => {
+                      const cZon = String(z.coZon || z.co_zon || '').trim().toUpperCase();
+                      const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
+                      const selfCode = String(editingZoneSeller.coVen || editingZoneSeller.co_ven || editingZoneSeller.id || '')
+                        .trim()
+                        .replace(/^usr-seller-/i, '')
+                        .toUpperCase();
+                      const otherOccupants = (zoneOccupantsMap.get(cZon) || []).filter(
+                        (o) => String(o.coVen || o.co_ven || o.id || '').trim().replace(/^usr-seller-/i, '').toUpperCase() !== selfCode
+                      );
+                      const isTakenByOther = otherOccupants.length > 0;
+                      const statusSuffix = isTakenByOther
+                        ? ` — [Ocupada por: ${otherOccupants.map((o) => o.venDes).join(', ')}]`
+                        : (String(editingZoneSeller.coZon || '').trim().toUpperCase() === cZon ? ' — [Actual]' : ' — [Disponible]');
+                      return (
+                        <option key={cZon} value={cZon} disabled={isTakenByOther}>
+                          Zona {cZon}: {dZon}{statusSuffix}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {Boolean(String(editingZoneSeller.coZon || editingZoneSeller.co_zon || editingZoneSeller.zona || '').trim()) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={savingZoneChange}
+                      onClick={() => handleReleaseSellerZone(editingZoneSeller)}
+                      style={{
+                        width: '100%',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        padding: '8px 12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        borderColor: 'var(--motorven-red, #e60012)',
+                        color: 'var(--motorven-red, #e60012)',
+                        background: 'rgba(230, 0, 18, 0.06)'
+                      }}
+                    >
+                      <X size={14} />
+                      {savingZoneChange
+                        ? 'Liberando zona...'
+                        : `Aún no tiene Zona Asignada (Liberar Zona ${editingZoneSeller.coZon ? `Z-${editingZoneSeller.coZon}` : 'Actual'})`}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <div
                   style={{

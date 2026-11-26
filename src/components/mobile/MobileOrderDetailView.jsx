@@ -103,7 +103,9 @@ export default function MobileOrderDetailView({
 
   const canApprove =
     Boolean(onUpdateOrderStatus) &&
-    (canApproveClients(currentUser) || canUserGrantCreditOverride(currentUser) || canManageInvoices(currentUser)) &&
+    (statusInfo.isRetained
+      ? canUserGrantCreditOverride(currentUser, { mobile: true })
+      : (canApproveClients(currentUser) || canUserGrantCreditOverride(currentUser, { mobile: true }) || canManageInvoices(currentUser))) &&
     (statusInfo.isRetained || statusInfo.code === 'PENDIENTE' || statusInfo.code === 'PENDIENTE_APROBACION');
 
   const canBill =

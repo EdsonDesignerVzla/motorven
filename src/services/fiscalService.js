@@ -12,6 +12,47 @@
 
 import { round2, formatUsd, formatBs, formatNumberUs } from './formatService.js';
 
+export const INVENTORY_SHIELD_CUTOFF_YMD = '2026-11-25';
+
+/**
+ * Blindaje de inventario: Editar y Eliminar Facturas/Notas de Entrega solo está permitido
+ * para documentos emitidos ANTES del 25/11/2026 (YYYY-MM-DD < '2026-11-25').
+ * Para documentos del 25/11/2026 en adelante, solo se permite Anular o Devolución.
+ */
+export const isDocBeforeInventoryShieldCutoff = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  const raw = doc.fechaEmision || doc.fecha_emision || doc.fecEmis || doc.fec_emis || doc.fecha || '';
+  const s = String(raw || '').trim();
+  if (!s) return false;
+  let ymd = '';
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    if (s.includes('T')) {
+      const parsed = Date.parse(s);
+      if (Number.isFinite(parsed)) {
+        const vetDate = new Date(parsed - 4 * 3600 * 1000);
+        ymd = vetDate.toISOString().slice(0, 10);
+      } else {
+        ymd = `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+      }
+    } else {
+      ymd = `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    }
+  } else {
+    const veMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (veMatch) {
+      ymd = `${veMatch[3]}-${veMatch[2].padStart(2, '0')}-${veMatch[1].padStart(2, '0')}`;
+    } else {
+      const parsed = Date.parse(s);
+      if (Number.isFinite(parsed)) {
+        const vetDate = new Date(parsed - 4 * 3600 * 1000);
+        ymd = vetDate.toISOString().slice(0, 10);
+      }
+    }
+  }
+  return Boolean(ymd && ymd < INVENTORY_SHIELD_CUTOFF_YMD);
+};
+
 // ==============================================================================
 // 1. VALIDACIÓN FISCAL DE DOCUMENTOS DE IDENTIDAD TRIBUTARIA (RIF Y CÉDULA)
 // ==============================================================================

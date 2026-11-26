@@ -1037,6 +1037,7 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
     const code = String(line?.codigo || line?.co_art || line?.articuloId || line?.id || '').trim();
     const delta01 = Number(line?.delta01 || 0);
     const delta02 = Number(line?.delta02 || 0);
+    const costoUnitarioUsd = Number(line?.costoUnitarioUsd ?? line?.costo_unitario_usd ?? 0) || 0;
     if (!code || (delta01 === 0 && delta02 === 0)) continue;
     const prodIdx = database.products.findIndex(
       (p) => p && (String(p.id || '').trim() === code || String(p.codigo || '').trim() === code)
@@ -1049,14 +1050,46 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
       }
       continue;
     }
-    const prev = grouped.get(prodIdx) || { prodIdx, delta01: 0, delta02: 0 };
+    const prev = grouped.get(prodIdx) || {
+      prodIdx,
+      delta01: 0,
+      delta02: 0,
+      costDeltaVal01: 0,
+      costDeltaQty01: 0,
+      lastCost01: 0,
+      costDeltaVal02: 0,
+      costDeltaQty02: 0,
+      lastCost02: 0
+    };
     prev.delta01 = Number((prev.delta01 + delta01).toFixed(4));
     prev.delta02 = Number((prev.delta02 + delta02).toFixed(4));
+    if (costoUnitarioUsd > 0) {
+      if (delta01 !== 0) {
+        prev.costDeltaVal01 = Number((prev.costDeltaVal01 + delta01 * costoUnitarioUsd).toFixed(6));
+        prev.costDeltaQty01 = Number((prev.costDeltaQty01 + delta01).toFixed(4));
+        prev.lastCost01 = costoUnitarioUsd;
+      }
+      if (delta02 !== 0) {
+        prev.costDeltaVal02 = Number((prev.costDeltaVal02 + delta02 * costoUnitarioUsd).toFixed(6));
+        prev.costDeltaQty02 = Number((prev.costDeltaQty02 + delta02).toFixed(4));
+        prev.lastCost02 = costoUnitarioUsd;
+      }
+    }
     grouped.set(prodIdx, prev);
   }
 
   const staged = [];
-  for (const { prodIdx, delta01, delta02 } of grouped.values()) {
+  for (const {
+    prodIdx,
+    delta01,
+    delta02,
+    costDeltaVal01,
+    costDeltaQty01,
+    lastCost01,
+    costDeltaVal02,
+    costDeltaQty02,
+    lastCost02
+  } of grouped.values()) {
     const prod = database.products[prodIdx];
     const stocks = resolveServerWarehouseStocks(prod);
     const prodCode = String(prod.codigo || prod.id || '').trim();
@@ -1081,6 +1114,46 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
     const next01 = Math.max(0, rawNext01);
     const next02 = Math.max(0, rawNext02);
     const nextTotal = Number((next01 + next02).toFixed(2));
+
+    // Costo Promedio Ponderado Independiente por Almacén (Opción 1)
+    const baseCost = Number(prod.costoUsd ?? prod.costo_usd ?? prod.costo ?? 0) || 0;
+    const prevCost01 = Number(prod.costoUsd01 ?? prod.costo_usd_01 ?? prod.costo01 ?? baseCost) || baseCost;
+    const prevCost02 = Number(prod.costoUsd02 ?? prod.costo_usd_02 ?? prod.costo02 ?? baseCost) || baseCost;
+    let nextCost01 = prevCost01;
+    let nextCost02 = prevCost02;
+    let hasCostUpdate = false;
+
+    if (costDeltaQty01 !== 0 && lastCost01 > 0) {
+      hasCostUpdate = true;
+      const prevVal01 = Math.max(0, stocks.stock01) * prevCost01;
+      const nextVal01 = Math.max(0, prevVal01 + costDeltaVal01);
+      nextCost01 = next01 > 0 ? Number((nextVal01 / next01).toFixed(6)) : Number(lastCost01.toFixed(6));
+    }
+    if (costDeltaQty02 !== 0 && lastCost02 > 0) {
+      hasCostUpdate = true;
+      const prevVal02 = Math.max(0, stocks.stock02) * prevCost02;
+      const nextVal02 = Math.max(0, prevVal02 + costDeltaVal02);
+      nextCost02 = next02 > 0 ? Number((nextVal02 / next02).toFixed(6)) : Number(lastCost02.toFixed(6));
+    }
+
+    const costPatch = hasCostUpdate
+      ? (() => {
+          const nextCostGlobal =
+            nextTotal > 0
+              ? Number(((next01 * nextCost01 + next02 * nextCost02) / nextTotal).toFixed(6))
+              : Number((lastCost02 || lastCost01 || baseCost || 0).toFixed(6));
+          return {
+            costoUsd: nextCostGlobal,
+            costo_usd: nextCostGlobal,
+            costo: nextCostGlobal,
+            costoUsd01: nextCost01,
+            costo_usd_01: nextCost01,
+            costoUsd02: nextCost02,
+            costo_usd_02: nextCost02
+          };
+        })()
+      : null;
+
     staged.push({
       prodIdx,
       prod,
@@ -1091,7 +1164,8 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
       next02,
       nextTotal,
       delta01,
-      delta02
+      delta02,
+      costPatch
     });
   }
 
@@ -1100,13 +1174,14 @@ function applyServerAtomicStockDelta({ lines = [], validateStrict = false, idemp
   const ledgerLines = [];
 
   for (const entry of staged) {
-    const { prodIdx, prod, prodCode, prev01, prev02, next01, next02, nextTotal, delta01, delta02 } = entry;
+    const { prodIdx, prod, prodCode, prev01, prev02, next01, next02, nextTotal, delta01, delta02, costPatch } = entry;
     const patch = {
       stock: nextTotal,
       stockAlmacen01: next01,
       stock_almacen_01: next01,
       stockAlmacen02: next02,
       stock_almacen_02: next02,
+      ...(costPatch || {}),
       updated_at: nowIso
     };
     database.products[prodIdx] = { ...prod, ...patch };

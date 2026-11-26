@@ -328,7 +328,7 @@ resetState();
   assert.strictEqual(ncFiscal.notePdfData.numeroControl, '00-001134');
   assert.strictEqual(ncFiscal.notePdfData.totalBs, 106225.84);
 
-  // Nota de Débito No Fiscal sin IVA y sin N° Control obligatorio
+  // Nota de Débito No Fiscal suma al saldo del documento afectado, sin IVA y sin N° Control obligatorio
   const ndNoFiscal = buildCxpCreditDebitNoteResult({
     noteType: 'NOTA_DEBITO',
     affectedDoc: payableFact,
@@ -341,14 +341,74 @@ resetState();
     motivo: 'Diferencial operativo no fiscal'
   });
   assert.strictEqual(ndNoFiscal.isFiscal, false);
-  assert.strictEqual(ndNoFiscal.createdDebitDoc.tipoDoc, 'N/DB');
-  assert.strictEqual(ndNoFiscal.createdDebitDoc.isFiscal, false);
-  assert.strictEqual(ndNoFiscal.createdDebitDoc.ivaUsd, 0);
-  assert.strictEqual(ndNoFiscal.createdDebitDoc.montoNetUsd, 50);
-  assert.strictEqual(ndNoFiscal.createdDebitDoc.montoNetBs, 45787);
+  assert.strictEqual(ndNoFiscal.createdDebitDoc, null);
+  assert.strictEqual(ndNoFiscal.updatedAffectedDoc.montoNetUsd, 282);
+  assert.strictEqual(ndNoFiscal.updatedAffectedDoc.saldoUsd, 282);
+  assert.strictEqual(ndNoFiscal.updatedAffectedDoc.ivaUsd, 0);
+  assert.strictEqual(ndNoFiscal.updatedAffectedDoc.historialPagos[0].formaPago, 'NOTA_DEBITO');
   assert.strictEqual(ndNoFiscal.notePdfData.isFiscal, false);
   assert.strictEqual(ndNoFiscal.notePdfData.ivaUsd, 0);
-  console.log('  ✓ 7. Emisión de NC/ND CxP (Fiscal vs No Fiscal, N° Control, USD y Bs.) verificada.');
+
+  // Nota de Débito Fiscal suma base + IVA 16% al documento afectado y conserva N° Control
+  const ndFiscal = buildCxpCreditDebitNoteResult({
+    noteType: 'NOTA_DEBITO',
+    affectedDoc: payableFact,
+    noteNum: 'ND-000003',
+    numeroControl: '00-001199',
+    isFiscal: true,
+    fechaEmision: '2026-11-17',
+    subtotalUsd: 50,
+    aplicaIva: true,
+    tasa: 915.74,
+    motivo: 'Recargo fiscal proveedor'
+  });
+  assert.strictEqual(ndFiscal.isFiscal, true);
+  assert.strictEqual(ndFiscal.createdDebitDoc, null);
+  assert.strictEqual(ndFiscal.updatedAffectedDoc.montoNetUsd, 290);
+  assert.strictEqual(ndFiscal.updatedAffectedDoc.saldoUsd, 290);
+  assert.strictEqual(ndFiscal.updatedAffectedDoc.ivaUsd, 8);
+  assert.strictEqual(ndFiscal.updatedAffectedDoc.historialPagos[0].numeroControl, '00-001199');
+  assert.strictEqual(ndFiscal.notePdfData.isFiscal, true);
+  assert.strictEqual(ndFiscal.notePdfData.ivaUsd, 8);
+  console.log('  ✓ 7. Emisión de NC/ND CxP (Fiscal vs No Fiscal, resta/suma al saldo, N° Control, USD y Bs.) verificada.');
+}
+
+// 8. Regresión: servidor más reciente prevalece sobre override local obsoleto con _pendingServerSync huérfano
+resetState();
+{
+  const docId = 'DOC-CP-NE-17605-J311153659';
+  localStorage.setItem(CXP_CUSTOM_DOCS_KEY, JSON.stringify({
+    [docId]: {
+      id: docId,
+      tipoDoc: 'NE',
+      nroDoc: '17605',
+      provRif: 'J-31115365-9',
+      montoNetUsd: 9500.00,
+      saldoUsd: 9500.00,
+      _pendingServerSync: true,
+      updated_at: '2026-11-25T10:00:00.000Z'
+    }
+  }));
+
+  const remoteList = [
+    {
+      id: docId,
+      tipoDoc: 'NE',
+      nroDoc: '17605',
+      provRif: 'J-31115365-9',
+      montoNetUsd: 11780.67,
+      saldoUsd: 11780.67,
+      updated_at: '2026-11-25T14:30:00.000Z'
+    }
+  ];
+
+  const resolved = applyLocalCxpOverridesToPayables(remoteList, true);
+  assert.strictEqual(resolved.length, 1);
+  assert.strictEqual(resolved[0].montoNetUsd, 11780.67, 'El monto más reciente del servidor debe prevalecer sobre el override local obsoleto');
+  assert.strictEqual(resolved[0].saldoUsd, 11780.67, 'El saldo más reciente del servidor debe prevalecer');
+  const prunedCustom = JSON.parse(localStorage.getItem(CXP_CUSTOM_DOCS_KEY) || '{}');
+  assert.strictEqual(prunedCustom[docId], undefined, 'El override obsoleto debe podarse de localStorage');
+  console.log('  ✓ 8. Regresión: servidor más reciente prevalece y poda override local huérfano.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXP Y SINCRONIZACIÓN PASARON AL 100% ---');

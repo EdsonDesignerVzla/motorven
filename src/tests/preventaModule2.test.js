@@ -179,16 +179,18 @@ assert.equal(summaryOverdue.enMora, true);
 assert.equal(summaryOverdue.diasMoraMax, 5);
 console.log('  ✓ 4. evaluateClientCreditPortfolioSummary calcula diasMoraMax y alerta3Dias con fechas DD/MM/YYYY.');
 
-// 5. Control RBAC para excepción directa de crédito en campo (canUserGrantCreditOverride)
+// 5. Control RBAC para aprobación de crédito según acceso a Flujo Comercial & Pedidos (canUserGrantCreditOverride)
 assert.equal(canUserGrantCreditOverride({ rol: 'ADMINISTRADOR MASTER' }), true);
 assert.equal(canUserGrantCreditOverride({ rol: 'GERENCIA' }), true);
 assert.equal(canUserGrantCreditOverride({ rol: 'COBRANZA' }), true);
 assert.equal(canUserGrantCreditOverride({ rol: 'ADMINISTRACION' }), true);
-assert.equal(canUserGrantCreditOverride({ rol: 'TECNOLOGIA' }), true);
-assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR' }), false);
-assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR_CAMPO' }), false);
-assert.equal(canUserGrantCreditOverride({ rol: 'CAJA' }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR' }), true);
+assert.equal(canUserGrantCreditOverride({ rol: 'CAJA' }), true);
+assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR', modulos: ['preventa', 'ventas'] }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'TECNOLOGIA' }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'TECNOLOGIA', modulos: ['pedidos', 'configuracion'] }), true);
+assert.equal(canUserGrantCreditOverride({ rol: 'COMPRAS' }), false);
 assert.equal(canUserGrantCreditOverride(null), false);
-console.log('  ✓ 5. canUserGrantCreditOverride restringe excepciones directas a roles autorizados.');
+console.log('  ✓ 5. canUserGrantCreditOverride habilita aprobación de crédito a usuarios con acceso a Flujo Comercial & Pedidos.');
 
 console.log('--- PRUEBAS DEL MÓDULO 2 EXITOSAS ---');

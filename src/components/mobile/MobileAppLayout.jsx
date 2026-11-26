@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ClipboardList,
   Home,
+  LayoutDashboard,
   LayoutGrid,
   Monitor,
   Moon,
@@ -13,23 +14,29 @@ import {
 } from 'lucide-react';
 import motorvenLogo from '../../assets/logo_motorven_limpio.png';
 import MobileHomeView from './MobileHomeView';
+import MobileDashboardView from './MobileDashboardView';
 import MobileOrdersView from './MobileOrdersView';
 import MobileInventoryView from './MobileInventoryView';
 import MobileCxCView from './MobileCxCView';
 import MobileMenuView from './MobileMenuView';
 import SalesPOSView from '../../views/SalesPOSView';
+import PredictiveAnalyticsView from '../../views/PredictiveAnalyticsView';
 import AppConfigModal from '../AppConfigModal';
 import { canAccessModule } from '../../services/authService';
 import { formatBs } from '../../services/formatService';
 import {
   canAccessMobileCxC,
+  canAccessMobileDashboard,
   canAccessMobileInventory,
+  canAccessMobilePresale,
   isCommercialPresaleOrder,
   normalizeOrderStatus,
   resolveDailyRate
 } from './mobileOrderHelpers';
 
 const MODULE_LABELS = {
+  dashboard: 'Resumen General Ejecutivo',
+  predictibilidad: 'Predictibilidad & Alertas',
   ventas: 'Facturación POS Caja',
   cxc: 'Cuentas por Cobrar (CxC)'
 };
@@ -37,13 +44,18 @@ const MODULE_LABELS = {
 export default function MobileAppLayout({
   products = [],
   clients = [],
+  purchases = [],
   orders = [],
   sales = [],
   profitInvoices = [],
   profitCollections = [],
+  profitBankAccounts = [],
+  profitCashDesks = [],
+  profitAccountsPayable = [],
   profitReturns = [],
   profitSellers = [],
   profitZones = [],
+  usersList = [],
   config = {},
   currentUser,
   theme = 'light',
@@ -179,17 +191,22 @@ export default function MobileAppLayout({
     [onProceedToPOS]
   );
 
-  const isMainTab = ['home', 'pedidos', 'cxc', 'inventario', 'menu'].includes(mobileTab);
+  const isMainTab = ['home', 'dashboard', 'pedidos', 'cxc', 'inventario', 'menu'].includes(mobileTab);
 
-  // Barra inferior con Inicio, Preventa, Cobranzas, Almacén y Menú
+  // Barra inferior con Inicio, Resumen, Preventa, Cobranzas, Almacén y Menú
   const dockItems = useMemo(() => {
     const items = [
       { id: 'home', label: 'Inicio', icon: Home, badge: null }
     ];
-    if (
-      canAccessModule(currentUser?.rol, 'pedidos', currentUser) ||
-      canAccessModule(currentUser?.rol, 'preventa', currentUser)
-    ) {
+    if (canAccessMobileDashboard(currentUser)) {
+      items.push({
+        id: 'dashboard',
+        label: 'Resumen',
+        icon: LayoutDashboard,
+        badge: null
+      });
+    }
+    if (canAccessMobilePresale(currentUser)) {
       items.push({
         id: 'pedidos',
         label: 'Preventa',
@@ -218,7 +235,7 @@ export default function MobileAppLayout({
       label: 'Menú',
       icon: LayoutGrid,
       badge: null,
-      activeOverride: !['home', 'pedidos', 'cxc', 'inventario'].includes(mobileTab)
+      activeOverride: !['home', 'dashboard', 'pedidos', 'cxc', 'inventario'].includes(mobileTab)
     });
     return items;
   }, [currentUser, activePendingOrdersCount, mobileTab]);
@@ -327,6 +344,23 @@ export default function MobileAppLayout({
             </div>
           )}
 
+          {mobileTab === 'dashboard' && (
+            <MobileDashboardView
+              products={products}
+              sales={sales}
+              orders={orders}
+              profitInvoices={profitInvoices}
+              profitCollections={profitCollections}
+              profitAccountsPayable={profitAccountsPayable}
+              profitSellers={profitSellers}
+              usersList={usersList}
+              config={config}
+              currentUser={currentUser}
+              onNavigate={handleNavigateSubmodule}
+              onSyncProfit={onSyncProfit}
+            />
+          )}
+
           {mobileTab === 'pedidos' && (
             <MobileOrdersView
               orders={orders}
@@ -394,6 +428,21 @@ export default function MobileAppLayout({
               onNavigateTab={handleNavigateSubmodule}
               onSyncProfit={onSyncProfit}
               onLogout={onLogout}
+            />
+          )}
+
+          {mobileTab === 'predictibilidad' && (
+            <PredictiveAnalyticsView
+              products={products}
+              sales={sales}
+              orders={orders}
+              purchases={purchases}
+              profitInvoices={profitInvoices}
+              profitAccountsPayable={profitAccountsPayable}
+              profitBankAccounts={profitBankAccounts}
+              profitCashDesks={profitCashDesks}
+              config={config}
+              onNavigate={handleNavigateSubmodule}
             />
           )}
 

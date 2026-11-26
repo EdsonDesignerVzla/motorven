@@ -38,7 +38,7 @@ import {
 import { formatBs, formatUsd, formatNumberUs, formatNumberVe } from '../services/formatService';
 import { canModifyRates, getRoleMeta, isMasterOrGerencia, isMasterAdmin, canAccessModule } from '../services/authService';
 import { fetchBcvRateDetails, fetchEuroRateDetails, fetchUsdtRateDetails, getActiveBackendUrl, setCustomBackendUrl, discoverActiveBackendUrl } from '../services/supabaseService';
-import { subscribeSyncStatus, flushSyncQueue } from '../services/offlineSyncService';
+import { subscribeSyncStatus, flushSyncQueue, getSyncQueue, removeSyncAction, clearSyncQueue } from '../services/offlineSyncService';
 import { uploadUserProfilePhoto, deleteUserProfilePhoto } from '../services/imageStorageService';
 import { compressProfileImage } from '../services/imageCompression';
 import AppConfigModal from './AppConfigModal';
@@ -120,6 +120,9 @@ export default function HeaderBar({
     pendingCount: 0
   });
   const [showServerModal, setShowServerModal] = useState(false);
+  const [showQueueDetails, setShowQueueDetails] = useState(false);
+  const [queueItems, setQueueItems] = useState([]);
+  const [confirmClearQueue, setConfirmClearQueue] = useState(false);
   const [customServerInput, setCustomServerInput] = useState(() => getActiveBackendUrl());
   const [serverHealth, setServerHealth] = useState({
     loading: false,
@@ -221,7 +224,19 @@ export default function HeaderBar({
   const handleManualSync = async () => {
     if (syncStatus.isSyncing) return;
     await flushSyncQueue();
+    if (showServerModal) {
+      setQueueItems(getSyncQueue());
+    }
   };
+
+  useEffect(() => {
+    if (!showServerModal) {
+      setShowQueueDetails(false);
+      setConfirmClearQueue(false);
+      return;
+    }
+    setQueueItems(getSyncQueue());
+  }, [showServerModal, syncStatus]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1915,12 +1930,179 @@ export default function HeaderBar({
 
                 {/* 4. Cola de Este Dispositivo */}
                 <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '8px', padding: '7px 9px' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Cola de Este Equipo</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Cola de Este Equipo</div>
+                    {syncStatus.pendingCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQueueItems(getSyncQueue());
+                          setShowQueueDetails(prev => !prev);
+                          setConfirmClearQueue(false);
+                        }}
+                        style={{
+                          background: 'rgba(245, 158, 11, 0.16)',
+                          border: '1px solid rgba(245, 158, 11, 0.35)',
+                          color: '#fbbf24',
+                          borderRadius: '5px',
+                          padding: '1px 6px',
+                          fontSize: '0.64rem',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {showQueueDetails ? 'Ocultar' : 'Ver detalle'}
+                      </button>
+                    )}
+                  </div>
                   <div style={{ fontSize: '0.85rem', fontWeight: 800, color: syncStatus.pendingCount === 0 ? '#34d399' : '#fbbf24', marginTop: '2px' }}>
                     {syncStatus.pendingCount === 0 ? '✓ Al día (0 pendientes)' : `⏳ ${syncStatus.pendingCount} pendientes`}
                   </div>
                 </div>
               </div>
+
+              {/* Detalle desplegable de elementos atascados/pendientes en la cola */}
+              {showQueueDetails && queueItems.length > 0 && (
+                <div style={{
+                  marginTop: '0.75rem',
+                  paddingTop: '0.75rem',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', gap: '8px' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Elementos en Cola ({queueItems.length})
+                    </span>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      {confirmClearQueue ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearSyncQueue({ clearPendingFlags: true });
+                              setQueueItems([]);
+                              setConfirmClearQueue(false);
+                              setShowQueueDetails(false);
+                              notify.info('Cola local limpiada.');
+                            }}
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.22)',
+                              border: '1px solid rgba(239, 68, 68, 0.5)',
+                              color: '#fca5a5',
+                              borderRadius: '6px',
+                              padding: '2px 8px',
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Confirmar Limpiar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmClearQueue(false)}
+                            style={{
+                              background: 'transparent',
+                              border: '1px solid var(--border-glass)',
+                              color: 'var(--text-muted)',
+                              borderRadius: '6px',
+                              padding: '2px 7px',
+                              fontSize: '0.68rem',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmClearQueue(true)}
+                          style={{
+                            background: 'rgba(239, 68, 68, 0.12)',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            color: '#f87171',
+                            borderRadius: '6px',
+                            padding: '2px 8px',
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Limpiar Cola
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {queueItems.map((qItem) => {
+                      const docRef =
+                        qItem.data?.factNum ||
+                        qItem.data?.cobNum ||
+                        qItem.data?.numeroDoc ||
+                        qItem.data?.nombre ||
+                        qItem.data?.concepto ||
+                        qItem.data?.id ||
+                        qItem.id;
+                      return (
+                        <div
+                          key={qItem.id}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: '8px',
+                            background: 'rgba(0, 0, 0, 0.25)',
+                            border: `1px solid ${qItem.lastError ? 'rgba(239, 68, 68, 0.35)' : 'rgba(255, 255, 255, 0.08)'}`,
+                            borderRadius: '8px',
+                            padding: '6px 8px',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontFamily: 'var(--font-code)', fontWeight: 700, color: '#38bdf8' }}>
+                                {qItem.entity}
+                              </span>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.66rem' }}>
+                                {qItem.action} • #{String(docRef).slice(0, 28)}
+                              </span>
+                              <span style={{ color: '#fbbf24', fontSize: '0.65rem' }}>
+                                ({qItem.attempts || 0} intentos)
+                              </span>
+                            </div>
+                            {qItem.lastError && (
+                              <div style={{ color: '#fca5a5', fontSize: '0.67rem', marginTop: '3px', wordBreak: 'break-word' }}>
+                                Error: {qItem.lastError}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            title="Descartar elemento de la cola"
+                            onClick={() => {
+                              removeSyncAction(qItem.id, { clearPendingFlag: true });
+                              const next = getSyncQueue();
+                              setQueueItems(next);
+                              if (next.length === 0) setShowQueueDetails(false);
+                            }}
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.14)',
+                              border: '1px solid rgba(239, 68, 68, 0.35)',
+                              color: '#f87171',
+                              borderRadius: '6px',
+                              padding: '4px',
+                              cursor: 'pointer',
+                              flexShrink: 0
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Campo URL del Túnel / Servidor */}

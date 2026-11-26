@@ -33,9 +33,11 @@ import {
   Scale
 } from 'lucide-react';
 import { formatUsd, formatBs, round2 } from '../services/formatService';
+import { isMasterAdmin } from '../services/authService';
 import { fetchTreasuryOpeningBalancesHistory } from '../services/supabaseService';
 import { generateCashflowPDF, generateExpenseVoucherPDF } from '../services/pdfReportService';
 import OpeningBalancesEvolutionModal from './OpeningBalancesEvolutionModal';
+import TreasuryAccountDetailModal from './TreasuryAccountDetailModal';
 import { buildExpenseAccountOptions } from '../utils/profitabilityUtils';
 import {
   matchesCashDesk,
@@ -61,7 +63,10 @@ import {
   loadPartnerPayableAccounts,
   resolveOpeningBalanceMeta,
   mergeOpeningBalanceFields,
-  formatTreasuryTimestampVe
+  formatTreasuryTimestampVe,
+  isOpeningBalanceLockedForDesk,
+  computeAccountDebeHaberSummary,
+  computeMovementsRunningBalanceMap
 } from '../utils/treasuryAccountUtils';
 import {
   loadPartnerLiabilityMovements,
@@ -118,6 +123,7 @@ export default function CashBankModal({
   initialTab = 'cajas'
 }) {
   const notify = useNotification();
+  const isMaster = isMasterAdmin(currentUser);
   const [activeTab, setActiveTab] = useState(initialTab || 'cajas'); // 'cajas' | 'bancos' | 'movimientos' | 'arqueo'
   const [bankSearch, setBankSearch] = useState('');
   const [movSearch, setMovSearch] = useState('');
@@ -214,6 +220,12 @@ export default function CashBankModal({
 
   // Panel de auditoría de saldos iniciales e historial de respaldos del servidor
   const [showOpeningEvolutionModal, setShowOpeningEvolutionModal] = useState(false);
+  const [accountDetailModal, setAccountDetailModal] = useState({
+    isOpen: false,
+    kind: 'CAJA',
+    record: null,
+    docScope: 'ALL'
+  });
   const [showOpeningHistoryPanel, setShowOpeningHistoryPanel] = useState(false);
   const [openingHistoryLoading, setOpeningHistoryLoading] = useState(false);
   const [openingHistoryError, setOpeningHistoryError] = useState('');
@@ -286,6 +298,69 @@ export default function CashBankModal({
   const totalConsolidadoUsd = round2(totalCajasUsd + totalBancosUsd);
   const totalConsolidadoBs = round2(totalCajasBs + totalBancosBs);
 
+  // Resumen Debe / Haber vinculado al Saldo para Cajas Registradoras
+  const { cashDeskDebeHaberMap, cashDebeHaberTotals } = useMemo(() => {
+    const map = new Map();
+    const totals = {
+      debeUsd: 0,
+      debeBs: 0,
+      debeCount: 0,
+      haberUsd: 0,
+      haberBs: 0,
+      haberCount: 0,
+      fiscalDebeUsd: 0,
+      fiscalDebeBs: 0,
+      fiscalHaberUsd: 0,
+      fiscalHaberBs: 0,
+      noFiscalDebeUsd: 0,
+      noFiscalDebeBs: 0,
+      noFiscalHaberUsd: 0,
+      noFiscalHaberBs: 0
+    };
+    const rateCfg = { tasaDolar: tasaBcv, tasaKeystone };
+    (cashDesks || []).forEach((d, idx) => {
+      const code = String(d?.coCaja || d?.co_caja || `CAJA-0${idx + 1}`).toUpperCase();
+      const summary = computeAccountDebeHaberSummary('CAJA', d, cashMovements, cashDesks, bankAccounts, rateCfg);
+      map.set(code, summary);
+      if (d?.id) map.set(String(d.id).toUpperCase(), summary);
+      totals.debeUsd = round2(totals.debeUsd + summary.debeUsd);
+      totals.debeBs = round2(totals.debeBs + summary.debeBs);
+      totals.debeCount += summary.debeCount;
+      totals.haberUsd = round2(totals.haberUsd + summary.haberUsd);
+      totals.haberBs = round2(totals.haberBs + summary.haberBs);
+      totals.haberCount += summary.haberCount;
+      totals.fiscalDebeUsd = round2(totals.fiscalDebeUsd + summary.fiscal.debeUsd);
+      totals.fiscalDebeBs = round2(totals.fiscalDebeBs + summary.fiscal.debeBs);
+      totals.fiscalHaberUsd = round2(totals.fiscalHaberUsd + summary.fiscal.haberUsd);
+      totals.fiscalHaberBs = round2(totals.fiscalHaberBs + summary.fiscal.haberBs);
+      totals.noFiscalDebeUsd = round2(totals.noFiscalDebeUsd + summary.noFiscal.debeUsd);
+      totals.noFiscalDebeBs = round2(totals.noFiscalDebeBs + summary.noFiscal.debeBs);
+      totals.noFiscalHaberUsd = round2(totals.noFiscalHaberUsd + summary.noFiscal.haberUsd);
+      totals.noFiscalHaberBs = round2(totals.noFiscalHaberBs + summary.noFiscal.haberBs);
+    });
+    return { cashDeskDebeHaberMap: map, cashDebeHaberTotals: totals };
+  }, [cashDesks, cashMovements, bankAccounts, tasaBcv, tasaKeystone]);
+
+  // Resumen Debe / Haber vinculado al Saldo para Cuentas Bancarias
+  const bankDebeHaberMap = useMemo(() => {
+    const map = new Map();
+    const rateCfg = { tasaDolar: tasaBcv, tasaKeystone };
+    (bankAccounts || []).forEach((b, idx) => {
+      const code = String(b?.codCta || b?.cod_cta || String(idx + 1).padStart(2, '0')).toUpperCase();
+      const rowId = String(b?.id || `CTA-${code}`).toUpperCase();
+      const summary = computeAccountDebeHaberSummary('BANCO', b, cashMovements, cashDesks, bankAccounts, rateCfg);
+      map.set(rowId, summary);
+      map.set(code, summary);
+    });
+    return map;
+  }, [bankAccounts, cashMovements, cashDesks, tasaBcv, tasaKeystone]);
+
+  // Saldo corrido (running balance) por cada movimiento vinculado a su Caja/Banco
+  const movementsRunningBalanceMap = useMemo(
+    () => computeMovementsRunningBalanceMap(cashMovements, cashDesks, bankAccounts, { tasaDolar: tasaBcv, tasaKeystone }),
+    [cashMovements, cashDesks, bankAccounts, tasaBcv, tasaKeystone]
+  );
+
   // Filtrado de bancos
   const filteredBankAccounts = useMemo(() => {
     let list = Array.isArray(bankAccounts) ? [...bankAccounts] : [];
@@ -322,6 +397,14 @@ export default function CashBankModal({
           return Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0;
         case 'montoBs':
           return Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0;
+        case 'debe':
+          return String(m?.tipo || '').toUpperCase() === 'INGRESO'
+            ? (Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0)
+            : -1;
+        case 'haber':
+          return String(m?.tipo || '').toUpperCase() === 'EGRESO'
+            ? (Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0)
+            : -1;
         default:
           return 0;
       }
@@ -364,7 +447,7 @@ export default function CashBankModal({
       if (prev.field === field) {
         return { field, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
       }
-      const defaultDesc = field === 'fecha' || field === 'montoUsd' || field === 'montoBs';
+      const defaultDesc = field === 'fecha' || field === 'montoUsd' || field === 'montoBs' || field === 'debe' || field === 'haber';
       return { field, direction: defaultDesc ? 'desc' : 'asc' };
     });
   };
@@ -671,18 +754,38 @@ export default function CashBankModal({
         </div>
       );
     }
+    const movTableTotals = rows.reduce(
+      (acc, m) => {
+        const isIng = String(m?.tipo || '').toUpperCase() === 'INGRESO';
+        const usd = round2(Math.abs(Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0));
+        const bs = round2(Math.abs(Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0));
+        if (isIng) {
+          acc.debeUsd = round2(acc.debeUsd + usd);
+          acc.debeBs = round2(acc.debeBs + bs);
+        } else {
+          acc.haberUsd = round2(acc.haberUsd + usd);
+          acc.haberBs = round2(acc.haberBs + bs);
+        }
+        return acc;
+      },
+      { debeUsd: 0, debeBs: 0, haberUsd: 0, haberBs: 0 }
+    );
+    const movTableNetoUsd = round2(movTableTotals.debeUsd - movTableTotals.haberUsd);
+    const movTableNetoBs = round2(movTableTotals.debeBs - movTableTotals.haberBs);
+
     return (
-      <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
+      <div style={{ overflow: 'auto', maxHeight: '52vh', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
-          <thead>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-table-header)' }}>
             <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
               {renderMovSortableTh('Fecha', 'fecha', 'left')}
               {renderMovSortableTh('Tipo', 'tipo', 'left')}
               {renderMovSortableTh('Concepto', 'concepto', 'left')}
               {renderMovSortableTh('Cuenta / Método', 'cuenta', 'left')}
               {renderMovSortableTh('Usuario', 'usuario', 'left')}
-              {renderMovSortableTh('Monto USD', 'montoUsd', 'right')}
-              {renderMovSortableTh('Monto Bs', 'montoBs', 'right')}
+              {renderMovSortableTh('Debe (+)', 'debe', 'right')}
+              {renderMovSortableTh('Haber (-)', 'haber', 'right')}
+              <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--brand-blue)', textAlign: 'right', whiteSpace: 'nowrap' }}>Saldo</th>
               <th style={{ padding: '0.85rem 1rem', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'center', whiteSpace: 'nowrap' }}>Vale PDF / Acción</th>
             </tr>
           </thead>
@@ -697,6 +800,44 @@ export default function CashBankModal({
               const isDeleting = deletingMovId === rowKey;
               const isSaving = savingMovId === rowKey;
               const isEditingRow = editingMovId === rowKey && !!inlineMovDraft;
+              const isEditingIngreso = isEditingRow && inlineMovDraft.tipo === 'INGRESO';
+              const isEditingEgreso = isEditingRow && inlineMovDraft.tipo === 'EGRESO';
+              const runBal = movementsRunningBalanceMap.get(m);
+
+              const renderAmountInputs = () => (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={inlineMovDraft.montoUsd}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const numUsd = Number(val || 0);
+                      setInlineMovDraft(prev => ({
+                        ...prev,
+                        montoUsd: val,
+                        montoBs: !Number.isNaN(numUsd) && tasaBcv > 0
+                          ? String(round2(numUsd * tasaBcv))
+                          : prev.montoBs
+                      }));
+                    }}
+                    className="input-modern"
+                    style={{ padding: '0.28rem 0.45rem', fontSize: '0.78rem', width: '95px', textAlign: 'right', fontFamily: 'var(--font-code)' }}
+                    placeholder="USD"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={inlineMovDraft.montoBs}
+                    onChange={(e) => setInlineMovDraft(prev => ({ ...prev, montoBs: e.target.value }))}
+                    className="input-modern"
+                    style={{ padding: '0.28rem 0.45rem', fontSize: '0.74rem', width: '105px', textAlign: 'right', fontFamily: 'var(--font-code)' }}
+                    placeholder="Bs."
+                  />
+                </div>
+              );
               return (
                 <tr
                   key={m.id || idx}
@@ -797,44 +938,45 @@ export default function CashBankModal({
                   <td style={{ padding: '0.85rem 1rem', color: 'var(--text-secondary)' }}>
                     {m.usuario || 'Sistema'}
                   </td>
-                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 700, color: isIngreso ? '#059669' : '#dc2626' }}>
-                    {isEditingRow ? (
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={inlineMovDraft.montoUsd}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const numUsd = Number(val || 0);
-                          setInlineMovDraft(prev => ({
-                            ...prev,
-                            montoUsd: val,
-                            montoBs: !Number.isNaN(numUsd) && tasaBcv > 0
-                              ? String(round2(numUsd * tasaBcv))
-                              : prev.montoBs
-                          }));
-                        }}
-                        className="input-modern"
-                        style={{ padding: '0.3rem 0.45rem', fontSize: '0.8rem', width: '95px', textAlign: 'right', fontFamily: 'var(--font-code)' }}
-                      />
+                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)', whiteSpace: 'nowrap' }}>
+                    {isEditingIngreso ? (
+                      renderAmountInputs()
+                    ) : isIngreso ? (
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#10b981' }}>+ {formatUsd(movUsd)}</div>
+                        <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{formatBs(movBs)}</div>
+                      </div>
                     ) : (
-                      formatUsd(movUsd)
+                      <span style={{ color: 'var(--text-muted)', opacity: 0.55 }}>—</span>
                     )}
                   </td>
-                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-muted)' }}>
-                    {isEditingRow ? (
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={inlineMovDraft.montoBs}
-                        onChange={(e) => setInlineMovDraft(prev => ({ ...prev, montoBs: e.target.value }))}
-                        className="input-modern"
-                        style={{ padding: '0.3rem 0.45rem', fontSize: '0.8rem', width: '110px', textAlign: 'right', fontFamily: 'var(--font-code)' }}
-                      />
+                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)', whiteSpace: 'nowrap' }}>
+                    {isEditingEgreso ? (
+                      renderAmountInputs()
+                    ) : !isIngreso ? (
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#ef4444' }}>- {formatUsd(movUsd)}</div>
+                        <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{formatBs(movBs)}</div>
+                      </div>
                     ) : (
-                      formatBs(movBs)
+                      <span style={{ color: 'var(--text-muted)', opacity: 0.55 }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '0.85rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)', whiteSpace: 'nowrap' }}>
+                    {runBal ? (
+                      <div title={`Saldo después del movimiento en ${runBal.accountName}`}>
+                        <div style={{ fontWeight: 800, color: 'var(--brand-blue)' }}>
+                          {runBal.isBsAccount ? formatBs(runBal.saldoDespuesBs) : formatUsd(runBal.saldoDespuesUsd)}
+                        </div>
+                        <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)' }}>
+                          {runBal.isBsAccount ? formatUsd(runBal.saldoDespuesUsd) : formatBs(runBal.saldoDespuesBs)}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                          {runBal.accountCode}
+                        </div>
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
                     )}
                   </td>
                   <td style={{ padding: '0.85rem 1rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
@@ -954,6 +1096,26 @@ export default function CashBankModal({
               );
             })}
           </tbody>
+          <tfoot>
+            <tr style={{ background: 'var(--bg-table-header)', borderTop: '2px solid var(--border-glass)', fontWeight: 800 }}>
+              <td colSpan={5} style={{ padding: '0.8rem 1rem', color: 'var(--text-primary)', fontSize: '0.78rem', textTransform: 'uppercase' }}>
+                Totales Libro ({rows.length} mov.)
+              </td>
+              <td style={{ padding: '0.8rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>
+                <div>+ {formatUsd(movTableTotals.debeUsd)}</div>
+                <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(movTableTotals.debeBs)}</div>
+              </td>
+              <td style={{ padding: '0.8rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#ef4444' }}>
+                <div>- {formatUsd(movTableTotals.haberUsd)}</div>
+                <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(movTableTotals.haberBs)}</div>
+              </td>
+              <td style={{ padding: '0.8rem 1rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: movTableNetoUsd >= 0 ? 'var(--brand-blue)' : '#ef4444' }}>
+                <div title="Flujo Neto (Debe - Haber)">{movTableNetoUsd >= 0 ? '+' : ''}{formatUsd(movTableNetoUsd)}</div>
+                <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>Neto: {formatBs(movTableNetoBs)}</div>
+              </td>
+              <td />
+            </tr>
+          </tfoot>
         </table>
       </div>
     );
@@ -1573,6 +1735,10 @@ export default function CashBankModal({
       setApplyingOpeningKey(applyKey);
       const effectiveFecha = fechaIso || new Date().toISOString();
       if (kind === 'CAJA') {
+        if (isOpeningBalanceLockedForDesk(codeOrId)) {
+          notify.warning(`La edición del saldo inicial está bloqueada para ${codeOrId} para evitar desfases.`);
+          return;
+        }
         const desk = cashDesks.find(d => matchesCashDesk(d, codeOrId));
         if (!desk) {
           notify.warning(`No se encontró la caja ${codeOrId} en el catálogo activo.`);
@@ -1735,7 +1901,8 @@ export default function CashBankModal({
       setFiscalSplitOverrides(nextOverrides);
 
       const nowIso = new Date().toISOString();
-      const shouldSetOpening = !editingCajaId || Boolean(cajaForm.updateOpeningBalance);
+      const isOpeningLocked = isOpeningBalanceLockedForDesk(cleanCode) || isOpeningBalanceLockedForDesk(id);
+      const shouldSetOpening = !isOpeningLocked && (!editingCajaId || Boolean(cajaForm.updateOpeningBalance));
       const initUsdVal = !editingCajaId
         ? parsedUsd
         : round2(parseFloat(cajaForm.saldoInicialUsd) || 0);
@@ -1802,6 +1969,10 @@ export default function CashBankModal({
 
   // Eliminar caja registradora
   const handleDeleteCaja = async (desk) => {
+    if (!isMaster) {
+      notify.warning('Solo el Administrador Master puede eliminar cajas.');
+      return;
+    }
     if (!desk) return;
     const code = desk.coCaja || desk.co_caja || desk.id;
     if (!window.confirm(`¿Está seguro de eliminar la caja ${code} — "${desk.descripcion}"?`)) {
@@ -1962,6 +2133,10 @@ export default function CashBankModal({
 
   // Iniciar flujo de Doble Seguridad para Eliminar Cuenta Bancaria
   const handleRequestDeleteBank = (b) => {
+    if (!isMaster) {
+      notify.warning('Solo el Administrador Master puede eliminar cuentas bancarias.');
+      return;
+    }
     if (!b) return;
     setBankDeleteSecurityModal({
       isOpen: true,
@@ -2517,20 +2692,37 @@ export default function CashBankModal({
                                         {formatTreasuryTimestampVe(snap.fechaActualizacion)} · {snap.source}
                                       </div>
                                     </div>
-                                    <button
-                                      type="button"
-                                      disabled={applyingOpeningKey === keyBtn}
-                                      onClick={() => handleApplyHistoricalOpening('CAJA', item.code, {
-                                        saldoUsd: snap.saldoUsd,
-                                        saldoBs: snap.saldoBs,
-                                        fechaIso: snap.fechaActualizacion
-                                      })}
-                                      className="btn btn-secondary"
-                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', whiteSpace: 'nowrap' }}
-                                      title="Fijar este monto y fecha como Saldo Inicial permanente de la caja"
-                                    >
-                                      {applyingOpeningKey === keyBtn ? '...' : 'Fijar Inicial'}
-                                    </button>
+                                    {isOpeningBalanceLockedForDesk(item.code) ? (
+                                      <span
+                                        style={{
+                                          padding: '0.2rem 0.5rem',
+                                          fontSize: '0.7rem',
+                                          fontWeight: 700,
+                                          borderRadius: '6px',
+                                          background: 'rgba(148, 163, 184, 0.16)',
+                                          color: 'var(--text-muted)',
+                                          whiteSpace: 'nowrap'
+                                        }}
+                                        title="Edición de saldo inicial bloqueada para esta caja"
+                                      >
+                                        Bloqueado
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        disabled={applyingOpeningKey === keyBtn}
+                                        onClick={() => handleApplyHistoricalOpening('CAJA', item.code, {
+                                          saldoUsd: snap.saldoUsd,
+                                          saldoBs: snap.saldoBs,
+                                          fechaIso: snap.fechaActualizacion
+                                        })}
+                                        className="btn btn-secondary"
+                                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', whiteSpace: 'nowrap' }}
+                                        title="Fijar este monto y fecha como Saldo Inicial permanente de la caja"
+                                      >
+                                        {applyingOpeningKey === keyBtn ? '...' : 'Fijar Inicial'}
+                                      </button>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -2756,6 +2948,25 @@ export default function CashBankModal({
                     </div>
 
                     {/* BLOQUE DE SALDO INICIAL / APERTURA PERMANENTE */}
+                    {(isOpeningBalanceLockedForDesk(editingCajaId) || isOpeningBalanceLockedForDesk(cajaForm.coCaja)) ? (
+                      <div style={{
+                        padding: '0.75rem 1rem',
+                        borderRadius: '10px',
+                        background: 'var(--bg-card-glass)',
+                        border: '1px solid var(--border-glass)',
+                        marginBottom: '1rem',
+                        fontSize: '0.78rem',
+                        color: 'var(--text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                      }}>
+                        <Clock size={15} color="var(--text-muted)" />
+                        <span>
+                          <strong>Saldo Inicial bloqueado en {cajaForm.coCaja || 'CAJA-04'}:</strong> esta caja se controla exclusivamente por sus movimientos registrados para evitar desfases.
+                        </span>
+                      </div>
+                    ) : (
                     <div style={{
                       padding: '0.9rem 1rem',
                       borderRadius: '10px',
@@ -2848,6 +3059,7 @@ export default function CashBankModal({
                         </div>
                       )}
                     </div>
+                    )}
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
                       <button
@@ -3295,14 +3507,15 @@ export default function CashBankModal({
 
               {/* TABLA OFICIAL DE CAJAS OPERATIVAS DEL SISTEMA (PADRE = FISCAL + NO FISCAL) */}
               <div style={{
-                overflowX: 'auto',
+                overflow: 'auto',
+                maxHeight: '52vh',
                 borderRadius: '12px',
                 border: '1px solid var(--border-glass)',
                 marginBottom: '1.5rem',
                 background: 'var(--bg-card-glass)'
               }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                  <thead>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-table-header)' }}>
                     <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Código</th>
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Nombre de la Caja / División</th>
@@ -3310,17 +3523,9 @@ export default function CashBankModal({
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Responsable</th>
                       <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Estado</th>
-                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--brand-blue)', textAlign: 'right' }}>Saldo Inicial</th>
-                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'FISCAL') && (
-                        <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#c084fc', textAlign: 'right' }}>Saldo Fiscal</th>
-                      )}
-                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'NO_FISCAL') && (
-                        <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#f59e0b', textAlign: 'right' }}>Saldo No Fiscal</th>
-                      )}
-                      {cajaScopeFilter === 'ALL' && (
-                        <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#10b981', textAlign: 'right' }}>Total Consolidado</th>
-                      )}
-                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#10b981', textAlign: 'right' }}>Ingreso (Debe)</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: '#ef4444', textAlign: 'right' }}>Egreso (Haber)</th>
+                      <th style={{ padding: '0.8rem 0.9rem', fontWeight: 700, color: 'var(--brand-blue)', textAlign: 'right' }}>Saldo Consolidado</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3340,6 +3545,14 @@ export default function CashBankModal({
                       const fmtPrimary = (usd, bs) => (isBsDesk ? formatBs(bs) : formatUsd(usd));
                       const fmtSecondary = (usd, bs) => (isBsDesk ? formatUsd(usd) : formatBs(bs));
                       const opening = resolveOpeningBalanceMeta(desk);
+                      const dh = cashDeskDebeHaberMap.get(code) || computeAccountDebeHaberSummary(
+                        'CAJA',
+                        desk,
+                        cashMovements,
+                        cashDesks,
+                        bankAccounts,
+                        { tasaDolar: tasaBcv, tasaKeystone }
+                      );
                       const lastUpdatedVe = formatTreasuryTimestampVe(desk.fechaActualizacion || desk.fecha_actualizacion);
                       const isExpanded = !collapsedCajas.has(code);
 
@@ -3364,12 +3577,21 @@ export default function CashBankModal({
                         const subUsd = isF ? bd.fiscalUsd : bd.noFiscalUsd;
                         const subBs = isF ? bd.fiscalBs : bd.noFiscalBs;
                         const movCount = isF ? bd.fiscalMovCount : bd.noFiscalMovCount;
+                        const subDh = isF ? dh.fiscal : dh.noFiscal;
                         return (
                           <tr
                             key={subCode}
+                            onClick={() => setAccountDetailModal({
+                              isOpen: true,
+                              kind: 'CAJA',
+                              record: desk,
+                              docScope: isF ? 'FISCAL' : 'NOTA_ENTREGA'
+                            })}
+                            title="Clic para abrir el modal de detalles y acciones de esta caja"
                             style={{
                               borderBottom: '1px solid var(--border-glass)',
-                              background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'
+                              background: idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)',
+                              cursor: 'pointer'
                             }}
                           >
                             <td style={{ padding: '0.75rem 0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: isF ? '#c084fc' : '#f59e0b' }}>
@@ -3423,21 +3645,21 @@ export default function CashBankModal({
                                 ● {isActiva ? 'Activa' : 'Inactiva'}
                               </span>
                             </td>
-                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.76rem' }}>
-                              {opening.hasOpeningBalance ? (
-                                <>
-                                  <div style={{ fontWeight: 700, color: 'var(--brand-blue)' }}>
-                                    {fmtPrimary(opening.saldoInicialUsd, opening.saldoInicialBs)}
-                                  </div>
-                                  {opening.fechaSaldoInicial && (
-                                    <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)' }}>
-                                      {formatTreasuryTimestampVe(opening.fechaSaldoInicial)}
-                                    </div>
-                                  )}
-                                </>
-                              ) : (
-                                '—'
-                              )}
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                              <div style={{ fontWeight: 700, color: '#10b981' }}>
+                                + {fmtPrimary(subDh.debeUsd, subDh.debeBs)}
+                              </div>
+                              <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                {subDh.debeCount} ent.
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                              <div style={{ fontWeight: 700, color: '#ef4444' }}>
+                                - {fmtPrimary(subDh.haberUsd, subDh.haberBs)}
+                              </div>
+                              <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                {subDh.haberCount} sal.
+                              </div>
                             </td>
                             <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
                               <div style={{ fontWeight: 700, color: isF ? '#c084fc' : '#f59e0b' }}>
@@ -3447,51 +3669,6 @@ export default function CashBankModal({
                                 {fmtSecondary(subUsd, subBs)}
                               </div>
                             </td>
-                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                              <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => jumpToSubMovs(isF ? 'FISCAL' : 'NO_FISCAL')}
-                                  className="btn"
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    fontSize: '0.75rem',
-                                    borderRadius: '6px',
-                                    background: 'rgba(56, 189, 248, 0.14)',
-                                    color: '#38bdf8',
-                                    border: '1px solid rgba(56, 189, 248, 0.35)'
-                                  }}
-                                  title={`Ver movimientos ${isF ? 'Fiscales' : 'No Fiscales'} de ${code}`}
-                                >
-                                  <List size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => openNewSubMov(isF ? 'FISCAL' : 'NO_FISCAL')}
-                                  className="btn btn-secondary"
-                                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', borderRadius: '6px' }}
-                                  title={`Registrar movimiento ${isF ? 'Fiscal' : 'No Fiscal'} en ${code}`}
-                                >
-                                  <PlusCircle size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditCaja(desk)}
-                                  className="btn"
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    fontSize: '0.75rem',
-                                    borderRadius: '6px',
-                                    background: 'rgba(217, 119, 6, 0.15)',
-                                    color: '#d97706',
-                                    border: '1px solid rgba(217, 119, 6, 0.3)'
-                                  }}
-                                  title="Editar distribución Fiscal / No Fiscal de la caja"
-                                >
-                                  <Edit2 size={13} />
-                                </button>
-                              </div>
-                            </td>
                           </tr>
                         );
                       }
@@ -3499,14 +3676,23 @@ export default function CashBankModal({
                       return (
                         <React.Fragment key={desk.id || code}>
                           <tr
+                            onClick={() => setAccountDetailModal({
+                              isOpen: true,
+                              kind: 'CAJA',
+                              record: desk,
+                              docScope: 'ALL'
+                            })}
+                            title="Clic para ver todos los detalles, Fiscal / Nota de Entrega y acciones"
                             style={{
                               borderBottom: '1px solid var(--border-glass)',
                               background: 'var(--bg-card-glass)',
-                              fontWeight: 600
+                              fontWeight: 600,
+                              cursor: 'pointer'
                             }}
                           >
                             <td
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setCollapsedCajas((prev) => {
                                   const next = new Set(prev);
                                   if (next.has(code)) next.delete(code);
@@ -3568,47 +3754,28 @@ export default function CashBankModal({
                               </span>
                             </td>
                             <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
-                              {opening.hasOpeningBalance ? (
-                                <>
-                                  <div style={{ fontWeight: 700, color: 'var(--brand-blue)' }}>
-                                    {fmtPrimary(opening.saldoInicialUsd, opening.saldoInicialBs)}
-                                  </div>
-                                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
-                                    {opening.fechaSaldoInicial ? formatTreasuryTimestampVe(opening.fechaSaldoInicial) : 'Sin fecha'}
-                                  </div>
-                                  {opening.usuarioSaldoInicial && (
-                                    <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
-                                      Por: {opening.usuarioSaldoInicial}
-                                    </div>
-                                  )}
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setShowOpeningEvolutionModal(true)}
-                                  style={{
-                                    background: 'rgba(148, 163, 184, 0.14)',
-                                    border: '1px dashed var(--border-glass)',
-                                    color: 'var(--text-muted)',
-                                    borderRadius: '6px',
-                                    padding: '0.2rem 0.45rem',
-                                    fontSize: '0.7rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer'
-                                  }}
-                                  title="Clic para abrir la Tabla de Saldos Iniciales y definir la apertura de esta caja"
-                                >
-                                  Sin fijar · Definir
-                                </button>
-                              )}
-                            </td>
-                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#c084fc', fontWeight: 700 }}>
-                              {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
-                            </td>
-                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b', fontWeight: 700 }}>
-                              {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
+                              <div style={{ fontWeight: 700, color: '#10b981' }}>
+                                + {fmtPrimary(dh.debeUsd, dh.debeBs)}
+                              </div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                {fmtSecondary(dh.debeUsd, dh.debeBs)}
+                              </div>
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                {dh.debeCount} ent.
+                              </div>
                             </td>
                             <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                              <div style={{ fontWeight: 700, color: '#ef4444' }}>
+                                - {fmtPrimary(dh.haberUsd, dh.haberBs)}
+                              </div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                {fmtSecondary(dh.haberUsd, dh.haberBs)}
+                              </div>
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                                {dh.haberCount} sal.
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }} title="Saldo Consolidado — Clic para ver detalles">
                               <div style={{ fontWeight: 800, color: '#10b981' }}>
                                 {fmtPrimary(bd.totalUsd, bd.totalBs)}
                               </div>
@@ -3621,76 +3788,16 @@ export default function CashBankModal({
                                 </div>
                               )}
                             </td>
-                            <td style={{ padding: '0.75rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                              <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => jumpToSubMovs('ALL')}
-                                  className="btn"
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    fontSize: '0.75rem',
-                                    borderRadius: '6px',
-                                    background: 'rgba(56, 189, 248, 0.14)',
-                                    color: '#38bdf8',
-                                    border: '1px solid rgba(56, 189, 248, 0.35)',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px'
-                                  }}
-                                  title="Ver todos los movimientos de esta caja"
-                                >
-                                  <List size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => openNewSubMov('NO_FISCAL')}
-                                  className="btn btn-secondary"
-                                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', borderRadius: '6px' }}
-                                  title="Registrar ingreso o egreso en esta caja"
-                                >
-                                  <PlusCircle size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditCaja(desk)}
-                                  className="btn"
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    fontSize: '0.75rem',
-                                    borderRadius: '6px',
-                                    background: 'rgba(217, 119, 6, 0.15)',
-                                    color: '#d97706',
-                                    border: '1px solid rgba(217, 119, 6, 0.3)'
-                                  }}
-                                  title="Editar datos o reparto Fiscal / No Fiscal"
-                                >
-                                  <Edit2 size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteCaja(desk)}
-                                  className="btn"
-                                  style={{
-                                    padding: '0.3rem 0.55rem',
-                                    fontSize: '0.75rem',
-                                    borderRadius: '6px',
-                                    background: 'rgba(239, 68, 68, 0.12)',
-                                    color: '#ef4444',
-                                    border: '1px solid rgba(239, 68, 68, 0.25)'
-                                  }}
-                                  title="Eliminar caja"
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              </div>
-                            </td>
                           </tr>
 
                           {isExpanded && (
                             <>
                               {/* Sub-fila Fiscal */}
-                              <tr style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-surface)', fontSize: '0.8rem' }}>
+                              <tr
+                                onClick={() => setAccountDetailModal({ isOpen: true, kind: 'CAJA', record: desk, docScope: 'FISCAL' })}
+                                title="Clic para ver detalles en Factura Fiscal"
+                                style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-surface)', fontSize: '0.8rem', cursor: 'pointer' }}
+                              >
                                 <td style={{ padding: '0.5rem 0.9rem 0.5rem 1.85rem', fontFamily: 'var(--font-code)', color: '#c084fc', fontWeight: 700, whiteSpace: 'nowrap' }}>
                                   └─ {code}-F
                                 </td>
@@ -3716,40 +3823,23 @@ export default function CashBankModal({
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{monedaDisplay}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-muted)', fontSize: '0.76rem' }}>{desk.responsable || 'Administración'}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981', fontWeight: 600 }}>
+                                  + {fmtPrimary(dh.fiscal.debeUsd, dh.fiscal.debeBs)}
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#ef4444', fontWeight: 600 }}>
+                                  - {fmtPrimary(dh.fiscal.haberUsd, dh.fiscal.haberBs)}
+                                </td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#c084fc' }}>
                                   {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
-                                </td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>—</td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-secondary)' }}>
-                                  {fmtPrimary(bd.fiscalUsd, bd.fiscalBs)}
-                                </td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'center', gap: '0.35rem' }}>
-                                    <button
-                                      type="button"
-                                      onClick={() => jumpToSubMovs('FISCAL')}
-                                      className="btn"
-                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(168, 85, 247, 0.14)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.3)' }}
-                                      title={`Ver movimientos Fiscales de ${code}`}
-                                    >
-                                      <List size={12} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => openNewSubMov('FISCAL')}
-                                      className="btn"
-                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(168, 85, 247, 0.14)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.3)' }}
-                                      title={`Registrar movimiento Fiscal en ${code}`}
-                                    >
-                                      <PlusCircle size={12} />
-                                    </button>
-                                  </div>
                                 </td>
                               </tr>
 
                               {/* Sub-fila No Fiscal */}
-                              <tr style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-surface)', fontSize: '0.8rem' }}>
+                              <tr
+                                onClick={() => setAccountDetailModal({ isOpen: true, kind: 'CAJA', record: desk, docScope: 'NOTA_ENTREGA' })}
+                                title="Clic para ver detalles en Nota de Entrega"
+                                style={{ borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-surface)', fontSize: '0.8rem', cursor: 'pointer' }}
+                              >
                                 <td style={{ padding: '0.5rem 0.9rem 0.5rem 1.85rem', fontFamily: 'var(--font-code)', color: '#f59e0b', fontWeight: 700, whiteSpace: 'nowrap' }}>
                                   └─ {code}-NF
                                 </td>
@@ -3775,35 +3865,14 @@ export default function CashBankModal({
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{monedaDisplay}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', color: 'var(--text-muted)', fontSize: '0.76rem' }}>{desk.responsable || 'Administración'}</td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.72rem' }}>—</td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-muted)' }}>—</td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981', fontWeight: 600 }}>
+                                  + {fmtPrimary(dh.noFiscal.debeUsd, dh.noFiscal.debeBs)}
+                                </td>
+                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#ef4444', fontWeight: 600 }}>
+                                  - {fmtPrimary(dh.noFiscal.haberUsd, dh.noFiscal.haberBs)}
+                                </td>
                                 <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontWeight: 700, color: '#f59e0b' }}>
                                   {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
-                                </td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-secondary)' }}>
-                                  {fmtPrimary(bd.noFiscalUsd, bd.noFiscalBs)}
-                                </td>
-                                <td style={{ padding: '0.5rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'center', gap: '0.35rem' }}>
-                                    <button
-                                      type="button"
-                                      onClick={() => jumpToSubMovs('NO_FISCAL')}
-                                      className="btn"
-                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.14)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
-                                      title={`Ver movimientos No Fiscales de ${code}`}
-                                    >
-                                      <List size={12} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => openNewSubMov('NO_FISCAL')}
-                                      className="btn"
-                                      style={{ padding: '0.22rem 0.48rem', fontSize: '0.71rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.14)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
-                                      title={`Registrar movimiento No Fiscal en ${code}`}
-                                    >
-                                      <PlusCircle size={12} />
-                                    </button>
-                                  </div>
                                 </td>
                               </tr>
                             </>
@@ -3821,50 +3890,66 @@ export default function CashBankModal({
                             ? 'Total Cajas No Fiscales'
                             : 'Sumatoria Total Cajas (Fiscal + No Fiscal)'}
                       </td>
-                      <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
+                      <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>
                         {(() => {
-                          let initUsd = 0;
-                          let initBs = 0;
-                          let countSet = 0;
-                          cashDesks.forEach((d) => {
-                            const om = resolveOpeningBalanceMeta(d);
-                            if (om.hasOpeningBalance) {
-                              countSet += 1;
-                              initUsd += Number(om.saldoInicialUsd || 0);
-                              initBs += Number(om.saldoInicialBs || 0);
-                            }
-                          });
-                          return countSet > 0 ? (
+                          const dUsd = cajaScopeFilter === 'FISCAL'
+                            ? cashDebeHaberTotals.fiscalDebeUsd
+                            : cajaScopeFilter === 'NO_FISCAL'
+                              ? cashDebeHaberTotals.noFiscalDebeUsd
+                              : cashDebeHaberTotals.debeUsd;
+                          const dBs = cajaScopeFilter === 'FISCAL'
+                            ? cashDebeHaberTotals.fiscalDebeBs
+                            : cajaScopeFilter === 'NO_FISCAL'
+                              ? cashDebeHaberTotals.noFiscalDebeBs
+                              : cashDebeHaberTotals.debeBs;
+                          return (
                             <>
-                              <div>{formatUsd(round2(initUsd))}</div>
-                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                                {countSet}/{cashDesks.length} fijadas
-                              </div>
+                              <div>+ {formatUsd(dUsd)}</div>
+                              <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(dBs)}</div>
                             </>
-                          ) : (
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 500 }}>Sin fijar</span>
                           );
                         })()}
                       </td>
-                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'FISCAL') && (
-                        <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#c084fc' }}>
-                          <div>{formatUsd(cashFiscalTotals.fiscalUsd)}</div>
-                          <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(cashFiscalTotals.fiscalBs)}</div>
-                        </td>
-                      )}
-                      {(cajaScopeFilter === 'ALL' || cajaScopeFilter === 'NO_FISCAL') && (
-                        <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#f59e0b' }}>
-                          <div>{formatUsd(cashFiscalTotals.noFiscalUsd)}</div>
-                          <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(cashFiscalTotals.noFiscalBs)}</div>
-                        </td>
-                      )}
-                      {cajaScopeFilter === 'ALL' && (
-                        <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>
-                          <div>{formatUsd(cashFiscalTotals.totalUsd)}</div>
-                          <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(cashFiscalTotals.totalBs)}</div>
-                        </td>
-                      )}
-                      <td />
+                      <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#ef4444' }}>
+                        {(() => {
+                          const hUsd = cajaScopeFilter === 'FISCAL'
+                            ? cashDebeHaberTotals.fiscalHaberUsd
+                            : cajaScopeFilter === 'NO_FISCAL'
+                              ? cashDebeHaberTotals.noFiscalHaberUsd
+                              : cashDebeHaberTotals.haberUsd;
+                          const hBs = cajaScopeFilter === 'FISCAL'
+                            ? cashDebeHaberTotals.fiscalHaberBs
+                            : cajaScopeFilter === 'NO_FISCAL'
+                              ? cashDebeHaberTotals.noFiscalHaberBs
+                              : cashDebeHaberTotals.haberBs;
+                          return (
+                            <>
+                              <div>- {formatUsd(hUsd)}</div>
+                              <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(hBs)}</div>
+                            </>
+                          );
+                        })()}
+                      </td>
+                      <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>
+                        {(() => {
+                          const sUsd = cajaScopeFilter === 'FISCAL'
+                            ? cashFiscalTotals.fiscalUsd
+                            : cajaScopeFilter === 'NO_FISCAL'
+                              ? cashFiscalTotals.noFiscalUsd
+                              : cashFiscalTotals.totalUsd;
+                          const sBs = cajaScopeFilter === 'FISCAL'
+                            ? cashFiscalTotals.fiscalBs
+                            : cajaScopeFilter === 'NO_FISCAL'
+                              ? cashFiscalTotals.noFiscalBs
+                              : cashFiscalTotals.totalBs;
+                          return (
+                            <>
+                              <div>{formatUsd(sUsd)}</div>
+                              <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatBs(sBs)}</div>
+                            </>
+                          );
+                        })()}
+                      </td>
                     </tr>
                   </tfoot>
                 </table>
@@ -4195,19 +4280,19 @@ export default function CashBankModal({
                 </div>
               )}
 
-              <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
+              <div style={{ overflow: 'auto', maxHeight: '52vh', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
-                  <thead>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-table-header)' }}>
                     <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-glass)' }}>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Cód</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Institución Bancaria</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Cuenta a Nombre de:</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Número de Cuenta</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Moneda</th>
-                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--brand-blue)', textAlign: 'right' }}>Saldo Inicial</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: '#10b981', textAlign: 'right' }}>Ingreso (Debe)</th>
+                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: '#ef4444', textAlign: 'right' }}>Egreso (Haber)</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Saldo en Bs</th>
                       <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'right' }}>Contravalor USD</th>
-                      <th style={{ padding: '0.85rem 0.9rem', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center' }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4221,15 +4306,29 @@ export default function CashBankModal({
                       const isNegative = saldoBs < 0;
                       const titularNombre = b.cuentaANombreDe || b.cuenta_a_nombre_de || b.titular || 'GRUPO MOTORVEN, C.A.';
                       const bankOpening = resolveOpeningBalanceMeta(b);
+                      const bankDh = bankDebeHaberMap.get(String(rowId).toUpperCase())
+                        || bankDebeHaberMap.get(String(code).toUpperCase())
+                        || computeAccountDebeHaberSummary('BANCO', b, cashMovements, cashDesks, bankAccounts, { tasaDolar: tasaBcv, tasaKeystone });
 
                       return (
                         <tr 
                           key={rowId}
+                          onClick={() => {
+                            if (isEditingRow) return;
+                            setAccountDetailModal({
+                              isOpen: true,
+                              kind: 'BANCO',
+                              record: b,
+                              docScope: 'ALL'
+                            });
+                          }}
+                          title={isEditingRow ? undefined : 'Clic para ver todos los detalles, Fiscal / Nota de Entrega y acciones'}
                           style={{
                             borderBottom: '1px solid var(--border-glass)',
                             background: isEditingRow
                               ? 'rgba(2, 132, 199, 0.08)'
-                              : (idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)')
+                              : (idx % 2 === 0 ? 'var(--bg-card-glass)' : 'var(--bg-surface)'),
+                            cursor: isEditingRow ? 'default' : 'pointer'
                           }}
                         >
                           <td style={{ padding: '0.8rem 0.9rem', fontWeight: 700, fontFamily: 'var(--font-code)', color: 'var(--brand-blue)' }}>
@@ -4350,32 +4449,28 @@ export default function CashBankModal({
                             )}
                           </td>
 
-                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', fontSize: '0.78rem' }}>
-                            {isEditingRow ? (
-                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', fontFamily: 'var(--font-main)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(inlineBankDraft.updateOpeningBalance)}
-                                  onChange={(e) => setInlineBankDraft(prev => ({ ...prev, updateOpeningBalance: e.target.checked }))}
-                                />
-                                <span>Fijar como Inicial</span>
-                              </label>
-                            ) : bankOpening.hasOpeningBalance ? (
-                              <>
-                                <div style={{ fontWeight: 700, color: 'var(--brand-blue)' }}>
-                                  {String(b.moneda || 'BS').toUpperCase() === 'BS'
-                                    ? formatBs(bankOpening.saldoInicialBs)
-                                    : formatUsd(bankOpening.saldoInicialUsd)}
-                                </div>
-                                {bankOpening.fechaSaldoInicial && (
-                                  <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
-                                    {formatTreasuryTimestampVe(bankOpening.fechaSaldoInicial)}
-                                  </div>
-                                )}
-                              </>
-                            ) : (
-                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>Sin fijar</span>
-                            )}
+                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                            <div style={{ fontWeight: 700, color: '#10b981' }}>
+                              + {formatBs(bankDh.debeBs)}
+                            </div>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                              {formatUsd(bankDh.debeUsd)}
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                              {bankDh.debeCount} ent.
+                            </div>
+                          </td>
+
+                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
+                            <div style={{ fontWeight: 700, color: '#ef4444' }}>
+                              - {formatBs(bankDh.haberBs)}
+                            </div>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                              {formatUsd(bankDh.haberUsd)}
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
+                              {bankDh.haberCount} sal.
+                            </div>
                           </td>
 
                           <td style={{
@@ -4453,127 +4548,57 @@ export default function CashBankModal({
                               formatUsd(saldoUsd)
                             )}
                           </td>
-
-                          {/* COLUMNA DE ACCIONES: MOVIMIENTOS, CREAR, EDITAR, GUARDAR, ELIMINAR */}
-                          <td style={{ padding: '0.8rem 0.9rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.35rem' }}>
-                              {/* Acción: Ver Movimientos */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const key = String(rowId || code || '').trim();
-                                  setBankMovFilterId(key || 'ALL');
-                                  setTimeout(() => bankMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
-                                }}
-                                className="btn"
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.28rem',
-                                  padding: '0.32rem 0.55rem',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  borderRadius: '6px',
-                                  background: 'rgba(56, 189, 248, 0.14)',
-                                  color: '#38bdf8',
-                                  border: '1px solid rgba(56, 189, 248, 0.35)'
-                                }}
-                                title="Ver ListView de entradas y salidas de esta cuenta bancaria"
-                              >
-                                <List size={12} />
-                                <span>Movs</span>
-                              </button>
-
-                              {/* Acción: Editar */}
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditBank(b)}
-                                className="btn"
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.28rem',
-                                  padding: '0.32rem 0.55rem',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  borderRadius: '6px',
-                                  background: 'rgba(217, 119, 6, 0.14)',
-                                  color: '#d97706',
-                                  border: '1px solid rgba(217, 119, 6, 0.3)'
-                                }}
-                                title="Editar esta cuenta bancaria"
-                              >
-                                <Edit2 size={12} />
-                                <span>Editar</span>
-                              </button>
-
-                              {/* Acción: Guardar */}
-                              <button
-                                type="button"
-                                disabled={isSubmitting}
-                                onClick={() => {
-                                  if (isEditingRow && inlineBankDraft) {
-                                    handleSaveBankRecord(inlineBankDraft, true);
-                                  } else {
-                                    handleSaveBankRecord({
-                                      id: rowId,
-                                      codCta: code,
-                                      bancoNombre: b.bancoNombre || b.banco_nombre,
-                                      cuentaANombreDe: titularNombre,
-                                      numCta: b.numCta || b.num_cta,
-                                      moneda: b.moneda || 'BS',
-                                      saldoBs,
-                                      saldoUsd
-                                    }, true);
-                                  }
-                                }}
-                                className="btn"
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.28rem',
-                                  padding: '0.32rem 0.55rem',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 700,
-                                  borderRadius: '6px',
-                                  background: isEditingRow ? 'linear-gradient(135deg, #059669, #10b981)' : 'rgba(16, 185, 129, 0.14)',
-                                  color: isEditingRow ? '#ffffff' : '#059669',
-                                  border: '1px solid rgba(16, 185, 129, 0.35)'
-                                }}
-                                title="Guardar cambios de la cuenta bancaria"
-                              >
-                                <Save size={12} />
-                                <span>Guardar</span>
-                              </button>
-
-                              {/* Acción: Eliminar (Doble Seguridad) */}
-                              <button
-                                type="button"
-                                onClick={() => handleRequestDeleteBank(b)}
-                                className="btn"
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.28rem',
-                                  padding: '0.32rem 0.55rem',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  borderRadius: '6px',
-                                  background: 'rgba(239, 68, 68, 0.12)',
-                                  color: '#ef4444',
-                                  border: '1px solid rgba(239, 68, 68, 0.28)'
-                                }}
-                                title="Eliminar cuenta bancaria (Protegido con Doble Seguridad)"
-                              >
-                                <Trash2 size={12} />
-                                <span>Eliminar</span>
-                              </button>
-                            </div>
-                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
+                  <tfoot>
+                    <tr style={{ background: 'var(--bg-table-header)', borderTop: '2px solid var(--border-glass)', fontWeight: 800 }}>
+                      <td colSpan={5} style={{ padding: '0.8rem 0.9rem', color: 'var(--text-primary)', textTransform: 'uppercase', fontSize: '0.78rem' }}>
+                        Sumatoria Cuentas Bancarias ({filteredBankAccounts.length})
+                      </td>
+                      {(() => {
+                        let totDebeBs = 0;
+                        let totDebeUsd = 0;
+                        let totHaberBs = 0;
+                        let totHaberUsd = 0;
+                        let totSaldoBs = 0;
+                        let totSaldoUsd = 0;
+                        filteredBankAccounts.forEach((b, i) => {
+                          const c = String(b.codCta || b.cod_cta || String(i + 1).padStart(2, '0')).toUpperCase();
+                          const rId = String(b.id || `CTA-${c}`).toUpperCase();
+                          const dh = bankDebeHaberMap.get(rId) || bankDebeHaberMap.get(c);
+                          if (dh) {
+                            totDebeBs = round2(totDebeBs + dh.debeBs);
+                            totDebeUsd = round2(totDebeUsd + dh.debeUsd);
+                            totHaberBs = round2(totHaberBs + dh.haberBs);
+                            totHaberUsd = round2(totHaberUsd + dh.haberUsd);
+                          }
+                          const val = computeBankAccountValuation(b, { tasaDolar: tasaBcv, tasaKeystone });
+                          totSaldoBs = round2(totSaldoBs + val.bs);
+                          totSaldoUsd = round2(totSaldoUsd + val.usd);
+                        });
+                        return (
+                          <>
+                            <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#10b981' }}>
+                              <div>+ {formatBs(totDebeBs)}</div>
+                              <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatUsd(totDebeUsd)}</div>
+                            </td>
+                            <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#ef4444' }}>
+                              <div>- {formatBs(totHaberBs)}</div>
+                              <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 500 }}>{formatUsd(totHaberUsd)}</div>
+                            </td>
+                            <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: 'var(--text-primary)' }}>
+                              {formatBs(totSaldoBs)}
+                            </td>
+                            <td style={{ padding: '0.8rem 0.9rem', textAlign: 'right', fontFamily: 'var(--font-code)', color: '#059669' }}>
+                              {formatUsd(totSaldoUsd)}
+                            </td>
+                          </>
+                        );
+                      })()}
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
 
@@ -5383,6 +5408,80 @@ export default function CashBankModal({
           config={config}
           currentUser={currentUser}
           onUpdateCashDesk={onUpdateCashDesk}
+        />
+
+        {/* MODAL DE DETALLES COMPLETOS DE CAJA O BANCO (FISCAL / NOTA DE ENTREGA + ACCIONES) */}
+        <TreasuryAccountDetailModal
+          isOpen={accountDetailModal.isOpen}
+          onClose={() => setAccountDetailModal((prev) => ({ ...prev, isOpen: false }))}
+          accountKind={accountDetailModal.kind}
+          accountRecord={accountDetailModal.record}
+          initialDocScope={accountDetailModal.docScope}
+          cashDesks={cashDesks}
+          bankAccounts={bankAccounts}
+          cashMovements={cashMovements}
+          movementsRunningBalanceMap={movementsRunningBalanceMap}
+          fiscalSplitOverrides={fiscalSplitOverrides}
+          config={config}
+          currentUser={currentUser}
+          isMaster={isMaster}
+          onNewMovement={(scope) => {
+            const rec = accountDetailModal.record;
+            const kind = accountDetailModal.kind;
+            setAccountDetailModal((prev) => ({ ...prev, isOpen: false }));
+            if (kind === 'CAJA') {
+              setMovAccountKind('CAJA');
+              setSelectedDeskId(rec?.id || rec?.coCaja || '');
+              setMovFiscalScope(scope === 'FISCAL' ? 'FISCAL' : 'NO_FISCAL');
+              setShowCajaForm(false);
+            } else {
+              setMovAccountKind('BANCO');
+              setSelectedBankId(rec?.id || rec?.codCta || '');
+              setMovFiscalScope(scope === 'FISCAL' ? 'FISCAL' : 'NO_FISCAL');
+              setShowBankForm(false);
+            }
+            setShowNewMovForm(true);
+          }}
+          onEditAccount={() => {
+            const rec = accountDetailModal.record;
+            const kind = accountDetailModal.kind;
+            setAccountDetailModal((prev) => ({ ...prev, isOpen: false }));
+            if (kind === 'CAJA') {
+              handleOpenEditCaja(rec);
+            } else {
+              handleOpenEditBank(rec);
+            }
+          }}
+          onDeleteAccount={() => {
+            const rec = accountDetailModal.record;
+            const kind = accountDetailModal.kind;
+            setAccountDetailModal((prev) => ({ ...prev, isOpen: false }));
+            if (kind === 'CAJA') {
+              handleDeleteCaja(rec);
+            } else {
+              handleRequestDeleteBank(rec);
+            }
+          }}
+          onOpenOpeningBalances={() => {
+            setAccountDetailModal((prev) => ({ ...prev, isOpen: false }));
+            setShowOpeningEvolutionModal(true);
+          }}
+          onJumpToMovements={(scope) => {
+            const rec = accountDetailModal.record;
+            const kind = accountDetailModal.kind;
+            setAccountDetailModal((prev) => ({ ...prev, isOpen: false }));
+            if (kind === 'CAJA') {
+              const key = String(rec?.id || rec?.coCaja || '').trim();
+              setCajaMovFilterId(key || 'ALL');
+              setCajaMovDocFilter(scope || 'ALL');
+              setTimeout(() => cajaMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+            } else {
+              const key = String(rec?.id || rec?.codCta || '').trim();
+              setBankMovFilterId(key || 'ALL');
+              setBankMovDocFilter(scope || 'ALL');
+              setTimeout(() => bankMovSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+            }
+          }}
         />
 
     </section>

@@ -168,12 +168,14 @@ test('4.4 formatSaleInvoiceTicketText parsea fechas DD/MM/YYYY y YYYY-MM-DD sin 
   assert.strictEqual(parsedLocal.date.getMonth(), 10);
 });
 
-test('4.5 canUserGrantCreditOverride aplica RBAC estricto para aprobacion excepcional de credito', () => {
+test('4.5 canUserGrantCreditOverride habilita aprobacion de credito segun acceso a Flujo Comercial y Pedidos', () => {
   assert.strictEqual(canUserGrantCreditOverride({ rol: 'Gerencia' }), true);
   assert.strictEqual(canUserGrantCreditOverride({ rol: 'ADMINISTRADOR MASTER' }), true);
   assert.strictEqual(canUserGrantCreditOverride({ rol: 'Crédito y Cobranzas' }), true);
-  assert.strictEqual(canUserGrantCreditOverride({ rol: 'Cajero', username: 'caja1' }), false);
-  assert.strictEqual(canUserGrantCreditOverride({ rol: 'Vendedor', username: 'vendedor1' }), false);
+  assert.strictEqual(canUserGrantCreditOverride({ rol: 'Cajero', username: 'caja1' }), true);
+  assert.strictEqual(canUserGrantCreditOverride({ rol: 'Vendedor', username: 'vendedor1' }), true);
+  assert.strictEqual(canUserGrantCreditOverride({ rol: 'Cajero', username: 'caja1', modulos: ['caja', 'ventas'] }), false);
+  assert.strictEqual(canUserGrantCreditOverride({ rol: 'COMPRAS', username: 'compras1' }), false);
 });
 
 console.log(`✅ posModule4.test.js: ${passed}/5 pruebas aprobadas`);

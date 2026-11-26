@@ -197,13 +197,16 @@ export default function InventoryView({
       const unit = resolveProductUnit(p, 'Caja');
       const litersPerUnit = resolveProductLitersPerUnit(p);
       const min = Number(p.stockMinimo) || 5;
-      const costo = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? 0) || 0;
+      const costo01 = getProductCost(p, '01');
+      const costo02 = getProductCost(p, '02');
+      const val01 = s01 * costo01;
+      const val02 = s02 * costo02;
 
       // 1. Acumuladores Consolidados (Suma Total)
       totalCajas += sTotal;
       const lTotal = sTotal * litersPerUnit;
       totalLitros += lTotal;
-      totalValorUsd += sTotal * costo;
+      totalValorUsd += val01 + val02;
 
       if (sTotal <= min) countCriticos++;
       else if (sTotal <= min * 2) countReorden++;
@@ -219,7 +222,7 @@ export default function InventoryView({
       alm01TotalCajas += s01;
       const l01 = s01 * litersPerUnit;
       alm01TotalLitros += l01;
-      alm01TotalValorUsd += s01 * costo;
+      alm01TotalValorUsd += val01;
 
       const min01 = Math.max(1, Math.round(min * 0.4));
       if (s01 <= min01) alm01CountCriticos++;
@@ -236,7 +239,7 @@ export default function InventoryView({
       alm02TotalCajas += s02;
       const l02 = s02 * litersPerUnit;
       alm02TotalLitros += l02;
-      alm02TotalValorUsd += s02 * costo;
+      alm02TotalValorUsd += val02;
 
       const min02 = Math.max(1, Math.round(min * 0.6));
       if (s02 <= min02) alm02CountCriticos++;
@@ -763,11 +766,17 @@ export default function InventoryView({
       const finalMayor01 = isWh02 ? prevMayor01 : mayor;
       const finalMayor02 = isWh02 ? mayor : prevMayor02;
 
+      const totalStock = s01 + s02;
+      const globalWeightedCost =
+        totalStock > 0
+          ? Number(((s01 * finalCost01 + s02 * finalCost02) / totalStock).toFixed(6))
+          : (isWh02 ? (finalCost02 > 0 ? finalCost02 : finalCost01) : (finalCost01 > 0 ? finalCost01 : finalCost02));
+
       const payloadToSave = {
         ...editingProduct,
-        costoUsd: isWh02 ? (finalCost01 > 0 ? finalCost01 : costo) : costo,
-        costo_usd: isWh02 ? (finalCost01 > 0 ? finalCost01 : costo) : costo,
-        costo: isWh02 ? (finalCost01 > 0 ? finalCost01 : costo) : costo,
+        costoUsd: globalWeightedCost,
+        costo_usd: globalWeightedCost,
+        costo: globalWeightedCost,
         costoUsd01: finalCost01,
         costo_usd_01: finalCost01,
         costoUsd02: finalCost02,
@@ -827,9 +836,9 @@ export default function InventoryView({
   };
 
   return (
-    <div>
+    <div className="inventory-view-shell">
       {/* Encabezado del Módulo */}
-      <div className="page-header-responsive" style={{ marginBottom: '1.25rem' }}>
+      <div className="page-header-responsive" style={{ marginBottom: '0.85rem', flexShrink: 0 }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
             <Droplet size={28} color="var(--neon-cyan)" /> Catálogo de Lubricantes & Matriz de Inventario
@@ -1179,7 +1188,7 @@ export default function InventoryView({
       </div>
 
       {/* Filtros & Barra de Búsqueda */}
-      <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem', borderRadius: '12px', border: '1px solid var(--border-glass)', width: '100%', minWidth: 0 }}>
+      <div className="card" style={{ padding: '0.85rem 1.15rem', marginBottom: '0.85rem', borderRadius: '12px', border: '1px solid var(--border-glass)', width: '100%', minWidth: 0, flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
           <div className="search-wrapper" style={{ flex: 1, minWidth: 'min(100%, 280px)', maxWidth: '480px' }}>
             <Search size={16} />

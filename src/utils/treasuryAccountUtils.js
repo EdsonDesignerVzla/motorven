@@ -127,6 +127,21 @@ export const resolveOpeningBalanceMeta = (record) => {
   };
 };
 
+export const LOCKED_OPENING_BALANCE_DESK_CODES = new Set(['CAJA-04']);
+
+/**
+ * Indica si una caja tiene bloqueada la edición del Saldo Inicial de apertura
+ * para evitar desfases con sus movimientos reales.
+ */
+export const isOpeningBalanceLockedForDesk = (deskOrCode) => {
+  if (!deskOrCode) return false;
+  const raw = typeof deskOrCode === 'object'
+    ? (deskOrCode.coCaja || deskOrCode.co_caja || deskOrCode.id || '')
+    : String(deskOrCode);
+  const norm = String(raw || '').trim().toUpperCase();
+  return LOCKED_OPENING_BALANCE_DESK_CODES.has(norm);
+};
+
 export const mergeOpeningBalanceFields = (
   incoming = {},
   existing = null,
@@ -1359,4 +1374,218 @@ export const buildCashDesksOpeningEvolutionRows = (
       diffBs: totalDiffBs
     }
   };
+};
+
+/**
+ * Calcula el resumen contable Debe (Entradas), Haber (Salidas) y su vínculo con el Saldo
+ * para una Caja Registradora o Cuenta Bancaria específica, incluyendo desglose Fiscal / No Fiscal.
+ */
+export const computeAccountDebeHaberSummary = (
+  accountKind = 'CAJA',
+  accountRecord = null,
+  cashMovements = [],
+  cashDesks = [],
+  bankAccounts = [],
+  config = {}
+) => {
+  const kind = String(accountKind || 'CAJA').toUpperCase();
+  const emptySub = {
+    debeUsd: 0,
+    debeBs: 0,
+    debeCount: 0,
+    haberUsd: 0,
+    haberBs: 0,
+    haberCount: 0,
+    netoUsd: 0,
+    netoBs: 0
+  };
+  if (!accountRecord) {
+    return {
+      ...emptySub,
+      saldoInicialUsd: 0,
+      saldoInicialBs: 0,
+      hasOpeningBalance: false,
+      saldoActualUsd: 0,
+      saldoActualBs: 0,
+      saldoCalculadoUsd: 0,
+      saldoCalculadoBs: 0,
+      fiscal: { ...emptySub },
+      noFiscal: { ...emptySub }
+    };
+  }
+
+  const { tasaBcv } = resolveExchangeRates(config);
+  const opening = resolveOpeningBalanceMeta(accountRecord);
+  const initUsd = round2(Number(opening.saldoInicialUsd || 0));
+  const initBs = round2(Number(opening.saldoInicialBs || 0));
+
+  let saldoActualUsd = 0;
+  let saldoActualBs = 0;
+  if (kind === 'BANCO') {
+    const val = computeBankAccountValuation(accountRecord, config);
+    saldoActualUsd = val.usd;
+    saldoActualBs = val.bs;
+  } else {
+    const moneda = String(accountRecord.moneda || 'USD').toUpperCase();
+    const rawUsd = Number(accountRecord.saldoUsd ?? accountRecord.saldo_usd ?? 0) || 0;
+    const rawBs = Number(accountRecord.saldoBs ?? accountRecord.saldo_bs ?? 0) || 0;
+    if (moneda === 'BS') {
+      saldoActualBs = round2(rawBs);
+      saldoActualUsd = rawBs !== 0 && tasaBcv > 0 ? round2(rawBs / tasaBcv) : round2(rawUsd);
+    } else {
+      saldoActualUsd = round2(rawUsd);
+      saldoActualBs = rawBs !== 0 ? round2(rawBs) : round2(rawUsd * tasaBcv);
+    }
+  }
+
+  const matchingMovs = (Array.isArray(cashMovements) ? cashMovements : []).filter((m) =>
+    doesMovementBelongToAccount(m, kind, accountRecord, cashDesks, bankAccounts)
+  );
+
+  const acc = { ...emptySub };
+  const fiscal = { ...emptySub };
+  const noFiscal = { ...emptySub };
+
+  matchingMovs.forEach((m) => {
+    const isIngreso = String(m?.tipo || '').trim().toUpperCase() === 'INGRESO';
+    const usd = round2(Math.abs(Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0));
+    const bs = round2(Math.abs(Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0));
+    const bucket = classifyMovementDocOrigin(m) === 'FISCAL' ? fiscal : noFiscal;
+
+    if (isIngreso) {
+      acc.debeCount += 1;
+      acc.debeUsd = round2(acc.debeUsd + usd);
+      acc.debeBs = round2(acc.debeBs + bs);
+      bucket.debeCount += 1;
+      bucket.debeUsd = round2(bucket.debeUsd + usd);
+      bucket.debeBs = round2(bucket.debeBs + bs);
+    } else {
+      acc.haberCount += 1;
+      acc.haberUsd = round2(acc.haberUsd + usd);
+      acc.haberBs = round2(acc.haberBs + bs);
+      bucket.haberCount += 1;
+      bucket.haberUsd = round2(bucket.haberUsd + usd);
+      bucket.haberBs = round2(bucket.haberBs + bs);
+    }
+  });
+
+  acc.netoUsd = round2(acc.debeUsd - acc.haberUsd);
+  acc.netoBs = round2(acc.debeBs - acc.haberBs);
+  fiscal.netoUsd = round2(fiscal.debeUsd - fiscal.haberUsd);
+  fiscal.netoBs = round2(fiscal.debeBs - fiscal.haberBs);
+  noFiscal.netoUsd = round2(noFiscal.debeUsd - noFiscal.haberUsd);
+  noFiscal.netoBs = round2(noFiscal.debeBs - noFiscal.haberBs);
+
+  return {
+    ...acc,
+    saldoInicialUsd: initUsd,
+    saldoInicialBs: initBs,
+    hasOpeningBalance: opening.hasOpeningBalance,
+    saldoActualUsd,
+    saldoActualBs,
+    saldoCalculadoUsd: round2(initUsd + acc.netoUsd),
+    saldoCalculadoBs: round2(initBs + acc.netoBs),
+    fiscal,
+    noFiscal
+  };
+};
+
+/**
+ * Calcula el saldo corrido (running balance) por cada movimiento vinculado al saldo actual
+ * de su Caja o Cuenta Bancaria correspondiente, garantizando Saldo_anterior + Debe - Haber = Saldo_nuevo.
+ */
+export const computeMovementsRunningBalanceMap = (
+  cashMovements = [],
+  cashDesks = [],
+  bankAccounts = [],
+  config = {}
+) => {
+  const result = new Map();
+  const list = Array.isArray(cashMovements) ? cashMovements : [];
+  if (list.length === 0) return result;
+
+  const { tasaBcv } = resolveExchangeRates(config);
+  const grouped = new Map();
+
+  list.forEach((m, idx) => {
+    if (!m || typeof m !== 'object') return;
+    const resolved = resolveTreasuryAccountForMovement(m, cashDesks, bankAccounts);
+    if (!resolved || !resolved.record) return;
+    const key = resolved.accountRef;
+    if (!grouped.has(key)) {
+      grouped.set(key, { resolved, items: [] });
+    }
+    grouped.get(key).items.push({ m, idx });
+  });
+
+  grouped.forEach(({ resolved, items }) => {
+    const { kind, record } = resolved;
+    const isBsAccount = String(record.moneda || (kind === 'BANCO' ? 'BS' : 'USD')).toUpperCase() === 'BS';
+    let currentUsd = 0;
+    let currentBs = 0;
+
+    if (kind === 'BANCO') {
+      const val = computeBankAccountValuation(record, config);
+      currentUsd = val.usd;
+      currentBs = val.bs;
+    } else {
+      const rawUsd = Number(record.saldoUsd ?? record.saldo_usd ?? 0) || 0;
+      const rawBs = Number(record.saldoBs ?? record.saldo_bs ?? 0) || 0;
+      if (isBsAccount) {
+        currentBs = round2(rawBs);
+        currentUsd = rawBs !== 0 && tasaBcv > 0 ? round2(rawBs / tasaBcv) : round2(rawUsd);
+      } else {
+        currentUsd = round2(rawUsd);
+        currentBs = rawBs !== 0 ? round2(rawBs) : round2(rawUsd * tasaBcv);
+      }
+    }
+
+    const accountCode = kind === 'BANCO'
+      ? `CTA-${record.codCta || record.cod_cta || record.id || ''}`
+      : String(record.coCaja || record.co_caja || record.id || '').toUpperCase();
+    const accountName = kind === 'BANCO'
+      ? (record.bancoNombre || record.banco_nombre || accountCode)
+      : (record.descripcion || accountCode);
+
+    // Orden cronológico descendente (más reciente primero) para anclar desde el saldo actual
+    items.sort((a, b) => {
+      const ta = new Date(a.m?.fecha || a.m?.createdAt || 0).getTime() || 0;
+      const tb = new Date(b.m?.fecha || b.m?.createdAt || 0).getTime() || 0;
+      if (tb !== ta) return tb - ta;
+      return a.idx - b.idx;
+    });
+
+    let runningUsd = currentUsd;
+    let runningBs = currentBs;
+
+    items.forEach(({ m }) => {
+      const isIngreso = String(m?.tipo || '').trim().toUpperCase() === 'INGRESO';
+      const sign = isIngreso ? 1 : -1;
+      const mUsd = round2(Math.abs(Number(m?.montoUsd ?? m?.monto_usd ?? 0) || 0));
+      const mBs = round2(Math.abs(Number(m?.montoBs ?? m?.monto_bs ?? 0) || 0));
+      const effBs = mBs > 0 ? mBs : (isBsAccount && tasaBcv > 0 ? round2(mUsd * tasaBcv) : 0);
+      const effUsd = mUsd > 0 ? mUsd : (isBsAccount && tasaBcv > 0 ? round2(mBs / tasaBcv) : 0);
+
+      const saldoDespuesUsd = round2(runningUsd);
+      const saldoDespuesBs = round2(runningBs);
+      const saldoAntesUsd = round2(runningUsd - sign * effUsd);
+      const saldoAntesBs = round2(runningBs - sign * effBs);
+
+      result.set(m, {
+        kind,
+        accountCode,
+        accountName,
+        isBsAccount,
+        saldoDespuesUsd,
+        saldoDespuesBs,
+        saldoAntesUsd,
+        saldoAntesBs
+      });
+
+      runningUsd = saldoAntesUsd;
+      runningBs = saldoAntesBs;
+    });
+  });
+
+  return result;
 };

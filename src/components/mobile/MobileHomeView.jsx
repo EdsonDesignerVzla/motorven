@@ -3,11 +3,13 @@ import {
   ArrowRight,
   ClipboardList,
   Droplets,
+  LayoutDashboard,
   Package,
   PackageCheck,
   Plus,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Wallet
 } from 'lucide-react';
 import { canAccessModule } from '../../services/authService';
@@ -19,11 +21,20 @@ import {
   resolveProductLitersPerUnit,
   round2
 } from '../../services/formatService';
+import {
+  toDateKey,
+  normalizeDashboardSalesDocs,
+  summarizeSalesWindows,
+  summarizeCollectionsWindow
+} from '../../services/dashboardMetricsService';
 import { consolidateClientReceivables } from '../../utils/cxcUtils';
 import { detectUserDevice } from './deviceDetection';
 import {
   canAccessMobileCxC,
+  canAccessMobileDashboard,
   canAccessMobileInventory,
+  canAccessMobilePredictibilidad,
+  canAccessMobilePresale,
   computeOrderMetrics,
   getOrderNumber,
   isCommercialPresaleOrder,
@@ -56,11 +67,44 @@ export default function MobileHomeView({
     .slice(0, 2)
     .toUpperCase() || 'SM';
 
-  const canPresale =
-    canAccessModule(currentUser?.rol, 'pedidos', currentUser) ||
-    canAccessModule(currentUser?.rol, 'preventa', currentUser);
+  const canDashboard = canAccessMobileDashboard(currentUser);
+  const canPredictibilidad = canAccessMobilePredictibilidad(currentUser);
+  const canPresale = canAccessMobilePresale(currentUser);
   const canInventory = canAccessMobileInventory(currentUser);
   const canCxC = canAccessMobileCxC(currentUser);
+
+  const resumenMetrics = useMemo(() => {
+    if (!canDashboard) {
+      return { ventasHoyUsd: 0, ventasMesUsd: 0, cobradoMesUsd: 0 };
+    }
+    const todayKey = toDateKey(new Date());
+    const anioActivo = config?.ejercicioFiscalActivo || new Date().getFullYear();
+    const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, '0');
+    const docs = normalizeDashboardSalesDocs({
+      profitInvoices,
+      sales,
+      products,
+      tasaBcv
+    });
+    const { ventasDelDia, ventasAcumuladoMes } = summarizeSalesWindows({
+      ventasDocsNormalizados: docs,
+      todayKey,
+      anioActivo,
+      ventasMesFilter: currentMonthStr,
+      metaMensualBase: Number(config?.metaComercialLitros) || 20000
+    });
+    const { mes: cobranzaMes } = summarizeCollectionsWindow({
+      profitCollections,
+      tasaBcv,
+      todayKey,
+      monthPrefix: `${anioActivo}-${currentMonthStr}`
+    });
+    return {
+      ventasHoyUsd: round2(ventasDelDia.usd),
+      ventasMesUsd: round2(ventasAcumuladoMes.usd),
+      cobradoMesUsd: round2(cobranzaMes.usd)
+    };
+  }, [canDashboard, config, profitInvoices, sales, products, profitCollections, tasaBcv]);
 
   const cxcMetrics = useMemo(() => {
     if (!canCxC) {
@@ -168,7 +212,7 @@ export default function MobileHomeView({
 
   const lastOrderStatus = metrics.lastOrder ? normalizeOrderStatus(metrics.lastOrder) : null;
   const lastOrderMetrics = metrics.lastOrder ? computeOrderMetrics(metrics.lastOrder, tasaBcv) : null;
-  const activeModulesCount = [canPresale, canCxC, canInventory].filter(Boolean).length;
+  const activeModulesCount = [canDashboard, canPresale, canCxC, canInventory].filter(Boolean).length;
 
   return (
     <div className="mobile-canvas-view">
@@ -213,6 +257,40 @@ export default function MobileHomeView({
         </span>
       </div>
 
+      {/* Acceso Directo a SIGNUM FORESIGHT: Predictibilidad & Alertas */}
+      {canPredictibilidad && (
+        <button
+          type="button"
+          onClick={() => onNavigate?.('predictibilidad')}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
+            border: '1px solid rgba(139, 92, 246, 0.45)',
+            color: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            cursor: 'pointer',
+            boxShadow: '0 4px 12px rgba(124, 58, 237, 0.22)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Sparkles size={16} color="#ddd6fe" />
+            <div style={{ textAlign: 'left' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.74rem', fontWeight: 900, letterSpacing: '0.03em' }}>
+                PREDICTIBILIDAD & ALERTAS (FORESIGHT)
+              </div>
+              <div style={{ fontSize: '0.58rem', color: '#e0e7ff', fontWeight: 600 }}>
+                Proyecciones de demanda, quiebre de stock, márgenes y flujo de caja
+              </div>
+            </div>
+          </div>
+          <ArrowRight size={15} color="#ffffff" />
+        </button>
+      )}
+
       {/* 2. Telemetría Ejecutiva (Preventa + Inventario Consolidado) */}
       <div className="mobile-telemetry-row">
         <div
@@ -250,21 +328,94 @@ export default function MobileHomeView({
         </div>
       </div>
 
-      {/* 3. Fichas de Módulos Activos: Preventa Móvil, Cobranzas (CxC) & Inventario Consolidado */}
+      {/* 3. Fichas de Módulos Activos: Resumen General, Preventa, Cobranzas (CxC) & Inventario Consolidado */}
       <div
         style={{
           flex: '1 1 auto',
           minHeight: 0,
           display: 'grid',
           gridTemplateColumns:
-            activeModulesCount === 3
-              ? 'repeat(3, minmax(0, 1fr))'
-              : activeModulesCount === 2
-              ? '1fr 1fr'
-              : '1fr',
-          gap: '8px'
+            activeModulesCount === 4 || activeModulesCount === 2
+              ? 'repeat(2, minmax(0, 1fr))'
+              : activeModulesCount === 3
+                ? 'repeat(3, minmax(0, 1fr))'
+                : '1fr',
+          gridTemplateRows: activeModulesCount === 4 ? 'repeat(2, minmax(0, 1fr))' : '1fr',
+          gap: '7px'
         }}
       >
+        {canDashboard && (
+          <button
+            type="button"
+            onClick={() => onNavigate?.('dashboard')}
+            className="mobile-module-tile"
+            style={{
+              width: '100%',
+              minWidth: 0,
+              height: '100%',
+              minHeight: 0,
+              padding: '9px 10px',
+              borderRadius: '14px',
+              textAlign: 'left',
+              borderColor: 'var(--mob-border-strong)'
+            }}
+          >
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
+              <div
+                className="mobile-module-icon-wrap"
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '8px',
+                  background: 'var(--mob-navy-soft)',
+                  color: 'var(--mob-navy)'
+                }}
+              >
+                <LayoutDashboard size={15} />
+              </div>
+              <span className="mobile-pill-badge info" style={{ fontSize: '0.50rem', padding: '2px 6px' }}>
+                EJECUTIVO
+              </span>
+            </div>
+
+            <div style={{ marginTop: '4px', width: '100%' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.73rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+                RESUMEN GENERAL
+              </div>
+              <div style={{ fontSize: '0.58rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '1px' }}>
+                Ventas • Stock • CxC • CxP
+              </div>
+            </div>
+
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+                marginTop: '4px',
+                paddingTop: '5px',
+                borderTop: '1px solid var(--mob-border)',
+                fontSize: '0.58rem',
+                color: 'var(--mob-text-secondary)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Fact. Mes:</span>
+                <strong style={{ fontFamily: 'var(--font-code)', color: 'var(--mob-green)' }}>
+                  {formatUsd(resumenMetrics.ventasMesUsd)}
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Cobrado Mes:</span>
+                <strong style={{ fontFamily: 'var(--font-code)', color: 'var(--mob-cyan)' }}>
+                  {formatUsd(resumenMetrics.cobradoMesUsd)}
+                </strong>
+              </div>
+            </div>
+          </button>
+        )}
+
         {canPresale && (
           <button
             type="button"
@@ -273,8 +424,8 @@ export default function MobileHomeView({
             style={{
               height: '100%',
               minHeight: 0,
-              padding: '12px 10px',
-              borderRadius: '16px',
+              padding: '9px 10px',
+              borderRadius: '14px',
               textAlign: 'left'
             }}
           >
@@ -282,23 +433,23 @@ export default function MobileHomeView({
               <div
                 className="mobile-module-icon-wrap"
                 style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '9px',
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '8px',
                   background: 'rgba(56, 189, 248, 0.2)',
                   color: '#38bdf8'
                 }}
               >
-                <ClipboardList size={17} />
+                <ClipboardList size={15} />
               </div>
               <span
                 style={{
                   background: metrics.activeOrdersCount > 0 ? '#e60012' : 'rgba(56, 189, 248, 0.22)',
                   color: '#ffffff',
                   fontFamily: 'var(--font-code)',
-                  fontSize: '0.62rem',
+                  fontSize: '0.56rem',
                   fontWeight: 800,
-                  padding: '2px 7px',
+                  padding: '2px 6px',
                   borderRadius: '9999px'
                 }}
               >
@@ -306,11 +457,11 @@ export default function MobileHomeView({
               </span>
             </div>
 
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.80rem', fontWeight: 800, color: '#ffffff' }}>
+            <div style={{ marginTop: '4px' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.73rem', fontWeight: 800, color: '#ffffff' }}>
                 PREVENTA
               </div>
-              <div style={{ fontSize: '0.62rem', color: '#bae6fd', fontWeight: 600, marginTop: '2px' }}>
+              <div style={{ fontSize: '0.58rem', color: '#bae6fd', fontWeight: 600, marginTop: '1px' }}>
                 ATP 72h
               </div>
             </div>
@@ -320,11 +471,11 @@ export default function MobileHomeView({
                 width: '100%',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '4px',
-                marginTop: '6px',
-                paddingTop: '7px',
+                gap: '3px',
+                marginTop: '4px',
+                paddingTop: '5px',
                 borderTop: '1px solid rgba(255, 255, 255, 0.14)',
-                fontSize: '0.60rem',
+                fontSize: '0.58rem',
                 color: '#e0f2fe'
               }}
             >
@@ -352,8 +503,8 @@ export default function MobileHomeView({
               minWidth: 0,
               height: '100%',
               minHeight: 0,
-              padding: '12px 10px',
-              borderRadius: '16px',
+              padding: '9px 10px',
+              borderRadius: '14px',
               textAlign: 'left',
               borderColor: 'var(--mob-border-strong)'
             }}
@@ -362,28 +513,28 @@ export default function MobileHomeView({
               <div
                 className="mobile-module-icon-wrap"
                 style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '9px',
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '8px',
                   background: 'var(--mob-cyan-soft)',
                   color: 'var(--mob-cyan)'
                 }}
               >
-                <Wallet size={17} />
+                <Wallet size={15} />
               </div>
               <span
                 className={`mobile-pill-badge ${cxcMetrics.clientesEnMora > 0 ? 'warning' : 'success'}`}
-                style={{ fontSize: '0.52rem', padding: '2px 6px' }}
+                style={{ fontSize: '0.50rem', padding: '2px 6px' }}
               >
                 {cxcMetrics.clientesEnMora > 0 ? `${cxcMetrics.clientesEnMora} MORA` : 'AL DÍA'}
               </span>
             </div>
 
-            <div style={{ marginTop: '6px', width: '100%' }}>
-              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+            <div style={{ marginTop: '4px', width: '100%' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.73rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
                 COBRANZAS / CXC
               </div>
-              <div style={{ fontSize: '0.62rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '2px' }}>
+              <div style={{ fontSize: '0.58rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '1px' }}>
                 Cartera & Cobros
               </div>
             </div>
@@ -393,11 +544,11 @@ export default function MobileHomeView({
                 width: '100%',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '4px',
-                marginTop: '6px',
-                paddingTop: '7px',
+                gap: '3px',
+                marginTop: '4px',
+                paddingTop: '5px',
                 borderTop: '1px solid var(--mob-border)',
-                fontSize: '0.60rem',
+                fontSize: '0.58rem',
                 color: 'var(--mob-text-secondary)'
               }}
             >
@@ -432,8 +583,8 @@ export default function MobileHomeView({
               minWidth: 0,
               height: '100%',
               minHeight: 0,
-              padding: '12px 10px',
-              borderRadius: '16px',
+              padding: '9px 10px',
+              borderRadius: '14px',
               textAlign: 'left',
               borderColor: 'var(--mob-border-strong)'
             }}
@@ -442,25 +593,25 @@ export default function MobileHomeView({
               <div
                 className="mobile-module-icon-wrap"
                 style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '9px',
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '8px',
                   background: 'var(--mob-green-soft)',
                   color: 'var(--mob-green)'
                 }}
               >
-                <Package size={17} />
+                <Package size={15} />
               </div>
-              <span className="mobile-pill-badge info" style={{ fontSize: '0.52rem', padding: '2px 6px' }}>
+              <span className="mobile-pill-badge info" style={{ fontSize: '0.50rem', padding: '2px 6px' }}>
                 SOLO LECTURA
               </span>
             </div>
 
-            <div style={{ marginTop: '6px', width: '100%' }}>
-              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+            <div style={{ marginTop: '4px', width: '100%' }}>
+              <div style={{ fontFamily: 'var(--font-tech)', fontSize: '0.73rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
                 ALMACÉN / STOCK
               </div>
-              <div style={{ fontSize: '0.62rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '2px' }}>
+              <div style={{ fontSize: '0.58rem', color: 'var(--mob-text-muted)', fontWeight: 600, marginTop: '1px' }}>
                 Alm 01 + Alm 02
               </div>
             </div>
@@ -470,11 +621,11 @@ export default function MobileHomeView({
                 width: '100%',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '4px',
-                marginTop: '6px',
-                paddingTop: '7px',
+                gap: '3px',
+                marginTop: '4px',
+                paddingTop: '5px',
                 borderTop: '1px solid var(--mob-border)',
-                fontSize: '0.60rem',
+                fontSize: '0.58rem',
                 color: 'var(--mob-text-secondary)'
               }}
             >

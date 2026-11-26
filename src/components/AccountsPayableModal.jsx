@@ -63,6 +63,18 @@ const isFiscalInvoiceType = (tipo, isFiscalFlag = undefined) => {
   return t === 'FACT' || t === 'FACTURA';
 };
 
+const isNotaEntregaPayableRecord = (doc) => {
+  if (!doc) return false;
+  const t = String(doc.tipoDoc || doc.tipo_doc || '').toUpperCase().trim();
+  if (t === 'NE' || t === 'NOTA_ENTREGA') return true;
+  if (doc.isFiscal === false || doc.is_fiscal === false) return true;
+  const nro = String(doc.nroDoc || doc.nro_doc || '').toUpperCase().trim();
+  if (/\bNOTA\s*(DE\s*)?ENTREGA\b/.test(nro) || /^NE[\s#-]/i.test(nro)) return true;
+  const obs = String(doc.observaciones || doc.descrip || '').toUpperCase();
+  if (/\bNOTA_?(DE_?)?ENTREGA\b/.test(obs) && Number(doc.ivaUsd ?? doc.iva_usd ?? 0) === 0) return true;
+  return false;
+};
+
 const getDocTypeLabel = (tipo) => {
   const t = String(tipo || '').toUpperCase().trim();
   if (t === 'FACT' || t === 'FACTURA') return 'Factura Fiscal';
@@ -337,6 +349,7 @@ export default function AccountsPayableModal({
   accountsPayable = [],
   profitAccountsPayable = [],
   suppliers = [],
+  profitSuppliers = [],
   bankAccounts = [],
   cashDesks = [],
   partnerPayableAccounts = null,
@@ -345,7 +358,8 @@ export default function AccountsPayableModal({
   currentUser = null,
   onRegisterPayment,
   onSaveDocument,
-  onDeleteDocument
+  onDeleteDocument,
+  onSaveSupplier
 }) {
   const notify = useNotification();
   const parteARef = useRef(null);
@@ -517,7 +531,7 @@ export default function AccountsPayableModal({
     return Array.from(setTypes);
   }, [targetPayables]);
 
-  // Lista de proveedores únicos
+  // Lista de proveedores únicos (para filtros de tabla)
   const supplierList = useMemo(() => {
     const setProvs = new Set();
     targetPayables.forEach(p => {
@@ -526,6 +540,150 @@ export default function AccountsPayableModal({
     });
     return Array.from(setProvs).sort();
   }, [targetPayables]);
+
+  // Catálogo unificado de proveedores (profitSuppliers + suppliers + CxP históricas) para búsqueda al crear CxP
+  const catalogSuppliers = useMemo(() => {
+    const map = new Map();
+    const registerEntry = (rawName, rawRif, rawDias = 0, rawId = '') => {
+      const name = String(rawName || '').trim();
+      const rif = String(rawRif || '').trim().toUpperCase();
+      if (!name) return;
+      const key = rif ? rif.replace(/[^A-Z0-9]/g, '') : name.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          id: rawId || key,
+          name,
+          rif,
+          diasCredito: Math.max(0, Number(rawDias || 0))
+        });
+      }
+    };
+    const mergedSource = [
+      ...(Array.isArray(profitSuppliers) ? profitSuppliers : []),
+      ...(Array.isArray(suppliers) ? suppliers : [])
+    ];
+    mergedSource.forEach(s => {
+      if (!s || s.inactivo) return;
+      registerEntry(
+        s.provDes || s.prov_des || s.nombre || s.razonSocial || s.provNombre,
+        s.rif || s.coProv || s.co_prov,
+        s.diasCredito ?? s.dias_credito ?? 0,
+        s.id
+      );
+    });
+    targetPayables.forEach(p => {
+      if (!p) return;
+      registerEntry(
+        p.provNombre || p.prov_nombre,
+        p.provRif || p.prov_rif || p.coProv || p.co_prov,
+        p.diasCredito ?? p.dias_credito ?? 0
+      );
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  }, [profitSuppliers, suppliers, targetPayables]);
+
+  const [showSupplierModal, setShowSupplierModal] = useState(false);
+  const [isSavingSupplier, setIsSavingSupplier] = useState(false);
+  const [supplierForm, setSupplierForm] = useState({
+    provDes: '',
+    rif: '',
+    diasCredito: 15,
+    telefonos: '',
+    email: '',
+    direccion: ''
+  });
+  const [supplierSearchQuery, setSupplierSearchQuery] = useState('');
+  const [showSupplierDropdown, setShowSupplierDropdown] = useState(false);
+
+  const filteredCatalogSuppliers = useMemo(() => {
+    const q = supplierSearchQuery.trim().toLowerCase();
+    if (!q) return catalogSuppliers.slice(0, 25);
+    const qAlnum = q.replace(/[^a-z0-9]/g, '');
+    return catalogSuppliers
+      .filter(s => {
+        const nameMatch = s.name.toLowerCase().includes(q);
+        const rifMatch = s.rif.toLowerCase().includes(q) || (qAlnum && s.rif.replace(/[^a-z0-9]/g, '').includes(qAlnum));
+        return nameMatch || rifMatch;
+      })
+      .slice(0, 25);
+  }, [catalogSuppliers, supplierSearchQuery]);
+
+  const handleOpenSupplierModal = (prefillName = '') => {
+    setSupplierForm({
+      provDes: typeof prefillName === 'string' ? prefillName.trim() : '',
+      rif: '',
+      diasCredito: 15,
+      telefonos: '',
+      email: '',
+      direccion: ''
+    });
+    setShowSupplierModal(true);
+  };
+
+  const handleSelectCatalogSupplier = (sup) => {
+    if (!sup) return;
+    setSupplierSearchQuery(sup.name);
+    setShowSupplierDropdown(false);
+    setEditingPayable(prev => {
+      if (!prev) return prev;
+      const next = {
+        ...prev,
+        provNombre: sup.name,
+        provRif: sup.rif || prev.provRif
+      };
+      if (sup.diasCredito > 0) {
+        next.diasCredito = sup.diasCredito;
+        const emisionDate = parseDateSafe(next.fechaEmisionIso);
+        const venc = new Date(emisionDate);
+        venc.setDate(venc.getDate() + sup.diasCredito);
+        next.fechaVencimientoIso = toIsoDateInput(venc);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveSupplier = async (e) => {
+    e.preventDefault();
+    const provDes = String(supplierForm.provDes || '').trim();
+    const rif = String(supplierForm.rif || '').trim().toUpperCase();
+    if (!provDes) {
+      notify.warning('El nombre o razón social del proveedor es obligatorio.');
+      return;
+    }
+    if (!rif) {
+      notify.warning('El RIF del proveedor es obligatorio.');
+      return;
+    }
+    setIsSavingSupplier(true);
+    try {
+      const saved = onSaveSupplier
+        ? await onSaveSupplier({
+            provDes,
+            rif,
+            diasCredito: Number(supplierForm.diasCredito || 0),
+            telefonos: supplierForm.telefonos,
+            email: supplierForm.email,
+            direccion: supplierForm.direccion
+          })
+        : { provDes, rif, diasCredito: Number(supplierForm.diasCredito || 0) };
+      soundFX.success();
+      notify.success(`Proveedor "${provDes}" registrado exitosamente.`);
+      setShowSupplierModal(false);
+      if (editingPayable) {
+        handleSelectCatalogSupplier({
+          name: saved?.provDes || provDes,
+          rif: saved?.rif || rif,
+          diasCredito: Number(saved?.diasCredito ?? supplierForm.diasCredito ?? 0)
+        });
+      }
+    } catch (err) {
+      console.error('Error registrando proveedor:', err);
+      soundFX.error();
+      notify.error('No se pudo registrar el proveedor: ' + (err?.message || 'Error del servidor'));
+    } finally {
+      setIsSavingSupplier(false);
+    }
+  };
 
   const uniqueSupplierPayments = useMemo(() => {
     return dedupeSupplierPaymentsList(supplierPayments || []);
@@ -605,7 +763,12 @@ export default function AccountsPayableModal({
           !pay?.anulado && doesSupplierPaymentMatchPayable(pay, docContext)
         );
         const inlineDocNotes = Array.isArray(resolved.historialPagos)
-          ? resolved.historialPagos.filter((hp) => hp && (hp.formaPago === 'NOTA_CREDITO' || hp.tipo === 'NOTA_CREDITO'))
+          ? resolved.historialPagos.filter((hp) => hp && (
+              hp.formaPago === 'NOTA_CREDITO' ||
+              hp.tipo === 'NOTA_CREDITO' ||
+              hp.formaPago === 'NOTA_DEBITO' ||
+              hp.tipo === 'NOTA_DEBITO'
+            ))
           : [];
         const combinedHistory = [...inlineDocNotes, ...matchingPayments];
 
@@ -615,11 +778,20 @@ export default function AccountsPayableModal({
           ? round2(resolvedNetBs)
           : round2(montoNetUsd * docTasa);
 
+        const inferredNotaEntrega = isNotaEntregaPayableRecord(resolved);
+        const effectiveTipoDoc = (inferredNotaEntrega && (tipoDoc === 'FACT' || tipoDoc === 'FACTURA')) ? 'NE' : tipoDoc;
+        const effectiveIsFiscal = inferredNotaEntrega
+          ? false
+          : isFiscalInvoiceType(effectiveTipoDoc, resolved.isFiscal ?? resolved.is_fiscal);
+        const effectiveExento = Boolean(resolved.exentoIva) || inferredNotaEntrega || (resolved.ivaUsd !== undefined && Number(resolved.ivaUsd) === 0);
+
         return {
           ...resolved,
           id: resolvedDocId,
-          tipoDoc,
-          tipoDocLabel: getDocTypeLabel(tipoDoc),
+          tipoDoc: effectiveTipoDoc,
+          tipoDocLabel: getDocTypeLabel(effectiveTipoDoc),
+          isFiscal: effectiveIsFiscal,
+          exentoIva: effectiveExento,
           nroDoc,
           provNombre,
           provRif,
@@ -629,7 +801,7 @@ export default function AccountsPayableModal({
           fechaVencimientoIso: toIsoDateInput(fecVenc),
           diasCredito: Number(resolved.diasCredito ?? resolved.dias_credito ?? 15),
           tasa: docTasa,
-          tipoTasa: resolveRecordRateType(resolved, isFiscalInvoiceType(tipoDoc, resolved.isFiscal) ? 'BCV' : 'KEYSTONE'),
+          tipoTasa: resolveRecordRateType(resolved, effectiveIsFiscal ? 'BCV' : 'KEYSTONE'),
           tasaPago: resolveEffectiveRateNumber(resolved, docTasa),
           monedaPago: resolved.monedaPago || resolved.moneda_pago || (String(resolved.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
           montoNetUsd: round2(montoNetUsd),
@@ -638,8 +810,12 @@ export default function AccountsPayableModal({
           abonosBs: round2(abonosUsd * docTasa),
           saldoUsd,
           saldoBs: round2(saldoUsd * docTasa),
-          baseImponibleUsd: resolved.baseImponibleUsd !== undefined ? round2(resolved.baseImponibleUsd) : (isFiscalInvoiceType(tipoDoc, resolved.isFiscal) && !resolved.exentoIva ? round2(montoNetUsd / 1.16) : round2(montoNetUsd)),
-          ivaUsd: resolved.ivaUsd !== undefined ? round2(resolved.ivaUsd) : (isFiscalInvoiceType(tipoDoc, resolved.isFiscal) && !resolved.exentoIva ? round2(montoNetUsd - round2(montoNetUsd / 1.16)) : 0),
+          baseImponibleUsd: effectiveIsFiscal && !effectiveExento
+            ? (resolved.baseImponibleUsd !== undefined ? round2(resolved.baseImponibleUsd) : round2(montoNetUsd / 1.16))
+            : round2(montoNetUsd),
+          ivaUsd: effectiveIsFiscal && !effectiveExento
+            ? (resolved.ivaUsd !== undefined ? round2(resolved.ivaUsd) : round2(montoNetUsd - round2(montoNetUsd / 1.16)))
+            : 0,
           isSolvente,
           isVencido,
           diffDays,
@@ -1065,6 +1241,8 @@ export default function AccountsPayableModal({
   // ========================================================================
   const handleOpenNewPayableModal = () => {
     setIsCreatingPayable(true);
+    setSupplierSearchQuery('');
+    setShowSupplierDropdown(false);
     const randomNum = Math.floor(100 + Math.random() * 900);
     const todayIso = getTodayIso();
     const vencDate = new Date();
@@ -1103,6 +1281,8 @@ export default function AccountsPayableModal({
 
   const handleOpenEditPayableModal = (p) => {
     setIsCreatingPayable(false);
+    setSupplierSearchQuery(p.provNombre || '');
+    setShowSupplierDropdown(false);
     const tipo = String(p.tipoDoc || 'FACT').toUpperCase().trim();
     const isFact = isFiscalInvoiceType(tipo, p.isFiscal);
     const docRate = Number(p.tasa || 0) > 10 ? round2(p.tasa) : round2(isFact ? tasaBcv : tasaKeystone);
@@ -1195,7 +1375,7 @@ export default function AccountsPayableModal({
       }
 
       if (field === 'provNombre') {
-        const match = suppliers.find(s => (s.nombre || s.razonSocial || '').toLowerCase() === String(value).toLowerCase());
+        const match = catalogSuppliers.find(s => s.name.toLowerCase() === String(value).trim().toLowerCase());
         if (match && match.rif) {
           next.provRif = match.rif;
         }
@@ -1315,12 +1495,12 @@ export default function AccountsPayableModal({
         return next;
       });
 
-      if (onSaveDocument) {
-        await onSaveDocument(payload);
-      }
+      const savedDoc = onSaveDocument ? await onSaveDocument(payload) : null;
 
       soundFX.success();
-      if (saldoUsd <= 0.01) {
+      if (savedDoc?._pendingServerSync) {
+        notify.warning(`Documento CxP #${nroDoc} guardado localmente; pendiente de sincronización con el servidor.`);
+      } else if (saldoUsd <= 0.01) {
         if (pagoDocKey === payload.id || (compKey && pagoDocKey === compKey)) {
           setPagoDocKey('');
           setPagoMontoUsd('');
@@ -1791,6 +1971,25 @@ export default function AccountsPayableModal({
           >
             <Plus size={16} />
             <span>+ Nueva Cuenta por Pagar</span>
+          </button>
+
+          {/* Botón Registrar Proveedor */}
+          <button
+            type="button"
+            onClick={() => handleOpenSupplierModal('')}
+            className="btn btn-secondary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              padding: '0.55rem 0.95rem',
+              fontSize: '0.82rem',
+              fontWeight: 700
+            }}
+            title="Registrar un nuevo proveedor en el catálogo"
+          >
+            <Building2 size={15} />
+            <span>+ Registrar Proveedor</span>
           </button>
 
           {/* Botones Nota de Crédito y Nota de Débito CxP */}
@@ -3225,10 +3424,11 @@ export default function AccountsPayableModal({
                           const hpRateType = resolveRecordRateType(hp, 'BCV');
                           const hpRateMeta = resolveRateMeta(hpRateType, 'BCV');
                           const hpTasa = resolveEffectiveRateNumber(hp, 0);
+                          const isNdEntry = hp.formaPago === 'NOTA_DEBITO' || hp.tipo === 'NOTA_DEBITO' || hp.accountType === 'NOTA_DEBITO';
                           return (
                             <tr key={hp.id || hIdx} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                              <td style={{ padding: '0.5rem 0.65rem', fontFamily: 'var(--font-code)' }}>{hp.fechaPago ? formatDateShort(hp.fechaPago) : 'Hoy'}</td>
-                              <td style={{ padding: '0.5rem 0.65rem' }}>{hp.pagoNum || hp.referencia || 'Pago S/N'}</td>
+                              <td style={{ padding: '0.5rem 0.65rem', fontFamily: 'var(--font-code)' }}>{(hp.fechaPago || hp.fecha) ? formatDateShort(hp.fechaPago || hp.fecha) : 'Hoy'}</td>
+                              <td style={{ padding: '0.5rem 0.65rem' }}>{hp.pagoNum || hp.correlativo || hp.referencia || 'Pago S/N'}</td>
                               <td style={{ padding: '0.5rem 0.65rem' }}>{hp.cuentaNombre || hp.accountType || 'Caja / Banco'}</td>
                               <td style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>
                                 <span style={{
@@ -3248,8 +3448,8 @@ export default function AccountsPayableModal({
                               <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontFamily: 'var(--font-code)' }}>
                                 {hpRateType === 'USD' ? 'Divisa USD' : (hpTasa > 0 ? formatBs(hpTasa) : '—')}
                               </td>
-                              <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontWeight: 700, color: '#10b981', fontFamily: 'var(--font-code)' }}>
-                                {formatUsd(hp.montoUsd)}
+                              <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontWeight: 700, color: isNdEntry ? '#f59e0b' : '#10b981', fontFamily: 'var(--font-code)' }}>
+                                {isNdEntry ? `+${formatUsd(hp.montoUsd)}` : formatUsd(hp.montoUsd)}
                               </td>
                             </tr>
                           );
@@ -3382,7 +3582,142 @@ export default function AccountsPayableModal({
             </div>
 
             <form onSubmit={handleSaveEditedPayable} style={{ padding: '1.35rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.95rem' }}>
-              {/* Selector Claro: Fiscal vs No Fiscal + Tipo + N° Doc + N° Control */}
+              {/* 1. Buscar / Seleccionar Proveedor Primero */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '1rem', alignItems: 'end' }}>
+                <div style={{ position: 'relative' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      Buscar / Seleccionar Proveedor *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenSupplierModal(editingPayable.provNombre)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 0,
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        color: '#38bdf8',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      + Nuevo Proveedor
+                    </button>
+                  </div>
+                  <div style={{ position: 'relative' }}>
+                    <Search size={14} style={{ position: 'absolute', left: '0.7rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
+                    <input
+                      type="text"
+                      required
+                      value={editingPayable.provNombre}
+                      onFocus={() => {
+                        setSupplierSearchQuery(editingPayable.provNombre || '');
+                        setShowSupplierDropdown(true);
+                      }}
+                      onBlur={() => {
+                        setTimeout(() => setShowSupplierDropdown(false), 160);
+                      }}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSupplierSearchQuery(val);
+                        setShowSupplierDropdown(true);
+                        handleEditFieldChange('provNombre', val);
+                      }}
+                      placeholder="Buscar por nombre o RIF (Ej. Keystone, Motorven)..."
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem 0.6rem 2.1rem', fontSize: '0.85rem' }}
+                      autoComplete="off"
+                    />
+                  </div>
+                  {showSupplierDropdown && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        marginTop: '4px',
+                        maxHeight: '210px',
+                        overflowY: 'auto',
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--border-glass)',
+                        borderRadius: '10px',
+                        boxShadow: '0 14px 32px rgba(0, 0, 0, 0.35)',
+                        zIndex: 50
+                      }}
+                    >
+                      {filteredCatalogSuppliers.length > 0 ? (
+                        filteredCatalogSuppliers.map((sup) => (
+                          <button
+                            key={sup.id || `${sup.name}-${sup.rif}`}
+                            type="button"
+                            onMouseDown={(ev) => {
+                              ev.preventDefault();
+                              handleSelectCatalogSupplier(sup);
+                            }}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '0.55rem 0.8rem',
+                              background: 'transparent',
+                              border: 'none',
+                              borderBottom: '1px solid var(--border-glass)',
+                              color: 'var(--text-primary)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              fontSize: '0.8rem'
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{sup.name}</span>
+                            <span style={{ fontFamily: 'var(--font-code)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                              {sup.rif || 'Sin RIF'}
+                            </span>
+                          </button>
+                        ))
+                      ) : (
+                        <div style={{ padding: '0.65rem 0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Proveedor no encontrado en el catálogo
+                          </span>
+                          <button
+                            type="button"
+                            onMouseDown={(ev) => {
+                              ev.preventDefault();
+                              setShowSupplierDropdown(false);
+                              handleOpenSupplierModal(editingPayable.provNombre);
+                            }}
+                            className="btn btn-primary"
+                            style={{ padding: '0.3rem 0.65rem', fontSize: '0.74rem' }}
+                          >
+                            + Registrar Proveedor
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                    RIF del Proveedor *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingPayable.provRif}
+                    onChange={(e) => handleEditFieldChange('provRif', e.target.value)}
+                    placeholder="Ej. J-311153659"
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem', fontFamily: 'var(--font-code)' }}
+                  />
+                </div>
+              </div>
+
+              {/* 2. Selector Claro: Fiscal vs No Fiscal + Tipo + N° Doc + N° Control */}
               <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '1rem', alignItems: 'start' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
@@ -3469,45 +3804,6 @@ export default function AccountsPayableModal({
                       style={{ width: '100%', padding: '0.55rem 0.8rem', fontSize: '0.86rem', fontWeight: 700, fontFamily: 'var(--font-code)' }}
                     />
                   </div>
-                </div>
-              </div>
-
-              {/* Proveedor y RIF */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '1rem' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                    Nombre del Proveedor *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    list="suppliers-datalist"
-                    value={editingPayable.provNombre}
-                    onChange={(e) => handleEditFieldChange('provNombre', e.target.value)}
-                    placeholder="Ej. Keystone, C.A."
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem' }}
-                  />
-                  <datalist id="suppliers-datalist">
-                    {supplierList.map(s => (
-                      <option key={s} value={s} />
-                    ))}
-                  </datalist>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                    RIF del Proveedor *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={editingPayable.provRif}
-                    onChange={(e) => handleEditFieldChange('provRif', e.target.value)}
-                    placeholder="Ej. J-311153659"
-                    className="input-modern"
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.85rem', fontFamily: 'var(--font-code)' }}
-                  />
                 </div>
               </div>
 
@@ -3896,7 +4192,7 @@ export default function AccountsPayableModal({
                   </h3>
                   <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                     {isDebit
-                      ? `Genera un cargo adicional por pagar vinculado a #${doc.nroDoc}`
+                      ? `Aplica cargo adicional que suma al saldo pendiente de #${doc.nroDoc}`
                       : `Aplica rebaja / descuento que disminuye el saldo pendiente de #${doc.nroDoc}`}
                   </p>
                 </div>
@@ -3926,7 +4222,7 @@ export default function AccountsPayableModal({
                     className={`ncnd-choice-btn ${isDebit ? 'active-debit' : ''}`}
                   >
                     <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>Nota de Débito (N/DB)</div>
-                    <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Aumenta obligación / cargo adicional</div>
+                    <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Suma cargo adicional al documento</div>
                   </button>
                 </div>
 
@@ -3970,7 +4266,19 @@ export default function AccountsPayableModal({
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Saldo Pendiente Actual</div>
                     <strong style={{ color: 'var(--semaforo-rojo)', fontFamily: 'var(--font-code)', fontSize: '0.95rem', display: 'block' }}>{formatUsd(doc.saldoUsd)}</strong>
-                    <span style={{ color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontSize: '0.72rem', fontWeight: 600 }}>{formatBs(saldoBsVal)}</span>
+                    <span style={{ color: 'var(--neon-cyan)', fontFamily: 'var(--font-code)', fontSize: '0.72rem', fontWeight: 600, display: 'block' }}>{formatBs(saldoBsVal)}</span>
+                    {totVal > 0 && (
+                      <span style={{
+                        fontSize: '0.7rem',
+                        fontFamily: 'var(--font-code)',
+                        fontWeight: 700,
+                        color: isDebit ? 'var(--accent-amber)' : 'var(--accent-emerald)',
+                        display: 'block',
+                        marginTop: '2px'
+                      }}>
+                        Nuevo Saldo ({isDebit ? '+Suma' : '-Resta'}): {formatUsd(isDebit ? round2(Number(doc.saldoUsd || 0) + totVal) : round2(Math.max(0, Number(doc.saldoUsd || 0) - totVal)))}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -4202,6 +4510,174 @@ export default function AccountsPayableModal({
           </div>
         );
         return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
+      })()}
+
+      {/* MODAL DE REGISTRO DE PROVEEDOR */}
+      {showSupplierModal && (() => {
+        const supplierModalNode = (
+          <div
+            onClick={() => !isSavingSupplier && setShowSupplierModal(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(10, 15, 28, 0.78)',
+              backdropFilter: 'blur(6px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1300,
+              padding: '1rem'
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: '520px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '14px',
+                boxShadow: '0 24px 60px rgba(0, 0, 0, 0.5)',
+                overflow: 'hidden'
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '1.05rem 1.35rem',
+                borderBottom: '1px solid var(--border-glass)',
+                background: 'var(--bg-card-header)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <Building2 size={18} color="#38bdf8" />
+                  <h3 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                    Registrar Nuevo Proveedor
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !isSavingSupplier && setShowSupplierModal(false)}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveSupplier} style={{ padding: '1.25rem 1.35rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                    Nombre / Razón Social *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={supplierForm.provDes}
+                    onChange={(e) => setSupplierForm(prev => ({ ...prev, provDes: e.target.value }))}
+                    placeholder="Ej. Motorven Servicios, C.A."
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.86rem' }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      RIF *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={supplierForm.rif}
+                      onChange={(e) => setSupplierForm(prev => ({ ...prev, rif: e.target.value.toUpperCase() }))}
+                      placeholder="Ej. J-501226717"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.86rem', fontFamily: 'var(--font-code)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      Días de Crédito
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={supplierForm.diasCredito}
+                      onChange={(e) => setSupplierForm(prev => ({ ...prev, diasCredito: e.target.value }))}
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.86rem' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      Teléfonos
+                    </label>
+                    <input
+                      type="text"
+                      value={supplierForm.telefonos}
+                      onChange={(e) => setSupplierForm(prev => ({ ...prev, telefonos: e.target.value }))}
+                      placeholder="Ej. 0414-0000000"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.86rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      Correo Electrónico
+                    </label>
+                    <input
+                      type="email"
+                      value={supplierForm.email}
+                      onChange={(e) => setSupplierForm(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="contacto@proveedor.com"
+                      className="input-modern"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.86rem' }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                    Dirección Fiscal
+                  </label>
+                  <input
+                    type="text"
+                    value={supplierForm.direccion}
+                    onChange={(e) => setSupplierForm(prev => ({ ...prev, direccion: e.target.value }))}
+                    placeholder="Dirección fiscal del proveedor"
+                    className="input-modern"
+                    style={{ width: '100%', padding: '0.6rem 0.8rem', fontSize: '0.86rem' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '0.35rem' }}>
+                  <button
+                    type="button"
+                    disabled={isSavingSupplier}
+                    onClick={() => setShowSupplierModal(false)}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.55rem 1.05rem' }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingSupplier}
+                    className="btn btn-primary"
+                    style={{ padding: '0.55rem 1.25rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <Check size={16} />
+                    <span>{isSavingSupplier ? 'Guardando...' : 'Guardar Proveedor'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+        return typeof document !== 'undefined' ? createPortal(supplierModalNode, document.body) : supplierModalNode;
       })()}
     </section>
   );

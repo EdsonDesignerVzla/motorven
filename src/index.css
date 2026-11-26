@@ -507,6 +507,73 @@ body {
   }
 }
 
+/* Vista de Inventario: sin scroll de página, cabecera/KPIs/filtros fijos y ListView adaptado al alto restante */
+.content-body:has(> .inventory-view-shell) {
+  overflow: hidden;
+}
+
+.inventory-view-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inventory-view-shell > .page-header-responsive,
+.inventory-view-shell > .inventory-kpi-grid,
+.inventory-view-shell > .card:not(.table-card-wrapper) {
+  flex-shrink: 0;
+}
+
+.inventory-view-shell > .inventory-kpi-grid {
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.inventory-view-shell > .table-card-wrapper {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-body .inventory-view-shell > .table-card-wrapper > .table-container {
+  flex: 1 1 0%;
+  min-height: 0;
+  max-height: none;
+  height: 100%;
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+}
+
+@media (max-width: 960px), (max-height: 620px) {
+  .content-body:has(> .inventory-view-shell) {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .inventory-view-shell {
+    display: block;
+    height: auto;
+    flex: none;
+    overflow: visible;
+  }
+
+  .inventory-view-shell > .table-card-wrapper {
+    display: block;
+    flex: none;
+    min-height: auto;
+  }
+
+  .content-body .inventory-view-shell > .table-card-wrapper > .table-container {
+    height: auto;
+    max-height: clamp(320px, calc(100dvh - 210px), 680px);
+  }
+}
+
 .top-header {
   height: auto;
   min-height: 64px;
@@ -6678,8 +6745,43 @@ html, body {
 .rg-container {
   display: flex;
   flex-direction: column;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.rg-sticky-header {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rg-blocks-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
   gap: 1.5rem;
+  padding-right: 4px;
   padding-bottom: 1.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  .rg-container {
+    height: auto;
+    overflow: visible;
+  }
+
+  .rg-blocks-scroll {
+    overflow: visible;
+    padding-right: 0;
+  }
 }
 
 .rg-topbar {
@@ -7101,7 +7203,7 @@ html, body {
 
 .rg-metric-label {
   font-family: var(--font-code);
-  font-size: 0.72rem;
+  font-size: 0.88rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -7140,20 +7242,20 @@ html, body {
 
 .rg-metric-secondary {
   font-family: var(--font-code);
-  font-size: 0.85rem;
+  font-size: 1.32rem;
   font-weight: 700;
   color: var(--text-secondary);
 }
 
 .rg-metric-gold {
   font-family: var(--font-code);
-  font-size: 0.85rem;
+  font-size: 1.32rem;
   font-weight: 700;
   color: var(--motorven-gold);
 }
 
 .rg-metric-note {
-  font-size: 0.75rem;
+  font-size: 1.05rem;
   font-weight: 600;
   color: var(--text-muted);
   margin-top: 2px;
@@ -7167,7 +7269,7 @@ html, body {
   gap: 0.5rem;
   padding-top: 0.65rem;
   border-top: 1px solid var(--border-glass);
-  font-size: 0.78rem;
+  font-size: 0.98rem;
   font-weight: 600;
   color: var(--text-muted);
 }
@@ -7338,7 +7440,7 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.76rem;
+  font-size: 1.02rem;
   font-weight: 700;
   color: var(--text-secondary);
 }
@@ -7353,13 +7455,13 @@ html, body {
 .rg-cob-split-amt {
   text-align: right;
   font-family: var(--font-code);
-  font-size: 0.92rem;
+  font-size: 1.42rem;
   font-weight: 800;
   color: var(--text-heading);
 }
 
 .rg-cob-split-sub {
-  font-size: 0.7rem;
+  font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-muted);
 }

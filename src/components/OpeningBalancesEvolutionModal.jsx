@@ -18,7 +18,8 @@ import {
   formatTreasuryTimestampVe,
   isoToVetDatetimeLocal,
   vetDatetimeLocalToIso,
-  resolveExchangeRates
+  resolveExchangeRates,
+  isOpeningBalanceLockedForDesk
 } from '../utils/treasuryAccountUtils';
 import { useNotification } from '../context/NotificationContext';
 
@@ -169,6 +170,7 @@ export default function OpeningBalancesEvolutionModal({
     setDrafts((prev) => {
       const next = { ...prev };
       liveRows.forEach((row) => {
+        if (isOpeningBalanceLockedForDesk(row.desk || row.code)) return;
         next[row.key] = {
           ...(next[row.key] || {}),
           usd: String(round2(row.impliedBaseUsd)),
@@ -215,6 +217,10 @@ export default function OpeningBalancesEvolutionModal({
 
   const handleSaveRow = async (row) => {
     if (!onUpdateCashDesk) return;
+    if (isOpeningBalanceLockedForDesk(row.desk || row.code)) {
+      notify.warning(`La edición del saldo inicial está bloqueada para ${row.code}.`);
+      return;
+    }
     try {
       setSavingRowId(row.key);
       const payload = buildPayloadForRow(row);
@@ -240,7 +246,9 @@ export default function OpeningBalancesEvolutionModal({
 
   const handleSaveAll = async () => {
     if (!onUpdateCashDesk) return;
-    const targetRows = liveRows.filter((r) => r.draft.dirty || !r.hasOpeningBalance);
+    const targetRows = liveRows.filter(
+      (r) => !isOpeningBalanceLockedForDesk(r.desk || r.code) && (r.draft.dirty || !r.hasOpeningBalance)
+    );
     if (targetRows.length === 0) {
       notify.info('No hay cambios pendientes por guardar.');
       return;
@@ -554,6 +562,7 @@ export default function OpeningBalancesEvolutionModal({
               <tbody>
                 {liveRows.map((row, idx) => {
                   const isRowSaving = savingRowId === row.key;
+                  const isLocked = isOpeningBalanceLockedForDesk(row.desk || row.code);
                   return (
                     <tr
                       key={row.key}
@@ -584,6 +593,7 @@ export default function OpeningBalancesEvolutionModal({
                         <input
                           type="number"
                           step="0.01"
+                          disabled={isLocked}
                           className="input-modern"
                           value={row.draft.usd}
                           onChange={(e) => {
@@ -611,6 +621,7 @@ export default function OpeningBalancesEvolutionModal({
                         <input
                           type="number"
                           step="0.01"
+                          disabled={isLocked}
                           className="input-modern"
                           value={row.draft.bs}
                           onChange={(e) => {
@@ -637,6 +648,7 @@ export default function OpeningBalancesEvolutionModal({
                       <td style={{ padding: '0.7rem', minWidth: '190px' }}>
                         <input
                           type="datetime-local"
+                          disabled={isLocked}
                           className="input-modern"
                           value={row.draft.fechaVet}
                           onChange={(e) => updateRowDraft(row.key, { fechaVet: e.target.value })}
@@ -718,6 +730,7 @@ export default function OpeningBalancesEvolutionModal({
                             <div style={{ fontWeight: 800, color: '#d97706' }}>
                               {row.liveDiffUsd > 0 ? '+' : ''}{formatUsd(row.liveDiffUsd)}
                             </div>
+                            {!isLocked && (
                             <button
                               type="button"
                               onClick={() => handleApplyImpliedBaseToRow(row)}
@@ -737,12 +750,31 @@ export default function OpeningBalancesEvolutionModal({
                             >
                               Usar base ({formatUsd(row.impliedBaseUsd)})
                             </button>
+                            )}
                           </div>
                         )}
                       </td>
 
                       {/* ACCIÓN GUARDAR */}
                       <td style={{ padding: '0.7rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        {isLocked ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '0.3rem 0.6rem',
+                              fontSize: '0.72rem',
+                              fontWeight: 700,
+                              borderRadius: '7px',
+                              background: 'rgba(148, 163, 184, 0.16)',
+                              color: 'var(--text-muted)',
+                              border: '1px solid var(--border-glass)'
+                            }}
+                            title="Edición de saldo inicial bloqueada para evitar desfases"
+                          >
+                            Bloqueado
+                          </span>
+                        ) : (
                         <button
                           type="button"
                           disabled={isRowSaving || savingAll}
@@ -767,6 +799,7 @@ export default function OpeningBalancesEvolutionModal({
                           <Save size={13} />
                           <span>{isRowSaving ? '...' : 'Fijar'}</span>
                         </button>
+                        )}
                       </td>
                     </tr>
                   );

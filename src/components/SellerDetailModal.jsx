@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   User,
@@ -64,6 +64,13 @@ export default function SellerDetailModal({
   const [savingZone, setSavingZone] = useState(false);
   const [zoneSaveSuccess, setZoneSaveSuccess] = useState(false);
 
+  useEffect(() => {
+    const syncedCoZon = initialCoZon === 'CUSTOM' ? '' : initialCoZon;
+    setCurrentCoZon(syncedCoZon);
+    setCurrentZona(initialZona);
+    setSelectedZoneVal(syncedCoZon);
+  }, [initialCoZon, initialZona, sellerCoVen]);
+
   if (!seller) return null;
 
   const validInvoices = (invoices || []).filter(f => !isDocAnulada(f));
@@ -113,6 +120,27 @@ export default function SellerDetailModal({
       const sZone = String(s.coZon || s.co_zon || '').trim().toUpperCase();
       return sZone === cleanZone && sCode !== selfClean;
     });
+  };
+
+  const handleReleaseZone = async () => {
+    setZoneErrorMsg('');
+    setSavingZone(true);
+    try {
+      if (onUpdateSellerZone) {
+        await onUpdateSellerZone(sellerCoVen, { coZon: '', zona: '' });
+      }
+      setCurrentCoZon('');
+      setCurrentZona('');
+      setSelectedZoneVal('');
+      setInlineNewZoneOpen(false);
+      setZoneSaveSuccess(true);
+      setTimeout(() => setZoneSaveSuccess(false), 3000);
+    } catch (err) {
+      setZoneErrorMsg(err?.message || 'Error liberando la zona.');
+      console.warn('Error releasing zone:', err);
+    } finally {
+      setSavingZone(false);
+    }
   };
 
   const handleSaveZone = async () => {
@@ -452,13 +480,18 @@ export default function SellerDetailModal({
                     <select
                       className="form-control"
                       value={selectedZoneVal}
+                      disabled={savingZone}
                       onChange={(e) => {
-                        setSelectedZoneVal(e.target.value);
+                        const nextVal = e.target.value;
+                        setSelectedZoneVal(nextVal);
                         setZoneErrorMsg('');
+                        if (nextVal === '' && (currentCoZon || currentZona)) {
+                          handleReleaseZone();
+                        }
                       }}
                       style={{ flex: 1, minWidth: '240px', fontSize: '0.82rem' }}
                     >
-                      <option value="">-- Aún no tiene Zona Asignada --</option>
+                      <option value="">-- Aún no tiene Zona Asignada (Liberar Zona) --</option>
                       {(profitZones || []).map((z) => {
                         const cZon = String(z.coZon || z.co_zon || '').trim().toUpperCase();
                         const dZon = z.zonDes || z.zon_des || `Zona ${cZon}`;
@@ -496,7 +529,26 @@ export default function SellerDetailModal({
                     </>
                   )}
 
-                  <div style={{ display: 'flex', gap: '6px' }}>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {Boolean(currentCoZon || currentZona) && !inlineNewZoneOpen && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleReleaseZone}
+                        disabled={savingZone}
+                        style={{
+                          fontSize: '0.78rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          padding: '6px 12px',
+                          borderColor: 'var(--motorven-red, #e60012)',
+                          color: 'var(--motorven-red, #e60012)'
+                        }}
+                      >
+                        <X size={13} /> Liberar Zona
+                      </button>
+                    )}
                     <button
                       className="btn btn-primary"
                       onClick={handleSaveZone}

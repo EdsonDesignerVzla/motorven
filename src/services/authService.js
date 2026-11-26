@@ -59,7 +59,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #e60012 0%, #99000c 100%)',
     avatar: '👑',
     defaultCargo: 'Administrador Master / Propietario',
-    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
+    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     defaultTab: 'dashboard'
   },
   {
@@ -74,7 +74,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
     avatar: '💻',
     defaultCargo: 'Especialista / Pasante TI',
-    defaultModules: ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'configuracion'],
+    defaultModules: ['dashboard', 'inventario', 'predictibilidad', 'reportes', 'auditoria', 'usuarios', 'configuracion'],
     defaultTab: 'dashboard'
   },
   {
@@ -89,7 +89,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
     avatar: '👔',
     defaultCargo: 'Gerente General / Dirección',
-    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
+    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     defaultTab: 'dashboard'
   },
   {
@@ -104,7 +104,7 @@ export const ROLE_DEFINITIONS = [
     gradient: 'linear-gradient(135deg, #002b7a 0%, #1e40af 100%)',
     avatar: '👨‍💼',
     defaultCargo: 'Administración & Finanzas',
-    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
+    defaultModules: ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios'],
     defaultTab: 'dashboard'
   },
   {
@@ -362,6 +362,7 @@ const STORAGE_ACTIVE_USER_KEY = 'signum_active_user';
 export const SYSTEM_MODULES = [
   // I. SÍNTESIS EJECUTIVA (CONSOLIDADO GRUPOS 1 AL 6)
   { id: 'dashboard', label: 'Resumen General', badge: 'Estructural • Consolidado Grupos 1–6' },
+  { id: 'predictibilidad', label: 'Predictibilidad & Alertas', badge: 'Estructural • Inteligencia Predictiva' },
 
   // II. CUENTAS REALES (BALANCE GENERAL / SITUACIÓN FINANCIERA)
   { id: 'caja', label: 'Caja Chica & Bancos', badge: 'Cuenta Real • 1.01 Activo Disponible' },
@@ -388,12 +389,12 @@ export const SYSTEM_MODULES = [
 
 // Módulos permitidos por cada rol por defecto
 export const ROLE_PERMISSIONS = {
-  'ADMINISTRADOR MASTER': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
-  'TECNOLOGÍA & INFORMÁTICA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
-  'ADMINISTRADOR DEL SISTEMA': ['dashboard', 'inventario', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
-  'GERENCIA': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
-  'ADMINISTRACIÓN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
-  'ADMIN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMINISTRADOR MASTER': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'TECNOLOGÍA & INFORMÁTICA': ['dashboard', 'inventario', 'predictibilidad', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'ADMINISTRADOR DEL SISTEMA': ['dashboard', 'inventario', 'predictibilidad', 'reportes', 'auditoria', 'usuarios', 'notificaciones', 'configuracion'],
+  'GERENCIA': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMINISTRACIÓN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
+  'ADMIN': ['dashboard', 'preventa', 'pedidos', 'inventario', 'ventas', 'vendedores', 'rentabilidad', 'predictibilidad', 'compras', 'caja', 'cxc', 'cxp', 'pasivos', 'reportes', 'auditoria', 'usuarios', 'notificaciones'],
   'VENTAS': ['preventa', 'pedidos', 'ventas', 'vendedores', 'inventario', 'cxc', 'notificaciones'],
   'VENDEDOR': ['preventa', 'pedidos', 'ventas', 'vendedores', 'inventario', 'cxc', 'notificaciones'],
   'ALMACEN': ['pedidos', 'inventario', 'compras', 'notificaciones'],
@@ -402,6 +403,139 @@ export const ROLE_PERMISSIONS = {
   'COBRANZA': ['cxc', 'caja', 'ventas', 'pedidos', 'notificaciones'],
   'COMPRAS': ['compras', 'cxp', 'inventario', 'notificaciones']
 };
+
+/**
+ * Catálogo Oficial de Módulos Disponibles en la Versión Móvil (PWA / Celulares)
+ */
+export const MOBILE_SYSTEM_MODULES = [
+  { id: 'dashboard', label: 'Resumen General Ejecutivo', badge: 'Móvil • Ventas, Stock, CxC y CxP' },
+  { id: 'predictibilidad', label: 'Predictibilidad & Alertas (Foresight)', badge: 'Móvil • Proyecciones, Stockout y Caja' },
+  { id: 'pedidos', label: 'Preventa Móvil & Mis Pedidos', badge: 'Móvil • ATP 72h, NE Alm 02 y Fiscal Alm 01' },
+  { id: 'cxc', label: 'Cuentas por Cobrar (Cobranzas)', badge: 'Móvil • Cartera, Moras y Estados de Cuenta' },
+  { id: 'inventario', label: 'Almacén & Inventario Consolidado', badge: 'Móvil • Alm 01 + Alm 02 Solo Lectura y PDF' },
+  { id: 'ventas', label: 'Facturación POS Caja', badge: 'Móvil • Facturación Directa de Pedidos' },
+  { id: 'configuracion', label: 'Configuración ERP (Tasa BCV)', badge: 'Móvil • Tasas BCV, Empresa e Impuestos' }
+];
+
+export const MOBILE_ROLE_PERMISSIONS = {
+  'ADMINISTRADOR MASTER': ['dashboard', 'predictibilidad', 'pedidos', 'cxc', 'inventario', 'ventas', 'configuracion'],
+  'TECNOLOGÍA & INFORMÁTICA': ['dashboard', 'predictibilidad', 'inventario', 'configuracion'],
+  'ADMINISTRADOR DEL SISTEMA': ['dashboard', 'predictibilidad', 'inventario', 'configuracion'],
+  'GERENCIA': ['dashboard', 'predictibilidad', 'pedidos', 'cxc', 'inventario', 'ventas'],
+  'ADMINISTRACIÓN': ['dashboard', 'predictibilidad', 'pedidos', 'cxc', 'inventario', 'ventas'],
+  'ADMIN': ['dashboard', 'predictibilidad', 'pedidos', 'cxc', 'inventario', 'ventas'],
+  'VENTAS': ['dashboard', 'pedidos', 'cxc', 'inventario'],
+  'VENDEDOR': ['dashboard', 'pedidos', 'cxc', 'inventario'],
+  'ALMACEN': ['dashboard', 'pedidos', 'inventario'],
+  'ALMACÉN': ['dashboard', 'pedidos', 'inventario'],
+  'CAJA': ['dashboard', 'pedidos', 'cxc', 'ventas'],
+  'COBRANZA': ['dashboard', 'pedidos', 'cxc'],
+  'COMPRAS': ['dashboard', 'inventario']
+};
+
+export const MOBILE_CFG_MARKER = '__MOB_CFG__';
+export const MOBILE_MOD_PREFIX = 'mob:';
+
+/**
+ * Separa una lista cruda de `modulos` (posiblemente con marcadores `mob:*` de Supabase)
+ * en `{ modulos, modulosMovil }`.
+ */
+export function splitModulosAndMobile(rawModulos, explicitModulosMovil, normRol = 'VENTAS') {
+  const arr = Array.isArray(rawModulos) ? rawModulos : [];
+  const desktopModulos = arr.filter(
+    (m) => typeof m === 'string' && m !== MOBILE_CFG_MARKER && !m.startsWith(MOBILE_MOD_PREFIX)
+  );
+  const hasEncodedMobile = arr.some(
+    (m) => typeof m === 'string' && (m === MOBILE_CFG_MARKER || m.startsWith(MOBILE_MOD_PREFIX))
+  );
+  const encodedMobile = arr
+    .filter((m) => typeof m === 'string' && m.startsWith(MOBILE_MOD_PREFIX))
+    .map((m) => m.slice(MOBILE_MOD_PREFIX.length));
+
+  const finalDesktop =
+    desktopModulos.length > 0
+      ? desktopModulos
+      : (ROLE_PERMISSIONS[normRol] ? [...ROLE_PERMISSIONS[normRol]] : ['ventas']);
+
+  let finalMobile = undefined;
+  if (Array.isArray(explicitModulosMovil)) {
+    finalMobile = explicitModulosMovil.filter((m) => typeof m === 'string');
+  } else if (hasEncodedMobile) {
+    finalMobile = encodedMobile;
+  }
+
+  return {
+    modulos: finalDesktop,
+    modulosMovil: finalMobile
+  };
+}
+
+/**
+ * Codifica `modulos` (PC) + `modulosMovil` (Móvil) en un solo arreglo compatible
+ * con la columna `users.modulos` de Supabase.
+ */
+export function encodeModulosWithMobile(desktopModulos, mobileModulos, normRol = 'VENTAS') {
+  const cleanDesktop = (Array.isArray(desktopModulos) ? desktopModulos : [])
+    .filter((m) => typeof m === 'string' && m !== MOBILE_CFG_MARKER && !m.startsWith(MOBILE_MOD_PREFIX));
+  const baseDesktop =
+    cleanDesktop.length > 0
+      ? cleanDesktop
+      : (ROLE_PERMISSIONS[normRol] ? [...ROLE_PERMISSIONS[normRol]] : ['ventas']);
+
+  if (!Array.isArray(mobileModulos)) {
+    return baseDesktop;
+  }
+  const cleanMobile = mobileModulos
+    .filter((m) => typeof m === 'string' && !m.startsWith(MOBILE_MOD_PREFIX))
+    .map((m) => `${MOBILE_MOD_PREFIX}${m}`);
+  return [...baseDesktop, MOBILE_CFG_MARKER, ...cleanMobile];
+}
+
+/**
+ * Obtiene los módulos móviles asignados o por defecto para un usuario.
+ */
+export function getDefaultMobileModulesForUser(user) {
+  if (!user) return [];
+  if (Array.isArray(user.modulosMovil)) {
+    return [...user.modulosMovil];
+  }
+  const norm = normalizeRole(user.rol);
+  if (MOBILE_ROLE_PERMISSIONS[norm]) {
+    return [...MOBILE_ROLE_PERMISSIONS[norm]];
+  }
+  return ['dashboard', 'pedidos', 'cxc', 'inventario'];
+}
+
+/**
+ * Verifica si un usuario tiene acceso a un módulo específico en la Versión Móvil.
+ */
+export function canAccessMobileModule(user, moduleId) {
+  if (!user || !moduleId) return false;
+  const username = (user?.username || '').toLowerCase();
+  const normRole = normalizeRole(user?.rol);
+
+  // Si el administrador configuró explícitamente la vista móvil del usuario, respetarla
+  if (Array.isArray(user.modulosMovil)) {
+    return user.modulosMovil.includes(moduleId);
+  }
+
+  // Verificar también si viene codificado en user.modulos
+  if (Array.isArray(user.modulos)) {
+    const hasEncoded = user.modulos.some(
+      (m) => typeof m === 'string' && (m === MOBILE_CFG_MARKER || m.startsWith(MOBILE_MOD_PREFIX))
+    );
+    if (hasEncoded) {
+      return user.modulos.includes(`${MOBILE_MOD_PREFIX}${moduleId}`);
+    }
+  }
+
+  if (username === 'edson designer' || normRole === 'ADMINISTRADOR MASTER') {
+    return true;
+  }
+
+  const defaults = MOBILE_ROLE_PERMISSIONS[normRole] || [];
+  return defaults.includes(moduleId);
+}
 
 // Pestaña inicial preferida al iniciar sesión según rol
 export const DEFAULT_TABS_BY_ROLE = {
@@ -525,13 +659,17 @@ export function getUsersList() {
 
     const normalizedList = currentList.map(u => {
       const norm = normalizeRole(u.rol);
+      const { modulos: cleanDesktop, modulosMovil: cleanMobile } = splitModulosAndMobile(
+        u.modulos,
+        u.modulosMovil,
+        norm
+      );
       return {
         ...u,
         rol: norm,
         departamento: u.departamento || getUserDepartment(u),
-        modulos: Array.isArray(u.modulos) && u.modulos.length > 0
-          ? u.modulos
-          : (ROLE_PERMISSIONS[norm] ? [...ROLE_PERMISSIONS[norm]] : ['ventas'])
+        modulos: cleanDesktop,
+        ...(Array.isArray(cleanMobile) ? { modulosMovil: cleanMobile } : {})
       };
     });
 
@@ -582,6 +720,9 @@ export function saveUser(userData) {
           color: roleColor,
           password: userData.password ? userData.password.trim() : (u.password || '123456'),
           modulos: Array.isArray(userData.modulos) ? userData.modulos : (u.modulos || ROLE_PERMISSIONS[targetRole] || []),
+          ...(Array.isArray(userData.modulosMovil)
+            ? { modulosMovil: userData.modulosMovil }
+            : (Array.isArray(u.modulosMovil) ? { modulosMovil: u.modulosMovil } : {})),
           updatedAt: nowIso,
           updated_at: nowIso
         };
@@ -610,6 +751,7 @@ export function saveUser(userData) {
       color: roleColor,
       descripcion: userData.descripcion || `Operador con rol ${targetRole}`,
       modulos: Array.isArray(userData.modulos) ? userData.modulos : (ROLE_PERMISSIONS[targetRole] || []),
+      ...(Array.isArray(userData.modulosMovil) ? { modulosMovil: userData.modulosMovil } : {}),
       createdAt: nowIso,
       created_at: nowIso,
       updatedAt: nowIso,
@@ -765,12 +907,16 @@ export function authenticate(username, password) {
   }
 
   const norm = normalizeRole(user.rol);
+  const { modulos: cleanDesktop, modulosMovil: cleanMobile } = splitModulosAndMobile(
+    user.modulos,
+    user.modulosMovil,
+    norm
+  );
   const userToSave = {
     ...user,
     rol: norm,
-    modulos: Array.isArray(user.modulos) && user.modulos.length > 0
-      ? user.modulos
-      : (ROLE_PERMISSIONS[norm] ? [...ROLE_PERMISSIONS[norm]] : ['ventas'])
+    modulos: cleanDesktop,
+    ...(Array.isArray(cleanMobile) ? { modulosMovil: cleanMobile } : {})
   };
 
   try {
@@ -804,8 +950,14 @@ export function getActiveUser() {
     if (user) {
       const norm = normalizeRole(user.rol);
       user.rol = norm;
-      if (!Array.isArray(user.modulos) || user.modulos.length === 0) {
-        user.modulos = ROLE_PERMISSIONS[norm] ? [...ROLE_PERMISSIONS[norm]] : ['ventas'];
+      const { modulos: cleanDesktop, modulosMovil: cleanMobile } = splitModulosAndMobile(
+        user.modulos,
+        user.modulosMovil,
+        norm
+      );
+      user.modulos = cleanDesktop;
+      if (Array.isArray(cleanMobile)) {
+        user.modulosMovil = cleanMobile;
       }
     }
     return user;
@@ -872,6 +1024,9 @@ export function canAccessModule(role, moduleId, user = null) {
     if (moduleId === 'preventa' && (user.modulos.includes('pedidos') || user.modulos.includes('ventas'))) {
       return (ROLE_PERMISSIONS[normRole] || []).includes('preventa');
     }
+    if (moduleId === 'predictibilidad' && (user.modulos.includes('dashboard') || user.modulos.includes('rentabilidad'))) {
+      return (ROLE_PERMISSIONS[normRole] || []).includes('predictibilidad');
+    }
     return false;
   }
 
@@ -933,46 +1088,27 @@ export function isMasterAdmin(userOrRole) {
 
 /**
  * Indica si el usuario puede aprobar solicitudes de nuevos clientes o registrarlos directamente en oficina.
- * Autorizados:
- * - Caja Principal (Vanesa Sánchez, rol CAJA / username 'caja')
- * - Cobranzas (Rosibel Briceño, rol COBRANZA / username 'rosibelcxc' — excluye 'rosibelventas')
- * - Supervisor Comercial de Ventas (Yheyson Calderón, username 'ventas' / co_ven 'YC')
- * - Tecnología & Informática (Manuel Rosales, rol TI / username 'manuel')
- * - Administrador Master (Edson Designer), Gerencia y Administración
+ * Autorizados: todos los usuarios que posean acceso al módulo Flujo Comercial & Pedidos ('pedidos').
  */
 export function canApproveClients(userOrRole) {
   if (!userOrRole) return false;
-  const role = typeof userOrRole === 'object' ? userOrRole?.rol : userOrRole;
-  const username = String(typeof userOrRole === 'object' ? (userOrRole?.username || '') : '').trim().toLowerCase();
-  const nombre = String(typeof userOrRole === 'object' ? (userOrRole?.nombre || userOrRole?.name || '') : '').trim().toLowerCase();
-  const coVen = String(typeof userOrRole === 'object' ? (userOrRole?.co_ven || userOrRole?.coVen || '') : '').trim().toUpperCase();
-  const r = normalizeRole(role);
-
-  if (
-    r === 'ADMINISTRADOR MASTER' ||
-    r === 'TECNOLOGÍA & INFORMÁTICA' ||
-    r === 'GERENCIA' ||
-    r === 'ADMINISTRACIÓN' ||
-    r === 'CAJA' ||
-    r === 'COBRANZA'
-  ) {
-    return true;
+  if (typeof userOrRole === 'object') {
+    const role = userOrRole?.rol || userOrRole?.role;
+    const hasExplicitModules = Array.isArray(userOrRole.modulos) && userOrRole.modulos.length > 0;
+    if (hasExplicitModules) {
+      return canAccessModule(role, 'pedidos', userOrRole);
+    }
+    const normRole = normalizeRole(role);
+    if (normRole === 'VENTAS' || normRole === 'VENDEDOR') {
+      const username = String(userOrRole?.username || '').trim().toLowerCase();
+      const coVen = String(userOrRole?.co_ven || userOrRole?.coVen || '').trim().toUpperCase();
+      return username === 'ventas' || coVen === 'YC';
+    }
+    return canAccessModule(role, 'pedidos', userOrRole);
   }
-
-  // Usuarios específicos autorizados (Edson, Manuel, Vanessa, Rosibel en cobranzas, Yheyson Calderón)
-  if (
-    username === 'edson designer' ||
-    username === 'manuel' ||
-    username === 'caja' ||
-    username === 'rosibelcxc' ||
-    username === 'ventas' ||
-    coVen === 'YC' ||
-    nombre.includes('yheyson')
-  ) {
-    return true;
-  }
-
-  return false;
+  const normRole = normalizeRole(String(userOrRole));
+  if (normRole === 'VENTAS' || normRole === 'VENDEDOR') return false;
+  return canAccessModule(String(userOrRole), 'pedidos', null);
 }
 
 /**

@@ -910,3 +910,460 @@ body.mobile-screen-locked {
   justify-content: center;
   border: 1.5px solid var(--mob-surface);
 }
+
+/* ==========================================================================
+   6. RESUMEN GENERAL MÓVIL (EXECUTIVE BENTO DASHBOARD)
+   ========================================================================== */
+.mob-rg-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
+}
+
+.mob-rg-hero {
+  background: var(--mob-surface);
+  border: 1px solid var(--mob-border-strong);
+  border-radius: 16px;
+  padding: 11px 12px;
+  box-shadow: var(--mob-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.mob-rg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mob-rg-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 6px;
+  border-bottom: 1.5px solid var(--mob-border);
+}
+
+.mob-rg-card {
+  position: relative;
+  overflow: hidden;
+  background: var(--mob-surface);
+  border: 1px solid var(--mob-border);
+  border-radius: 15px;
+  padding: 11px 12px;
+  box-shadow: var(--mob-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.mob-rg-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3.5px;
+  background: var(--mob-cyan);
+}
+
+.mob-rg-card.accent-emerald {
+  border-color: rgba(16, 185, 129, 0.35);
+}
+.mob-rg-card.accent-emerald::before {
+  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+}
+
+.mob-rg-card.accent-cyan {
+  border-color: rgba(2, 132, 199, 0.35);
+}
+.mob-rg-card.accent-cyan::before {
+  background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
+}
+
+.mob-rg-card.accent-violet {
+  border-color: rgba(124, 58, 237, 0.35);
+}
+.mob-rg-card.accent-violet::before {
+  background: linear-gradient(90deg, #7c3aed 0%, #a78bfa 100%);
+}
+
+.mob-rg-card.accent-teal {
+  border-color: rgba(13, 148, 136, 0.35);
+}
+.mob-rg-card.accent-teal::before {
+  background: linear-gradient(90deg, #0d9488 0%, #2dd4bf 100%);
+}
+
+.mob-rg-card.accent-amber {
+  border-color: rgba(217, 119, 6, 0.38);
+}
+.mob-rg-card.accent-amber::before {
+  background: linear-gradient(90deg, #d97706 0%, #fbbf24 100%);
+}
+
+.mob-rg-card.accent-rose {
+  border-color: rgba(220, 38, 38, 0.38);
+}
+.mob-rg-card.accent-rose::before {
+  background: linear-gradient(90deg, #dc2626 0%, #f87171 100%);
+}
+
+.mob-rg-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mob-rg-metric-box {
+  background: var(--mob-surface-low);
+  border: 1px solid var(--mob-border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mob-rg-metric-label {
+  font-family: var(--font-code, 'JetBrains Mono', monospace);
+  font-size: 0.60rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mob-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mob-rg-metric-val {
+  font-family: var(--font-tech, 'Orbitron', sans-serif);
+  font-size: clamp(0.92rem, 3.6vw, 1.14rem);
+  font-weight: 900;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mob-rg-metric-sub {
+  font-family: var(--font-code, 'JetBrains Mono', monospace);
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--mob-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mob-rg-metric-note {
+  font-size: 0.60rem;
+  font-weight: 600;
+  color: var(--mob-text-muted);
+  margin-top: 1px;
+}
+
+.mob-rg-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--mob-border);
+  font-size: 0.64rem;
+  font-weight: 600;
+  color: var(--mob-text-muted);
+}
+
+.mob-rg-card-footer strong {
+  color: var(--mob-text);
+  font-weight: 800;
+}
+
+.mob-rg-month-select {
+  font-family: var(--font-main, 'Inter', sans-serif);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--mob-surface-low);
+  color: var(--mob-text);
+  border: 1px solid var(--mob-border-strong);
+  outline: none;
+  cursor: pointer;
+}
+
+.mob-rg-progress-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--mob-surface-high);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.mob-rg-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+
+/* ==========================================================================
+   POS VENDEDOR EN CALLE (STITCH MOBILE PREVENTA)
+   ========================================================================== */
+.mob-pos-hero-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #00184d 0%, #002b7a 100%);
+  color: #ffffff;
+  box-shadow: var(--mob-shadow-elevated);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+}
+
+[data-theme="dark"] .mob-pos-hero-banner {
+  background: linear-gradient(135deg, rgba(12, 27, 62, 0.96) 0%, rgba(0, 43, 122, 0.68) 100%);
+  border-color: rgba(56, 189, 248, 0.32);
+}
+
+.mob-pos-hero-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+  flex-shrink: 0;
+}
+
+.mob-pos-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-tech, 'Orbitron', sans-serif);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #38bdf8;
+}
+
+.mob-pos-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.85);
+  flex-shrink: 0;
+}
+
+.mob-pos-hero-sub {
+  font-size: 0.66rem;
+  color: rgba(248, 250, 252, 0.84);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.mob-pos-doc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mob-pos-doc-card {
+  position: relative;
+  text-align: left;
+  padding: 10px 11px;
+  border-radius: 13px;
+  border: 1px solid var(--mob-border);
+  background: var(--mob-surface-low);
+  color: var(--mob-text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  transition: transform 0.14s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.mob-pos-doc-card:active {
+  transform: scale(0.985);
+}
+
+.mob-pos-doc-card.active {
+  background: #00184d;
+  border-color: #00184d;
+  color: #ffffff;
+  box-shadow: 0 6px 18px rgba(0, 24, 77, 0.24);
+}
+
+[data-theme="dark"] .mob-pos-doc-card.active {
+  background: linear-gradient(135deg, rgba(0, 43, 122, 0.85) 0%, rgba(2, 132, 199, 0.35) 100%);
+  border-color: #38bdf8;
+  color: #f8fafc;
+}
+
+.mob-pos-doc-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mob-pos-doc-title {
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.mob-pos-doc-radio {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--mob-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.mob-pos-doc-card.active .mob-pos-doc-radio {
+  border-color: #38bdf8;
+}
+
+.mob-pos-doc-radio-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #38bdf8;
+}
+
+.mob-pos-doc-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mob-pos-doc-wh-pill {
+  font-family: var(--font-code, 'JetBrains Mono', monospace);
+  font-size: 0.60rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--mob-surface-high);
+  color: var(--mob-text-secondary);
+}
+
+.mob-pos-doc-card.active .mob-pos-doc-wh-pill {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.mob-pos-doc-tax-label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--mob-text-muted);
+}
+
+.mob-pos-doc-card.active .mob-pos-doc-tax-label {
+  color: rgba(248, 250, 252, 0.88);
+}
+
+.mob-pos-client-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mob-pos-client-metric-box {
+  background: var(--mob-surface-low);
+  border: 1px solid var(--mob-border);
+  border-radius: 11px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.mob-pos-product-card {
+  background: var(--mob-surface);
+  border: 1px solid var(--mob-border);
+  border-radius: 14px;
+  padding: 11px 12px;
+  box-shadow: var(--mob-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.mob-pos-product-card.in-cart {
+  border-color: var(--mob-navy);
+  background: var(--mob-surface-tint);
+}
+
+.mob-pos-product-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mob-border);
+}
+
+.mob-pos-summary-card {
+  background: var(--mob-surface);
+  border: 1px solid var(--mob-border-strong);
+  border-radius: 16px;
+  padding: 12px 13px;
+  box-shadow: var(--mob-shadow-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mob-pos-send-btn {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #e60012 0%, #b3000e 100%);
+  color: #ffffff;
+  font-family: var(--font-tech, 'Orbitron', sans-serif);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(230, 0, 18, 0.28);
+  transition: transform 0.14s ease, opacity 0.2s ease;
+}
+
+.mob-pos-send-btn:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.mob-pos-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}

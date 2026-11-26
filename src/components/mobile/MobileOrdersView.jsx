@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  Building2,
+  ArrowLeftRight,
   CheckCircle2,
   ClipboardList,
   Droplets,
@@ -121,6 +121,7 @@ export default function MobileOrdersView({
   const [showClientPicker, setShowClientPicker] = useState(false);
   const [productQuery, setProductQuery] = useState('');
   const [viscosityFilter, setViscosityFilter] = useState('TODAS');
+  const [showOnlyAvailable, setShowOnlyAvailable] = useState(false);
   const [cartQtyByProduct, setCartQtyByProduct] = useState({});
   const [observaciones, setObservaciones] = useState('');
   const [grantOverride, setGrantOverride] = useState(false);
@@ -134,7 +135,7 @@ export default function MobileOrdersView({
   const [busyApproveId, setBusyApproveId] = useState(null);
 
   const approverInfo = useMemo(() => getAuthorizedApproverGroups(config), [config]);
-  const userCanOverrideCredit = useMemo(() => canUserGrantCreditOverride(currentUser), [currentUser]);
+  const userCanOverrideCredit = useMemo(() => canUserGrantCreditOverride(currentUser, { mobile: true }), [currentUser]);
   const sellerOnly = useMemo(() => isSellerProfile(currentUser), [currentUser]);
 
   // Sincronización con contextos externos (Inicio -> +Crear Pedido / Detalle, Stock -> +Pedir, CxC -> +Preventa)
@@ -183,6 +184,10 @@ export default function MobileOrdersView({
   }, [overrideAuthorizer, approverInfo.defaultAuthorizer]);
 
   const targetWarehouse = docType === 'NOTA_ENTREGA' ? '02' : '01';
+  const previewOrderNumber = useMemo(
+    () => generateMobileOrderNumber(orders, docType === 'NOTA_ENTREGA'),
+    [orders, docType]
+  );
   const committedStock = useMemo(() => buildCommittedStockMap(orders), [orders]);
 
   const visibleClients = useMemo(
@@ -279,6 +284,9 @@ export default function MobileOrdersView({
     const q = productQuery.trim().toLowerCase();
     return catalogProducts.filter((entry) => {
       const inCart = (cartQtyByProduct[entry.pid] || 0) > 0;
+      if (showOnlyAvailable && entry.atpAvailable <= 0 && !inCart) {
+        return false;
+      }
       if (viscosityFilter !== 'TODAS' && entry.viscosity !== viscosityFilter && !inCart) {
         return false;
       }
@@ -286,7 +294,7 @@ export default function MobileOrdersView({
       const text = `${entry.prod.nombre || ''} ${entry.prod.descripcion || ''} ${entry.prod.codigo || ''} ${entry.viscosity}`.toLowerCase();
       return text.includes(q);
     });
-  }, [catalogProducts, viscosityFilter, productQuery, cartQtyByProduct]);
+  }, [catalogProducts, showOnlyAvailable, viscosityFilter, productQuery, cartQtyByProduct]);
 
   const cartEntries = useMemo(() => {
     return catalogProducts
@@ -663,98 +671,181 @@ export default function MobileOrdersView({
          ===================================================================== */}
       {subTab === 'crear' && (
         <>
-          {/* Regla BR-PRE-001 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '8px',
-              padding: '7px 11px',
-              borderRadius: '11px',
-              background: 'var(--mob-navy-soft)',
-              border: '1px solid var(--mob-border)',
-              fontSize: '0.68rem',
-              color: 'var(--mob-navy)',
-              fontWeight: 700
-            }}
-          >
-            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <ShieldCheck size={14} /> Reserva Virtual ATP 72h • Sin egreso físico hasta facturar
+          {/* Hero Banner Stitch: MODO PREVENTA ACTIVO */}
+          <div className="mob-pos-hero-banner">
+            <div className="mob-pos-hero-icon">
+              <ShieldCheck size={18} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="mob-pos-hero-title">
+                <span>MODO PREVENTA ACTIVO</span>
+                <span className="mob-pos-live-dot" />
+              </div>
+              <div className="mob-pos-hero-sub">
+                Reserva virtual ATP 72h • Sin egreso físico hasta facturar
+              </div>
+            </div>
+            <span
+              style={{
+                fontFamily: 'var(--font-code)',
+                fontSize: '0.64rem',
+                fontWeight: 800,
+                padding: '3px 8px',
+                borderRadius: '8px',
+                background: 'rgba(255, 255, 255, 0.14)',
+                color: '#ffffff',
+                flexShrink: 0
+              }}
+            >
+              Alm {targetWarehouse}
             </span>
-            <span style={{ fontFamily: 'var(--font-code)' }}>Alm {targetWarehouse}</span>
           </div>
 
-          {/* Selector de Cliente y Ficha Crediticia */}
-          <div className="mobile-card" style={{ padding: '11px 12px' }}>
+          {/* 1. TIPO DE COMPROBANTE + CANAL + PLAZO */}
+          <div className="mobile-card" style={{ padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: '9px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-              <span className="mobile-telemetry-label">1. Cliente Comercial</span>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                {onSwitchToDesktop && (
-                  <button
-                    type="button"
-                    onClick={onSwitchToDesktop}
-                    className="mobile-chip"
-                    style={{ padding: '3px 8px', fontSize: '0.62rem' }}
-                    title="Solicitar o crear cliente nuevo desde vista escritorio"
-                  >
-                    <Monitor size={11} /> Nuevo en PC
-                  </button>
-                )}
+              <span className="mobile-telemetry-label">TIPO DE COMPROBANTE</span>
+              <span style={{ fontFamily: 'var(--font-code)', fontSize: '0.68rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+                PROFIT: {previewOrderNumber}
+              </span>
+            </div>
+
+            <div className="mob-pos-doc-grid">
+              <button
+                type="button"
+                className={`mob-pos-doc-card ${docType === 'NOTA_ENTREGA' ? 'active' : ''}`}
+                onClick={() => handleSwitchDocType('NOTA_ENTREGA')}
+              >
+                <div className="mob-pos-doc-top">
+                  <span className="mob-pos-doc-title">Nota de Entrega (N/E)</span>
+                  <span className="mob-pos-doc-radio">
+                    {docType === 'NOTA_ENTREGA' && <span className="mob-pos-doc-radio-dot" />}
+                  </span>
+                </div>
+                <div className="mob-pos-doc-meta">
+                  <span className="mob-pos-doc-wh-pill">Alm 02 / Directo</span>
+                  <span className="mob-pos-doc-tax-label">Exento</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className={`mob-pos-doc-card ${docType === 'FACTURA' ? 'active' : ''}`}
+                onClick={() => handleSwitchDocType('FACTURA')}
+              >
+                <div className="mob-pos-doc-top">
+                  <span className="mob-pos-doc-title">Fiscal (SENIAT)</span>
+                  <span className="mob-pos-doc-radio">
+                    {docType === 'FACTURA' && <span className="mob-pos-doc-radio-dot" />}
+                  </span>
+                </div>
+                <div className="mob-pos-doc-meta">
+                  <span className="mob-pos-doc-wh-pill">Alm 01</span>
+                  <span className="mob-pos-doc-tax-label">+16% IVA</span>
+                </div>
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '5px' }}>
                 <button
                   type="button"
-                  onClick={() => setShowClientPicker((v) => !v)}
-                  className="mobile-chip active"
-                  style={{ padding: '3px 10px', fontSize: '0.66rem' }}
+                  className={`mobile-chip ${priceChannel === PRICE_CHANNEL.PREVENTA ? 'active' : ''}`}
+                  onClick={() => setPriceChannel(PRICE_CHANNEL.PREVENTA)}
                 >
-                  {selectedClient ? 'Cambiar' : 'Elegir Cliente'}
+                  Lista Detal (Calle)
+                </button>
+                <button
+                  type="button"
+                  className={`mobile-chip ${priceChannel === PRICE_CHANNEL.OFICINA ? 'active' : ''}`}
+                  onClick={() => setPriceChannel(PRICE_CHANNEL.OFICINA)}
+                >
+                  Lista Mayor (Oficina)
                 </button>
               </div>
             </div>
 
+            <div className="mobile-chips-row">
+              {PAYMENT_TERMS.map((term) => (
+                <button
+                  key={term.id}
+                  type="button"
+                  className={`mobile-chip ${paymentTerm === term.id ? 'active' : ''}`}
+                  onClick={() => setPaymentTerm(term.id)}
+                >
+                  {term.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. CLIENTE COMERCIAL & CRÉDITO / DEUDA */}
+          <div className="mobile-card" style={{ padding: '11px 12px' }}>
             {selectedClient ? (
-              <div style={{ marginTop: '8px' }}>
+              <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '0.86rem', fontWeight: 800, color: 'var(--mob-text)' }}>
-                      {selectedClient.nombre || selectedClient.razonSocial}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.90rem', fontWeight: 800, color: 'var(--mob-text)' }}>
+                        {selectedClient.nombre || selectedClient.razonSocial}
+                      </span>
+                      {clientPortfolio && (
+                        <span className={`mobile-pill-badge ${clientPortfolio.badgeTone === 'neutral' ? 'info' : clientPortfolio.badgeTone}`}>
+                          {clientPortfolio.estadoLabel}
+                        </span>
+                      )}
                     </div>
-                    <div style={{ fontSize: '0.70rem', color: 'var(--mob-text-muted)' }}>
-                      {selectedClient.rif || 'Sin RIF'} • {selectedClient.ciudad || 'Ruta Activa'}
+                    <div style={{ fontSize: '0.70rem', color: 'var(--mob-text-muted)', marginTop: '2px' }}>
+                      RIF: {selectedClient.rif || 'Sin RIF'} • {selectedClient.ciudad || selectedClient.zona || 'Ruta Activa'}
                     </div>
                   </div>
-                  {clientPortfolio && (
-                    <span className={`mobile-pill-badge ${clientPortfolio.badgeTone === 'neutral' ? 'info' : clientPortfolio.badgeTone}`}>
-                      {clientPortfolio.estadoLabel}
-                    </span>
-                  )}
+                  <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowClientPicker((v) => !v)}
+                      className="mobile-chip active"
+                      style={{ padding: '5px 9px', fontSize: '0.66rem' }}
+                      title="Cambiar cliente"
+                    >
+                      <ArrowLeftRight size={13} />
+                    </button>
+                  </div>
                 </div>
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                    gap: '6px',
-                    marginTop: '8px',
-                    fontSize: '0.68rem'
-                  }}
-                >
-                  <div style={{ background: 'var(--mob-surface-low)', padding: '6px 8px', borderRadius: '9px' }}>
-                    <div style={{ color: 'var(--mob-text-muted)', fontSize: '0.58rem', fontWeight: 700 }}>LÍMITE</div>
-                    <div style={{ fontFamily: 'var(--font-code)', fontWeight: 800 }}>
-                      {formatUsd(creditEvaluation?.limiteCreditoUsd ?? selectedClient.limiteCredito ?? 0)}
+                <div className="mob-pos-client-metrics">
+                  <div className="mob-pos-client-metric-box">
+                    <div className="mobile-telemetry-label" style={{ fontSize: '0.58rem' }}>CRÉDITO DISPONIBLE</div>
+                    <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.02rem', fontWeight: 800, color: 'var(--mob-text)', marginTop: '2px' }}>
+                      {formatUsd(creditEvaluation?.creditoDisponibleUsd ?? 0)}
+                    </div>
+                    <div style={{ fontSize: '0.64rem', color: 'var(--mob-text-muted)', marginTop: '2px' }}>
+                      Plazo: {selectedClient.diasCredito || 15} Días • Lím {formatUsd(creditEvaluation?.limiteCreditoUsd ?? selectedClient.limiteCredito ?? 0)}
                     </div>
                   </div>
-                  <div style={{ background: 'var(--mob-surface-low)', padding: '6px 8px', borderRadius: '9px' }}>
-                    <div style={{ color: 'var(--mob-text-muted)', fontSize: '0.58rem', fontWeight: 700 }}>SALDO CXC</div>
-                    <div style={{ fontFamily: 'var(--font-code)', fontWeight: 800, color: (creditEvaluation?.saldoDeudorUsd || 0) > 0 ? 'var(--mob-amber)' : 'var(--mob-text)' }}>
+                  <div className="mob-pos-client-metric-box">
+                    <div className="mobile-telemetry-label" style={{ fontSize: '0.58rem' }}>DEUDA ACTUAL</div>
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-tech)',
+                        fontSize: '1.02rem',
+                        fontWeight: 800,
+                        color: (creditEvaluation?.saldoDeudorUsd || 0) > 0 ? 'var(--mob-amber)' : 'var(--mob-green)',
+                        marginTop: '2px'
+                      }}
+                    >
                       {formatUsd(creditEvaluation?.saldoDeudorUsd ?? selectedClient.saldoDeudorUsd ?? 0)}
                     </div>
-                  </div>
-                  <div style={{ background: 'var(--mob-surface-low)', padding: '6px 8px', borderRadius: '9px' }}>
-                    <div style={{ color: 'var(--mob-text-muted)', fontSize: '0.58rem', fontWeight: 700 }}>DISPONIBLE</div>
-                    <div style={{ fontFamily: 'var(--font-code)', fontWeight: 800, color: 'var(--mob-green)' }}>
-                      {formatUsd(creditEvaluation?.creditoDisponibleUsd ?? 0)}
+                    <div
+                      style={{
+                        fontSize: '0.64rem',
+                        fontWeight: 700,
+                        color: (creditEvaluation?.vencidasCount || 0) > 0 ? 'var(--mob-red)' : 'var(--mob-green)',
+                        marginTop: '2px'
+                      }}
+                    >
+                      {(creditEvaluation?.vencidasCount || 0) > 0
+                        ? `${creditEvaluation.vencidasCount} Factura(s) en mora`
+                        : '✓ 0 Facturas en mora'}
                     </div>
                   </div>
                 </div>
@@ -774,10 +865,112 @@ export default function MobileOrdersView({
                     Cliente en revisión administrativa. Debe aprobarse antes de procesar pedidos.
                   </div>
                 )}
+
+                {creditBlocked && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      padding: '8px 10px',
+                      borderRadius: '10px',
+                      background: 'var(--mob-amber-soft)',
+                      border: '1px solid var(--mob-amber)',
+                      fontSize: '0.70rem',
+                      color: 'var(--mob-text)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontWeight: 700, color: 'var(--mob-amber)' }}>
+                      <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
+                      <span>{creditEvaluation.motivo}</span>
+                    </div>
+
+                    {userCanOverrideCredit ? (
+                      <div style={{ marginTop: '7px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={grantOverride}
+                            onChange={(e) => setGrantOverride(e.target.checked)}
+                          />
+                          Autorizar excepción gerencial y enviar directo a Caja
+                        </label>
+                        {grantOverride && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <select
+                              value={overrideAuthorizer}
+                              onChange={(e) => setOverrideAuthorizer(e.target.value)}
+                              style={{
+                                width: '100%',
+                                padding: '6px 8px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--mob-border)',
+                                background: 'var(--mob-surface)',
+                                color: 'var(--mob-text)',
+                                fontSize: '0.70rem'
+                              }}
+                            >
+                              {approverInfo.approverGroups.map((g) => (
+                                <optgroup key={g.category} label={g.category}>
+                                  {g.people.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                  ))}
+                                </optgroup>
+                              ))}
+                            </select>
+                            <input
+                              value={overrideJustification}
+                              onChange={(e) => setOverrideJustification(e.target.value)}
+                              placeholder="Motivo de autorización excepcional..."
+                              style={{
+                                width: '100%',
+                                boxSizing: 'border-box',
+                                padding: '6px 8px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--mob-border)',
+                                background: 'var(--mob-surface)',
+                                color: 'var(--mob-text)',
+                                fontSize: '0.70rem'
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: '4px', fontSize: '0.66rem', color: 'var(--mob-text-muted)' }}>
+                        Si envías el pedido a crédito se guardará como <strong>RETENIDO POR CRÉDITO</strong> para validación de Gerencia.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
-              <div style={{ marginTop: '8px', fontSize: '0.74rem', color: 'var(--mob-text-muted)' }}>
-                Toca <strong>Elegir Cliente</strong> para vincular RIF, cupo de crédito y ruta asignada.
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                  <span className="mobile-telemetry-label">CLIENTE COMERCIAL</span>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {onSwitchToDesktop && (
+                      <button
+                        type="button"
+                        onClick={onSwitchToDesktop}
+                        className="mobile-chip"
+                        style={{ padding: '3px 8px', fontSize: '0.62rem' }}
+                        title="Solicitar o crear cliente nuevo desde vista escritorio"
+                      >
+                        <Monitor size={11} /> Nuevo en PC
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowClientPicker((v) => !v)}
+                      className="mobile-chip active"
+                      style={{ padding: '4px 10px', fontSize: '0.68rem' }}
+                    >
+                      Elegir Cliente
+                    </button>
+                  </div>
+                </div>
+                <div style={{ marginTop: '7px', fontSize: '0.74rem', color: 'var(--mob-text-muted)' }}>
+                  Toca <strong>Elegir Cliente</strong> para vincular RIF, cupo de crédito y ruta asignada.
+                </div>
               </div>
             )}
 
@@ -876,146 +1069,22 @@ export default function MobileOrdersView({
             )}
           </div>
 
-          {/* 2. Comprobante (BR-FIS-002), Canal y Plazo */}
-          <div className="mobile-card" style={{ padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <span className="mobile-telemetry-label">2. Almacén, Comprobante y Condición</span>
-
-            <div className="mobile-segmented-tabs">
-              <button
-                type="button"
-                className={`mobile-segmented-tab ${docType === 'NOTA_ENTREGA' ? 'active' : ''}`}
-                onClick={() => handleSwitchDocType('NOTA_ENTREGA')}
-              >
-                <Building2 size={14} />
-                <span>N/E Alm 02 (Exento)</span>
-              </button>
-              <button
-                type="button"
-                className={`mobile-segmented-tab ${docType === 'FACTURA' ? 'active' : ''}`}
-                onClick={() => handleSwitchDocType('FACTURA')}
-              >
-                <FileText size={14} />
-                <span>Fiscal Alm 01 (+16%)</span>
-              </button>
+          {/* 3. CATÁLOGO OILSTONE LUBRICANTS */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span className="mobile-telemetry-label">CATÁLOGO OILSTONE LUBRICANTS</span>
+              <span style={{ fontSize: '0.68rem', fontWeight: 700, color: cartEntries.length > 0 ? 'var(--mob-navy)' : 'var(--mob-text-muted)' }}>
+                {cartEntries.length} Seleccionados
+              </span>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: '5px' }}>
-                <button
-                  type="button"
-                  className={`mobile-chip ${priceChannel === PRICE_CHANNEL.PREVENTA ? 'active' : ''}`}
-                  onClick={() => setPriceChannel(PRICE_CHANNEL.PREVENTA)}
-                >
-                  Lista Detal (Calle)
-                </button>
-                <button
-                  type="button"
-                  className={`mobile-chip ${priceChannel === PRICE_CHANNEL.OFICINA ? 'active' : ''}`}
-                  onClick={() => setPriceChannel(PRICE_CHANNEL.OFICINA)}
-                >
-                  Lista Mayor (Oficina)
-                </button>
-              </div>
-            </div>
-
-            <div className="mobile-chips-row">
-              {PAYMENT_TERMS.map((term) => (
-                <button
-                  key={term.id}
-                  type="button"
-                  className={`mobile-chip ${paymentTerm === term.id ? 'active' : ''}`}
-                  onClick={() => setPaymentTerm(term.id)}
-                >
-                  {term.label}
-                </button>
-              ))}
-            </div>
-
-            {creditBlocked && (
-              <div
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '10px',
-                  background: 'var(--mob-amber-soft)',
-                  border: '1px solid var(--mob-amber)',
-                  fontSize: '0.70rem',
-                  color: 'var(--mob-text)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontWeight: 700, color: 'var(--mob-amber)' }}>
-                  <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
-                  <span>{creditEvaluation.motivo}</span>
-                </div>
-
-                {userCanOverrideCredit ? (
-                  <div style={{ marginTop: '7px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={grantOverride}
-                        onChange={(e) => setGrantOverride(e.target.checked)}
-                      />
-                      Autorizar excepción gerencial y enviar directo a Caja
-                    </label>
-                    {grantOverride && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        <select
-                          value={overrideAuthorizer}
-                          onChange={(e) => setOverrideAuthorizer(e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '6px 8px',
-                            borderRadius: '8px',
-                            border: '1px solid var(--mob-border)',
-                            background: 'var(--mob-surface)',
-                            color: 'var(--mob-text)',
-                            fontSize: '0.70rem'
-                          }}
-                        >
-                          {approverInfo.approverGroups.map((g) => (
-                            <optgroup key={g.category} label={g.category}>
-                              {g.people.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                        <input
-                          value={overrideJustification}
-                          onChange={(e) => setOverrideJustification(e.target.value)}
-                          placeholder="Motivo de autorización excepcional..."
-                          style={{
-                            width: '100%',
-                            boxSizing: 'border-box',
-                            padding: '6px 8px',
-                            borderRadius: '8px',
-                            border: '1px solid var(--mob-border)',
-                            background: 'var(--mob-surface)',
-                            color: 'var(--mob-text)',
-                            fontSize: '0.70rem'
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div style={{ marginTop: '4px', fontSize: '0.66rem', color: 'var(--mob-text-muted)' }}>
-                    Si envías el pedido a crédito se guardará como <strong>RETENIDO POR CRÉDITO</strong> para validación de Gerencia.
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* 3. Catálogo OILSTONE con disponibilidad ATP 72h */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div className="mobile-search-bar">
               <Search size={15} color="var(--mob-text-muted)" />
               <input
                 className="mobile-search-input"
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
-                placeholder={`Buscar lubricante disponible en Alm. ${targetWarehouse}...`}
+                placeholder="Buscar viscosidad (15W-40, 20W-50, etc.)..."
               />
               {productQuery && (
                 <button
@@ -1029,6 +1098,13 @@ export default function MobileOrdersView({
             </div>
 
             <div className="mobile-chips-row">
+              <button
+                type="button"
+                className={`mobile-chip ${showOnlyAvailable ? 'active' : ''}`}
+                onClick={() => setShowOnlyAvailable((v) => !v)}
+              >
+                Solo ATP &gt; 0
+              </button>
               {viscosityChips.map((visc) => (
                 <button
                   key={visc}
@@ -1036,7 +1112,7 @@ export default function MobileOrdersView({
                   className={`mobile-chip ${viscosityFilter === visc ? 'active' : ''}`}
                   onClick={() => setViscosityFilter(visc)}
                 >
-                  {visc === 'TODAS' ? 'Todas las Viscosidades' : visc}
+                  {visc === 'TODAS' ? 'Todas' : visc}
                 </button>
               ))}
             </div>
@@ -1044,80 +1120,104 @@ export default function MobileOrdersView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {filteredCatalog.slice(0, 60).map((entry) => {
                 const qty = Number(cartQtyByProduct[entry.pid] || 0);
-                const bsPrice = round2(entry.unitPrice * safeRate);
+                const lineUsd = qty > 0 ? lineSubtotal(qty, entry.unitPrice) : entry.unitPrice;
+                const lineBs = round2(lineUsd * safeRate);
+                const stockTone = entry.atpAvailable > 5 ? 'success' : entry.atpAvailable > 0 ? 'warning' : 'danger';
+                const stockLabel = entry.atpAvailable > 5 ? 'Disponible' : entry.atpAvailable > 0 ? 'Bajo Stock' : 'Agotado';
+
                 return (
                   <div
                     key={entry.pid}
-                    className="mobile-card"
-                    style={{
-                      padding: '10px',
-                      borderColor: qty > 0 ? 'var(--mob-navy)' : 'var(--mob-border)',
-                      background: qty > 0 ? 'var(--mob-surface-tint)' : 'var(--mob-surface)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px'
-                    }}
+                    className={`mob-pos-product-card ${qty > 0 ? 'in-cart' : ''}`}
                   >
-                    <OilstoneProductImage
-                      product={entry.prod}
-                      style={{
-                        width: '48px',
-                        height: '48px',
-                        borderRadius: '10px',
-                        objectFit: 'contain',
-                        background: 'var(--mob-surface-low)',
-                        padding: '4px',
-                        flexShrink: 0
-                      }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                      <OilstoneProductImage
+                        product={entry.prod}
+                        style={{
+                          width: '48px',
+                          height: '48px',
+                          borderRadius: '10px',
+                          objectFit: 'contain',
+                          background: 'var(--mob-surface-low)',
+                          border: '1px solid var(--mob-border)',
+                          padding: '4px',
+                          flexShrink: 0
+                        }}
+                      />
 
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                        <span className="mobile-pill-badge info" style={{ fontSize: '0.56rem', padding: '1px 6px' }}>
-                          {entry.viscosity}
-                        </span>
-                        <span style={{ fontSize: '0.62rem', color: 'var(--mob-text-muted)', fontFamily: 'var(--font-code)' }}>
-                          {entry.prod.codigo || entry.pid}
-                        </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '0.80rem', fontWeight: 800, color: 'var(--mob-text)', lineHeight: 1.22 }}>
+                          {entry.prod.nombre || entry.prod.descripcion}
+                        </div>
+                        <div style={{ fontSize: '0.66rem', color: 'var(--mob-text-muted)', marginTop: '2px', fontFamily: 'var(--font-code)' }}>
+                          Cód: {entry.prod.codigo || entry.pid} • {entry.viscosity}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '5px', flexWrap: 'wrap' }}>
+                          <span
+                            style={{
+                              fontFamily: 'var(--font-code)',
+                              fontSize: '0.60rem',
+                              fontWeight: 700,
+                              padding: '2px 7px',
+                              borderRadius: '6px',
+                              background: 'var(--mob-surface-low)',
+                              border: '1px solid var(--mob-border)',
+                              color: 'var(--mob-text-secondary)'
+                            }}
+                          >
+                            Stock Alm {targetWarehouse}: {entry.atpAvailable} {entry.unitName}
+                          </span>
+                          <span className={`mobile-pill-badge ${stockTone}`} style={{ fontSize: '0.58rem', padding: '1px 6px' }}>
+                            {stockLabel}
+                          </span>
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-text)', marginTop: '2px', lineHeight: 1.2 }}>
-                        {entry.prod.nombre || entry.prod.descripcion}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
-                        <span style={{ fontFamily: 'var(--font-code)', fontSize: '0.78rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
+
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.86rem', fontWeight: 800, color: 'var(--mob-text)' }}>
                           {formatUsd(entry.unitPrice)}
-                        </span>
-                        <span style={{ fontFamily: 'var(--font-code)', fontSize: '0.64rem', color: 'var(--mob-text-muted)' }}>
-                          {formatBs(bsPrice)}
-                        </span>
-                        <span
-                          className={`mobile-pill-badge ${entry.atpAvailable > 5 ? 'success' : entry.atpAvailable > 0 ? 'warning' : 'danger'}`}
-                          style={{ fontSize: '0.56rem', padding: '1px 6px' }}
-                        >
-                          ATP: {entry.atpAvailable} {entry.unitName}
-                        </span>
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: 'var(--mob-text-muted)' }}>
+                          / {entry.unitName.toLowerCase()}
+                        </div>
                       </div>
                     </div>
 
-                    <div className="mobile-stepper">
-                      <button
-                        type="button"
-                        className="mobile-stepper-btn"
-                        disabled={qty <= 0}
-                        onClick={() => handleAdjustProductQty(entry, -1)}
-                        aria-label="Disminuir cantidad"
-                      >
-                        −
-                      </button>
-                      <span className="mobile-stepper-val">{qty}</span>
-                      <button
-                        type="button"
-                        className="mobile-stepper-btn plus"
-                        onClick={() => handleAdjustProductQty(entry, 1)}
-                        aria-label="Aumentar cantidad"
-                      >
-                        +
-                      </button>
+                    <div className="mob-pos-product-bottom">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                        <div className="mobile-stepper">
+                          <button
+                            type="button"
+                            className="mobile-stepper-btn"
+                            disabled={qty <= 0}
+                            onClick={() => handleAdjustProductQty(entry, -1)}
+                            aria-label="Disminuir cantidad"
+                          >
+                            −
+                          </button>
+                          <span className="mobile-stepper-val">{qty}</span>
+                          <button
+                            type="button"
+                            className="mobile-stepper-btn plus"
+                            onClick={() => handleAdjustProductQty(entry, 1)}
+                            aria-label="Aumentar cantidad"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--mob-text-muted)', fontWeight: 600 }}>
+                          {entry.unitName.toLowerCase()}
+                        </span>
+                      </div>
+
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.84rem', fontWeight: 800, color: qty > 0 ? 'var(--mob-navy)' : 'var(--mob-text-secondary)' }}>
+                          {formatUsd(lineUsd)}
+                        </div>
+                        <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.64rem', color: 'var(--mob-text-muted)' }}>
+                          {formatBs(lineBs)}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1131,13 +1231,20 @@ export default function MobileOrdersView({
             </div>
           </div>
 
-          {/* Notas de despacho */}
+          {/* 4. OBSERVACIONES / RUTA DE DESPACHO */}
           <div className="mobile-card" style={{ padding: '10px 12px' }}>
-            <div className="mobile-telemetry-label" style={{ marginBottom: '5px' }}>Observaciones de Despacho / Flete</div>
-            <input
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span className="mobile-telemetry-label">OBSERVACIONES / RUTA DE DESPACHO</span>
+              <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-code)', color: 'var(--mob-text-muted)' }}>
+                {observaciones.length}/120
+              </span>
+            </div>
+            <textarea
+              rows={2}
+              maxLength={120}
               value={observaciones}
               onChange={(e) => setObservaciones(e.target.value)}
-              placeholder="Ej. Entregar en almacén posterior, recibir con nota original..."
+              placeholder="Ej: Entregar en almacén posterior, recibir con factura original..."
               style={{
                 width: '100%',
                 boxSizing: 'border-box',
@@ -1146,57 +1253,67 @@ export default function MobileOrdersView({
                 padding: '8px 10px',
                 background: 'var(--mob-surface-low)',
                 color: 'var(--mob-text)',
-                fontSize: '0.76rem'
+                fontSize: '0.74rem',
+                resize: 'none',
+                fontFamily: 'inherit'
               }}
             />
           </div>
 
-          {/* Sticky Dock Liquidación Preventa */}
-          <div className="mobile-sticky-footer-bar">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+          {/* 5. RESUMEN & CTA ENVIAR PREVENTA (STITCH SUMMARY CARD) */}
+          <div className="mob-pos-summary-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.68rem', color: 'var(--mob-text-muted)', fontWeight: 700 }}>
-                  <span>{totalUnitsInCart} Unid.</span>
-                  <span>•</span>
-                  <span>{formatUnitVe(totalLitrosInCart)} L</span>
-                  <span>•</span>
-                  <span>{docType === 'NOTA_ENTREGA' ? 'Exento IVA' : `+IVA ${formatUsd(taxSummary.totalIvaUsd)}`}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'var(--font-tech)', fontSize: '1.08rem', fontWeight: 800, color: 'var(--mob-navy)' }}>
-                    {formatUsd(taxSummary.totalFacturaUsd)}
-                  </span>
-                  <span style={{ fontFamily: 'var(--font-code)', fontSize: '0.76rem', fontWeight: 700, color: 'var(--mob-text-secondary)' }}>
-                    {formatBs(taxSummary.totalFacturaBs)}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.60rem', fontFamily: 'var(--font-code)', color: 'var(--mob-text-muted)', marginTop: '1px' }}>
-                  Tasa BCV día: {formatBs(safeRate)}
+                <div className="mobile-telemetry-label" style={{ fontSize: '0.58rem' }}>VOLUMEN OPERATIVO</div>
+                <div style={{ fontSize: '0.84rem', fontWeight: 800, color: 'var(--mob-text)', marginTop: '2px' }}>
+                  {formatUnitVe(totalLitrosInCart)} Litros <span style={{ fontWeight: 600, color: 'var(--mob-text-muted)' }}>({totalUnitsInCart} bultos)</span>
                 </div>
               </div>
+              <div style={{ textAlign: 'right' }}>
+                <div className="mobile-telemetry-label" style={{ fontSize: '0.58rem' }}>TASA BCV VIGENTE</div>
+                <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.80rem', fontWeight: 800, color: 'var(--mob-text)', marginTop: '2px' }}>
+                  {formatBs(safeRate).replace(/^Bs\.\s*/, '')} Bs./$
+                </div>
+              </div>
+            </div>
 
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  type="button"
-                  disabled={submitting || cartEntries.length === 0}
-                  onClick={() => handleSubmitPreventa(true)}
-                  className="mobile-chip"
-                  style={{ padding: '9px 10px', borderRadius: '12px' }}
-                  title="Guardar borrador pendiente"
-                >
-                  Borrador
-                </button>
-                <button
-                  type="button"
-                  disabled={submitting || cartEntries.length === 0 || !clientApprovedForSales}
-                  onClick={() => handleSubmitPreventa(false)}
-                  className="mobile-quick-action-btn primary"
-                  style={{ padding: '9px 14px' }}
-                >
-                  <Send size={14} />
-                  {submitting ? 'Enviando...' : 'Enviar Preventa'}
-                </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '8px', paddingTop: '8px', borderTop: '1px solid var(--mob-border)' }}>
+              <div>
+                <div className="mobile-telemetry-label" style={{ fontSize: '0.58rem' }}>
+                  TOTAL PREVENTA ESTIMADO {docType === 'FACTURA' ? `(+IVA ${formatUsd(taxSummary.totalIvaUsd)})` : '(EXENTO)'}
+                </div>
+                <div style={{ fontFamily: 'var(--font-tech)', fontSize: '1.35rem', fontWeight: 900, color: 'var(--mob-navy)', lineHeight: 1.1, marginTop: '2px' }}>
+                  {formatUsd(taxSummary.totalFacturaUsd)}
+                </div>
               </div>
+              <div style={{ textAlign: 'right' }}>
+                <div className="mobile-telemetry-label" style={{ fontSize: '0.58rem' }}>EN BOLÍVARES</div>
+                <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.84rem', fontWeight: 800, color: 'var(--mob-text-secondary)', marginTop: '2px' }}>
+                  {formatBs(taxSummary.totalFacturaBs)}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                type="button"
+                disabled={submitting || cartEntries.length === 0}
+                onClick={() => handleSubmitPreventa(true)}
+                className="mobile-chip"
+                style={{ minHeight: '44px', padding: '0 12px', borderRadius: '12px', fontWeight: 700 }}
+                title="Guardar borrador pendiente"
+              >
+                Borrador
+              </button>
+              <button
+                type="button"
+                disabled={submitting || cartEntries.length === 0 || !clientApprovedForSales}
+                onClick={() => handleSubmitPreventa(false)}
+                className="mob-pos-send-btn"
+              >
+                <Send size={15} />
+                {submitting ? 'ENVIANDO...' : 'ENVIAR PREVENTA'}
+              </button>
             </div>
           </div>
         </>

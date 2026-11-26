@@ -31,7 +31,8 @@ import {
   saveSupabaseProfitZone,
   getSupabaseProfitZones,
   deleteSupabaseProfitZone,
-  getSupabaseProfitSellers
+  getSupabaseProfitSellers,
+  updateSupabaseSellerZone
 } from '../services/supabaseService.js';
 import {
   normalizeProfitCollectionUsd,
@@ -42,7 +43,9 @@ import {
   calculateDocumentCommission,
   calculateSellerCommissionSummary,
   calculateProjectedOrderCommission,
-  countDistinctActiveMonths
+  countDistinctActiveMonths,
+  isSalesDepartmentUser,
+  buildSalesDepartmentSellers
 } from '../services/commissionService.js';
 import {
   generateSellersPDF,
@@ -386,6 +389,121 @@ test('8. PDFs de Cobradores y CxC reemplazan Vendedor/Asesor por Cobrador y ejec
 
     passed += 1;
     console.log('  ✔ 9. CRUD de Zonas Exclusivas (crear, editar, anti-duplicado, eliminar) y sincronización de usuario Ventas');
+  } finally {
+    globalThis.localStorage = prevStorage;
+    globalThis.fetch = prevFetch;
+  }
+}
+
+test('10. Fuerza de Ventas muestra EXCLUSIVAMENTE usuarios del departamento Ventas (excluye Cobranza/legacy y refleja Rosibel de Ventas)', () => {
+  assert.equal(
+    isSalesDepartmentUser({ id: 'usr-mvgse4to', username: 'rosibelcxc', nombre: 'Rosibel Briceño', rol: 'COBRANZA', departamento: 'ADM', activo: true }),
+    false
+  );
+  assert.equal(
+    isSalesDepartmentUser({ id: 'usr-wrong-dept', username: 'testadm', nombre: 'Usuario Admin', rol: 'VENTAS', departamento: 'ADM', activo: true }),
+    false
+  );
+  assert.equal(
+    isSalesDepartmentUser({ id: 'usr-inactive', username: 'inactivo', nombre: 'Vendedor Inactivo', rol: 'VENTAS', departamento: 'VEN', activo: false }),
+    false
+  );
+  assert.equal(
+    isSalesDepartmentUser({ id: 'usr-mwnr2mt6', username: 'rosibelventas', nombre: 'Rosibel Briceño ventas', rol: 'VENTAS', departamento: 'VEN', activo: true }),
+    true
+  );
+  assert.equal(
+    isSalesDepartmentUser({ id: 'usr-ventas-txt', username: 'vendedor2', nombre: 'Nuevo Asesor', rol: 'VENTAS', departamento: 'Ventas', activo: true }),
+    true
+  );
+
+  const sampleUsers = [
+    { id: 'usr-admin', username: 'admin', nombre: 'Luiggy Silva', rol: 'ADMINISTRACIÓN', departamento: 'ADM', co_ven: null, activo: true },
+    { id: 'usr-mvgse4to', username: 'rosibelcxc', nombre: 'Rosibel Briceño', rol: 'COBRANZA', departamento: 'ADM', co_ven: null, activo: true, foto: 'data:image/jpeg;base64,FOTO_COBRANZA' },
+    { id: 'usr-mu5vswve', username: 'ventas', nombre: 'Yheyson Calderón', rol: 'VENTAS', departamento: 'VEN', co_ven: 'YC', activo: true },
+    { id: 'usr-mwnr2mt6', username: 'rosibelventas', nombre: 'Rosibel Briceño ventas', rol: 'VENTAS', departamento: 'VEN', co_ven: 'RBR', activo: true },
+    { id: 'usr-inactivo', username: 'exvendedor', nombre: 'Ex Vendedor', rol: 'VENTAS', departamento: 'VEN', co_ven: 'EV', activo: false }
+  ];
+
+  const sampleProfitSellers = [
+    { id: 'YC', co_ven: 'YC', ven_des: 'Yheyson Calderon', co_zon: '01', zona: 'Puerto Cabello', meta_litros_mes: 4500, comision_pct: 4 },
+    { id: 'CB', co_ven: 'CB', ven_des: 'Carlos Becerra', co_zon: '' },
+    { id: 'FS', co_ven: 'FS', ven_des: 'Freddy Sepulveda', co_zon: '' },
+    { id: 'RB', co_ven: 'RB', ven_des: 'Rosibel Briceño', foto: 'data:image/jpeg;base64,FOTO_COBRANZA' },
+    { id: 'RBR', co_ven: 'RBR', ven_des: 'Rosibel Briceño ventas', co_zon: '08', zona: 'Valencia Sur' }
+  ];
+
+  const result = buildSalesDepartmentSellers(sampleUsers, sampleProfitSellers);
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map((s) => s.coVen), ['YC', 'RBR']);
+  assert.equal(result.some((s) => s.coVen === 'RB' || s.coVen === 'CB' || s.coVen === 'FS'), false);
+
+  const yc = result.find((s) => s.coVen === 'YC');
+  assert.equal(yc.venDes, 'Yheyson Calderón');
+  assert.equal(yc.coZon, '01');
+  assert.equal(yc.metaLitrosMes, 4500);
+
+  const rbr = result.find((s) => s.coVen === 'RBR');
+  assert.equal(rbr.venDes, 'Rosibel Briceño ventas');
+  assert.equal(rbr.username, 'rosibelventas');
+  assert.equal(rbr.coZon, '08');
+
+  // Caso homónimo: Rosibel de Ventas sin co_ven y mismo nombre que Rosibel de Cobranza
+  const sameNameResult = buildSalesDepartmentSellers(
+    [
+      { id: 'usr-mvgse4to', username: 'rosibelcxc', nombre: 'Rosibel Briceño', rol: 'COBRANZA', departamento: 'ADM', co_ven: null, activo: true, foto: 'data:image/jpeg;base64,FOTO_COBRANZA' },
+      { id: 'usr-mwnr2mt6', username: 'rosibelventas', nombre: 'Rosibel Briceño', rol: 'VENTAS', departamento: 'VEN', co_ven: null, activo: true, foto: '' }
+    ],
+    [{ id: 'RB', co_ven: 'RB', ven_des: 'Rosibel Briceño', foto: 'data:image/jpeg;base64,FOTO_COBRANZA' }]
+  );
+  assert.equal(sameNameResult.length, 1);
+  assert.equal(sameNameResult[0].username, 'rosibelventas');
+  assert.equal(sameNameResult[0].departamento, 'VEN');
+  assert.equal(sameNameResult[0].foto, '');
+});
+
+// 11. Liberación persistente de zona de vendedor (no restaura zona legacy de REAL_PROFIT_SELLERS) y reasignación inmediata
+{
+  const memStore = new Map();
+  const prevStorage = globalThis.localStorage;
+  const prevFetch = globalThis.fetch;
+  globalThis.localStorage = {
+    getItem: (k) => (memStore.has(k) ? memStore.get(k) : null),
+    setItem: (k, v) => { memStore.set(k, String(v)); },
+    removeItem: (k) => { memStore.delete(k); },
+    clear: () => { memStore.clear(); }
+  };
+  globalThis.fetch = async () => { throw new Error('offline-test'); };
+
+  try {
+    // Sembrar YC con Zona 01 (igual que REAL_PROFIT_SELLERS) y RBR sin zona
+    globalThis.localStorage.setItem('sm_sellers_v4_native', JSON.stringify([
+      { id: 'YC', coVen: 'YC', co_ven: 'YC', venDes: 'Yheyson Calderón', coZon: '01', co_zon: '01', zona: 'Mun. Pto. Cabello - Juan José Mora' },
+      { id: 'RBR', coVen: 'RBR', co_ven: 'RBR', venDes: 'Rosibel Briceño ventas', coZon: '', co_zon: '', zona: '' }
+    ]));
+
+    // 1. Liberar la zona de YC
+    const released = await updateSupabaseSellerZone('YC', { coZon: '', zona: '' });
+    assert.equal(released.coZon, '');
+    assert.equal(released.zona, '');
+
+    // 2. Verificar que getSupabaseProfitSellers NO resucita la Zona 01 desde REAL_PROFIT_SELLERS
+    const sellersAfterRelease = await getSupabaseProfitSellers();
+    const ycAfterRelease = sellersAfterRelease.find((s) => s.coVen === 'YC');
+    assert.ok(ycAfterRelease, 'YC debe existir en profit_sellers');
+    assert.equal(ycAfterRelease.coZon, '', 'Al liberar zona de YC no debe restaurarse 01 desde fallback');
+    assert.equal(ycAfterRelease.zona, '', 'La descripción de zona de YC debe quedar vacía tras liberar');
+
+    // 3. Reasignar la Zona 01 liberada a RBR y validar persistencia
+    const reassigned = await updateSupabaseSellerZone('RBR', { coZon: '01', zona: 'Mun. Pto. Cabello - Juan José Mora' });
+    assert.equal(reassigned.coZon, '01');
+    const sellersAfterReassign = await getSupabaseProfitSellers();
+    const rbrAfterReassign = sellersAfterReassign.find((s) => s.coVen === 'RBR');
+    assert.equal(rbrAfterReassign?.coZon, '01');
+    assert.equal(rbrAfterReassign?.zona, 'Mun. Pto. Cabello - Juan José Mora');
+
+    passed += 1;
+    console.log('  ✔ 11. Liberación persistente de zona de vendedor sin regresión de fallback y reasignación inmediata');
   } finally {
     globalThis.localStorage = prevStorage;
     globalThis.fetch = prevFetch;

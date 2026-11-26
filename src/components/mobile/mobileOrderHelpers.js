@@ -2,16 +2,16 @@ import {
   resolveProductUnit,
   resolveProductLitersPerUnit,
   round2
-} from '../../services/formatService';
-import { canAccessModule, normalizeRole } from '../../services/authService';
+} from '../../services/formatService.js';
+import { canAccessModule, canAccessMobileModule, normalizeRole } from '../../services/authService.js';
 import {
   isClientAssignedToSeller,
   isOrderReservationExpired,
   parseInvoiceDateInfo,
   resolveCreditDaysFromTerm
-} from '../../services/creditPolicyService';
-import { isCreditSaleRecord, isCxcInvoiceSettled } from '../../utils/cxcUtils';
-import { resolveExchangeRates } from '../../utils/treasuryAccountUtils';
+} from '../../services/creditPolicyService.js';
+import { isCreditSaleRecord, isCxcInvoiceSettled } from '../../utils/cxcUtils.js';
+import { resolveExchangeRates } from '../../utils/treasuryAccountUtils.js';
 
 export const PREVENTA_RESERVATION_HOURS = 72;
 
@@ -544,6 +544,9 @@ export function resolveOrderExpirationStatus(order, { profitInvoices = [], sales
  */
 export function canAccessMobileInventory(currentUser) {
   if (!currentUser) return false;
+  if (Array.isArray(currentUser.modulosMovil)) {
+    return canAccessMobileModule(currentUser, 'inventario');
+  }
   if (canAccessModule(currentUser?.rol, 'inventario', currentUser)) return true;
   return (
     canAccessModule(currentUser?.rol, 'preventa', currentUser) ||
@@ -558,6 +561,9 @@ export function canAccessMobileInventory(currentUser) {
  */
 export function canAccessMobileCxC(currentUser) {
   if (!currentUser) return false;
+  if (Array.isArray(currentUser.modulosMovil)) {
+    return canAccessMobileModule(currentUser, 'cxc');
+  }
   if (canAccessModule(currentUser?.rol, 'cxc', currentUser)) return true;
   return (
     canAccessModule(currentUser?.rol, 'preventa', currentUser) ||
@@ -565,4 +571,49 @@ export function canAccessMobileCxC(currentUser) {
     canAccessModule(currentUser?.rol, 'ventas', currentUser) ||
     canAccessModule(currentUser?.rol, 'cxc')
   );
+}
+
+/**
+ * Habilita el módulo Resumen General Ejecutivo en la versión móvil
+ * para roles directivos/administrativos y operadores autenticados en móvil.
+ */
+export function canAccessMobileDashboard(currentUser) {
+  if (!currentUser) return false;
+  if (Array.isArray(currentUser.modulosMovil)) {
+    return canAccessMobileModule(currentUser, 'dashboard');
+  }
+  if (canAccessModule(currentUser?.rol, 'dashboard', currentUser)) return true;
+  return (
+    canAccessModule(currentUser?.rol, 'dashboard') ||
+    canAccessModule(currentUser?.rol, 'preventa', currentUser) ||
+    canAccessModule(currentUser?.rol, 'pedidos', currentUser) ||
+    canAccessModule(currentUser?.rol, 'ventas', currentUser) ||
+    canAccessModule(currentUser?.rol, 'cxc', currentUser) ||
+    canAccessModule(currentUser?.rol, 'inventario', currentUser)
+  );
+}
+
+/**
+ * Habilita Preventa Móvil & Mis Pedidos según permisología móvil o general.
+ */
+export function canAccessMobilePresale(currentUser) {
+  if (!currentUser) return false;
+  if (Array.isArray(currentUser.modulosMovil)) {
+    return canAccessMobileModule(currentUser, 'pedidos') || canAccessMobileModule(currentUser, 'preventa');
+  }
+  return (
+    canAccessModule(currentUser?.rol, 'pedidos', currentUser) ||
+    canAccessModule(currentUser?.rol, 'preventa', currentUser)
+  );
+}
+
+/**
+ * Habilita Predictibilidad & Alertas (SIGNUM FORESIGHT) en la versión móvil.
+ */
+export function canAccessMobilePredictibilidad(currentUser) {
+  if (!currentUser) return false;
+  if (Array.isArray(currentUser.modulosMovil)) {
+    return canAccessMobileModule(currentUser, 'predictibilidad');
+  }
+  return canAccessModule(currentUser?.rol, 'predictibilidad', currentUser);
 }

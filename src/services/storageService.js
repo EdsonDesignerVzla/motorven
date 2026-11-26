@@ -208,6 +208,15 @@ export const patchProductsStockInStorage = (updatedItems = []) => {
         stock_almacen_01: patch.stock_almacen_01,
         stockAlmacen02: patch.stockAlmacen02,
         stock_almacen_02: patch.stock_almacen_02,
+        ...(patch.costoUsd !== undefined
+          ? { costoUsd: patch.costoUsd, costo_usd: patch.costoUsd, costo: patch.costoUsd }
+          : {}),
+        ...(patch.costoUsd01 !== undefined
+          ? { costoUsd01: patch.costoUsd01, costo_usd_01: patch.costoUsd01 }
+          : {}),
+        ...(patch.costoUsd02 !== undefined
+          ? { costoUsd02: patch.costoUsd02, costo_usd_02: patch.costoUsd02 }
+          : {}),
         updated_at: patch.updated_at || products[idx].updated_at
       };
       changed = true;
@@ -945,6 +954,7 @@ export const savePurchase = (purchaseData) => {
     receptor: purchaseData?.receptor || 'Pedro Gómez',
     recepcionId: purchaseData?.recepcionId || '',
     stockAplicado: Boolean(purchaseData?.stockAplicado),
+    updatedAt: purchaseData?.updatedAt || new Date().toISOString(),
     items: normalizedItems
   };
 
@@ -960,11 +970,22 @@ export const savePurchase = (purchaseData) => {
 
 export const updateStoragePurchase = (id, patch = {}) => {
   const purchases = getPurchases();
-  const idx = purchases.findIndex(p => p && p.id === id);
+  const idx = purchases.findIndex(p => p && String(p.id || '').trim() === String(id || '').trim());
   if (idx < 0) return null;
-  purchases[idx] = { ...purchases[idx], ...patch };
+  purchases[idx] = { ...purchases[idx], ...patch, updatedAt: patch?.updatedAt || new Date().toISOString() };
   localStorage.setItem(KEYS.PURCHASES, JSON.stringify(purchases));
   return purchases[idx];
+};
+
+export const deleteStoragePurchase = (idOrObj) => {
+  if (!idOrObj) return getPurchases();
+  const rawId = typeof idOrObj === 'object' ? (idOrObj.id || idOrObj.numeroFacturaProv || idOrObj.nroFactura) : idOrObj;
+  const cleanId = String(rawId || '').trim();
+  if (!cleanId) return getPurchases();
+  const purchases = getPurchases();
+  const filtered = purchases.filter(p => p && String(p.id || '').trim() !== cleanId);
+  localStorage.setItem(KEYS.PURCHASES, JSON.stringify(filtered));
+  return filtered;
 };
 
 export const getCashMovements = () => {
@@ -1171,8 +1192,19 @@ export const getStorageSellers = () => {
           (r.coVen && String(r.coVen).trim().toLowerCase() === coVen.toLowerCase()) ||
           (r.venDes && venDes && String(r.venDes).trim().toLowerCase() === venDes.toLowerCase())
       );
-      const coZon = String(s?.coZon || s?.co_zon || fallback?.coZon || fallback?.co_zon || '').trim();
-      const zona = String(s?.zona || fallback?.zona || '').trim();
+      const hasExplicitCoZon =
+        Boolean(s) && (
+          Object.prototype.hasOwnProperty.call(s, 'coZon') ||
+          Object.prototype.hasOwnProperty.call(s, 'co_zon')
+        );
+      const rawCoZon = Boolean(s) && Object.prototype.hasOwnProperty.call(s, 'co_zon')
+        ? s.co_zon
+        : (hasExplicitCoZon ? s?.coZon : (fallback?.coZon ?? fallback?.co_zon ?? ''));
+      const coZon = String(rawCoZon ?? '').trim();
+      const hasExplicitZona = Boolean(s) && Object.prototype.hasOwnProperty.call(s, 'zona');
+      const zona = coZon
+        ? String(hasExplicitZona ? (s?.zona ?? '') : (fallback?.zona ?? '')).trim()
+        : '';
       return {
         ...fallback,
         ...s,

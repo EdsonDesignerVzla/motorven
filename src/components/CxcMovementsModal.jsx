@@ -42,7 +42,10 @@ import {
   normalizeCxcRateType,
   classifyCollectionRateType,
   groupMovementsByRateType,
-  summarizeDailyMovementsByCaja
+  summarizeDailyMovementsByCaja,
+  filterMovementsForDailyCollectionReport,
+  resolveCatalogAccountForMovement,
+  healCorruptedBankToCajaAccount
 } from '../utils/cxcUtils';
 import {
   isDirectCurrencyRateType,
@@ -188,6 +191,7 @@ const resolveCollectionAmounts = (col, fallbackTasa = 827.73) => {
 const buildInvoiceMovementsList = ({
   documents = [],
   collections = [],
+  catalogCuentas = [],
   fallbackTasa = 827.73
 }) => {
   const docByNum = new Map();
@@ -242,7 +246,7 @@ const buildInvoiceMovementsList = ({
       const factNum = String(h.factNum || doc.factNum || doc.factura || '').trim();
       const cuentaNombre = h.cuentaNombre || h.cuentaDestino || h.cuentaId || 'Caja / Banco';
 
-      pushUniqueMovement({
+      pushUniqueMovement(healCorruptedBankToCajaAccount({
         id: h.id || `hist-${factNum}-${rawCorr || idx}-${fechaIso}`,
         rawId: h.id || `${factNum}-${idx}`,
         histId: h.id || null,
@@ -264,6 +268,7 @@ const buildInvoiceMovementsList = ({
         vendedorNombre: String(h.cobradorNombre || h.vendedorNombre || doc.vendedorNombre || '').trim(),
         cobradorNombre: String(h.cobradorNombre || h.vendedorNombre || doc.vendedorNombre || '').trim(),
         formaPago: resolvePaymentMethodLabel(h.formaPago, h.accountType),
+        cuentaKey: h.cuentaKey || '',
         cuentaId: h.cuentaId || '',
         cuentaNombre,
         accountType: h.accountType || 'BANCO',
@@ -282,7 +287,7 @@ const buildInvoiceMovementsList = ({
         montoFacturaUsd: Number(doc.montoFacturaUsd || 0),
         restanteDocUsd: Number(doc.restanteUsd || 0),
         source: 'DOC_HISTORIAL'
-      });
+      }, catalogCuentas));
     });
   });
 
@@ -708,7 +713,7 @@ export function CxcMovementsModal({
   // Consolidar y clasificar todos los movimientos por renglón de tasa (Fiscal: BCV o moneda directa; moneda directa muestra 0 en Bs/Tasa)
   const allMovements = useMemo(
     () =>
-      buildInvoiceMovementsList({ documents, collections, fallbackTasa: effectiveTasaBcv }).map((m) => {
+      buildInvoiceMovementsList({ documents, collections, catalogCuentas, fallbackTasa: effectiveTasaBcv }).map((m) => {
         const tipoTasa = classifyCollectionRateType(m, rateRefMap);
         const isDirect = isDirectCurrencyRateType(tipoTasa);
         const codeUpper = String(m.vendedorId || '').trim().toUpperCase();
@@ -730,7 +735,7 @@ export function CxcMovementsModal({
           montoBs: isDirect ? 0 : m.montoBs
         };
       }),
-    [documents, collections, effectiveTasaBcv, rateRefMap, sellerNameByCode]
+    [documents, collections, catalogCuentas, effectiveTasaBcv, rateRefMap, sellerNameByCode]
   );
 
   // Días recientes disponibles con movimientos para selector rápido
@@ -833,6 +838,25 @@ export function CxcMovementsModal({
       maxCorr
     };
   }, [filteredMovements, movementsByDay]);
+
+  // Datos exclusivos para los cuadros de resumen final del Reporte Diario Impreso:
+  // el detalle diario mantiene visibles las Notas de Crédito y Débito, pero en los
+  // cuadros de cuentas finales (Resumen por Tasa y Resumen por Caja/Banco) se excluyen
+  // para que no aparezcan ni se sumen a los totales finales.
+  const printableFinalMovements = useMemo(
+    () => filterMovementsForDailyCollectionReport(filteredMovements),
+    [filteredMovements]
+  );
+
+  const printableRateBreakdown = useMemo(
+    () => groupMovementsByRateType(printableFinalMovements, rateRefMap),
+    [printableFinalMovements, rateRefMap]
+  );
+
+  const printableCajaBreakdown = useMemo(
+    () => summarizeDailyMovementsByCaja(printableFinalMovements),
+    [printableFinalMovements]
+  );
 
   // Selector de documento para insertar abono
   const selectableDocs = useMemo(() => {
@@ -963,7 +987,14 @@ export function CxcMovementsModal({
       notify.warning('Seleccione una Factura o Nota de Entrega para asociar el movimiento.');
       return;
     }
-    const isDirectCurrency = isDirectCurrencyRateType(insertTipoTasa);
+    const cuentaObj = (catalogCuentas || []).find(c => c.key === insertCuentaKey);
+    if (!cuentaObj) {
+      notify.warning('Seleccione una Caja o Banco válido.');
+      return;
+    }
+    const directFromCuentaObj = inferDirectCurrencyFromAccountOrMethod(cuentaObj, { includeBinanceFromAccount: true });
+    const effectiveInsertTipoRaw = directFromCuentaObj || insertTipoTasa;
+    const isDirectCurrency = isDirectCurrencyRateType(effectiveInsertTipoRaw);
     const rate = isDirectCurrency ? 0 : Number(insertTasa);
     if (!isDirectCurrency && (!rate || isNaN(rate) || rate <= 0)) {
       notify.warning('Ingrese una Tasa válida mayor a 0.');
@@ -971,11 +1002,6 @@ export function CxcMovementsModal({
     }
     if (!insertFecha) {
       notify.warning('La Fecha del movimiento es obligatoria.');
-      return;
-    }
-    const cuentaObj = (catalogCuentas || []).find(c => c.key === insertCuentaKey);
-    if (!cuentaObj) {
-      notify.warning('Seleccione una Caja o Banco válido.');
       return;
     }
     const abonoUsd = round2(Number(insertMontoUsd));
@@ -1015,10 +1041,12 @@ export function CxcMovementsModal({
 
     const movNowIso = new Date().toISOString();
     const fechaCompleta = insertFecha === getTodayIso() ? movNowIso : `${insertFecha}T12:00:00.000Z`;
-    const normalizedInsertTipo = normalizeCxcRateType(insertTipoTasa);
-    const effectiveTipoTasa = selectedInsertDoc.tipoDoc !== 'NOTA_ENTREGA'
-      ? (normalizedInsertTipo === 'EURO' ? 'BCV' : (normalizedInsertTipo || 'BCV'))
-      : (normalizedInsertTipo || 'PERSONALIZADA');
+    const normalizedInsertTipo = normalizeCxcRateType(effectiveInsertTipoRaw);
+    const effectiveTipoTasa = directFromCuentaObj
+      ? directFromCuentaObj
+      : (selectedInsertDoc.tipoDoc !== 'NOTA_ENTREGA'
+          ? (normalizedInsertTipo === 'EURO' ? 'BCV' : (normalizedInsertTipo || 'BCV'))
+          : (normalizedInsertTipo || 'PERSONALIZADA'));
     const persistedRate = isDirectCurrency ? 1 : rate;
     const monedaPagoVal = isDirectCurrency ? 'USD' : 'BS';
     const obsFinal = insertObservaciones.trim() || (
@@ -1320,23 +1348,8 @@ export function CxcMovementsModal({
     return matched;
   };
 
-  const resolveCatalogAccountForMov = (mov) => {
-    if (!mov || !Array.isArray(catalogCuentas) || catalogCuentas.length === 0) return null;
-    const norm = (v) => String(v || '').trim().toUpperCase();
-    const stripPref = (v) => norm(v).replace(/^(CAJA:|BANCO:|CAJA-|CTA-)/, '');
-    const movId = stripPref(mov.cuentaId);
-    const movName = norm(mov.cuentaNombre);
-
-    return (
-      catalogCuentas.find((c) => {
-        const cid = stripPref(c.rawId || c.id || c.key);
-        const cKey = stripPref(c.key);
-        if (movId && (cid === movId || cKey === movId)) return true;
-        if (movName && (norm(c.nombre) === movName || norm(c.label) === movName)) return true;
-        return false;
-      }) || null
-    );
-  };
+  const resolveCatalogAccountForMov = (mov) =>
+    resolveCatalogAccountForMovement(mov, catalogCuentas);
 
   const normalizeFormaPagoForSelect = (rawForma) => {
     const u = String(rawForma || '').trim().toUpperCase();
@@ -1391,6 +1404,37 @@ export function CxcMovementsModal({
       ...mov,
       _initialMatchedAccount: matchedAcct
     });
+  };
+
+  const handleEditPayCuentaChange = (nextKey) => {
+    setEditPayCuentaKey(nextKey);
+    if (!nextKey || nextKey === '__KEEP__') return;
+    const acc = (catalogCuentas || []).find((c) => c.key === nextKey);
+    if (!acc) return;
+
+    if (acc.accountType === 'CAJA') {
+      const mUpper = String(acc.nombre || '').toUpperCase();
+      if (mUpper.includes('USDT') || mUpper.includes('BINANCE')) setEditPayFormaPago('USDT');
+      else if (mUpper.includes('ZELLE')) setEditPayFormaPago('ZELLE');
+      else setEditPayFormaPago('EFECTIVO');
+    } else if (editPayFormaPago === 'EFECTIVO' || editPayFormaPago === 'ZELLE' || editPayFormaPago === 'USDT') {
+      setEditPayFormaPago('TRANSFERENCIA');
+    }
+
+    const directFromAcc = inferDirectCurrencyFromAccountOrMethod(acc, { includeBinanceFromAccount: true });
+    if (directFromAcc) {
+      setEditPayTipoTasa(directFromAcc);
+      setEditPayTasa('0');
+      setEditPayMontoBs('0');
+    } else if (isDirectCurrencyRateType(editPayTipoTasa)) {
+      const bcvStr = round2(effectiveTasaBcv).toFixed(2);
+      setEditPayTipoTasa('BCV');
+      setEditPayTasa(bcvStr);
+      const u = Number(editPayMontoUsd);
+      if (!isNaN(u) && editPayMontoUsd !== '') {
+        setEditPayMontoBs(round2(u * Number(bcvStr)).toFixed(2));
+      }
+    }
   };
 
   const handleEditPayTipoTasaChange = (nextTipo) => {
@@ -1471,7 +1515,16 @@ export function CxcMovementsModal({
     e.preventDefault();
     if (!editingPaymentData) return;
 
-    const isDirectCurrency = isDirectCurrencyRateType(editPayTipoTasa);
+    const isNewCreditNote = editPayFormaPago === 'NOTA_CREDITO';
+    const selectedAcct = !isNewCreditNote && editPayCuentaKey && editPayCuentaKey !== '__KEEP__'
+      ? (catalogCuentas || []).find((c) => c.key === editPayCuentaKey) || null
+      : null;
+    const directFromSelectedAcct = selectedAcct
+      ? inferDirectCurrencyFromAccountOrMethod(selectedAcct, { includeBinanceFromAccount: true })
+      : null;
+    const effectiveTipoTasa = directFromSelectedAcct || editPayTipoTasa;
+
+    const isDirectCurrency = isDirectCurrencyRateType(effectiveTipoTasa);
     const parsedUsd = round2(Number(editPayMontoUsd || 0));
     const parsedRate = isDirectCurrency ? 0 : Number(editPayTasa || 0);
     if (!parsedUsd || isNaN(parsedUsd) || parsedUsd <= 0) {
@@ -1508,10 +1561,9 @@ export function CxcMovementsModal({
       }
     }
 
-    const isNewCreditNote = editPayFormaPago === 'NOTA_CREDITO';
-    const selectedAcct = !isNewCreditNote && editPayCuentaKey && editPayCuentaKey !== '__KEEP__'
-      ? (catalogCuentas || []).find((c) => c.key === editPayCuentaKey) || null
-      : null;
+    const newCuentaKey = isNewCreditNote
+      ? ''
+      : (selectedAcct ? selectedAcct.key : (editingPaymentData.cuentaKey || ''));
     const newCuentaId = isNewCreditNote
       ? ''
       : (selectedAcct ? (selectedAcct.rawId || selectedAcct.id) : (editingPaymentData.cuentaId || ''));
@@ -1542,10 +1594,11 @@ export function CxcMovementsModal({
           return {
             ...h,
             formaPago: editPayFormaPago,
+            cuentaKey: newCuentaKey || h.cuentaKey || '',
             cuentaId: newCuentaId,
             cuentaNombre: newCuentaNombre,
             accountType: newAccountType,
-            tipoTasa: editPayTipoTasa,
+            tipoTasa: effectiveTipoTasa,
             tasa: persistedRate,
             tasaPago: persistedRate,
             monedaPago: monedaPagoVal,
@@ -1613,7 +1666,7 @@ export function CxcMovementsModal({
                 montoUsd: nextTotalUsd,
                 montoBs: nextTotalBs,
                 tasa: persistedRate,
-                tipoTasa: editPayTipoTasa,
+                tipoTasa: effectiveTipoTasa,
                 cuentaId: newCuentaId,
                 cuentaNombre: newCuentaNombre,
                 codCta: newAccountType === 'BANCO' ? newCuentaId : '',
@@ -1633,8 +1686,8 @@ export function CxcMovementsModal({
           tasa: persistedRate,
           tasaPago: persistedRate,
           tasa_pago: persistedRate,
-          tipoTasa: editPayTipoTasa,
-          tipo_tasa: editPayTipoTasa,
+          tipoTasa: effectiveTipoTasa,
+          tipo_tasa: effectiveTipoTasa,
           monedaPago: monedaPagoVal,
           moneda_pago: monedaPagoVal,
           cuentaId: newCuentaId,
@@ -1666,7 +1719,7 @@ export function CxcMovementsModal({
         newCuentaId,
         newCuentaNombre,
         newFormaPago: editPayFormaPago,
-        newTipoTasa: editPayTipoTasa,
+        newTipoTasa: effectiveTipoTasa,
         newTasa: persistedRate,
         monedaPago: monedaPagoVal,
         newReferencia: cleanRef,
@@ -1733,10 +1786,33 @@ export function CxcMovementsModal({
           histRemoved || (targetCanon && docCanon === targetCanon && targetMov.source === 'PROFIT_COLLECTION');
         if (!shouldUpdateDoc) return;
 
+        const targetFormaUp = String(targetMov.formaPago || '').toUpperCase();
+        const targetAccUp = String(targetMov.accountType || '').toUpperCase();
+        const targetCorrUp = String(targetMov.correlativo || '').toUpperCase();
+        const isDebitNoteTarget =
+          targetFormaUp.includes('DEBITO') ||
+          targetFormaUp.includes('DÉBITO') ||
+          targetAccUp === 'NOTA_DEBITO' ||
+          /^(ND-|NE-ND-)/i.test(targetCorrUp);
+
         const docTotalUsd = round2(Number(doc.montoFacturaUsd ?? doc.totNetoUsd ?? 0));
-        const newAbonosUsd = round2(Math.max(0, Number(doc.abonosUsd || 0) - oldMovUsd));
-        const newRestanteUsd = round2(Math.min(docTotalUsd > 0 ? docTotalUsd : 999999999, Math.max(0, docTotalUsd - newAbonosUsd)));
-        const updatedDocPayload = buildUpdatedDocPayload(doc, nextHist, newAbonosUsd, newRestanteUsd);
+        const currentAbonosUsd = round2(Number(doc.abonosUsd || 0));
+        const newAbonosUsd = isDebitNoteTarget
+          ? currentAbonosUsd
+          : round2(Math.max(0, currentAbonosUsd - oldMovUsd));
+        const nextDocTotalUsd = isDebitNoteTarget
+          ? round2(Math.max(0, docTotalUsd - oldMovUsd))
+          : docTotalUsd;
+        const newRestanteUsd = round2(Math.min(nextDocTotalUsd > 0 ? nextDocTotalUsd : 999999999, Math.max(0, nextDocTotalUsd - newAbonosUsd)));
+        const basePayload = buildUpdatedDocPayload(doc, nextHist, newAbonosUsd, newRestanteUsd);
+        const updatedDocPayload = isDebitNoteTarget
+          ? {
+              ...basePayload,
+              totNetoUsd: nextDocTotalUsd,
+              totBrutoUsd: round2(Math.max(0, Number(doc.totBrutoUsd ?? doc.subtotalUsd ?? docTotalUsd) - (Number(targetMov.subtotalUsd || oldMovUsd)))),
+              ivaUsd: doc.tipoDoc === 'NOTA_ENTREGA' ? 0 : round2(Math.max(0, Number(doc.ivaUsd || 0) - Number(targetMov.ivaUsd || 0)))
+            }
+          : basePayload;
         updatedDocs.push(updatedDocPayload);
 
         if (onUpdateLocalDoc) {
@@ -3200,11 +3276,24 @@ export function CxcMovementsModal({
                                       <button
                                         type="button"
                                         onClick={() => {
+                                          const formaUpper = String(mov.formaPago || '').toUpperCase();
+                                          const accTypeUpper = String(mov.accountType || '').toUpperCase();
+                                          const corrUpper = String(mov.correlativo || '').toUpperCase();
+                                          const isDebitNoteMov =
+                                            formaUpper === 'NOTA_DEBITO' ||
+                                            formaUpper === 'NOTA DE DÉBITO' ||
+                                            formaUpper === 'NOTA DE DEBITO' ||
+                                            accTypeUpper === 'NOTA_DEBITO' ||
+                                            /^(ND-|NE-ND-)/i.test(corrUpper);
                                           const isCreditNoteMov =
-                                            String(mov.formaPago || '').toUpperCase() === 'NOTA_CREDITO' ||
-                                            String(mov.accountType || '').toUpperCase() === 'NOTA_CREDITO' ||
-                                            /^NC-/i.test(String(mov.correlativo || ''));
-                                          if (isCreditNoteMov) {
+                                            !isDebitNoteMov && (
+                                              formaUpper === 'NOTA_CREDITO' ||
+                                              formaUpper === 'NOTA DE CRÉDITO' ||
+                                              formaUpper === 'NOTA DE CREDITO' ||
+                                              accTypeUpper === 'NOTA_CREDITO' ||
+                                              /^(NC-|NE-NC-)/i.test(corrUpper)
+                                            );
+                                          if (isCreditNoteMov || isDebitNoteMov) {
                                             const totalNoteUsd = round2(Number(mov.montoUsd || 0));
                                             const isFiscalMov = mov.isFiscal !== undefined
                                               ? Boolean(mov.isFiscal)
@@ -3230,10 +3319,10 @@ export function CxcMovementsModal({
                                               sellerNameByCode.get(resolvedVendedorId) ||
                                               ''
                                             ).trim();
-                                            const resolvedMotivo = mov.observaciones || `Nota de Crédito #${mov.correlativo} sobre #${mov.factNum}`;
+                                            const resolvedMotivo = mov.observaciones || `${isDebitNoteMov ? 'Nota de Débito' : 'Nota de Crédito'} #${mov.correlativo} sobre #${mov.factNum}`;
                                             outputCreditDebitNoteDocument({
                                               docData: {
-                                                tipoDoc: 'NOTA_CREDITO',
+                                                tipoDoc: isDebitNoteMov ? 'NOTA_DEBITO' : 'NOTA_CREDITO',
                                                 isFiscal: isFiscalMov,
                                                 isExento: !isFiscalMov,
                                                 numeroDoc: mov.correlativo,
@@ -3597,7 +3686,7 @@ export function CxcMovementsModal({
                     {/* Cuadro Final de Clasificación y Sumatoria Total por Renglón de Tasa */}
                     <div className="cxc-print-footer-totals" style={{ marginTop: '12px' }}>
                       <div style={{ fontSize: '8.8pt', fontWeight: 900, textTransform: 'uppercase', marginBottom: '4px', color: '#0f172a' }}>
-                        RESUMEN Y SUMATORIA FINAL POR RENGLÓN DE TASA (TODAS LAS TASAS)
+                        RESUMEN Y SUMATORIA FINAL POR RENGLÓN DE TASA (TODAS LAS TASAS — EXCLUYE N/C Y N/D)
                       </div>
                       <table className="cxc-print-table">
                         <thead>
@@ -3609,21 +3698,27 @@ export function CxcMovementsModal({
                           </tr>
                         </thead>
                         <tbody>
-                          {overallRateBreakdown.groups.map((rg) => (
-                            <tr key={`sum-${rg.id}`}>
-                              <td style={{ fontWeight: 700 }}>
-                                {rg.label}{rg.id === 'BCV' ? ' (incl. Documentos Fiscales)' : ''}
+                          {printableRateBreakdown.nonEmptyGroups.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} style={{ textAlign: 'center', color: '#64748b', fontStyle: 'italic' }}>
+                                Sin abonos reales de cobranza registrados por renglón de tasa
                               </td>
-                              <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{rg.count}</td>
-                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatUsd(rg.totalUsd)}</td>
-                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{rg.isDirectCurrency ? '0' : formatBs(rg.totalBs)}</td>
                             </tr>
-                          ))}
+                          ) : (
+                            printableRateBreakdown.nonEmptyGroups.map((rg) => (
+                              <tr key={`sum-${rg.id}`}>
+                                <td style={{ fontWeight: 700 }}>{rg.label}</td>
+                                <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{rg.count}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatUsd(rg.totalUsd)}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{rg.isDirectCurrency ? '0' : formatBs(rg.totalBs)}</td>
+                              </tr>
+                            ))
+                          )}
                           <tr style={{ background: '#e2e8f0', fontWeight: 900, fontSize: '9.5pt' }}>
                             <td>TOTAL GENERAL TODAS LAS TASAS ({summaryStats.daysCount} día(s))</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{overallRateBreakdown.totals.count}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatUsd(overallRateBreakdown.totals.totalUsd)}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{overallRateBreakdown.totals.totalBs > 0 ? formatBs(overallRateBreakdown.totals.totalBs) : '0'}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{printableRateBreakdown.totals.count}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatUsd(printableRateBreakdown.totals.totalUsd)}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{printableRateBreakdown.totals.totalBs > 0 ? formatBs(printableRateBreakdown.totals.totalBs) : '0'}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -3632,7 +3727,7 @@ export function CxcMovementsModal({
                     {/* Cuadro Final de Sumatoria Total por Caja / Banco */}
                     <div className="cxc-print-footer-totals" style={{ marginTop: '10px' }}>
                       <div style={{ fontSize: '8.8pt', fontWeight: 900, textTransform: 'uppercase', marginBottom: '4px', color: '#0f172a' }}>
-                        RESUMEN Y SUMATORIA FINAL POR CAJA / BANCO
+                        RESUMEN Y SUMATORIA FINAL POR CAJA / BANCO (EXCLUYE N/C Y N/D)
                       </div>
                       <table className="cxc-print-table">
                         <thead>
@@ -3644,19 +3739,27 @@ export function CxcMovementsModal({
                           </tr>
                         </thead>
                         <tbody>
-                          {overallCajaBreakdown.rows.map((cj) => (
-                            <tr key={`sum-caja-${cj.key}`}>
-                              <td style={{ fontWeight: 700 }}>{cj.cuentaNombre}</td>
-                              <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{cj.count}</td>
-                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatUsd(cj.totalUsd)}</td>
-                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{cj.totalBs > 0 ? formatBs(cj.totalBs) : '0'}</td>
+                          {printableCajaBreakdown.rows.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} style={{ textAlign: 'center', color: '#64748b', fontStyle: 'italic' }}>
+                                Sin ingresos registrados en cajas o bancos
+                              </td>
                             </tr>
-                          ))}
+                          ) : (
+                            printableCajaBreakdown.rows.map((cj) => (
+                              <tr key={`sum-caja-${cj.key}`}>
+                                <td style={{ fontWeight: 700 }}>{cj.cuentaNombre}</td>
+                                <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{cj.count}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{formatUsd(cj.totalUsd)}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{cj.totalBs > 0 ? formatBs(cj.totalBs) : '0'}</td>
+                              </tr>
+                            ))
+                          )}
                           <tr style={{ background: '#e2e8f0', fontWeight: 900, fontSize: '9.5pt' }}>
-                            <td>TOTAL GENERAL POR CAJAS ({overallCajaBreakdown.rows.length} caja(s)/banco(s))</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{overallCajaBreakdown.totals.count}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatUsd(overallCajaBreakdown.totals.totalUsd)}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{overallCajaBreakdown.totals.totalBs > 0 ? formatBs(overallCajaBreakdown.totals.totalBs) : '0'}</td>
+                            <td>TOTAL GENERAL POR CAJAS ({printableCajaBreakdown.rows.length} caja(s)/banco(s))</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'monospace' }}>{printableCajaBreakdown.totals.count}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{formatUsd(printableCajaBreakdown.totals.totalUsd)}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>{printableCajaBreakdown.totals.totalBs > 0 ? formatBs(printableCajaBreakdown.totals.totalBs) : '0'}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -4229,7 +4332,7 @@ export function CxcMovementsModal({
                   ) : (
                     <select
                       value={editPayCuentaKey}
-                      onChange={(e) => setEditPayCuentaKey(e.target.value)}
+                      onChange={(e) => handleEditPayCuentaChange(e.target.value)}
                       disabled={isSavingEditPayment}
                       className="input-modern"
                       style={{ width: '100%', padding: '0.5rem 0.65rem', fontSize: '0.8rem' }}

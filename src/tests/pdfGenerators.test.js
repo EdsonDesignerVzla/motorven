@@ -76,7 +76,8 @@ import {
   generateExpenseVoucherPDF,
   generateThirdPartyStatementPDF,
   generateSeniatRetentionVoucherPDF,
-  generateSeniatRetentionTxt
+  generateSeniatRetentionTxt,
+  generatePredictiveReportPDF
 } from '../services/pdfReportService.js';
 import { REAL_CLIENTS } from '../data/supabaseRealData.js';
 import {
@@ -1535,8 +1536,8 @@ async function runPdfTests() {
       currentUser: mockUser
     });
     assertMultiPageComplete(consDocsPdf, 'CxC Consolidado Documentos (70 docs)', 'FAC-CON-001', 'NE-CON-070');
-    if (!docContains(consDocsPdf, 'NOTA ENT.') || !docContains(consDocsPdf, 'TOTAL (70 documentos)')) {
-      throw new Error('CxC Consolidado Documentos omitió tipo NOTA ENT. o fila TOTAL (70 documentos)');
+    if (!docContains(consDocsPdf, 'NOTA ENT.') || !docContains(consDocsPdf, 'TOTAL (70 documentos)') || !docContains(consDocsPdf, 'CRÉD.')) {
+      throw new Error('CxC Consolidado Documentos omitió tipo NOTA ENT., columna CRÉD. o fila TOTAL (70 documentos)');
     }
 
     const consClients55 = Array.from({ length: 55 }, (_, i) => ({
@@ -2103,6 +2104,65 @@ async function runPdfTests() {
     }
     if (!neStream.includes('8.4 Tf') && !neStream.includes('8.40 Tf')) {
       throw new Error('Nota de Entrega PDF debe usar fuente ampliada >= 8.4pt en cliente/expedición/tabla');
+    }
+  });
+
+  // 50. Reporte PDF de Inteligencia Predictiva & Alertas Tempranas (SIGNUM FORESIGHT)
+  testGen('Reporte PDF de Inteligencia Predictiva y Alertas Tempranas (generatePredictiveReportPDF)', () => {
+    const doc = generatePredictiveReportPDF({
+      stockData: {
+        summary: { criticosCount: 2, agotadosCount: 1, reordenCount: 3, estancadosCount: 1, capitalEstancadoUsd: 450 },
+        items: [
+          {
+            codigo: '001208',
+            descripcion: 'Oilstone 15W40 Mineral',
+            stockTotal: 4,
+            dailyVelocity: 1.5,
+            coverageDays: 2.7,
+            stockoutDateFormatted: '23/11/2026',
+            urgency: 'CRITICO',
+            suggestedReorderQty: 41
+          }
+        ]
+      },
+      marginData: {
+        summary: {
+          avgMarginPct: 24.5,
+          comprimidosCount: 1,
+          perdidaCount: 0,
+          divergentWarehouseCostCount: 1,
+          targetMarginPct: 25
+        },
+        items: []
+      },
+      cashflowData: {
+        horizonDays: 30,
+        openingLiquidityUsd: 12500,
+        projectedInflowsUsd: 8400,
+        projectedOutflowsUsd: 6200,
+        closingBalanceUsd: 14700,
+        minProjectedBalanceUsd: 11200,
+        minBalanceDateFormatted: '28/11/2026',
+        daysBelowSafetyCount: 0
+      },
+      radarData: {
+        counts: { total: 2, criticas: 1, advertencias: 1, oportunidades: 0 },
+        alerts: [
+          {
+            severity: 'CRITICA',
+            category: 'INVENTARIO',
+            title: 'Riesgo inminente de quiebre: 001208',
+            detail: 'Cobertura de 2.7 días',
+            metricLabel: '4 UNID',
+            recommendation: 'Emitir OC de 41 unid.'
+          }
+        ]
+      },
+      config: mockConfig,
+      currentUser: mockUser
+    });
+    if (!doc || typeof doc.internal?.getNumberOfPages !== 'function' || doc.internal.getNumberOfPages() < 1) {
+      throw new Error('generatePredictiveReportPDF debe retornar una instancia jsPDF válida con al menos 1 página');
     }
   });
 

@@ -25,7 +25,11 @@ import {
   XCircle,
   ExternalLink,
   Users,
-  Warehouse
+  Warehouse,
+  Edit3,
+  Trash2,
+  Save,
+  X
 } from 'lucide-react';
 import { formatUsd, formatBs, getProductWarehouseStocks } from '../services/formatService';
 import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber } from '../utils/rateClassificationUtils';
@@ -49,7 +53,9 @@ import {
 } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import DatePeriodFilter from '../components/DatePeriodFilter';
-import { createDefaultDatePeriodFilter, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
+import { createDefaultDatePeriodFilter, isOnOrAfterDate, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
+
+const PURCHASES_START_DATE = '2026-11-10';
 
 export default function PurchasesView({
   products = [],
@@ -58,6 +64,8 @@ export default function PurchasesView({
   config,
   onSaveProduct,
   onRegisterPurchase,
+  onUpdatePurchase,
+  onDeletePurchase,
   purchaseRequisitions = [],
   purchaseOrders = [],
   goodsReceiptNotes = [],
@@ -221,7 +229,59 @@ export default function PurchasesView({
     }
   ]));
 
-  const displayPurchases = purchases && purchases.length > 0 ? purchases : localPurchases;
+  useEffect(() => {
+    if (Array.isArray(purchases)) {
+      setLocalPurchases(purchases);
+    }
+  }, [purchases]);
+
+  const [editingPurchaseId, setEditingPurchaseId] = useState(null);
+  const [editingPurchaseOriginal, setEditingPurchaseOriginal] = useState(null);
+  const [inlineEditId, setInlineEditId] = useState(null);
+  const [inlineEditDraft, setInlineEditDraft] = useState(null);
+
+  const displayPurchases = (onRegisterPurchase || onUpdatePurchase || onDeletePurchase) && Array.isArray(purchases)
+    ? purchases
+    : localPurchases;
+
+  // En este módulo partimos exclusivamente desde el 10/11/2026
+  const scopedDisplayPurchases = useMemo(
+    () => (displayPurchases || []).filter(p => p && isOnOrAfterDate(p.fecha || p.fechaEmision || p.fec_emis, PURCHASES_START_DATE)),
+    [displayPurchases]
+  );
+  const scopedProfitPurchases = useMemo(
+    () => (profitPurchases || []).filter(p => p && isOnOrAfterDate(p.fechaEmision || p.fec_emis || p.fecha, PURCHASES_START_DATE)),
+    [profitPurchases]
+  );
+  const scopedAccountsPayable = useMemo(
+    () => (profitAccountsPayable || []).filter(d => d && isOnOrAfterDate(d.fechaEmision || d.fec_emis || d.fecha, PURCHASES_START_DATE)),
+    [profitAccountsPayable]
+  );
+  const scopedSupplierPayments = useMemo(
+    () => (profitSupplierPayments || []).filter(p => p && isOnOrAfterDate(p.fecha || p.fec_cob || p.fechaPago, PURCHASES_START_DATE)),
+    [profitSupplierPayments]
+  );
+  const scopedPaymentOrders = useMemo(
+    () => (profitPaymentOrders || []).filter(o => o && isOnOrAfterDate(o.fecha || o.fec_emis || o.fec_pag, PURCHASES_START_DATE)),
+    [profitPaymentOrders]
+  );
+  const scopedPurchaseRequisitions = useMemo(
+    () => (purchaseRequisitions || []).filter(r => r && isOnOrAfterDate(r.fecha || r.fechaEmision, PURCHASES_START_DATE)),
+    [purchaseRequisitions]
+  );
+  const scopedPurchaseOrders = useMemo(
+    () => (purchaseOrders || []).filter(po => po && isOnOrAfterDate(po.fecha || po.fechaEmision, PURCHASES_START_DATE)),
+    [purchaseOrders]
+  );
+  const scopedGoodsReceiptNotes = useMemo(
+    () => (goodsReceiptNotes || []).filter(rec => rec && isOnOrAfterDate(rec.fec_emis || rec.fecha, PURCHASES_START_DATE)),
+    [goodsReceiptNotes]
+  );
+  const scopedIslrWithholdings = useMemo(
+    () => (profitIslrWithholdings || []).filter(w => w && isOnOrAfterDate(w.fecha || w.fec_emis || w.fechaEmision, PURCHASES_START_DATE)),
+    [profitIslrWithholdings]
+  );
+
   const rifValidation = selectedSupplier ? validateRif(selectedSupplier.rif) : { isValid: true };
 
   // Cálculos fiscales instantáneos en pantalla (soporta renglón activo o múltiples renglones)
@@ -301,29 +361,140 @@ export default function PurchasesView({
     netoPagarCalculadoUsd
   } = taxSummary;
 
-  // Fusión unificada Profit + Compras locales Signum (evita ocultar compras locales cuando hay profitPurchases)
+  // Fusión unificada Profit + Compras locales Signum (evita ocultar compras locales o Notas de Entrega múltiples)
   const effectivePurchases = useMemo(() => {
     const byCanon = new Map();
-    const buildKey = (facNum, rif, fallbackId) => {
-      const f = String(facNum || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
-      const r = String(rif || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-      return f ? `${f}::${r}` : String(fallbackId || '');
+    const normStr = (v) => String(v || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    const isGenericDocLabel = (f) => {
+      const clean = String(f || '').replace(/[^A-Z0-9]/g, '');
+      return !clean || ['NOTADEENTREGA', 'NOTAENTREGA', 'NE', 'SN', 'SINNUMERO'].includes(clean);
     };
 
-    (profitPurchases || []).forEach(p => {
+    const localList = Array.isArray(scopedDisplayPurchases) ? scopedDisplayPurchases.filter(Boolean) : [];
+    const matchedLocalIds = new Set();
+
+    const findMatchingLocal = (pp) => {
+      const ppId = String(pp.id || '').trim();
+      const ppCompraId = String(pp.compraId || pp.compra_id || '').trim();
+      if (ppCompraId) {
+        const byCompraId = localList.find(lp => String(lp.id || '').trim() === ppCompraId);
+        if (byCompraId) return byCompraId;
+      }
+      const byExactId = localList.find(lp => String(lp.id || '').trim() === ppId);
+      if (byExactId) return byExactId;
+
+      const ppFac = normStr(pp.facturaProv || pp.factNum);
+      const ppRif = normStr(pp.provRif || pp.coProv).replace(/[^A-Z0-9]/g, '');
+      const ppCtrl = normStr(pp.nroControl || pp.numeroControl || pp.nro_control || pp.numero_control);
+      const ppTotal = Number(pp.totNetoUsd ?? pp.totalUsd ?? 0);
+
+      return localList.find(lp => {
+        if (matchedLocalIds.has(lp.id)) return false;
+        const lpFac = normStr(lp.numeroFacturaProv || lp.nroFactura);
+        const lpRif = normStr(lp.proveedorRif || lp.proveedorId).replace(/[^A-Z0-9]/g, '');
+        const lpCtrl = normStr(lp.numeroControl || lp.nroControl);
+        const lpTotal = Number(lp.totalUsd ?? 0);
+        if (ppFac && lpFac && ppFac !== lpFac) return false;
+        if (ppRif && lpRif && ppRif !== lpRif) return false;
+        if (ppCtrl && lpCtrl && ppCtrl === lpCtrl && Math.abs(ppTotal - lpTotal) < 0.05) return true;
+        if (Math.abs(ppTotal - lpTotal) < 0.02) {
+          const ppDate = String(pp.fechaEmision || pp.fec_emis || '').slice(0, 16);
+          const lpDate = String(lp.fecha || lp.fechaEmision || '').slice(0, 16);
+          if (ppDate && lpDate && ppDate === lpDate) return true;
+          if (!isGenericDocLabel(ppFac)) return true;
+        }
+        return false;
+      }) || null;
+    };
+
+    const buildKey = (facNum, ctrlNum, rif, totalUsd, fallbackId) => {
+      const f = normStr(facNum);
+      const c = normStr(ctrlNum);
+      const r = normStr(rif).replace(/[^A-Z0-9]/g, '');
+      const t = Number(totalUsd || 0).toFixed(2);
+      if (!f || isGenericDocLabel(f)) {
+        return `${f || 'DOC'}::${c || fallbackId}::${r}::${t}::${fallbackId || ''}`;
+      }
+      return c ? `${f}::${c}::${r}` : `${f}::${r}`;
+    };
+
+    (scopedProfitPurchases || []).forEach(p => {
       if (!p) return;
-      const key = buildKey(p.facturaProv || p.factNum, p.provRif || p.coProv, p.id);
-      if (key) byCanon.set(key, p);
+      const matchedLocal = findMatchingLocal(p);
+      if (matchedLocal?.id) {
+        matchedLocalIds.add(matchedLocal.id);
+      }
+      const ctrl = matchedLocal?.numeroControl || matchedLocal?.nroControl || p.nroControl || p.numeroControl || p.nro_control || p.numero_control || '';
+      const localUpdatedTs = Date.parse(matchedLocal?.updatedAt || matchedLocal?.updated_at || 0) || 0;
+      const profitUpdatedTs = Date.parse(p.updated_at || p.updatedAt || p.fechaSincronizacion || 0) || 0;
+      const preferLocalFinancials = Boolean(
+        matchedLocal &&
+        Number(matchedLocal.totalUsd || 0) > 0 &&
+        localUpdatedTs > 0 &&
+        (profitUpdatedTs === 0 || localUpdatedTs > profitUpdatedTs)
+      );
+
+      let enriched = {
+        ...p,
+        compraId: p.compraId || p.compra_id || matchedLocal?.id || '',
+        nroControl: ctrl,
+        numeroControl: ctrl,
+        almacen: matchedLocal?.almacen || p.almacen || '01',
+        localRecord: matchedLocal || null
+      };
+
+      if (preferLocalFinancials) {
+        const prevTotNeto = Number(p.totNetoUsd ?? p.totalUsd ?? 0);
+        const prevSaldo = Number(p.saldoUsd ?? prevTotNeto);
+        const abonosPrevios = Math.max(0, Number((prevTotNeto - prevSaldo).toFixed(2)));
+        const nextTotalUsd = Number(matchedLocal.totalUsd || 0);
+        const nextRate = Number(matchedLocal.tasaDolar || config?.tasaDolar || 1);
+        const nextNetoPagar = matchedLocal.montoNetoPagarUsd !== undefined
+          ? Number(matchedLocal.montoNetoPagarUsd)
+          : nextTotalUsd;
+        const nextSaldoUsd = (String(matchedLocal.tipoDoc || '').toUpperCase() === 'NOTA_CREDITO' || matchedLocal.condicionPago === 'CONTADO')
+          ? 0
+          : Math.max(0, Number((nextNetoPagar - abonosPrevios).toFixed(2)));
+        const nextIvaUsd = Number(matchedLocal.ivaGeneralUsd || 0) + Number(matchedLocal.ivaReducidaUsd || 0);
+        enriched = {
+          ...enriched,
+          factNum: matchedLocal.numeroFacturaProv || matchedLocal.nroFactura || enriched.factNum,
+          facturaProv: matchedLocal.numeroFacturaProv || matchedLocal.nroFactura || enriched.facturaProv,
+          provNombre: matchedLocal.proveedorNombre || enriched.provNombre,
+          provRif: matchedLocal.proveedorRif || enriched.provRif,
+          totBrutoUsd: Number(matchedLocal.subtotalUsd || 0),
+          totBrutoBs: Number(matchedLocal.subtotalBs ?? Number((Number(matchedLocal.subtotalUsd || 0) * nextRate).toFixed(2))),
+          ivaUsd: nextIvaUsd,
+          ivaBs: Number((nextIvaUsd * nextRate).toFixed(2)),
+          totNetoUsd: nextTotalUsd,
+          totNetoBs: Number(matchedLocal.totalBs ?? Number((nextTotalUsd * nextRate).toFixed(2))),
+          saldoUsd: nextSaldoUsd,
+          saldoBs: Number((nextSaldoUsd * nextRate).toFixed(2)),
+          status: (String(matchedLocal.tipoDoc || '').toUpperCase() === 'NOTA_CREDITO' || matchedLocal.condicionPago === 'CONTADO' || nextSaldoUsd <= 0.01)
+            ? 'PAGADA'
+            : 'SALDO_PENDIENTE',
+          items: Array.isArray(matchedLocal.items) && matchedLocal.items.length > 0 ? matchedLocal.items : enriched.items
+        };
+      }
+
+      const key = buildKey(enriched.facturaProv || enriched.factNum, ctrl, enriched.provRif || enriched.coProv, enriched.totNetoUsd, enriched.id);
+      if (key && !byCanon.has(key)) {
+        byCanon.set(key, enriched);
+      }
     });
 
-    (displayPurchases || []).forEach(p => {
-      if (!p) return;
-      const key = buildKey(p.numeroFacturaProv || p.nroFactura || p.id, p.proveedorRif || p.proveedorId, p.id);
+    localList.forEach(p => {
+      if (!p || matchedLocalIds.has(p.id)) return;
+      const ctrl = p.numeroControl || p.nroControl || '';
+      const key = buildKey(p.numeroFacturaProv || p.nroFactura || p.id, ctrl, p.proveedorRif || p.proveedorId, p.totalUsd, p.id);
       if (!key || byCanon.has(key)) return;
       byCanon.set(key, {
         id: p.id,
+        compraId: p.id,
         factNum: p.numeroFacturaProv || p.nroFactura || p.id,
         facturaProv: p.numeroFacturaProv || p.nroFactura || p.id,
+        nroControl: ctrl,
+        numeroControl: ctrl,
         provNombre: p.proveedorNombre || 'Proveedor',
         provRif: p.proveedorRif || 'J-00000000-0',
         coProv: p.proveedorId || 'P-0001',
@@ -338,18 +509,19 @@ export default function PurchasesView({
         status: p.condicionPago === 'CONTADO' ? 'PAGADA' : 'SALDO_PENDIENTE',
         almacen: p.almacen || '01',
         anulada: Boolean(p.anulada || p.anulado),
-        items: p.items || []
+        items: p.items || [],
+        localRecord: p
       });
     });
 
     return Array.from(byCanon.values()).sort((a, b) => new Date(b.fechaEmision || 0) - new Date(a.fechaEmision || 0));
-  }, [profitPurchases, displayPurchases]);
+  }, [scopedProfitPurchases, scopedDisplayPurchases, config?.tasaDolar]);
 
   // KPIs Generales del Módulo de Compras y Proveedores
   const kpis = useMemo(() => {
     const activePurchases = effectivePurchases.filter(p => p && !p.anulada && !p.anulado);
-    const activeCxP = (profitAccountsPayable || []).filter(d => d && !d.anulado);
-    const activePayments = (profitSupplierPayments || []).filter(p => p && !p.anulado);
+    const activeCxP = (scopedAccountsPayable || []).filter(d => d && !d.anulado);
+    const activePayments = (scopedSupplierPayments || []).filter(p => p && !p.anulado);
 
     const totalComprasUsd = activePurchases.reduce((acc, p) => acc + (p.totNetoUsd || 0), 0);
     const totalComprasBs = activePurchases.reduce((acc, p) => acc + (p.totNetoBs || 0), 0);
@@ -378,7 +550,7 @@ export default function PurchasesView({
       totalPagadoBs,
       totalPagosCount: activePayments.length
     };
-  }, [unifiedSuppliers, effectivePurchases, profitAccountsPayable, profitSupplierPayments]);
+  }, [unifiedSuppliers, effectivePurchases, scopedAccountsPayable, scopedSupplierPayments]);
 
   const filteredPurchases = useMemo(() => {
     return effectivePurchases.filter(p => {
@@ -387,7 +559,10 @@ export default function PurchasesView({
       const matchQuery = !q ||
         String(p.factNum || '').toLowerCase().includes(q) ||
         (p.facturaProv && String(p.facturaProv).toLowerCase().includes(q)) ||
+        (p.nroControl && String(p.nroControl).toLowerCase().includes(q)) ||
+        (p.numeroControl && String(p.numeroControl).toLowerCase().includes(q)) ||
         (p.provNombre && String(p.provNombre).toLowerCase().includes(q)) ||
+        (p.provRif && String(p.provRif).toLowerCase().includes(q)) ||
         (p.coProv && String(p.coProv).toLowerCase().includes(q));
 
       const matchStatus = statusFilter === 'TODOS' || p.status === statusFilter;
@@ -416,7 +591,7 @@ export default function PurchasesView({
   // Filtrado de Cuentas por Pagar (CxP)
   const filteredCxP = useMemo(() => {
     const now = new Date();
-    return (profitAccountsPayable || []).filter(d => {
+    return (scopedAccountsPayable || []).filter(d => {
       if (!d || d.anulado) return false;
       const q = searchQuery.toLowerCase().trim();
       const matchQuery = !q ||
@@ -437,11 +612,11 @@ export default function PurchasesView({
       const matchDate = matchesDatePeriodFilter(d.fechaEmision || d.fec_emis || d.fecha, datePeriodFilter);
       return matchQuery && matchStatus && matchDate;
     });
-  }, [profitAccountsPayable, searchQuery, statusFilter, datePeriodFilter]);
+  }, [scopedAccountsPayable, searchQuery, statusFilter, datePeriodFilter]);
 
   // Filtrado de Pagos a Proveedores
   const filteredPayments = useMemo(() => {
-    return (profitSupplierPayments || []).filter(p => {
+    return (scopedSupplierPayments || []).filter(p => {
       if (!p || p.anulado) return false;
       const q = searchQuery.toLowerCase().trim();
       const matchQuery = !q ||
@@ -451,11 +626,11 @@ export default function PurchasesView({
         (p.coProv && String(p.coProv).toLowerCase().includes(q));
       return matchQuery && matchesDatePeriodFilter(p.fecha || p.fec_cob || p.fechaPago, datePeriodFilter);
     });
-  }, [profitSupplierPayments, searchQuery, datePeriodFilter]);
+  }, [scopedSupplierPayments, searchQuery, datePeriodFilter]);
 
   // Filtrado de Órdenes de Pago Profit
   const filteredPaymentOrders = useMemo(() => {
-    return (profitPaymentOrders || []).filter(o => {
+    return (scopedPaymentOrders || []).filter(o => {
       if (!o) return false;
       const q = searchQuery.toLowerCase().trim();
       const ben = String(o.benDes || o.benNombre || '').toLowerCase();
@@ -465,7 +640,7 @@ export default function PurchasesView({
       const matchQuery = !q || ord.includes(q) || ben.includes(q) || desc.includes(q) || cod.includes(q);
       return matchQuery && matchesDatePeriodFilter(o.fecha || o.fec_emis || o.fec_pag, datePeriodFilter);
     });
-  }, [profitPaymentOrders, searchQuery, datePeriodFilter]);
+  }, [scopedPaymentOrders, searchQuery, datePeriodFilter]);
 
   // Filtrado de Beneficiarios Profit
   const filteredBeneficiaries = useMemo(() => {
@@ -512,6 +687,221 @@ export default function PurchasesView({
     setFleteProrrateadoUsd(0);
   };
 
+  const handleCancelEditPurchase = () => {
+    setEditingPurchaseId(null);
+    setEditingPurchaseOriginal(null);
+    setInlineEditId(null);
+    setInlineEditDraft(null);
+    setNumeroFacturaProv('');
+    setNumeroControlProv('');
+    setDocumentoAfectado('');
+    setPurchaseItems([]);
+    setLinkedReceiptId('');
+    setFleteProrrateadoUsd(0);
+  };
+
+  const handleStartEditPurchase = (rec) => {
+    if (!rec) return;
+    const recId = rec.id;
+    setEditingPurchaseId(recId);
+    setEditingPurchaseOriginal(rec);
+
+    // Vincular proveedor en el formulario superior
+    const matchedSupplier = unifiedSuppliers.find(
+      (s) =>
+        (rec.proveedorId && String(s.id) === String(rec.proveedorId)) ||
+        (rec.proveedorRif && String(s.rif || '').trim().toUpperCase() === String(rec.proveedorRif || '').trim().toUpperCase()) ||
+        (rec.proveedorNombre && String(s.nombre || s.provDes || '').trim().toUpperCase() === String(rec.proveedorNombre || '').trim().toUpperCase())
+    ) || selectedSupplier || unifiedSuppliers[0] || null;
+
+    if (matchedSupplier) {
+      setSelectedSupplier(matchedSupplier);
+    }
+    setNumeroFacturaProv(String(rec.numeroFacturaProv || rec.facturaProv || rec.nroFactura || ''));
+    setNumeroControlProv(String(rec.numeroControl || rec.nroControl || '00-005821'));
+    setTipoDoc(rec.tipoDoc || 'FACTURA');
+    setDocumentoAfectado(String(rec.documentoAfectado || ''));
+    setAlmacenDestino(String(rec.almacen || '01').includes('02') ? '02' : '01');
+    setCondicionPago(rec.condicionPago || 'CREDITO');
+    setDiasCredito(Number(rec.diasCredito ?? matchedSupplier?.diasCredito ?? 30));
+    setLinkedReceiptId(rec.recepcionId || '');
+
+    const items = Array.isArray(rec.items) && rec.items.length > 0 ? rec.items : [];
+    if (items.length > 1) {
+      setPurchaseItems(items.map((it) => {
+        const qty = Number(it.cantidad || 1);
+        const unitCost = Number(it.costoUnitarioUsd ?? it.precioUnitario ?? 0);
+        const itemFlete = Number(it.fleteUsd || 0);
+        return {
+          productoId: it.productoId || it.articuloId || it.codigo || '',
+          codigo: it.codigo || it.articuloId || it.productoId || '',
+          producto: it.producto || it.descripcion || '',
+          descripcion: it.descripcion || it.producto || '',
+          cantidad: qty,
+          costoUnitarioUsd: unitCost,
+          fleteUsd: itemFlete,
+          subtotalUsd: Number(it.subtotalUsd ?? it.totalNeto ?? (qty * unitCost + itemFlete)),
+          tipoAlicuota: it.tipoAlicuota || (Number(rec.ivaGeneralUsd || rec.ivaUsd || 0) === 0 && Number(rec.ivaReducidaUsd || 0) === 0 ? 'EXENTO_0' : 'GENERAL_16'),
+          almacen: String(it.almacen || rec.almacen || '01').includes('02') ? '02' : '01'
+        };
+      }));
+    } else {
+      setPurchaseItems([]);
+      const firstIt = items[0] || null;
+      const prodMatch = products.find(
+        (p) =>
+          (firstIt && (String(p.id) === String(firstIt.productoId) || String(p.codigo) === String(firstIt.codigo))) ||
+          (rec.productoId && String(p.id) === String(rec.productoId)) ||
+          (rec.productoCodigo && String(p.codigo) === String(rec.productoCodigo)) ||
+          (rec.producto && String(p.descripcion || '').toLowerCase() === String(rec.producto || '').toLowerCase())
+      );
+      if (prodMatch) setSelectedProduct(prodMatch);
+      const qty = Number(firstIt?.cantidad ?? rec.cantidad ?? 1) || 1;
+      const cost = Number(firstIt?.costoUnitarioUsd ?? rec.costoUnitarioUsd ?? rec.totalUsd ?? prodMatch?.costoUsd ?? 0);
+      setCantidadRecibida(qty);
+      setNuevoCostoUsd(cost);
+      setFleteProrrateadoUsd(Number(firstIt?.fleteUsd ?? rec.fleteUsd ?? 0));
+      if (firstIt?.tipoAlicuota) {
+        setTipoAlicuota(firstIt.tipoAlicuota);
+      } else if (Number(rec.ivaGeneralUsd || 0) === 0 && Number(rec.ivaReducidaUsd || 0) === 0) {
+        setTipoAlicuota('EXENTO_0');
+      } else if (Number(rec.ivaReducidaUsd || 0) > 0) {
+        setTipoAlicuota('REDUCIDA_8');
+      } else {
+        setTipoAlicuota('GENERAL_16');
+      }
+    }
+
+    const totalIvaOrig = Number(rec.ivaGeneralUsd || 0) + Number(rec.ivaReducidaUsd || 0);
+    const retIvaOrig = Number(rec.retencionIvaUsd || 0);
+    if (totalIvaOrig > 0 && retIvaOrig > 0) {
+      const pctIva = Math.round((retIvaOrig / totalIvaOrig) * 100);
+      setPorcentajeRetIva(pctIva >= 90 ? 100 : pctIva >= 50 ? 75 : 0);
+    } else {
+      setPorcentajeRetIva(0);
+    }
+    const baseImpOrig = Number(rec.baseGeneralUsd || 0) + Number(rec.baseReducidaUsd || 0);
+    const retIslrOrig = Number(rec.retencionIslrUsd || 0);
+    if (baseImpOrig > 0 && retIslrOrig > 0) {
+      const pctIslr = Math.round((retIslrOrig / baseImpOrig) * 100);
+      setPorcentajeRetIslr(pctIslr >= 4 ? 5 : pctIslr >= 1 ? 2 : 0);
+    } else {
+      setPorcentajeRetIslr(0);
+    }
+
+    const tasa = Number(rec.tasaDolar || config?.tasaDolar || 1);
+    const rawDate = rec.fecha || rec.fechaCompra || rec.fechaEmision || new Date().toISOString();
+    const dateInputVal = /^\d{4}-\d{2}-\d{2}/.test(String(rawDate))
+      ? String(rawDate).slice(0, 10)
+      : new Date(rawDate).toISOString().slice(0, 10);
+
+    const retIvaUsdVal = Number(rec.retencionIvaUsd ?? ((Number(rec.retencionIvaBs || 0)) / (tasa || 1)));
+    const retIslrUsdVal = Number(rec.retencionIslrUsd ?? ((Number(rec.retencionIslrBs || 0)) / (tasa || 1)));
+
+    setInlineEditId(recId);
+    setInlineEditDraft({
+      id: recId,
+      fecha: dateInputVal,
+      numeroFacturaProv: String(rec.numeroFacturaProv || rec.facturaProv || rec.nroFactura || ''),
+      numeroControl: String(rec.numeroControl || rec.nroControl || '00-005821'),
+      tipoDoc: rec.tipoDoc || 'FACTURA',
+      proveedorId: rec.proveedorId || matchedSupplier?.id || '',
+      proveedorNombre: String(rec.proveedorNombre || rec.proveedor || matchedSupplier?.nombre || ''),
+      proveedorRif: String(rec.proveedorRif || matchedSupplier?.rif || 'J-31115365-9'),
+      totalUsd: Number(rec.totalUsd || 0),
+      retencionIvaUsd: Number(retIvaUsdVal.toFixed(2)),
+      retencionIslrUsd: Number(retIslrUsdVal.toFixed(2)),
+      numeroComprobanteRetencionIva: String(rec.numeroComprobanteRetencionIva || '20260700000001')
+    });
+  };
+
+  const handleSaveInlinePurchase = async (rec) => {
+    if (!rec || !inlineEditDraft) return;
+    const facNum = String(inlineEditDraft.numeroFacturaProv || '').trim().toUpperCase();
+    const ctrlNum = String(inlineEditDraft.numeroControl || '').trim().toUpperCase();
+    if (!facNum) {
+      notify.warning('El N° de Factura del Proveedor no puede estar vacío.');
+      return;
+    }
+    if (!ctrlNum) {
+      notify.warning('El N° de Control no puede estar vacío.');
+      return;
+    }
+
+    const tasa = Number(rec.tasaDolar || config?.tasaDolar || 1);
+    const totalUsdVal = Math.max(0, Number(inlineEditDraft.totalUsd) || 0);
+    const retIvaUsdVal = Math.max(0, Number(inlineEditDraft.retencionIvaUsd) || 0);
+    const retIslrUsdVal = Math.max(0, Number(inlineEditDraft.retencionIslrUsd) || 0);
+    const oldTotalUsd = Number(rec.totalUsd || 0);
+    const scaleRatio = oldTotalUsd > 0 ? (totalUsdVal / oldTotalUsd) : 1;
+    const nextSubtotalUsd = oldTotalUsd > 0 && Number(rec.subtotalUsd || 0) > 0
+      ? Number((Number(rec.subtotalUsd) * scaleRatio).toFixed(2))
+      : totalUsdVal;
+    const nextIvaGeneralUsd = Math.max(0, Number((totalUsdVal - nextSubtotalUsd).toFixed(2)));
+    const netoPagarUsd = Math.max(0, Number((totalUsdVal - retIvaUsdVal - retIslrUsdVal).toFixed(2)));
+
+    const fechaIso = inlineEditDraft.fecha
+      ? new Date(`${inlineEditDraft.fecha}T12:00:00.000Z`).toISOString()
+      : (rec.fecha || new Date().toISOString());
+
+    const updatedPayload = {
+      ...rec,
+      id: rec.id,
+      fecha: fechaIso,
+      numeroFacturaProv: facNum,
+      numeroControl: ctrlNum,
+      tipoDoc: inlineEditDraft.tipoDoc || rec.tipoDoc || 'FACTURA',
+      proveedorId: inlineEditDraft.proveedorId || rec.proveedorId,
+      proveedorNombre: String(inlineEditDraft.proveedorNombre || rec.proveedorNombre || 'Proveedor').trim(),
+      proveedorRif: String(inlineEditDraft.proveedorRif || rec.proveedorRif || 'J-00000000-0').trim().toUpperCase(),
+      tasaDolar: tasa,
+      subtotalUsd: nextSubtotalUsd,
+      subtotalBs: Number((nextSubtotalUsd * tasa).toFixed(2)),
+      ivaGeneralUsd: nextIvaGeneralUsd,
+      ivaGeneralBs: Number((nextIvaGeneralUsd * tasa).toFixed(2)),
+      totalUsd: totalUsdVal,
+      totalBs: Number((totalUsdVal * tasa).toFixed(2)),
+      retencionIvaUsd: retIvaUsdVal,
+      retencionIvaBs: Number((retIvaUsdVal * tasa).toFixed(2)),
+      retencionIslrUsd: retIslrUsdVal,
+      retencionIslrBs: Number((retIslrUsdVal * tasa).toFixed(2)),
+      montoNetoPagarUsd: netoPagarUsd,
+      numeroComprobanteRetencionIva: String(inlineEditDraft.numeroComprobanteRetencionIva || rec.numeroComprobanteRetencionIva || '').trim()
+    };
+
+    if (onUpdatePurchase) {
+      const saved = await onUpdatePurchase(rec.id, updatedPayload);
+      setLocalPurchases((prev) => prev.map((p) => (p && p.id === rec.id ? (saved || updatedPayload) : p)));
+    } else {
+      setLocalPurchases((prev) => prev.map((p) => (p && p.id === rec.id ? updatedPayload : p)));
+      notify.success(`Carga SENIAT #${facNum} actualizada y guardada con éxito.`);
+    }
+
+    handleCancelEditPurchase();
+  };
+
+  const handleDeletePurchaseRecord = async (rec) => {
+    if (!rec) return;
+    const docLabel = rec.numeroFacturaProv || rec.facturaProv || rec.nroFactura || rec.id;
+    const provLabel = rec.proveedorNombre || rec.proveedor || 'Proveedor';
+    if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      const confirmed = window.confirm(
+        `¿Está seguro de eliminar del Historial de Cargas SENIAT el documento "${docLabel}" de ${provLabel} (${formatUsd(rec.totalUsd)})?`
+      );
+      if (!confirmed) return;
+    }
+
+    if (onDeletePurchase) {
+      await onDeletePurchase(rec);
+    } else {
+      notify.success(`Registro SENIAT "${docLabel}" eliminado con éxito.`);
+    }
+    setLocalPurchases((prev) => prev.filter((p) => p && String(p.id) !== String(rec.id)));
+    if (editingPurchaseId === rec.id || inlineEditId === rec.id) {
+      handleCancelEditPurchase();
+    }
+  };
+
   const handleRegisterPurchase = async (e) => {
     e.preventDefault();
     if (!selectedSupplier) {
@@ -538,7 +928,18 @@ export default function PurchasesView({
     }
 
     const finalItems = purchaseItems.length > 0
-      ? purchaseItems
+      ? purchaseItems.map((it) => {
+          const qty = Math.max(0.01, Number(it.cantidad || 1));
+          const cost = Math.max(0, Number(it.costoUnitarioUsd || 0));
+          const flete = Math.max(0, Number(it.fleteUsd || 0));
+          return {
+            ...it,
+            cantidad: qty,
+            costoUnitarioUsd: cost,
+            fleteUsd: flete,
+            subtotalUsd: Number((qty * cost + flete).toFixed(2))
+          };
+        })
       : (selectedProduct && qtyActiva > 0
           ? [{
               productoId: selectedProduct.id,
@@ -563,19 +964,43 @@ export default function PurchasesView({
     const totalFlete = finalItems.reduce((s, it) => s + Number(it.fleteUsd || 0), 0);
     const dateObj = new Date();
     const voucherSeq = displayPurchases.length + 1;
-    const voucherNum = generateVatRetentionVoucherNumber(dateObj, voucherSeq);
+    const voucherNum = editingPurchaseOriginal?.numeroComprobanteRetencionIva
+      || generateVatRetentionVoucherNumber(dateObj, voucherSeq);
+
+    const tasaActiva = Number(config?.tasaDolar || editingPurchaseOriginal?.tasaDolar || 1);
+    const nowIso = new Date().toISOString();
+    const origBase = editingPurchaseOriginal ? { ...editingPurchaseOriginal } : {};
+    delete origBase.totNetoUsd;
+    delete origBase.totNetoBs;
+    delete origBase.totBrutoUsd;
+    delete origBase.totBrutoBs;
+    delete origBase.saldoUsd;
+    delete origBase.saldoBs;
+    delete origBase.total_usd;
+    delete origBase.subtotal_usd;
+    delete origBase.total_bs;
+    delete origBase.subtotal_bs;
+    delete origBase.localRecord;
 
     const purchasePayload = {
+      ...origBase,
+      id: editingPurchaseId || undefined,
+      profitPurchaseId: editingPurchaseOriginal?.profitPurchaseId || (String(editingPurchaseOriginal?.id || '').startsWith('COM-') ? editingPurchaseOriginal.id : undefined),
+      _prevFacNum: editingPurchaseOriginal?.numeroFacturaProv || editingPurchaseOriginal?.facturaProv || editingPurchaseOriginal?.nroFactura || editingPurchaseOriginal?.factNum || '',
+      _prevCtrlNum: editingPurchaseOriginal?.numeroControl || editingPurchaseOriginal?.nroControl || '',
+      _prevRif: editingPurchaseOriginal?.proveedorRif || editingPurchaseOriginal?.provRif || editingPurchaseOriginal?.coProv || '',
+      _prevTotalUsd: Number(editingPurchaseOriginal?.totalUsd ?? editingPurchaseOriginal?.totNetoUsd ?? 0),
       numeroFacturaProv: numeroFacturaProv.trim().toUpperCase(),
       numeroControl: numeroControlProv.trim().toUpperCase(),
       tipoDoc,
       documentoAfectado: (tipoDoc === 'NOTA_CREDITO' || tipoDoc === 'NOTA_DEBITO') ? documentoAfectado.trim().toUpperCase() : '',
-      fecha: dateObj.toISOString(),
+      fecha: editingPurchaseOriginal?.fecha || dateObj.toISOString(),
+      updatedAt: nowIso,
       proveedorId: selectedSupplier.id,
       proveedorNombre: selectedSupplier.nombre || selectedSupplier.provDes,
       proveedorRif: selectedSupplier.rif,
       proveedorDireccion: selectedSupplier.domicilioFiscal || selectedSupplier.direccion || '',
-      tasaDolar: config.tasaDolar,
+      tasaDolar: tasaActiva,
       condicionPago,
       diasCredito: condicionPago === 'CONTADO' ? 0 : Math.max(0, parseInt(diasCredito, 10) || 0),
       producto: finalItems.map(it => it.descripcion).filter(Boolean).join(' + '),
@@ -584,6 +1009,7 @@ export default function PurchasesView({
       cantidad: totalQty,
       costoUnitarioUsd: finalItems[0]?.costoUnitarioUsd || 0,
       fleteUsd: parseFloat(totalFlete.toFixed(2)),
+      fleteBs: Number((parseFloat(totalFlete.toFixed(2)) * tasaActiva).toFixed(2)),
       subtotalUsd,
       baseExentaUsd,
       baseGeneralUsd,
@@ -591,17 +1017,38 @@ export default function PurchasesView({
       baseReducidaUsd,
       ivaReducidaUsd,
       totalUsd: totalFacturaCalculadoUsd,
+      subtotalBs: Number((subtotalUsd * tasaActiva).toFixed(2)),
+      baseExentaBs: Number((baseExentaUsd * tasaActiva).toFixed(2)),
+      baseGeneralBs: Number((baseGeneralUsd * tasaActiva).toFixed(2)),
+      ivaGeneralBs: Number((ivaGeneralUsd * tasaActiva).toFixed(2)),
+      baseReducidaBs: Number((baseReducidaUsd * tasaActiva).toFixed(2)),
+      ivaReducidaBs: Number((ivaReducidaUsd * tasaActiva).toFixed(2)),
+      totalBs: Number((totalFacturaCalculadoUsd * tasaActiva).toFixed(2)),
       retencionIvaUsd: retencionIvaCalculadaUsd,
+      retencionIvaBs: Number((retencionIvaCalculadaUsd * tasaActiva).toFixed(2)),
       retencionIslrUsd: retencionIslrCalculadaUsd,
+      retencionIslrBs: Number((retencionIslrCalculadaUsd * tasaActiva).toFixed(2)),
       montoNetoPagarUsd: netoPagarCalculadoUsd,
       numeroComprobanteRetencionIva: voucherNum,
-      numeroComprobanteRetencionIslr: voucherNum,
+      numeroComprobanteRetencionIslr: editingPurchaseOriginal?.numeroComprobanteRetencionIslr || voucherNum,
       almacen: almacenDestino,
       almacenNombre: almacenDestino === '01' ? 'Almacén 01 (Fiscal / SENIAT)' : 'Almacén 02 (Central / Bóveda - Notas de Entrega)',
       receptor: currentUser?.nombre || 'Pedro Gómez',
       recepcionId: linkedReceiptId || '',
       items: finalItems
     };
+
+    if (editingPurchaseId) {
+      if (onUpdatePurchase) {
+        const saved = await onUpdatePurchase(editingPurchaseId, purchasePayload);
+        setLocalPurchases((prev) => prev.map((p) => (p && p.id === editingPurchaseId ? (saved || purchasePayload) : p)));
+      } else {
+        setLocalPurchases((prev) => prev.map((p) => (p && p.id === editingPurchaseId ? purchasePayload : p)));
+        notify.success(`Carga fiscal SENIAT #${purchasePayload.numeroFacturaProv} actualizada y guardada.`);
+      }
+      handleCancelEditPurchase();
+      return;
+    }
 
     if (onRegisterPurchase) {
       await onRegisterPurchase(purchasePayload);
@@ -643,8 +1090,11 @@ export default function PurchasesView({
               <h1 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-main)' }}>
                 Compras, Proveedores & Cuentas por Pagar (CxP)
               </h1>
-              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Gestión integral de compras y proveedores conforme a SENIAT
+              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span>Gestión integral de compras y proveedores conforme a SENIAT</span>
+                <span className="badge badge-info" style={{ fontSize: '0.68rem', fontWeight: 700 }}>
+                  Desde 10/11/2026
+                </span>
               </p>
             </div>
           </div>
@@ -867,7 +1317,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <Calendar size={16} /> Cuentas por Pagar (CxP) ({(profitAccountsPayable || []).filter(d => d && !d.anulado).length})
+          <Calendar size={16} /> Cuentas por Pagar (CxP) ({(scopedAccountsPayable || []).filter(d => d && !d.anulado).length})
         </button>
 
         <button
@@ -887,7 +1337,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <CreditCard size={16} /> Historial de Pagos ({profitSupplierPayments.length})
+          <CreditCard size={16} /> Historial de Pagos ({scopedSupplierPayments.length})
         </button>
 
         <button
@@ -907,7 +1357,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <FileCheck size={16} /> Órdenes de Pago ({profitPaymentOrders.length})
+          <FileCheck size={16} /> Órdenes de Pago ({scopedPaymentOrders.length})
         </button>
 
         <button
@@ -947,7 +1397,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <FileText size={15} /> Requisiciones ({purchaseRequisitions.length})
+          <FileText size={15} /> Requisiciones ({scopedPurchaseRequisitions.length})
         </button>
 
         <button
@@ -967,7 +1417,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <ShoppingBag size={15} /> Órdenes de Compra ({purchaseOrders.length})
+          <ShoppingBag size={15} /> Órdenes de Compra ({scopedPurchaseOrders.length})
         </button>
 
         <button
@@ -987,7 +1437,7 @@ export default function PurchasesView({
             cursor: 'pointer'
           }}
         >
-          <Warehouse size={15} /> Recepciones ({goodsReceiptNotes.length})
+          <Warehouse size={15} /> Recepciones ({scopedGoodsReceiptNotes.length})
         </button>
 
         <button
@@ -1140,6 +1590,11 @@ export default function PurchasesView({
                               Prov: {purchase.facturaProv}
                             </div>
                           )}
+                          {(purchase.nroControl || purchase.numeroControl) && (
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                              Ctrl: {purchase.nroControl || purchase.numeroControl}
+                            </div>
+                          )}
                         </td>
                         <td>
                           <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
@@ -1168,17 +1623,105 @@ export default function PurchasesView({
                             {purchase.status}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <button
-                            className="btn btn-secondary"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedProfitPurchase(purchase);
-                            }}
-                            style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <Eye size={13} /> Ver Detalle
-                          </button>
+                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedProfitPurchase(purchase);
+                              }}
+                              style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            >
+                              <Eye size={13} /> Ver Detalle
+                            </button>
+                            {onUpdatePurchase && (purchase.localRecord || purchase.compraId || String(purchase.id || '').startsWith('COMP-')) && (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const editTarget = purchase.localRecord
+                                    ? { ...purchase.localRecord, profitPurchaseId: purchase.id }
+                                    : {
+                                        ...purchase,
+                                        id: purchase.compraId || purchase.id,
+                                        profitPurchaseId: purchase.id,
+                                        numeroFacturaProv: purchase.facturaProv || purchase.factNum,
+                                        numeroControl: purchase.nroControl || purchase.numeroControl || '',
+                                        fecha: purchase.fechaEmision,
+                                        proveedorId: purchase.coProv,
+                                        proveedorNombre: purchase.provNombre,
+                                        proveedorRif: purchase.provRif,
+                                        subtotalUsd: purchase.totBrutoUsd,
+                                        ivaGeneralUsd: purchase.ivaUsd,
+                                        totalUsd: purchase.totNetoUsd,
+                                        totalBs: purchase.totNetoBs
+                                      };
+                                  handleStartEditPurchase(editTarget);
+                                  setActiveSubTab('registro_seniat');
+                                  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  }
+                                }}
+                                style={{
+                                  padding: '4px 8px',
+                                  fontSize: '0.73rem',
+                                  fontWeight: 700,
+                                  borderRadius: '6px',
+                                  background: 'rgba(217, 119, 6, 0.15)',
+                                  color: '#fbbf24',
+                                  border: '1px solid rgba(217, 119, 6, 0.35)',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  cursor: 'pointer'
+                                }}
+                                title="Editar factura, cantidades, costos o almacén (actualiza inventario y CxP)"
+                              >
+                                <Edit3 size={12} /> Editar
+                              </button>
+                            )}
+                            {onDeletePurchase && (purchase.localRecord || purchase.compraId || String(purchase.id || '').startsWith('COMP-')) && (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeletePurchaseRecord(
+                                    purchase.localRecord
+                                      ? { ...purchase.localRecord, profitPurchaseId: purchase.id }
+                                      : {
+                                          ...purchase,
+                                          id: purchase.compraId || purchase.id,
+                                          profitPurchaseId: purchase.id,
+                                          numeroFacturaProv: purchase.facturaProv || purchase.factNum,
+                                          numeroControl: purchase.nroControl || purchase.numeroControl || '',
+                                          proveedorNombre: purchase.provNombre,
+                                          proveedorRif: purchase.provRif,
+                                          totalUsd: purchase.totNetoUsd
+                                        }
+                                  );
+                                }}
+                                style={{
+                                  padding: '4px 8px',
+                                  fontSize: '0.73rem',
+                                  fontWeight: 700,
+                                  borderRadius: '6px',
+                                  background: 'rgba(239, 68, 68, 0.15)',
+                                  color: '#ef4444',
+                                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  cursor: 'pointer'
+                                }}
+                                title="Eliminar registro de compra y revertir inventario/CxP"
+                              >
+                                <Trash2 size={12} /> Eliminar
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1672,7 +2215,7 @@ export default function PurchasesView({
                   </tr>
                 </thead>
                 <tbody>
-                  {purchaseRequisitions.length > 0 ? purchaseRequisitions.map((r) => (
+                  {scopedPurchaseRequisitions.length > 0 ? scopedPurchaseRequisitions.map((r) => (
                     <tr key={r.id || r.numeroDoc}>
                       <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>{r.numeroDoc}</td>
                       <td>{r.fecha ? new Date(r.fecha).toLocaleDateString('es-VE') : '-'}</td>
@@ -1815,7 +2358,7 @@ export default function PurchasesView({
                   </tr>
                 </thead>
                 <tbody>
-                  {purchaseOrders.length > 0 ? purchaseOrders.map((po) => (
+                  {scopedPurchaseOrders.length > 0 ? scopedPurchaseOrders.map((po) => (
                     <tr key={po.id || po.numeroDoc}>
                       <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-navy-light)' }}>{po.numeroDoc}</td>
                       <td>{po.fecha ? new Date(po.fecha).toLocaleDateString('es-VE') : '-'}</td>
@@ -1995,7 +2538,7 @@ export default function PurchasesView({
                   </tr>
                 </thead>
                 <tbody>
-                  {goodsReceiptNotes.length > 0 ? goodsReceiptNotes.map((rec) => (
+                  {scopedGoodsReceiptNotes.length > 0 ? scopedGoodsReceiptNotes.map((rec) => (
                     <tr key={rec.id || rec.numeroDoc}>
                       <td style={{ fontWeight: 800, fontFamily: 'var(--font-code)', color: 'var(--motorven-emerald)' }}>{rec.not_num || rec.numeroDoc}</td>
                       <td>{rec.fec_emis ? new Date(rec.fec_emis).toLocaleDateString('es-VE') : '-'}</td>
@@ -2079,9 +2622,26 @@ export default function PurchasesView({
             
             {/* Formulario de Carga de Mercancía con Cumplimiento Fiscal */}
             <div className="card">
-              <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Truck size={18} color="var(--accent-primary)" /> Registrar Recepción de Mercancía
-              </h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '8px' }}>
+                <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.1rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Truck size={18} color="var(--accent-primary)" /> {editingPurchaseId ? 'Editar Carga Fiscal SENIAT' : 'Registrar Recepción de Mercancía'}
+                </h3>
+                {editingPurchaseId && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="badge badge-warning" style={{ fontSize: '0.72rem' }}>
+                      Editando: {editingPurchaseOriginal?.numeroFacturaProv || editingPurchaseId}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleCancelEditPurchase}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem', padding: '3px 8px' }}
+                    >
+                      <X size={12} /> Cancelar Edición
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <form onSubmit={handleRegisterPurchase}>
                 {/* Proveedor */}
@@ -2125,9 +2685,19 @@ export default function PurchasesView({
                     <select
                       className="form-control"
                       value={tipoDoc}
-                      onChange={(e) => setTipoDoc(e.target.value)}
+                      onChange={(e) => {
+                        const nextTipo = e.target.value;
+                        setTipoDoc(nextTipo);
+                        if (nextTipo === 'NOTA_ENTREGA') {
+                          setTipoAlicuota('EXENTO_0');
+                          setPorcentajeRetIva(0);
+                          setPorcentajeRetIslr(0);
+                          setAlmacenDestino('02');
+                        }
+                      }}
                     >
                       <option value="FACTURA">Factura de Compra</option>
+                      <option value="NOTA_ENTREGA">Nota de Entrega (No Fiscal / Sin IVA)</option>
                       <option value="NOTA_CREDITO">Nota de Crédito (Devolución)</option>
                       <option value="NOTA_DEBITO">Nota de Débito</option>
                     </select>
@@ -2230,11 +2800,12 @@ export default function PurchasesView({
                     <label className="form-label">Cantidad</label>
                     <input
                       type="number"
-                      min="1"
+                      min={purchaseItems.length === 0 ? '1' : '0'}
+                      step="any"
                       className="form-control"
                       value={cantidadRecibida}
                       onChange={(e) => setCantidadRecibida(e.target.value)}
-                      required
+                      required={purchaseItems.length === 0}
                     />
                   </div>
 
@@ -2242,11 +2813,12 @@ export default function PurchasesView({
                     <label className="form-label">Costo Unit. Factura ($)</label>
                     <input
                       type="number"
-                      step="0.01"
+                      min="0"
+                      step="any"
                       className="form-control"
                       value={nuevoCostoUsd}
                       onChange={(e) => setNuevoCostoUsd(parseFloat(e.target.value) || 0)}
-                      required
+                      required={purchaseItems.length === 0}
                     />
                   </div>
 
@@ -2255,7 +2827,8 @@ export default function PurchasesView({
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <input
                         type="number"
-                        step="0.01"
+                        min="0"
+                        step="any"
                         className="form-control"
                         value={fleteProrrateadoUsd}
                         onChange={(e) => setFleteProrrateadoUsd(parseFloat(e.target.value) || 0)}
@@ -2279,10 +2852,100 @@ export default function PurchasesView({
                       <span>Renglones en esta factura ({purchaseItems.length}):</span>
                       <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPurchaseItems([])}>Limpiar</button>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       {purchaseItems.map((it, idx) => (
-                        <div key={`${it.codigo}-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.74rem', padding: '4px 6px', background: 'var(--bg-card)', borderRadius: '6px' }}>
-                          <span><strong>{it.codigo}</strong> ({it.cantidad} u. • Alm {it.almacen}) — {formatUsd(it.subtotalUsd)}</span>
+                        <div key={`${it.codigo}-${idx}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1.5fr) 74px 86px 76px auto auto', gap: '6px', alignItems: 'center', fontSize: '0.74rem', padding: '6px 8px', background: 'var(--bg-card)', borderRadius: '6px' }}>
+                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.descripcion || it.producto}>
+                            <strong>{it.codigo}</strong> <span style={{ color: 'var(--text-muted)' }}>{it.descripcion || it.producto}</span>
+                          </div>
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="any"
+                            className="form-control"
+                            style={{ padding: '3px 6px', fontSize: '0.74rem', textAlign: 'right' }}
+                            value={it.cantidad}
+                            title="Cantidad"
+                            onChange={(e) => {
+                              const rawVal = e.target.value;
+                              const nextQty = rawVal === '' ? '' : Math.max(0.01, Number(rawVal) || 0);
+                              setPurchaseItems(prev => prev.map((row, i) => {
+                                if (i !== idx) return row;
+                                const unit = Number(row.costoUnitarioUsd || 0);
+                                const flete = Number(row.fleteUsd || 0);
+                                const calcQty = Number(nextQty || 0);
+                                return {
+                                  ...row,
+                                  cantidad: nextQty,
+                                  subtotalUsd: Number((calcQty * unit + flete).toFixed(2))
+                                };
+                              }));
+                            }}
+                            onBlur={() => {
+                              setPurchaseItems(prev => prev.map((row, i) => {
+                                if (i !== idx) return row;
+                                const safeQty = Math.max(1, Number(row.cantidad) || 1);
+                                const unit = Number(row.costoUnitarioUsd || 0);
+                                const flete = Number(row.fleteUsd || 0);
+                                return {
+                                  ...row,
+                                  cantidad: safeQty,
+                                  subtotalUsd: Number((safeQty * unit + flete).toFixed(2))
+                                };
+                              }));
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            className="form-control"
+                            style={{ padding: '3px 6px', fontSize: '0.74rem', textAlign: 'right' }}
+                            value={it.costoUnitarioUsd}
+                            title="Costo Unit. ($)"
+                            onChange={(e) => {
+                              const rawVal = e.target.value;
+                              const nextCost = rawVal === '' ? '' : Math.max(0, Number(rawVal) || 0);
+                              setPurchaseItems(prev => prev.map((row, i) => {
+                                if (i !== idx) return row;
+                                const qty = Number(row.cantidad || 1);
+                                const flete = Number(row.fleteUsd || 0);
+                                const calcCost = Number(nextCost || 0);
+                                return {
+                                  ...row,
+                                  costoUnitarioUsd: nextCost,
+                                  subtotalUsd: Number((qty * calcCost + flete).toFixed(2))
+                                };
+                              }));
+                            }}
+                            onBlur={() => {
+                              setPurchaseItems(prev => prev.map((row, i) => {
+                                if (i !== idx) return row;
+                                const safeCost = Math.max(0, Number(row.costoUnitarioUsd) || 0);
+                                const qty = Number(row.cantidad || 1);
+                                const flete = Number(row.fleteUsd || 0);
+                                return {
+                                  ...row,
+                                  costoUnitarioUsd: safeCost,
+                                  subtotalUsd: Number((qty * safeCost + flete).toFixed(2))
+                                };
+                              }));
+                            }}
+                          />
+                          <select
+                            className="form-control"
+                            style={{ padding: '3px 4px', fontSize: '0.72rem' }}
+                            value={String(it.almacen || '01').includes('02') ? '02' : '01'}
+                            title="Almacén"
+                            onChange={(e) => {
+                              const nextAlm = e.target.value;
+                              setPurchaseItems(prev => prev.map((row, i) => (i === idx ? { ...row, almacen: nextAlm } : row)));
+                            }}
+                          >
+                            <option value="01">Alm 01</option>
+                            <option value="02">Alm 02</option>
+                          </select>
+                          <span style={{ fontWeight: 700, whiteSpace: 'nowrap', textAlign: 'right' }}>{formatUsd(it.subtotalUsd)}</span>
                           <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPurchaseItems(prev => prev.filter((_, i) => i !== idx))}>✕</button>
                         </div>
                       ))}
@@ -2290,12 +2953,12 @@ export default function PurchasesView({
                   </div>
                 )}
 
-                {Array.isArray(goodsReceiptNotes) && goodsReceiptNotes.length > 0 && (
+                {Array.isArray(scopedGoodsReceiptNotes) && scopedGoodsReceiptNotes.length > 0 && (
                   <div className="form-group" style={{ marginBottom: '0.85rem' }}>
                     <label className="form-label">Nota de Recepción Vinculada (Opcional — evita duplicar entrada de stock)</label>
                     <select className="form-control" value={linkedReceiptId} onChange={(e) => setLinkedReceiptId(e.target.value)}>
                       <option value="">-- Ninguna (sumar stock directamente con esta factura) --</option>
-                      {goodsReceiptNotes.map(rec => (
+                      {scopedGoodsReceiptNotes.map(rec => (
                         <option key={rec.id || rec.numeroDoc} value={rec.id || rec.numeroDoc}>
                           {rec.numeroDoc || rec.not_num} • {rec.prov_des || rec.proveedorNombre || ''} {rec.stock_aplicado ? '(Stock ya ingresado)' : ''}
                         </option>
@@ -2363,9 +3026,38 @@ export default function PurchasesView({
                   )}
                 </div>
 
-                <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.75rem', padding: '0.75rem' }}>
-                  <CheckCircle size={18} /> Cargar a Inventario & Generar Retención SENIAT
-                </button>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '0.75rem' }}>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{
+                      flex: 1,
+                      padding: '0.75rem',
+                      background: editingPurchaseId ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : undefined,
+                      borderColor: editingPurchaseId ? '#10b981' : undefined
+                    }}
+                  >
+                    {editingPurchaseId ? (
+                      <>
+                        <Save size={18} /> Guardar Cambios en Carga SENIAT
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle size={18} /> Cargar a Inventario & Generar Retención SENIAT
+                      </>
+                    )}
+                  </button>
+                  {editingPurchaseId && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleCancelEditPurchase}
+                      style={{ padding: '0.75rem 1rem' }}
+                    >
+                      <X size={16} /> Cancelar
+                    </button>
+                  )}
+                </div>
               </form>
             </div>
 
@@ -2379,7 +3071,7 @@ export default function PurchasesView({
                 <div style={{ background: 'var(--surface-input, rgba(0, 43, 122, 0.03))', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--border-glass)' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>N° Comprobante Retención IVA (14 Dígitos SENIAT):</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-code)' }}>
-                    {generateVatRetentionVoucherNumber(new Date(), displayPurchases.length + 1)}
+                    {editingPurchaseOriginal?.numeroComprobanteRetencionIva || generateVatRetentionVoucherNumber(new Date(), displayPurchases.length + 1)}
                   </div>
                 </div>
 
@@ -2452,52 +3144,312 @@ export default function PurchasesView({
                     <th>Ret. IVA 75% (Bs.)</th>
                     <th>Ret. ISLR 2% (Bs.)</th>
                     <th>N° Comprobante Ret. IVA / PDF</th>
+                    <th style={{ textAlign: 'center' }}>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {displayPurchases.map((rec) => (
-                    <tr key={rec.id}>
-                      <td>{new Date(rec.fecha).toLocaleDateString()}</td>
-                      <td><strong style={{ color: 'var(--accent-primary)' }}>{rec.numeroFacturaProv || rec.facturaProv}</strong></td>
-                      <td><span style={{ fontFamily: 'monospace' }}>{rec.numeroControl || '00-005821'}</span></td>
-                      <td>
-                        <span className="badge" style={{
-                          background: rec.tipoDoc === 'NOTA_CREDITO' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-                          color: rec.tipoDoc === 'NOTA_CREDITO' ? 'var(--motorven-red)' : 'var(--motorven-emerald)'
-                        }}>
-                          {rec.tipoDoc || 'FACTURA'}
-                        </span>
-                      </td>
-                      <td>{rec.proveedorNombre || rec.proveedor}</td>
-                      <td>{rec.proveedorRif || 'J-31115365-9'}</td>
-                      <td>
-                        <div><strong>{formatUsd(rec.totalUsd)}</strong></div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{formatBs(rec.totalBs || (rec.totalUsd * config.tasaDolar))}</div>
-                      </td>
-                      <td>
-                        <span className="badge badge-success">{formatBs(rec.retencionIvaBs || (rec.retencionIvaUsd * config.tasaDolar))}</span>
-                      </td>
-                      <td>
-                        <span className="badge badge-info">{formatBs(rec.retencionIslrBs || (rec.retencionIslrUsd * config.tasaDolar))}</span>
-                      </td>
-                      <td>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--neon-cyan)' }}>
-                            {rec.numeroComprobanteRetencionIva || '20260700000001'}
-                          </span>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            style={{ padding: '2px 6px', fontSize: '0.68rem' }}
-                            onClick={() => generateSeniatRetentionVoucherPDF({ type: 'IVA', record: rec, config, currentUser })}
-                            title="Descargar Comprobante de Retención IVA SENIAT en PDF"
-                          >
-                            <Printer size={11} /> IVA PDF
-                          </button>
-                        </div>
+                  {scopedDisplayPurchases.length > 0 ? scopedDisplayPurchases.map((rec) => {
+                    const isEditingRow = inlineEditId === rec.id && inlineEditDraft;
+                    const rowRate = Number(rec.tasaDolar || config?.tasaDolar || 1);
+                    return (
+                      <tr
+                        key={rec.id}
+                        style={isEditingRow ? { background: 'rgba(16, 185, 129, 0.06)' } : undefined}
+                      >
+                        <td>
+                          {isEditingRow ? (
+                            <input
+                              type="date"
+                              className="form-control"
+                              style={{ padding: '3px 6px', fontSize: '0.75rem', minWidth: '122px' }}
+                              value={inlineEditDraft.fecha || ''}
+                              onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, fecha: e.target.value }))}
+                            />
+                          ) : (
+                            rec.fecha ? new Date(rec.fecha).toLocaleDateString() : '-'
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <input
+                              type="text"
+                              className="form-control"
+                              style={{ padding: '3px 6px', fontSize: '0.75rem', minWidth: '115px', fontWeight: 700 }}
+                              value={inlineEditDraft.numeroFacturaProv || ''}
+                              onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, numeroFacturaProv: e.target.value.toUpperCase() }))}
+                            />
+                          ) : (
+                            <strong style={{ color: 'var(--accent-primary)' }}>{rec.numeroFacturaProv || rec.facturaProv}</strong>
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <input
+                              type="text"
+                              className="form-control"
+                              style={{ padding: '3px 6px', fontSize: '0.75rem', width: '95px', fontFamily: 'monospace' }}
+                              value={inlineEditDraft.numeroControl || ''}
+                              onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, numeroControl: e.target.value.toUpperCase() }))}
+                            />
+                          ) : (
+                            <span style={{ fontFamily: 'monospace' }}>{rec.numeroControl || '00-005821'}</span>
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <select
+                              className="form-control"
+                              style={{ padding: '3px 6px', fontSize: '0.74rem', minWidth: '105px' }}
+                              value={inlineEditDraft.tipoDoc || 'FACTURA'}
+                              onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, tipoDoc: e.target.value }))}
+                            >
+                              <option value="FACTURA">FACTURA</option>
+                              <option value="NOTA_CREDITO">NOTA_CREDITO</option>
+                              <option value="NOTA_DEBITO">NOTA_DEBITO</option>
+                            </select>
+                          ) : (
+                            <span className="badge" style={{
+                              background: rec.tipoDoc === 'NOTA_CREDITO' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                              color: rec.tipoDoc === 'NOTA_CREDITO' ? 'var(--motorven-red)' : 'var(--motorven-emerald)'
+                            }}>
+                              {rec.tipoDoc || 'FACTURA'}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <select
+                              className="form-control"
+                              style={{ padding: '3px 6px', fontSize: '0.74rem', minWidth: '150px' }}
+                              value={inlineEditDraft.proveedorNombre || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const sup = unifiedSuppliers.find((s) => (s.nombre || s.provDes) === val);
+                                setInlineEditDraft((prev) => ({
+                                  ...prev,
+                                  proveedorNombre: val,
+                                  proveedorId: sup?.id || prev.proveedorId,
+                                  proveedorRif: sup?.rif || prev.proveedorRif
+                                }));
+                              }}
+                            >
+                              {!unifiedSuppliers.some((s) => (s.nombre || s.provDes) === inlineEditDraft.proveedorNombre) && inlineEditDraft.proveedorNombre && (
+                                <option value={inlineEditDraft.proveedorNombre}>{inlineEditDraft.proveedorNombre}</option>
+                              )}
+                              {unifiedSuppliers.map((s) => (
+                                <option key={s.id} value={s.nombre || s.provDes}>
+                                  {s.nombre || s.provDes}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            rec.proveedorNombre || rec.proveedor
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <input
+                              type="text"
+                              className="form-control"
+                              style={{ padding: '3px 6px', fontSize: '0.75rem', width: '105px', fontFamily: 'monospace' }}
+                              value={inlineEditDraft.proveedorRif || ''}
+                              onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, proveedorRif: e.target.value.toUpperCase() }))}
+                            />
+                          ) : (
+                            rec.proveedorRif || 'J-31115365-9'
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <div>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="form-control"
+                                style={{ padding: '3px 6px', fontSize: '0.75rem', width: '95px', fontWeight: 700 }}
+                                value={inlineEditDraft.totalUsd ?? 0}
+                                onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, totalUsd: e.target.value }))}
+                              />
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                {formatBs((Number(inlineEditDraft.totalUsd) || 0) * rowRate)}
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div><strong>{formatUsd(rec.totalUsd)}</strong></div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{formatBs(rec.totalBs || (rec.totalUsd * config.tasaDolar))}</div>
+                            </>
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <div>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="form-control"
+                                style={{ padding: '3px 6px', fontSize: '0.74rem', width: '85px' }}
+                                value={inlineEditDraft.retencionIvaUsd ?? 0}
+                                onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, retencionIvaUsd: e.target.value }))}
+                                title="Retención IVA en USD ($)"
+                              />
+                              <div style={{ fontSize: '0.66rem', color: 'var(--motorven-emerald)' }}>
+                                {formatBs((Number(inlineEditDraft.retencionIvaUsd) || 0) * rowRate)}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="badge badge-success">{formatBs(rec.retencionIvaBs || ((rec.retencionIvaUsd || 0) * config.tasaDolar))}</span>
+                          )}
+                        </td>
+                        <td>
+                          {isEditingRow ? (
+                            <div>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="form-control"
+                                style={{ padding: '3px 6px', fontSize: '0.74rem', width: '85px' }}
+                                value={inlineEditDraft.retencionIslrUsd ?? 0}
+                                onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, retencionIslrUsd: e.target.value }))}
+                                title="Retención ISLR en USD ($)"
+                              />
+                              <div style={{ fontSize: '0.66rem', color: 'var(--neon-cyan)' }}>
+                                {formatBs((Number(inlineEditDraft.retencionIslrUsd) || 0) * rowRate)}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="badge badge-info">{formatBs(rec.retencionIslrBs || ((rec.retencionIslrUsd || 0) * config.tasaDolar))}</span>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            {isEditingRow ? (
+                              <input
+                                type="text"
+                                className="form-control"
+                                style={{ padding: '3px 6px', fontSize: '0.73rem', width: '125px', fontFamily: 'monospace' }}
+                                value={inlineEditDraft.numeroComprobanteRetencionIva || ''}
+                                onChange={(e) => setInlineEditDraft((prev) => ({ ...prev, numeroComprobanteRetencionIva: e.target.value }))}
+                              />
+                            ) : (
+                              <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--neon-cyan)' }}>
+                                {rec.numeroComprobanteRetencionIva || '20260700000001'}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '2px 6px', fontSize: '0.68rem' }}
+                              onClick={() => generateSeniatRetentionVoucherPDF({ type: 'IVA', record: rec, config, currentUser })}
+                              title="Descargar Comprobante de Retención IVA SENIAT en PDF"
+                            >
+                              <Printer size={11} /> IVA PDF
+                            </button>
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                            {isEditingRow ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  onClick={() => handleSaveInlinePurchase(rec)}
+                                  style={{
+                                    padding: '3px 8px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    borderRadius: '6px',
+                                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                    color: '#ffffff',
+                                    border: '1px solid #10b981',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer'
+                                  }}
+                                  title="Guardar cambios de este registro SENIAT"
+                                >
+                                  <Save size={12} /> Guardar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={handleCancelEditPurchase}
+                                  style={{
+                                    padding: '3px 7px',
+                                    fontSize: '0.7rem',
+                                    borderRadius: '6px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    cursor: 'pointer'
+                                  }}
+                                  title="Cancelar edición"
+                                >
+                                  <X size={12} /> Cancelar
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  onClick={() => handleStartEditPurchase(rec)}
+                                  style={{
+                                    padding: '3px 8px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    borderRadius: '6px',
+                                    background: 'rgba(217, 119, 6, 0.15)',
+                                    color: '#fbbf24',
+                                    border: '1px solid rgba(217, 119, 6, 0.35)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer'
+                                  }}
+                                  title="Editar registro de carga SENIAT"
+                                >
+                                  <Edit3 size={12} /> Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  onClick={() => handleDeletePurchaseRecord(rec)}
+                                  style={{
+                                    padding: '3px 8px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    borderRadius: '6px',
+                                    background: 'rgba(239, 68, 68, 0.15)',
+                                    color: '#ef4444',
+                                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer'
+                                  }}
+                                  title="Eliminar registro del historial de carga SENIAT"
+                                >
+                                  <Trash2 size={12} /> Eliminar
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }) : (
+                    <tr>
+                      <td colSpan="11" style={{ textAlign: 'center', padding: '1.75rem', color: 'var(--text-muted)' }}>
+                        No hay registros en el historial de cargas locales SENIAT.
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>
@@ -2521,8 +3473,8 @@ export default function PurchasesView({
         <ProfitSupplierDetailModal
           supplier={selectedProfitSupplier}
           onClose={() => setSelectedProfitSupplier(null)}
-          purchases={profitPurchases}
-          accountsPayable={profitAccountsPayable}
+          purchases={scopedProfitPurchases}
+          accountsPayable={scopedAccountsPayable}
           tasaBcv={config?.tasaDolar || 827.73}
         />
       )}
@@ -2534,10 +3486,10 @@ export default function PurchasesView({
           onClose={() => setShowIslrModal(false)}
           islrConcepts={profitIslrConcepts}
           beneficiaries={profitBeneficiaries}
-          paymentOrders={profitPaymentOrders}
-          withholdings={profitIslrWithholdings}
-          accountsPayable={profitAccountsPayable}
-          purchases={profitPurchases}
+          paymentOrders={scopedPaymentOrders}
+          withholdings={scopedIslrWithholdings}
+          accountsPayable={scopedAccountsPayable}
+          purchases={scopedProfitPurchases}
           suppliers={profitSuppliers.length > 0 ? profitSuppliers : suppliers}
           onRefresh={onSyncProfit}
         />

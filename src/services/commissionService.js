@@ -516,10 +516,26 @@ export function calculateDocumentCommission(doc, { collections = [], collectionI
  */
 export function calculateSellerCommissionSummary(
   seller,
-  { invoices = [], collections = [], tasaBcv = 1, asOfDate = new Date() } = {}
+  { invoices = [], collections = [], returns = [], tasaBcv = 1, asOfDate = new Date() } = {}
 ) {
   const safeRate = Number(tasaBcv || 1) > 0 ? Number(tasaBcv) : 1;
   const collectionIndex = buildCollectionDateIndex(collections);
+
+  // Indexar devoluciones vigentes por número de factura / NE afectada para descontar base sin IVA
+  const returnedBaseByDocKey = new Map();
+  let unmatchedReturnedBaseUsd = 0;
+  (Array.isArray(returns) ? returns : []).forEach((ret) => {
+    if (!ret || isDocAnulada(ret)) return;
+    if (seller && !matchesSeller(seller, ret)) return;
+    const baseRet = round2(Number(ret.totBruto ?? ret.tot_bruto ?? ret.totNeto ?? ret.tot_neto ?? 0));
+    if (!(baseRet > 0)) return;
+    const refKey = String(ret.factNum || ret.fact_num || ret.documentoAfectado || '').trim().toUpperCase().replace(/^(FAC-|FACT-|NE-|NDE-)/i, '').replace(/^0+(?=\d)/, '');
+    if (refKey) {
+      returnedBaseByDocKey.set(refKey, round2((returnedBaseByDocKey.get(refKey) || 0) + baseRet));
+    } else {
+      unmatchedReturnedBaseUsd = round2(unmatchedReturnedBaseUsd + baseRet);
+    }
+  });
 
   const tiers = {};
   MOTORVEN_TIER_ORDER.forEach((tierId) => {
@@ -554,6 +570,16 @@ export function calculateSellerCommissionSummary(
     const res = calculateDocumentCommission(doc, { collectionIndex, tasaBcv: safeRate });
     if (!res.eligible) return;
 
+    const docCleanKey = String(doc.factNum || doc.numeroDoc || doc.nroDoc || doc.id || '')
+      .trim()
+      .toUpperCase()
+      .replace(/^(FAC-|FACT-|NE-|NDE-)/i, '')
+      .replace(/^0+(?=\d)/, '');
+    const returnedForDoc = docCleanKey ? (returnedBaseByDocKey.get(docCleanKey) || 0) : 0;
+    const effectiveBaseSinIvaUsd = Math.max(0, round2(res.baseSinIvaUsd - returnedForDoc));
+    const effectiveComisionUsd = res.tier ? round2(effectiveBaseSinIvaUsd * (res.ratePct / 100)) : 0;
+    const effectiveComisionBs = round2(effectiveComisionUsd * safeRate);
+
     if (res.fullyPaid && res.tier) {
       const bucket = tiers[res.tier.id];
       bucket.docsCount += 1;
@@ -564,8 +590,8 @@ export function calculateSellerCommissionSummary(
         bucket.facturasCount += 1;
         paidFacturasCount += 1;
       }
-      bucket.baseSinIvaUsd = round2(bucket.baseSinIvaUsd + res.baseSinIvaUsd);
-      bucket.comisionUsd = round2(bucket.comisionUsd + res.comisionUsd);
+      bucket.baseSinIvaUsd = round2(bucket.baseSinIvaUsd + effectiveBaseSinIvaUsd);
+      bucket.comisionUsd = round2(bucket.comisionUsd + effectiveComisionUsd);
       bucket.comisionBs = round2(bucket.comisionUsd * safeRate);
 
       const docDetail = {
@@ -580,35 +606,40 @@ export function calculateSellerCommissionSummary(
         tierId: res.tier.id,
         tierLabel: res.tier.label,
         ratePct: res.ratePct,
-        baseSinIvaUsd: res.baseSinIvaUsd,
-        comisionUsd: res.comisionUsd,
-        comisionBs: res.comisionBs
+        baseSinIvaUsd: effectiveBaseSinIvaUsd,
+        comisionUsd: effectiveComisionUsd,
+        comisionBs: effectiveComisionBs
       };
       bucket.docs.push(docDetail);
       paidDocs.push(docDetail);
 
       paidDocsCount += 1;
-      basePagadaSinIvaUsd = round2(basePagadaSinIvaUsd + res.baseSinIvaUsd);
-      totalComisionUsd = round2(totalComisionUsd + res.comisionUsd);
+      basePagadaSinIvaUsd = round2(basePagadaSinIvaUsd + effectiveBaseSinIvaUsd);
+      totalComisionUsd = round2(totalComisionUsd + effectiveComisionUsd);
     } else {
       pendingDocsCount += 1;
       const dueDate = doc.fechaVencimiento || doc.fec_venc || doc.fechaEmision || doc.fec_emis;
       const overdueAsOfToday = calculateOverdueDays(dueDate, asOfDate);
       const { ratePct: projectedRatePct } = getMotorvenCommissionRateByOverdueDays(overdueAsOfToday);
       if (overdueAsOfToday === 0) {
-        projectedAlDiaBaseUsd = round2(projectedAlDiaBaseUsd + res.baseSinIvaUsd);
+        projectedAlDiaBaseUsd = round2(projectedAlDiaBaseUsd + effectiveBaseSinIvaUsd);
       }
       pendingDocs.push({
         id: doc.id,
         factNum: doc.factNum || doc.numeroDoc || doc.nroDoc || doc.id,
         tipoDoc: res.tipoDoc,
-        baseSinIvaUsd: res.baseSinIvaUsd,
+        baseSinIvaUsd: effectiveBaseSinIvaUsd,
         saldoUsd: round2(Number(doc.saldoUsd ?? doc.restanteUsd ?? 0)),
         diasVencidosActual: overdueAsOfToday,
         projectedRatePct
       });
     }
   });
+
+  if (unmatchedReturnedBaseUsd > 0) {
+    basePagadaSinIvaUsd = Math.max(0, round2(basePagadaSinIvaUsd - unmatchedReturnedBaseUsd));
+    totalComisionUsd = Math.max(0, round2(totalComisionUsd - unmatchedReturnedBaseUsd * 0.04));
+  }
 
   const projectedAlDiaComisionUsd = round2(projectedAlDiaBaseUsd * 0.04);
 
@@ -666,4 +697,249 @@ export function countDistinctActiveMonths(invoices = [], collections = []) {
     addDate(col?.fecha || col?.fec_cob);
   });
   return Math.max(1, months.size);
+}
+
+const SALES_DEPARTMENT_VALUES = new Set([
+  'VEN',
+  'VENTAS',
+  'COMERCIAL & VENTAS',
+  'COMERCIAL Y VENTAS',
+  'FUERZA DE VENTAS'
+]);
+
+/**
+ * Determina estrictamente si un usuario pertenece al departamento de Ventas (VEN).
+ * Respeta el campo `departamento` configurado en Gestión de Usuarios: usuarios de
+ * Cobranza/Administración (`ADM`), Gerencia (`DIR`), Operaciones (`OPE`) o TI (`TI`)
+ * quedan excluidos de Fuerza de Ventas aunque compartan nombre con un asesor.
+ */
+export function isSalesDepartmentUser(user) {
+  if (!user || typeof user !== 'object') return false;
+  if (user.activo === false || user.active === false) return false;
+
+  const uname = String(user.username || '').trim().toLowerCase();
+  const uid = String(user.id || '').trim().toLowerCase();
+  if (/^autotest_/i.test(uname) || /^usr-autotest-/i.test(uid)) return false;
+
+  const rawDept = normalizeTextToken(user.departamento).toUpperCase();
+  if (rawDept) {
+    return SALES_DEPARTMENT_VALUES.has(rawDept);
+  }
+
+  // Fallback únicamente cuando el registro no tiene campo `departamento` configurado
+  const rawRol = normalizeTextToken(user.rol || user.role).toUpperCase();
+  return rawRol === 'VENTAS' || rawRol === 'VENDEDOR';
+}
+
+/**
+ * Construye la lista oficial de asesores visibles en el módulo Fuerza de Ventas,
+ * tomando EXCLUSIVAMENTE los usuarios activos configurados en el departamento de Ventas
+ * y enriqueciéndolos con su metadata comercial de `profit_sellers` (zona, meta, % comisión, etc.)
+ * sin contaminar fotos ni incluir registros ajenos (p.ej. usuarios de Cobranza o vendedores legacy).
+ */
+export function buildSalesDepartmentSellers(usersList = [], profitSellers = []) {
+  const safeUsers = Array.isArray(usersList) ? usersList.filter(Boolean) : [];
+  const safeProfit = Array.isArray(profitSellers) ? profitSellers.filter(Boolean) : [];
+
+  const cleanCodeToken = (raw) =>
+    String(raw || '')
+      .trim()
+      .replace(/^usr-seller-/i, '')
+      .trim()
+      .toUpperCase();
+
+  // Indexar metadata comercial de profit_sellers deduplicada por código limpio y nombre normalizado
+  const profitByCode = new Map();
+  const profitByName = new Map();
+  const allProfitCodes = new Set();
+
+  safeProfit.forEach((s) => {
+    const rawCode = String(s.coVen || s.co_ven || s.id || '').trim();
+    const cleanCode = cleanCodeToken(rawCode);
+    const name = String(s.venDes || s.ven_des || s.nombre || '').trim();
+    if ((!name && !cleanCode) || cleanCode.startsWith('USR-')) return;
+
+    const nameKey = normalizeTextToken(name);
+    const codeKey = cleanCode || nameKey.toUpperCase();
+    const existing = profitByCode.get(codeKey);
+    const rawIsPrefixed = /^usr-seller-/i.test(rawCode);
+    const existingIsPrefixed = existing ? /^usr-seller-/i.test(String(existing.coVen || existing.co_ven || '')) : false;
+
+    const preservedFoto = s.foto || existing?.foto || '';
+    const preservedAvatar = s.avatar || existing?.avatar || '';
+
+    if (!existing || (existingIsPrefixed && !rawIsPrefixed)) {
+      const merged = {
+        ...(existing || {}),
+        ...s,
+        id: s.id && !/^usr-seller-/i.test(String(s.id)) ? s.id : (cleanCode || s.id),
+        coVen: cleanCode || existing?.coVen || '',
+        co_ven: cleanCode || existing?.co_ven || '',
+        venDes: name || existing?.venDes || cleanCode,
+        ven_des: name || existing?.ven_des || cleanCode,
+        foto: preservedFoto,
+        avatar: preservedAvatar,
+        coZon: s.coZon || s.co_zon || existing?.coZon || '',
+        co_zon: s.coZon || s.co_zon || existing?.co_zon || '',
+        zona: s.zona || existing?.zona || '',
+        metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? existing?.metaLitrosMes ?? 3000),
+        comisionPct: Number(s.comisionPct ?? s.comision_pct ?? existing?.comisionPct ?? 3.0)
+      };
+      profitByCode.set(codeKey, merged);
+      if (cleanCode) allProfitCodes.add(cleanCode);
+      if (nameKey && !profitByName.has(nameKey)) {
+        profitByName.set(nameKey, merged);
+      } else if (nameKey && existingIsPrefixed && !rawIsPrefixed) {
+        profitByName.set(nameKey, merged);
+      }
+    } else if (preservedFoto && !existing.foto) {
+      const updated = { ...existing, foto: preservedFoto, avatar: preservedAvatar || existing.avatar };
+      profitByCode.set(codeKey, updated);
+      if (nameKey && profitByName.get(nameKey)?.coVen === existing.coVen) {
+        profitByName.set(nameKey, updated);
+      }
+    }
+  });
+
+  // Fallback defensivo únicamente si no existe listado de usuarios cargado
+  if (safeUsers.length === 0) {
+    return Array.from(profitByCode.values());
+  }
+
+  // Recopilar fotos y nombres de usuarios fuera del departamento Ventas para evitar contaminación cruzada
+  const nonSalesPhotos = new Set();
+  const nonSalesNames = new Set();
+  const salesUsers = [];
+
+  safeUsers.forEach((u) => {
+    if (isSalesDepartmentUser(u)) {
+      salesUsers.push(u);
+    } else {
+      const uPhoto = u.foto || u.photo_url || u.photoUrl || '';
+      if (uPhoto) nonSalesPhotos.add(uPhoto);
+      const uNameKey = normalizeTextToken(u.nombre || u.name);
+      if (uNameKey) nonSalesNames.add(uNameKey);
+    }
+  });
+
+  // Reservar primero todos los códigos explícitos de los usuarios de Ventas
+  const reservedExplicitCodes = new Set();
+  const getExplicitUserCode = (u) => {
+    const rawUserCoVen = cleanCodeToken(u.co_ven || u.coVen || u.seller_id || u.sellerId || '');
+    if (rawUserCoVen && !rawUserCoVen.startsWith('USR-')) return rawUserCoVen;
+    const uid = String(u.id || '').trim();
+    if (/^usr-seller-/i.test(uid)) {
+      const derived = cleanCodeToken(uid);
+      if (derived && !derived.startsWith('USR-')) return derived;
+    }
+    return '';
+  };
+
+  salesUsers.forEach((u) => {
+    const c = getExplicitUserCode(u);
+    if (c) reservedExplicitCodes.add(c);
+  });
+
+  const usedCodes = new Set([...allProfitCodes, ...reservedExplicitCodes]);
+  const claimedProfitCodes = new Set();
+
+  const genInitialsCode = (nombre) => {
+    const words = normalizeTextToken(nombre).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+    let base = words.length >= 2
+      ? `${words[0][0]}${words[1][0]}`.toUpperCase()
+      : (words[0] || 'VN').slice(0, 2).toUpperCase();
+    if (!base || base.length < 2) base = (base || 'VN').padEnd(2, 'X').slice(0, 2);
+    if (!usedCodes.has(base)) return base;
+    if (words.length >= 2 && words[1].length >= 2) {
+      const three = `${words[0][0]}${words[1].slice(0, 2)}`.toUpperCase();
+      if (!usedCodes.has(three)) return three;
+    }
+    if (words.length >= 3) {
+      const initials3 = `${words[0][0]}${words[1][0]}${words[2][0]}`.toUpperCase();
+      if (!usedCodes.has(initials3)) return initials3;
+    }
+    for (let i = 2; i < 99; i++) {
+      const c = `${base}${i}`;
+      if (!usedCodes.has(c)) return c;
+    }
+    return `${base}${Date.now().toString(36).slice(-2).toUpperCase()}`;
+  };
+
+  const result = [];
+  const seenUserKeys = new Set();
+
+  salesUsers.forEach((u) => {
+    const uName = String(u.nombre || u.name || u.username || '').trim();
+    const uNameKey = normalizeTextToken(uName);
+    const uname = String(u.username || '').trim();
+    const uid = String(u.id || '').trim();
+    const dedupeKey = uid || uname.toLowerCase() || uNameKey;
+    if (dedupeKey && seenUserKeys.has(dedupeKey)) return;
+    if (dedupeKey) seenUserKeys.add(dedupeKey);
+
+    const explicitCode = getExplicitUserCode(u);
+
+    // 1. Buscar metadata en profit_sellers por código explícito primero
+    let matchedProfit = explicitCode && profitByCode.has(explicitCode)
+      ? profitByCode.get(explicitCode)
+      : null;
+
+    // 2. Si el usuario no tiene código explícito, buscar por nombre exacto no reclamado
+    if (!matchedProfit && !explicitCode && uNameKey && profitByName.has(uNameKey)) {
+      const byNameCandidate = profitByName.get(uNameKey);
+      const candCode = cleanCodeToken(byNameCandidate?.coVen || byNameCandidate?.co_ven || byNameCandidate?.id);
+      if (
+        candCode &&
+        !claimedProfitCodes.has(candCode) &&
+        !reservedExplicitCodes.has(candCode)
+      ) {
+        matchedProfit = byNameCandidate;
+      }
+    }
+
+    const matchedCode = matchedProfit
+      ? cleanCodeToken(matchedProfit.coVen || matchedProfit.co_ven || matchedProfit.id)
+      : '';
+
+    const assignedCode = explicitCode || matchedCode || genInitialsCode(uName || uname);
+    usedCodes.add(assignedCode);
+    if (matchedCode) claimedProfitCodes.add(matchedCode);
+
+    const userPhoto = u.foto || u.photo_url || u.photoUrl || '';
+    const profitPhoto = matchedProfit?.foto || '';
+    // Nunca heredar una foto de profit_sellers que pertenezca a un usuario de otro departamento (ej. Cobranza)
+    const safeProfitPhoto = profitPhoto && !nonSalesPhotos.has(profitPhoto)
+      ? (nonSalesNames.has(normalizeTextToken(matchedProfit?.venDes)) && !explicitCode ? '' : profitPhoto)
+      : '';
+
+    const resolvedCoZon = matchedProfit?.coZon || matchedProfit?.co_zon || '';
+    const resolvedZona = matchedProfit?.zona || '';
+
+    result.push({
+      ...(matchedProfit || {}),
+      id: assignedCode,
+      coVen: assignedCode,
+      co_ven: assignedCode,
+      venDes: uName || matchedProfit?.venDes || assignedCode,
+      ven_des: uName || matchedProfit?.ven_des || assignedCode,
+      cedula: u.cedula || matchedProfit?.cedula || '',
+      telefonos: u.telefono || u.phone || matchedProfit?.telefonos || '',
+      direccion: matchedProfit?.direccion || '',
+      tipo: matchedProfit?.tipo || 'A',
+      comisionPct: Number(matchedProfit?.comisionPct ?? matchedProfit?.comision_pct ?? 3.0),
+      metaLitrosMes: Number(matchedProfit?.metaLitrosMes ?? matchedProfit?.meta_litros_mes ?? 3000),
+      activo: true,
+      foto: userPhoto || safeProfitPhoto || '',
+      avatar: u.avatar || matchedProfit?.avatar || '',
+      coZon: resolvedCoZon,
+      co_zon: resolvedCoZon,
+      zona: resolvedZona,
+      userId: uid,
+      username: uname,
+      departamento: 'VEN',
+      rol: u.rol || u.role || 'VENTAS'
+    });
+  });
+
+  return result;
 }

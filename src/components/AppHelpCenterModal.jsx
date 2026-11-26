@@ -38,7 +38,8 @@ import {
   CreditCard,
   FileSpreadsheet,
   Plus,
-  Download
+  Download,
+  Scale
 } from 'lucide-react';
 import {
   SYSTEM_METADATA,
@@ -50,8 +51,8 @@ import {
 import { ROLE_PERMISSIONS, normalizeRole } from '../services/authService';
 import { generateManualPDF } from '../services/pdfReportService';
 
-// Módulos siempre visibles para todos los roles (barra superior global, centro de notificaciones y período fiscal)
-const ALWAYS_VISIBLE_IDS = ['header_rates', 'notificaciones', 'config_fiscal'];
+// Módulos siempre visibles para todos los roles (barra superior global, centro de notificaciones, período fiscal y guía móvil)
+const ALWAYS_VISIBLE_IDS = ['header_rates', 'notificaciones', 'config_fiscal', 'pos_movil'];
 
 export default function AppHelpCenterModal({
   isOpen,
@@ -219,6 +220,8 @@ export default function AppHelpCenterModal({
       case 'Layers': return <Layers {...props} />;
       case 'FileText': return <FileText {...props} />;
       case 'Compass': return <Compass {...props} />;
+      case 'Sparkles': return <Sparkles {...props} />;
+      case 'Scale': return <Scale {...props} />;
       default: return <BookOpen {...props} />;
     }
   };

@@ -15,13 +15,14 @@ import { getClients, saveClient, deleteClient } from '../services/storageService
 
 console.log('--- INICIANDO PRUEBA DE FLUJO DE REGISTRO Y APROBACION DE CLIENTES ---');
 
-// 1. Verificar usuarios autorizados para aprobar y registrar directamente en oficina
+// 1. Verificar usuarios con acceso a Flujo Comercial ('pedidos') autorizados para aprobar clientes
 console.log('1. Verificando aprobadores autorizados...');
 const authorizedApprovers = [
   { username: 'caja', rol: 'CAJA', nombre: 'Vanesa Sánchez' },
   { username: 'rosibelcxc', rol: 'COBRANZA', nombre: 'Rosibel Briceño' },
-  { username: 'ventas', rol: 'VENTAS', nombre: 'Yheyson Calderón', co_ven: 'YC' },
-  { username: 'manuel', rol: 'TECNOLOGÍA & INFORMÁTICA', nombre: 'Manuel Rosales' },
+  { username: 'ventas', rol: 'VENTAS', nombre: 'Yheyson Calderón', co_ven: 'YC', modulos: ['preventa', 'pedidos'] },
+  { username: 'yheisom', rol: 'VENTAS', nombre: 'Yheisom Calderon', modulos: ['preventa', 'pedidos'] },
+  { username: 'luiggys', rol: 'OPERACIONES', nombre: 'Luiggy Silva', modulos: ['pedidos', 'dashboard'] },
   { username: 'edson designer', rol: 'ADMINISTRADOR MASTER', nombre: 'Edson' },
   { username: 'gerencia', rol: 'GERENCIA', nombre: 'Gerencia General' },
   { username: 'admin', rol: 'ADMINISTRACIÓN', nombre: 'Administración' }
@@ -35,16 +36,17 @@ authorizedApprovers.forEach((u) => {
   );
 });
 
-// 2. Verificar usuarios que NO pueden auto-aprobar clientes (deben esperar aprobación)
-console.log('2. Verificando restricciones para vendedores y otros roles...');
+// 2. Verificar usuarios sin acceso a Flujo Comercial ('pedidos') no pueden aprobar clientes
+console.log('2. Verificando restricciones para vendedores y otros roles sin Flujo Comercial...');
 const nonApprovers = [
-  { username: 'rosibelventas', rol: 'VENTAS', nombre: 'Rosibel Ventas', co_ven: '01' },
-  { username: 'victorv', rol: 'VENTAS', nombre: 'Victor V', co_ven: '02' },
-  { username: 'carlosm', rol: 'VENTAS', nombre: 'Carlos M', co_ven: '03' },
-  { username: 'juanr', rol: 'VENTAS', nombre: 'Juan R', co_ven: '04' },
-  { username: 'katherineb', rol: 'VENTAS', nombre: 'Katherine B', co_ven: '05' },
-  { username: 'oficina', rol: 'VENTAS', nombre: 'Oficina Ventas', co_ven: 'OF' },
-  { username: 'rayalm', rol: 'ALMACEN', nombre: 'Ray Almacen' },
+  { username: 'rosibelventas', rol: 'VENTAS', nombre: 'Rosibel Ventas', co_ven: '01', modulos: ['preventa', 'ventas', 'cxc'] },
+  { username: 'victorv', rol: 'VENTAS', nombre: 'Victor V', co_ven: '02', modulos: ['preventa', 'ventas'] },
+  { username: 'carlosm', rol: 'VENTAS', nombre: 'Carlos M', co_ven: '03', modulos: ['preventa'] },
+  { username: 'juanr', rol: 'VENTAS', nombre: 'Juan R', co_ven: '04', modulos: ['preventa'] },
+  { username: 'katherineb', rol: 'VENTAS', nombre: 'Katherine B', co_ven: '05', modulos: ['preventa'] },
+  { username: 'oficina', rol: 'VENTAS', nombre: 'Oficina Ventas', co_ven: 'OF', modulos: ['preventa', 'ventas'] },
+  { username: 'rayalm', rol: 'ALMACEN', nombre: 'Ray Almacen', modulos: ['inventario', 'compras'] },
+  { username: 'manuel', rol: 'TECNOLOGÍA & INFORMÁTICA', nombre: 'Manuel Rosales', modulos: ['dashboard', 'configuracion'] },
   null
 ];
 

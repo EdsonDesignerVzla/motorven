@@ -1,5 +1,11 @@
 import { formatNumberUs } from './formatService.js';
 import { getEraScopedCanonicalDocKey } from './fiscalService.js';
+import {
+  canAccessModule,
+  canAccessMobileModule,
+  MOBILE_CFG_MARKER,
+  MOBILE_MOD_PREFIX
+} from './authService.js';
 
 export const CREDIT_APPROVERS_CATALOG = [
   {
@@ -34,7 +40,7 @@ export const DEFAULT_APPROVER_IDS = [
   'Edson Designer (Administrador Master / Dirección)',
   'Ricardo Sánchez (Gerente General / Dirección)',
   'Luiggy Silva (Administración & Finanzas)',
-  'José Martínez (Analista de Cobranzas y Crédito)'
+  'Yheyson Calderón (Supervisor / Ventas)'
 ];
 
 /**
@@ -538,7 +544,7 @@ export function getAuthorizedApproverGroups(config) {
           'Edson Designer (Administrador Master / Dirección)',
           'Ricardo Sánchez (Gerente General / Dirección)',
           'Luiggy Silva (Administración & Finanzas)',
-          'José Martínez (Analista de Cobranzas y Crédito)'
+          'Yheyson Calderón (Supervisor / Ventas)'
         ]);
 
   const approverGroups = (CREDIT_APPROVERS_CATALOG || [])
@@ -561,32 +567,25 @@ export function getAuthorizedApproverGroups(config) {
 }
 
 /**
- * Indica si el usuario autenticado posee privilegio jerárquico para otorgar una aprobación
- * excepcional de crédito directamente en campo/oficina sin retener el pedido en Flujo Comercial.
+ * Indica si el usuario autenticado posee acceso al módulo de Flujo Comercial & Pedidos ('pedidos')
+ * para aprobar créditos en todas sus versiones (escritorio, POS, preventa y móvil).
  */
-export function canUserGrantCreditOverride(userOrRole) {
+export function canUserGrantCreditOverride(userOrRole, { mobile = false } = {}) {
   if (!userOrRole) return false;
-  const rawRole = typeof userOrRole === 'object' ? (userOrRole.rol || userOrRole.role || '') : String(userOrRole);
-  const roleNorm = String(rawRole)
-    .trim()
-    .toUpperCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-  const username = String(typeof userOrRole === 'object' ? (userOrRole.username || '') : '')
-    .trim()
-    .toLowerCase();
-
-  if (
-    roleNorm.includes('ADMINISTRADOR MASTER') ||
-    roleNorm.includes('GERENCIA') ||
-    roleNorm.includes('TECNOLOGIA') ||
-    roleNorm.includes('ADMINISTRACION') ||
-    roleNorm.includes('COBRANZA')
-  ) {
-    return true;
+  if (typeof userOrRole === 'object') {
+    const role = userOrRole.rol || userOrRole.role;
+    const hasMobileConfig =
+      Array.isArray(userOrRole.modulosMovil) ||
+      (Array.isArray(userOrRole.modulos) &&
+        userOrRole.modulos.some(
+          (m) => typeof m === 'string' && (m === MOBILE_CFG_MARKER || m.startsWith(MOBILE_MOD_PREFIX))
+        ));
+    if (mobile && hasMobileConfig) {
+      return canAccessMobileModule(userOrRole, 'pedidos');
+    }
+    return canAccessModule(role, 'pedidos', userOrRole);
   }
-
-  return ['edson designer', 'gerencia', 'manuel', 'sistemas', 'luiggy', 'rosibelcxc', 'jose'].includes(username);
+  return canAccessModule(String(userOrRole), 'pedidos', null);
 }
 
 /**

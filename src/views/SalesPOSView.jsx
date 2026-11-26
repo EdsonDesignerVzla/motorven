@@ -2464,9 +2464,9 @@ export default function SalesPOSView({
                             color: '#cbd5e1',
                             border: '1px solid rgba(148, 163, 184, 0.35)'
                           }}
-                          title="Solo Presidencia, Gerencia o Crédito y Cobranzas pueden otorgar aprobaciones excepcionales de crédito"
+                          title="Requiere acceso al módulo Flujo Comercial & Pedidos para aprobar créditos"
                         >
-                          🔒 Requiere Gerencia
+                          🔒 Requiere Flujo Comercial
                         </span>
                       )
                     )}
@@ -3173,7 +3173,7 @@ export default function SalesPOSView({
                   style={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 800 }}
                   onClick={() => {
                     if (!userCanGrantCreditOverride) {
-                      notify.error('Solo usuarios con rol de Presidencia, Gerencia o Crédito y Cobranzas pueden autorizar excepciones de crédito.');
+                      notify.error('Solo usuarios con acceso al módulo Flujo Comercial & Pedidos pueden aprobar créditos.');
                       return;
                     }
                     if (!authorizedApproverIds.has(creditOverrideAuthorizer)) {

@@ -181,7 +181,7 @@ export function normalizeCollectionWriteAmounts({ montoUsd = 0, montoBs = 0, tas
   };
 }
 
-const normalizeRefDigits = (v) =>
+export const normalizeRefDigits = (v) =>
   String(v || '')
     .toUpperCase()
     .trim()
@@ -258,6 +258,129 @@ export function doesCollectionMatchInvoice(collection, invoice) {
   if (descrip.includes('FACTURA FISCAL') && invTipo === 'NOTA_ENTREGA') return false;
   const hashMatches = descrip.match(/#([A-Z0-9-]+)/g) || [];
   return hashMatches.some(tok => normalizeRefDigits(tok.slice(1)) === invNumDigits);
+}
+
+/**
+ * Resuelve el monto aplicado en USD y Bs de un cobro hacia un documento específico.
+ */
+export function resolveCollectionAppliedAmountForInvoice(collection, invoice, fallbackTasa = 1) {
+  if (!doesCollectionMatchInvoice(collection, invoice)) {
+    return { usd: 0, bs: 0, tasa: Number(fallbackTasa || 1) || 1 };
+  }
+
+  const invTipo = inferCxcDocType(invoice);
+  const invCanon = getCanonicalDocKey(invoice, invTipo);
+  const invNumDigits = normalizeRefDigits(invoice.factNum || invoice.factura || invoice.numeroDoc || invoice.id);
+  const docEntries = Array.isArray(collection.documentosAfectados)
+    ? collection.documentosAfectados
+    : (Array.isArray(collection.documentos_afectados) ? collection.documentos_afectados : []);
+
+  const matchedEntry = docEntries.find(da => {
+    if (!da || typeof da !== 'object') return false;
+    const rawDaTipo = String(da.tipoDoc || da.tipo_doc || '').toUpperCase().trim();
+    if (rawDaTipo) {
+      const daIsNe = rawDaTipo === 'NOTA_ENTREGA' || rawDaTipo === 'N/E' || rawDaTipo === 'NE';
+      if (daIsNe !== (invTipo === 'NOTA_ENTREGA')) return false;
+    }
+    const daNum = String(da.numDoc || da.factNum || da.numeroDoc || da.num_doc || da.fact_num || '').trim();
+    if (!daNum) return false;
+    const daCanon = getCanonicalDocKey(daNum, rawDaTipo || invTipo);
+    if (invCanon && daCanon) return daCanon === invCanon;
+    return normalizeRefDigits(daNum) === invNumDigits;
+  }) || docEntries[0] || {};
+
+  const cTasa = Number(collection.tasa || invoice.tasa || fallbackTasa || 1) || 1;
+  const rawUsd = Number(matchedEntry.montoCobradoUsd ?? collection.montoUsd ?? 0);
+  const rawBs = Number(matchedEntry.montoCobrado ?? collection.montoBs ?? 0);
+  const usd = (cTasa > 10 && rawUsd > 0 && Math.abs(rawUsd - rawBs) < 1)
+    ? round2(rawUsd / cTasa)
+    : round2(rawUsd || (cTasa > 0 ? rawBs / cTasa : 0));
+  const bs = (cTasa > 1 && usd > 0 && Math.abs(rawBs - usd) < 0.01)
+    ? round2(usd * cTasa)
+    : round2(rawBs || usd * cTasa);
+
+  return { usd, bs, tasa: cTasa };
+}
+
+export function buildCollectionsByDocDigitsIndex(collections) {
+  const index = new Map();
+  if (!Array.isArray(collections) || collections.length === 0) return index;
+  const pushRef = (rawVal, col) => {
+    const digits = normalizeRefDigits(rawVal);
+    if (!digits) return;
+    let bucket = index.get(digits);
+    if (!bucket) {
+      bucket = [];
+      index.set(digits, bucket);
+    }
+    if (bucket[bucket.length - 1] !== col) {
+      bucket.push(col);
+    }
+  };
+  for (let i = 0; i < collections.length; i++) {
+    const col = collections[i];
+    if (!col || col.anulado) continue;
+    const docsAfectados = Array.isArray(col.documentosAfectados)
+      ? col.documentosAfectados
+      : (Array.isArray(col.documentos_afectados) ? col.documentos_afectados : []);
+    if (docsAfectados.length > 0) {
+      for (let j = 0; j < docsAfectados.length; j++) {
+        const da = docsAfectados[j];
+        if (da && typeof da === 'object') {
+          pushRef(da.numDoc || da.factNum || da.numeroDoc || da.num_doc || da.fact_num, col);
+        }
+      }
+      continue;
+    }
+    if (col.factNum || col.fact_num) {
+      pushRef(col.factNum || col.fact_num, col);
+      continue;
+    }
+    const descrip = String(col.descrip || '').toUpperCase();
+    if (descrip) {
+      const hashMatches = descrip.match(/#([A-Z0-9-]+)/g);
+      if (hashMatches) {
+        for (let k = 0; k < hashMatches.length; k++) {
+          pushRef(hashMatches[k].slice(1), col);
+        }
+      }
+    }
+  }
+  return index;
+}
+
+/**
+ * Suma el total abonado en USD de todos los cobros vinculados (profit_collections + historialCobros local)
+ * para un documento CxC, evitando duplicados por cobNum/id.
+ */
+export function sumLinkedCollectionsUsdForInvoice(collections, invoice, fallbackTasa = 1) {
+  if (!invoice) return 0;
+  const seenKeys = new Set();
+  let totalUsd = 0;
+
+  (Array.isArray(collections) ? collections : []).forEach(col => {
+    if (!doesCollectionMatchInvoice(col, invoice)) return;
+    const key = String(col.cobNum || col.correlativo || col.id || '').trim();
+    if (key) {
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+    }
+    const { usd } = resolveCollectionAppliedAmountForInvoice(col, invoice, fallbackTasa);
+    if (usd > 0) totalUsd = round2(totalUsd + usd);
+  });
+
+  (Array.isArray(invoice.historialCobros) ? invoice.historialCobros : []).forEach(hc => {
+    if (!hc || hc.anulado) return;
+    const key = String(hc.cobNum || hc.correlativo || hc.id || '').trim();
+    if (key) {
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+    }
+    const usd = round2(Math.max(0, Number(hc.montoUsd ?? 0)));
+    if (usd > 0) totalUsd = round2(totalUsd + usd);
+  });
+
+  return round2(totalUsd);
 }
 
 /**
@@ -920,13 +1043,25 @@ export function classifyCollectionRateType(mov, rates = {}) {
 
   const monUp = String(mov?.monedaPago || mov?.moneda_pago || '').toUpperCase().trim();
   const rawBs = Number(mov?.montoBs ?? mov?.monto_bs ?? 0);
+  const directFromAccount = inferDirectCurrencyFromAccountOrMethod(mov);
+  const directFromAccountWithBinance = inferDirectCurrencyFromAccountOrMethod(mov, {
+    includeBinanceFromAccount: true
+  });
 
   if (explicit) {
+    if (isDirectCurrencyRateType(explicit)) {
+      // Si el movimiento es en moneda directa, alinear al renglón exacto de la caja receptora
+      // (ej. tipoTasa='USD' guardado en Caja USDT Binance -> 'USDT', o Caja Zelle -> 'ZELLE')
+      if (directFromAccountWithBinance) return directFromAccountWithBinance;
+      return explicit;
+    }
+    // Las cajas estrictamente en divisa directa (Efectivo USD, Zelle, Kontigo USDC)
+    // siempre clasifican en su moneda directa para garantizar cuadre exacto Renglón <-> Caja.
+    if (directFromAccount) return directFromAccount;
     if (isFiscalCollectionMovement(mov) && (explicit === 'EURO' || explicit === 'USDT_BS')) return 'BCV';
     return explicit;
   }
 
-  const directFromAccount = inferDirectCurrencyFromAccountOrMethod(mov);
   const directCandidate =
     directFromAccount ||
     explicitDirectFromObs ||
@@ -1037,11 +1172,11 @@ export function summarizeDailyMovementsByCaja(movements = []) {
     if (!mov) return;
     const rawNombre = String(mov.cuentaNombre || mov.cajaOBanco || '').trim() || 'Tesorería / Sin Caja';
     const key = rawNombre.toUpperCase();
-    const explicitTipo = normalizeCxcRateType(mov.tipoTasa ?? mov.tipo_tasa);
+    const directFromAccount = inferDirectCurrencyFromAccountOrMethod(mov);
     const isDirect = Boolean(
       mov.isDirectCurrency ||
       isDirectCurrencyRateType(mov.tipoTasa, { monedaPago: mov.monedaPago }) ||
-      (!explicitTipo && inferDirectCurrencyFromAccountOrMethod(mov))
+      directFromAccount
     );
     const usd = Number(mov.montoUsd || 0);
     const bs = isDirect ? 0 : Number(mov.montoBs || 0);
@@ -1074,6 +1209,221 @@ export function summarizeDailyMovementsByCaja(movements = []) {
       totalUsd: round2(rows.reduce((acc, r) => acc + r.totalUsd, 0)),
       totalBs: round2(rows.reduce((acc, r) => acc + r.totalBs, 0))
     }
+  };
+}
+
+/**
+ * Determina si un movimiento CxC corresponde a una Nota de Crédito (N/CR)
+ * o Nota de Débito (N/DB), ya sea por tipo de documento, forma de pago,
+ * caja/banco receptor, correlativo o referencia.
+ */
+export function isCxcCreditOrDebitNoteMovement(mov) {
+  if (!mov || typeof mov !== 'object') return false;
+  if (getCreditDebitNoteKind(mov)) return true;
+
+  const normalize = (v) =>
+    String(v || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .trim();
+
+  const rawTipo = normalize(mov.tipo);
+  if (
+    rawTipo === 'NOTA_CREDITO' ||
+    rawTipo === 'NOTA DE CREDITO' ||
+    rawTipo === 'N/CR' ||
+    rawTipo === 'NCR' ||
+    rawTipo === 'NOTA_DEBITO' ||
+    rawTipo === 'NOTA DE DEBITO' ||
+    rawTipo === 'N/DB' ||
+    rawTipo === 'NDB'
+  ) {
+    return true;
+  }
+
+  const forma = normalize(mov.formaPago || mov.metodoPago);
+  if (
+    forma === 'NOTA_CREDITO' ||
+    forma === 'NOTA DE CREDITO' ||
+    forma === 'N/CR' ||
+    forma === 'NCR' ||
+    forma === 'NOTA_DEBITO' ||
+    forma === 'NOTA DE DEBITO' ||
+    forma === 'N/DB' ||
+    forma === 'NDB'
+  ) {
+    return true;
+  }
+
+  const accType = normalize(mov.accountType);
+  if (
+    accType === 'NOTA_CREDITO' ||
+    accType === 'NOTA DE CREDITO' ||
+    accType === 'N/CR' ||
+    accType === 'NOTA_DEBITO' ||
+    accType === 'NOTA DE DEBITO' ||
+    accType === 'N/DB'
+  ) {
+    return true;
+  }
+
+  const cuentaId = normalize(mov.cuentaId);
+  if (cuentaId === 'NC-FISCAL' || cuentaId === 'ND-FISCAL' || /^(NC|ND|NE-NC|NE-ND)-/.test(cuentaId)) {
+    return true;
+  }
+
+  const cuentaNombre = normalize(mov.cuentaNombre || mov.cajaOBanco);
+  if (
+    /^N\/CR\b/.test(cuentaNombre) ||
+    /^N\/DB\b/.test(cuentaNombre) ||
+    cuentaNombre.startsWith('NOTA DE CREDITO') ||
+    cuentaNombre.startsWith('NOTA DE DEBITO') ||
+    cuentaNombre.startsWith('NOTA_CREDITO') ||
+    cuentaNombre.startsWith('NOTA_DEBITO')
+  ) {
+    return true;
+  }
+
+  const corr = normalize(mov.correlativo);
+  if (/^(NC|ND|NE-NC|NE-ND)-/.test(corr)) {
+    return true;
+  }
+
+  const ref = normalize(mov.referencia);
+  if (/^(NC|ND|NE-NC|NE-ND)-/.test(ref)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Filtra los movimientos para el Reporte Diario Impreso de Movimientos y Abonos CxC:
+ * excluye Notas de Crédito y Notas de Débito para que no aparezcan ni en el detalle,
+ * ni en el resumen por renglón de tasa, ni en el resumen por Caja/Banco, ni se sumen
+ * a ninguno de los totales del reporte impreso.
+ */
+export function filterMovementsForDailyCollectionReport(movements = []) {
+  return (Array.isArray(movements) ? movements : []).filter(
+    (mov) => mov && !isCxcCreditOrDebitNoteMovement(mov)
+  );
+}
+
+/**
+ * Resuelve la cuenta/caja exacta del catálogo para un movimiento CxC sin colisión
+ * entre prefijos numéricos de Bancos (ej. '01' / 'CTA-01' / 'BANCO:01') y Cajas
+ * (ej. 'caja-01' / 'CAJA:caja-01').
+ */
+export function resolveCatalogAccountForMovement(mov, catalogCuentas = []) {
+  if (!mov || !Array.isArray(catalogCuentas) || catalogCuentas.length === 0) return null;
+  const norm = (v) => String(v || '').trim().toUpperCase();
+  const stripPref = (v) => norm(v).replace(/^(CAJA:|BANCO:|CAJA-|CTA-)/, '');
+
+  const rawKey = norm(mov.cuentaKey);
+  const rawId = norm(mov.cuentaId);
+  const movName = norm(mov.cuentaNombre || mov.cajaOBanco);
+  const rawAccType = norm(mov.accountType);
+
+  let expectedType = '';
+  if (rawId.startsWith('CAJA-') || rawId.startsWith('CAJA:')) expectedType = 'CAJA';
+  else if (rawId.startsWith('CTA-') || rawId.startsWith('BANCO:')) expectedType = 'BANCO';
+  else if (movName.includes('BANCO')) expectedType = 'BANCO';
+  else if (movName.startsWith('CAJA') || /\b(ZELLE|BINANCE|USDT|USDC|KONTIGO)\b/.test(movName)) expectedType = 'CAJA';
+  else if (rawKey.startsWith('BANCO:')) expectedType = 'BANCO';
+  else if (rawKey.startsWith('CAJA:')) expectedType = 'CAJA';
+  else if (rawAccType === 'BANCO' || rawAccType === 'CAJA') expectedType = rawAccType;
+
+  const sameType = (c) => !expectedType || norm(c.accountType) === expectedType;
+
+  // 1. Coincidencia exacta por cuentaKey si coincide el tipo de cuenta esperado
+  if (rawKey) {
+    const byExactKey = catalogCuentas.find((c) => norm(c.key) === rawKey && sameType(c));
+    if (byExactKey) return byExactKey;
+  }
+
+  // 2. Coincidencia exacta por nombre o etiqueta normalizada
+  if (movName) {
+    const byName = catalogCuentas.find(
+      (c) => (norm(c.nombre) === movName || norm(c.label) === movName) && sameType(c)
+    );
+    if (byName) return byName;
+    const byNameAny = catalogCuentas.find((c) => norm(c.nombre) === movName || norm(c.label) === movName);
+    if (byNameAny) return byNameAny;
+  }
+
+  // 3. Coincidencia exacta por ID completo (sin quitar prefijos CAJA- / CTA-)
+  if (rawId) {
+    const byExactId = catalogCuentas.find((c) => {
+      if (!sameType(c)) return false;
+      return norm(c.rawId) === rawId || norm(c.id) === rawId || norm(c.key) === rawId;
+    });
+    if (byExactId) return byExactId;
+  }
+
+  // 4. Coincidencia por código numérico (ej. '01', '04') estrictamente dentro del mismo tipo (BANCO vs CAJA)
+  const strippedMovId = stripPref(rawId || rawKey);
+  if (strippedMovId && expectedType) {
+    const byTypeAndNum = catalogCuentas.find((c) => {
+      if (norm(c.accountType) !== expectedType) return false;
+      const cid = stripPref(c.rawId || c.id || c.key);
+      const cKey = stripPref(c.key);
+      return cid === strippedMovId || cKey === strippedMovId;
+    });
+    if (byTypeAndNum) return byTypeAndNum;
+  }
+
+  return null;
+}
+
+/**
+ * Autocorrije registros históricos afectados por la antigua colisión BANCO:XX -> caja-XX
+ * al editar cobros bancarios en Bs. (conservaban cuentaKey='BANCO:XX', monedaPago='BS'
+ * y montoBs > 0, pero cuentaId/cuentaNombre apuntaba por error a una caja USD).
+ */
+export function healCorruptedBankToCajaAccount(mov, catalogCuentas = []) {
+  if (!mov || typeof mov !== 'object') return mov;
+  const norm = (v) => String(v || '').trim().toUpperCase();
+  const rawKey = norm(mov.cuentaKey);
+  const rawId = norm(mov.cuentaId);
+  const rawAccType = norm(mov.accountType);
+  const monPago = norm(mov.monedaPago || mov.moneda_pago);
+  const montoBs = Number(mov.montoBs ?? mov.monto_bs ?? 0);
+  const explicitTipo = normalizeCxcRateType(mov.tipoTasa ?? mov.tipo_tasa);
+
+  const isBankKeyWithCajaCollision =
+    rawKey.startsWith('BANCO:') &&
+    (rawId.startsWith('CAJA') || rawAccType === 'CAJA') &&
+    montoBs > 0 &&
+    (monPago === 'BS' || (explicitTipo && !isDirectCurrencyRateType(explicitTipo)));
+
+  if (!isBankKeyWithCajaCollision) return mov;
+
+  const bankCode = rawKey.replace(/^BANCO:/, '').replace(/^CTA-/, '');
+  const matchedBank = (Array.isArray(catalogCuentas) ? catalogCuentas : []).find((c) => {
+    if (norm(c.accountType) !== 'BANCO') return false;
+    if (norm(c.key) === rawKey) return true;
+    const cCode = norm(c.rawId || c.id || '').replace(/^CTA-/, '');
+    return Boolean(bankCode) && cCode === bankCode;
+  });
+
+  if (matchedBank) {
+    return {
+      ...mov,
+      cuentaKey: matchedBank.key,
+      cuentaId: matchedBank.rawId || matchedBank.id || bankCode,
+      cuentaNombre: matchedBank.nombre || mov.cuentaNombre,
+      accountType: 'BANCO',
+      moneda: matchedBank.moneda || 'BS'
+    };
+  }
+
+  return {
+    ...mov,
+    cuentaId: bankCode || mov.cuentaId,
+    cuentaNombre: bankCode ? `Banco (${bankCode})` : mov.cuentaNombre,
+    accountType: 'BANCO',
+    moneda: 'BS'
   };
 }
 
@@ -1263,42 +1613,72 @@ export function buildCxcCreditDebitNoteResult({
     };
     clientDebtDeltaUsd = -appliedAmount;
   } else {
-    // Nota de Débito: genera un nuevo documento por cobrar vinculado al documento afectado
-    const ndDocNum = !effectiveIsFiscal && !cleanNoteNum.startsWith('NE-')
-      ? `NE-${cleanNoteNum}`
-      : cleanNoteNum;
-    createdDebitDoc = {
-      id: ndDocNum,
-      factNum: ndDocNum,
-      tipoDoc: effectiveIsFiscal ? 'FACTURA' : 'NOTA_ENTREGA',
-      fiscalDocType: 'NOTA_DEBITO',
-      isFiscal: effectiveIsFiscal,
-      documentoAfectado: String(affectedDoc.factNum),
+    // Nota de Débito: suma el cargo adicional al documento afectado y registra el movimiento en historialCobros
+    const ndEntry = {
+      id: `nd-${cleanNoteNum}-${Date.now().toString().slice(-4)}`,
+      correlativo: cleanNoteNum,
+      cobNum: cleanNoteNum,
       numeroControl: resolvedControl,
+      isFiscal: effectiveIsFiscal,
+      tipo: 'NOTA_DEBITO',
+      tipoDoc: 'NOTA_DEBITO',
+      factNum: String(affectedDoc.factNum),
+      documentoAfectado: String(affectedDoc.factNum),
+      fecha: cleanFecha,
+      tasa: cleanTasa,
+      tasaPago: cleanTasa,
+      tipoTasa: 'BCV',
+      monedaPago: 'BS',
+      subtotalUsd: cleanSub,
+      subtotalBs,
+      ivaUsd: cleanIva,
+      ivaBs,
+      isExento: !effectiveAplicaIva,
+      montoUsd: cleanTotal,
+      montoBs: totalBs,
+      formaPago: 'NOTA_DEBITO',
+      cuentaId: effectiveIsFiscal ? 'ND-FISCAL' : 'ND-NOFISCAL',
+      cuentaNombre: `N/DB #${cleanNoteNum}`,
+      accountType: 'NOTA_DEBITO',
       vendedorId,
       vendedorNombre,
+      cobradorId: vendedorId,
+      cobradorNombre: vendedorNombre,
+      referencia: cleanNoteNum,
+      motivo: cleanMotivo,
+      observaciones: `Nota de Débito #${cleanNoteNum} • ${cleanMotivo}`
+    };
+
+    const newFacturaUsd = round2(currentFacturaUsd + cleanTotal);
+    const newRestanteUsd = round2(Math.max(0, currentRestanteUsd + cleanTotal));
+    const currentBrutoUsd = round2(Number(affectedDoc.subtotalUsd ?? affectedDoc.totBrutoUsd ?? currentFacturaUsd));
+    const newTotBrutoUsd = isNotaEntregaAffected
+      ? round2(currentBrutoUsd + cleanTotal)
+      : round2(currentBrutoUsd + cleanSub);
+    const newIvaUsd = isNotaEntregaAffected
+      ? 0
+      : round2(Number(affectedDoc.ivaUsd ?? 0) + cleanIva);
+
+    updatedAffectedDoc = {
+      ...affectedDoc,
+      factNum: String(affectedDoc.factNum),
+      tipoDoc: affectedType,
+      fechaEmision: affectedDoc.fechaEmisionIso || affectedDoc.fechaEmision || cleanFecha,
+      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
       clienteId,
       clienteNombre,
       clienteRif,
-      clienteDireccion,
-      fechaEmision: cleanFecha,
-      fechaVencimiento: affectedDoc.fechaVencimientoIso || affectedDoc.fechaVencimiento || cleanFecha,
+      vendedorId,
+      vendedorNombre,
       diasCredito: Number(affectedDoc.diasCredito || 0),
-      condicionPago: 'CREDITO',
-      isExento: !effectiveAplicaIva,
-      totBrutoUsd: cleanSub,
-      totBrutoBs: subtotalBs,
-      ivaUsd: cleanIva,
-      ivaBs,
-      totNetoUsd: cleanTotal,
-      totNetoBs: totalBs,
-      abonosUsd: 0,
-      saldoUsd: cleanTotal,
-      saldoBs: totalBs,
-      tasa: cleanTasa,
-      observaciones: `Nota de Débito #${cleanNoteNum} (Afecta #${affectedDoc.factNum}) • ${cleanMotivo}`,
-      historialCobros: [],
-      _customCreated: true
+      diasVencidoCustom: affectedDoc.diasVencidoCustom ?? null,
+      totBrutoUsd: newTotBrutoUsd,
+      ivaUsd: newIvaUsd,
+      totNetoUsd: newFacturaUsd,
+      abonosUsd: currentAbonosUsd,
+      saldoUsd: newRestanteUsd,
+      tasa: Number(affectedDoc.tasa || cleanTasa),
+      historialCobros: [ndEntry, ...(Array.isArray(affectedDoc.historialCobros) ? affectedDoc.historialCobros : [])]
     };
     clientDebtDeltaUsd = cleanTotal;
   }

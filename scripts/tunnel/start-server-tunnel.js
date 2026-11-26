@@ -33,7 +33,8 @@ const cloudflaredCandidates = [
 function loadLocalTunnelConfig() {
   const candidates = [
     path.join(__dirname, '.tunnel_config.json'),
-    path.join(projectRoot, '.tunnel_config.json')
+    path.join(projectRoot, '.tunnel_config.json'),
+    path.join(projectRoot, 'SERVIDOR_EMPRESA_26.229.220.202/.tunnel_config.json')
   ];
   for (const fp of candidates) {
     try {
@@ -44,6 +45,33 @@ function loadLocalTunnelConfig() {
     } catch (_) {}
   }
   return {};
+}
+
+function discoverTunnelTokenFromServiceBat() {
+  const batCandidates = [
+    path.join(__dirname, '1_INSTALAR_TUNEL_CLOUDFLARE_SERVICIO.bat'),
+    path.join(projectRoot, 'SERVIDOR_EMPRESA_26.229.220.202/1_INSTALAR_TUNEL_CLOUDFLARE_SERVICIO.bat')
+  ];
+  for (const fp of batCandidates) {
+    try {
+      if (fs.existsSync(fp)) {
+        const content = fs.readFileSync(fp, 'utf8');
+        const match = content.match(/service\s+install\s+([A-Za-z0-9+/=_-]{40,})/i);
+        if (match && match[1]) return match[1].trim();
+      }
+    } catch (_) {}
+  }
+  return '';
+}
+
+function decodeBase64Token(b64) {
+  if (!b64 || typeof b64 !== 'string') return '';
+  try {
+    const decoded = Buffer.from(b64.trim(), 'base64').toString('utf8').trim();
+    return /^gh[pousr]_[A-Za-z0-9_]+$/.test(decoded) ? decoded : '';
+  } catch (_) {
+    return '';
+  }
 }
 
 const tunnelConfig = loadLocalTunnelConfig();
@@ -59,6 +87,7 @@ const OFFICIAL_TUNNEL_TOKEN =
   tunnelConfig.cloudflareTunnelToken ||
   tunnelConfig.tunnelToken ||
   tunnelConfig.token ||
+  discoverTunnelTokenFromServiceBat() ||
   '';
 const SOURCE_REPO_URL =
   process.env.SIGNUM_SOURCE_REPO_URL ||
@@ -67,10 +96,11 @@ const SOURCE_REPO_URL =
 const SERVER_AUTO_UPDATE_URL =
   process.env.SIGNUM_SERVER_UPDATE_URL ||
   tunnelConfig.serverUpdateUrl ||
-  '';
+  'https://raw.githubusercontent.com/EdsonDesignerVzla/motorvenarreglo/main/scripts/local-supabase/server.js';
 const GITHUB_UPDATE_TOKEN =
   process.env.SIGNUM_GITHUB_TOKEN ||
   tunnelConfig.githubToken ||
+  decodeBase64Token(tunnelConfig.tokenB64) ||
   '';
 const NON_INTERACTIVE_GIT_ENV = {
   ...process.env,
@@ -324,12 +354,29 @@ function killStaleTryCloudflareTunnels() {
   } catch (_) {}
 }
 
+function tryStartWindowsCloudflaredService() {
+  try {
+    execSync('sc start cloudflared', { stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function startOfficialPersistentTunnel() {
   saveLocalBackendUrlFiles();
-  const alreadyOnline = await checkUrlHealth(OFFICIAL_BACKEND_URL);
+  let alreadyOnline = await checkUrlHealth(OFFICIAL_BACKEND_URL);
   if (alreadyOnline) {
     console.log(`✅ [2/2] Túnel Oficial ya activo vía Servicio de Windows (${OFFICIAL_BACKEND_URL}).`);
     return;
+  }
+  if (tryStartWindowsCloudflaredService()) {
+    await new Promise(r => setTimeout(r, 4000));
+    alreadyOnline = await checkUrlHealth(OFFICIAL_BACKEND_URL);
+    if (alreadyOnline) {
+      console.log(`✅ [2/2] Servicio de Windows cloudflared iniciado y activo (${OFFICIAL_BACKEND_URL}).`);
+      return;
+    }
   }
   if (!OFFICIAL_TUNNEL_TOKEN) {
     console.log(`ℹ️  [2/2] Sin CLOUDFLARE_TUNNEL_TOKEN en entorno/.tunnel_config.json; esperando servicio de Windows de Cloudflare para ${OFFICIAL_BACKEND_URL}.`);
@@ -398,29 +445,31 @@ setInterval(async () => {
   watchdogRunning = true;
   try {
     await ensureLocalDatabase();
-    if (currentCfProcess) {
-      const ok = await checkUrlHealth(OFFICIAL_BACKEND_URL);
-      if (!ok) {
-        // Si el origen local tampoco responde, el problema NO es el túnel: reiniciar cloudflared
-        // sólo cortaría a todos los equipos conectados sin resolver nada.
-        const localOk = await checkUrlHealth(`http://127.0.0.1:${PORT}`);
-        if (!localOk) {
-          console.warn('⚠️  El servidor local no respondió /health a tiempo; se conserva el túnel activo.');
-          consecutiveHealthFailures = 0;
-          return;
-        }
-        consecutiveHealthFailures += 1;
-        console.warn(`⚠️  Verificando enlace del túnel (${consecutiveHealthFailures}/4): ${OFFICIAL_BACKEND_URL}`);
-        if (consecutiveHealthFailures >= 4) {
-          consecutiveHealthFailures = 0;
-          console.warn('🔄 Reiniciando conector de Cloudflare para restablecer enlace limpio...');
-          try {
-            currentCfProcess.kill();
-          } catch (_) {}
-        }
-      } else {
+    const ok = await checkUrlHealth(OFFICIAL_BACKEND_URL);
+    if (!ok) {
+      // Si el origen local tampoco responde, el problema NO es el túnel: reiniciar cloudflared
+      // sólo cortaría a todos los equipos conectados sin resolver nada.
+      const localOk = await checkUrlHealth(`http://127.0.0.1:${PORT}`);
+      if (!localOk) {
+        console.warn('⚠️  El servidor local no respondió /health a tiempo; se conserva el túnel activo.');
         consecutiveHealthFailures = 0;
+        return;
       }
+      consecutiveHealthFailures += 1;
+      console.warn(`⚠️  Verificando enlace del túnel (${consecutiveHealthFailures}/4): ${OFFICIAL_BACKEND_URL}`);
+      if (!currentCfProcess && consecutiveHealthFailures >= 2) {
+        consecutiveHealthFailures = 0;
+        console.warn('🔄 Túnel inactivo detectado; iniciando conector oficial de Cloudflare...');
+        await startOfficialPersistentTunnel();
+      } else if (currentCfProcess && consecutiveHealthFailures >= 4) {
+        consecutiveHealthFailures = 0;
+        console.warn('🔄 Reiniciando conector de Cloudflare para restablecer enlace limpio...');
+        try {
+          currentCfProcess.kill();
+        } catch (_) {}
+      }
+    } else {
+      consecutiveHealthFailures = 0;
     }
   } catch (_) {
   } finally {

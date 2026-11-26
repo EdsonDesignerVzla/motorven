@@ -21,7 +21,8 @@ import {
   Settings,
   Bell,
   Smartphone,
-  Scale
+  Scale,
+  Sparkles
 } from 'lucide-react';
 import MotorvenLogo from './MotorvenLogo';
 import { canAccessModule, getRoleMeta, normalizeRole, isMasterAdmin } from '../services/authService';
@@ -84,6 +85,17 @@ export default function Navigation({
       codeTag: '1–6',
       codeColor: '#38bdf8',
       accountingHint: 'Síntesis Consolidada BA VEN-NIF 2 (Balance General + Estado de Resultados)'
+    },
+    {
+      id: 'predictibilidad',
+      label: 'Predictibilidad & Alertas',
+      icon: Sparkles,
+      section: 'DIRECCIÓN & SÍNTESIS FINANCIERA',
+      sectionBadge: 'FORESIGHT',
+      sectionColor: '#8b5cf6',
+      codeTag: 'PROY',
+      codeColor: '#8b5cf6',
+      accountingHint: 'Inteligencia Predictiva — Proyecciones de agotamiento, márgenes y horizonte de tesorería'
     },
 
     // II. CUENTAS REALES (BALANCE GENERAL — SALDOS ACUMULATIVOS)

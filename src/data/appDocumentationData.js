@@ -6,20 +6,20 @@
 
 export const SYSTEM_METADATA = {
   appName: "SIGNUM MOTORVEN ERP & POS",
-  version: "5.6.0 Enterprise Multi-Device",
+  version: "5.8.0 Enterprise Multi-Device",
   company: "SIGNUM MOTORVEN, C.A. / GRUPO MOTORVEN",
   rif: "J-50478166-0",
-  databaseSync: "Servidor Central PostgreSQL / Local DB (127.0.0.1:54321 / api.signummotorven.com) + Profit Plus GRUMOTOR",
+  databaseSync: "Servidor Central PostgreSQL / Local DB (192.168.0.3:54321 / api.signummotorven.com) + Profit Plus GRUMOTOR",
   lastUpdated: "Noviembre 2026",
   author: "Equipo de Arquitectura, Finanzas y Sistemas SIGNUM MOTORVEN",
   recentMilestones: [
-    "Plan de Cuentas Oficial Pro Motorven C.A. integrado al 100%: catálogo jerárquico de 156 cuentas en 6 grupos con 99 cuentas imputables.",
-    "Motor Contable Automático de Partida Doble (accountingService.js): asientos balanceados en tiempo real (Debe === Haber) para Ventas, Cobranzas, Compras SENIAT, Pagos a Proveedores y Caja Chica.",
-    "Ciclo Contable Completo en Auditoría & Contable: Libro Diario, Libro Mayor General Analítico, Balance de Comprobación de Sumas y Saldos y Estados Financieros Básicos BA VEN-NIF 2.",
-    "Independencia Total de Precios y Costos entre Almacén 01 (Fiscal / Principal) y Almacén 02 (Central / Despacho).",
-    "Batería de Documentos Legales Venezolanos: Solicitud de Crédito & Pagaré Mercantil (Art. 486 Cód. Comercio), Recibos de Salario LOTTT (Art. 106 LOTTT) y Comprobante Anual ARC de ISLR (Art. 24 Decreto 1.808).",
-    "Flujos de Devolución por Nota de Crédito (con reingreso de stock y ajuste de cuenta) y Control de Mermas/Roturas (con Kardex y Comprobante PDF firmado).",
-    "Guía Didáctica para Principiantes integrada: explicaciones de qué es cada módulo, cómo realizar cada tarea paso a paso, glosario y errores comunes."
+    "Módulo de Predictibilidad & Alertas (Foresight): Radar de Riesgo Temprano, Proyección de Quiebres de Stock, Compresión de Márgenes con Simulador What-If y Flujo de Caja Proyectado.",
+    "Módulo de Cuentas de Pasivo & Socios (2.02.01.001): control de cuentas por pagar a socios, otros pasivos, abonos/cargos vinculados a Caja/Banco y libro auxiliar.",
+    "POS Mostrador Móvil & Modo Celular (PWA): experiencia móvil completa con Preventa ATP 72h, Facturación directa en POS Caja desde pedidos, Cobranzas CxC y Resumen Ejecutivo.",
+    "Multi-Tasa en Barra Superior en tiempo real: BCV, KSY, EUR y USDT sincronizados, además de acceso directo al Explorador de Tablas Supabase en vivo.",
+    "Plan de Cuentas Oficial Pro Motorven C.A. (156 cuentas / 99 imputables) + Motor Contable Automático de Partida Doble (accountingService.js) + Estados Financieros BA VEN-NIF 2.",
+    "CxC Parte A y Parte B mejorado: cobros directos en divisa/Bs., emisión de Notas de Crédito y Notas de Débito, y filtros avanzados por fecha y cobrador.",
+    "Batería de Documentos Legales Venezolanos: Solicitud de Crédito & Pagaré Mercantil (Art. 486 Cód. Comercio), Recibos LOTTT (Art. 106) y Comprobante Anual ARC de ISLR."
   ]
 };
 
@@ -1494,6 +1494,212 @@ export const MODULES_DOCUMENTATION = [
       "Hacer un respaldo completo al final de cada semana y almacenarlo fuera de la oficina.",
       "Trabajar en el entorno local (localhost:5180) hasta verificar todas las pruebas antes de enviar a producción."
     ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 20. PREDICTIBILIDAD & ALERTAS (FORESIGHT)
+  // ─────────────────────────────────────────────────────────
+  {
+    id: "predictibilidad",
+    title: "Predictibilidad & Alertas (Foresight)",
+    icon: "Sparkles",
+    category: "Dirección & Síntesis Financiera",
+    badge: "PRO / IA",
+    roleRequired: "Gerencia, Administración, Compras & Finanzas",
+    summary: "Motor de inteligencia operativa que anticipa quiebres de inventario, detecta compresión de márgenes, simula escenarios de precios (What-If) y proyecta el flujo de caja a 30/60/90 días.",
+    beginnerIntro: {
+      whatIsIt: "Es el 'radar de futuro' del sistema: analiza las ventas recientes, el inventario actual, las cuentas por cobrar y por pagar para avisarte qué va a pasar antes de que ocurra un problema.",
+      whyItMatters: "Evita que te quedes sin los lubricantes más vendidos, que vendas por debajo de tu margen seguro por cambios de costo o que te falte liquidez para pagar a proveedores.",
+      whenToUse: "Úsalo al inicio de cada semana o antes de aprobar órdenes de compra y ajustes de precios.",
+      whatIfSkipped: "Solo reaccionarías cuando el producto ya esté en 0 o cuando la caja no alcance para cubrir compromisos."
+    },
+    glossary: [
+      { term: "Radar de Riesgo Temprano", definition: "Tablero principal que agrupa alertas críticas y preventivas de stock, márgenes y tesorería en un solo lugar." },
+      { term: "Quiebre de Stock", definition: "Momento proyectado en el que un SKU llegará a 0 unidades según su velocidad diaria de venta (run-rate)." },
+      { term: "Simulador What-If", definition: "Herramienta interactiva para probar cuánto cambiaría tu precio y utilidad si sube el costo del proveedor o si ajustas el margen objetivo." }
+    ],
+    commonTasks: [
+      {
+        title: "Tarea 1: Revisar Alertas de Quiebre de Stock y Planificar Reposición",
+        objective: "Detectar qué lubricantes se agotarán en los próximos días y actuar a tiempo.",
+        steps: [
+          "1. Entra a 'Predictibilidad & Alertas' en el menú lateral (o desde el Menú en Modo Celular).",
+          "2. Elige el horizonte de proyección (ej. 30 días) y filtra por Almacén (Todos, 01 o 02).",
+          "3. En la pestaña 'Radar de Riesgo' o 'Inventario', revisa los productos marcados en Rojo (crítico) o Amarillo (atención).",
+          "4. Haz clic en 'Exportar Reporte Predictivo PDF' si deseas compartir el plan de reposición con Compras."
+        ],
+        proTip: "Revisa primero los SKUs de alta rotación en Almacén 01 y 02 antes de cerrar pedidos grandes de la semana."
+      },
+      {
+        title: "Tarea 2: Simular Ajustes de Costo y Margen (What-If)",
+        objective: "Calcular el nuevo precio sugerido ante un aumento de proveedor sin perder rentabilidad.",
+        steps: [
+          "1. Ve a la pestaña 'Márgenes' dentro de Predictibilidad & Alertas.",
+          "2. Define el 'Margen Mínimo Seguro (%)' (por defecto 18%).",
+          "3. En el Simulador What-If, selecciona el SKU, indica el % de variación de costo y el margen objetivo (%).",
+          "4. Observa al instante el precio sugerido en USD/Bs. y el impacto en utilidad."
+        ],
+        proTip: "Úsalo antes de actualizar listas de precios en Inventario."
+      }
+    ],
+    mistakesToAvoid: [
+      {
+        mistake: "Ignorar alertas de compresión de margen cuando sube el costo de reposición",
+        why: "Puedes seguir facturando un producto creyendo que ganas dinero, pero al reponerlo el efectivo no alcanza.",
+        solution: "Revisa semanalmente la pestaña 'Márgenes' y ajusta precios de venta cuando caigan debajo del margen seguro."
+      }
+    ],
+    components: [
+      { name: "Pestaña Radar de Riesgo", description: "Resumen ejecutivo de alertas tempranas por severidad (críticas y preventivas)." },
+      { name: "Pestaña Inventario (Quiebres)", description: "Días de cobertura restantes por SKU y consumo promedio diario." },
+      { name: "Pestaña Márgenes & Simulador What-If", description: "Detección de productos con margen comprimido y simulador de precios." },
+      { name: "Pestaña Flujo de Caja", description: "Gráfico proyectado de ingresos (CxC + run-rate de ventas) vs egresos (CxP, gastos y nómina)." }
+    ],
+    modals: [
+      { name: "Reporte Predictivo PDF", buttonTrigger: "Botón 'Descargar PDF'", purpose: "Genera un informe ejecutivo imprimible con las proyecciones activas." }
+    ],
+    buttons: [
+      { name: "Radar / Inventario / Márgenes / Flujo de Caja", color: "Azul", icon: "Sparkles", action: "Cambia entre las 4 vistas analíticas del motor Foresight." },
+      { name: "Descargar PDF", color: "Verde", icon: "Download", action: "Exporta el reporte predictivo completo en PDF." }
+    ],
+    bestPractices: [
+      "Revisar el Radar de Riesgo todos los lunes por la mañana.",
+      "Combinar la proyección de flujo de caja con Cuentas por Pagar antes de comprometer pagos grandes."
+    ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 21. CUENTAS DE PASIVO & SOCIOS (2.02.01.001)
+  // ─────────────────────────────────────────────────────────
+  {
+    id: "pasivos",
+    title: "Cuentas de Pasivo & Socios",
+    icon: "Scale",
+    category: "Cuentas Reales • Balance General",
+    badge: "2.02-06",
+    roleRequired: "Gerencia, Contabilidad, Administración & Master",
+    summary: "Control detallado de obligaciones con socios y otros pasivos (grupo 2.02.01.001 y cuentas de pasivo del Plan de Cuentas): saldos, abonos/cargos vinculados a Caja/Banco y libro auxiliar.",
+    beginnerIntro: {
+      whatIsIt: "Es el módulo donde se llevan las cuentas que la empresa debe a sus socios (préstamos o aportes por pagar) y otros pasivos distintos a proveedores comerciales.",
+      whyItMatters: "Mantiene la transparencia total entre el dinero de los socios y el dinero operativo de la empresa, evitando descuadres en Caja y Bancos.",
+      whenToUse: "Cuando un socio aporta capital temporal, presta dinero a la empresa o recibe un reintegro desde Caja o Banco.",
+      whatIfSkipped: "Los ingresos o salidas de dinero de socios quedarían sin respaldo en el Balance General."
+    },
+    glossary: [
+      { term: "Cuenta por Pagar a Socio", definition: "Registro individual (ej. SOC-01) del saldo que la empresa adeuda o tiene cruzado con un socio." },
+      { term: "Abono / Cargo de Pasivo", definition: "Movimiento que aumenta (abono/préstamo recibido) o disminuye (cargo/pago o reintegro) la deuda con el socio." }
+    ],
+    commonTasks: [
+      {
+        title: "Tarea 1: Registrar una Cuenta de Socio o Pasivo y su Movimiento",
+        objective: "Crear la ficha del socio/pasivo y registrar un aporte o reintegro vinculado a tesorería.",
+        steps: [
+          "1. Entra a 'Cuentas de Pasivo' en el menú lateral.",
+          "2. Si es un socio nuevo, presiona '+ Nueva Cuenta' y completa nombre, código (SOC-XX) y moneda.",
+          "3. Para registrar un aporte o pago, haz clic en el botón de movimiento sobre la cuenta correspondiente.",
+          "4. Selecciona la Caja o Banco involucrado, indica el monto en USD/Bs. y guarda."
+        ],
+        proTip: "Verifica siempre la Caja o Banco de origen antes de registrar un pago o reintegro para mantener el saldo real cuadrado."
+      }
+    ],
+    mistakesToAvoid: [
+      {
+        mistake: "Registrar un reintegro a socio sin asociar la cuenta de Caja o Banco real",
+        why: "Se rebaja la deuda del socio pero el saldo de la caja/banco quedaría inflado.",
+        solution: "Selecciona siempre la cuenta de tesorería exacta desde la cual salió o entró el dinero."
+      }
+    ],
+    components: [
+      { name: "Tarjetas de Resumen de Pasivos", description: "Totales consolidados de pasivos con socios, otros pasivos y CxP." },
+      { name: "Directorio de Cuentas de Socios y Pasivos", description: "Listado con saldos en USD/Bs. y acciones rápidas de edición y movimiento." },
+      { name: "Libro Auxiliar de Movimientos", description: "Historial cronológico filtrable con exportación e impresión en PDF." }
+    ],
+    modals: [
+      { name: "Modal Nueva / Editar Cuenta de Pasivo", buttonTrigger: "Botón '+ Nueva Cuenta'", purpose: "Crea o actualiza cuentas de socios u otros pasivos." },
+      { name: "Modal Registrar Movimiento", buttonTrigger: "Botón de Abono / Cargo", purpose: "Registra ingresos o egresos vinculados a Caja/Banco." }
+    ],
+    buttons: [
+      { name: "+ Nueva Cuenta", color: "Azul", icon: "Plus", action: "Abre el formulario para crear una cuenta de socio u otro pasivo." },
+      { name: "Imprimir / PDF", color: "Verde", icon: "Printer", action: "Genera el reporte oficial de pasivos y movimientos en PDF." }
+    ],
+    bestPractices: [
+      "Conciliar mensualmente el saldo de cada socio con su estado de cuenta.",
+      "Documentar en la descripción el motivo y comprobante bancario de cada movimiento."
+    ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 22. POS MOSTRADOR MÓVIL & MODO CELULAR (PWA)
+  // ─────────────────────────────────────────────────────────
+  {
+    id: "pos_movil",
+    title: "POS Mostrador Móvil & Modo Celular (PWA)",
+    icon: "Smartphone",
+    category: "Operación Móvil & Terreno",
+    badge: "PWA MÓVIL",
+    roleRequired: "Todos los roles (según permisos móviles asignados)",
+    summary: "Interfaz móvil optimizada para teléfonos y tablets ('Modo Celular'): permite crear pedidos en Preventa ATP 72h, consultar inventario consolidado, cobrar cartera CxC y facturar directamente en POS Mostrador Móvil.",
+    beginnerIntro: {
+      whatIsIt: "Es la versión portátil y táctil de SIGNUM MOTORVEN diseñada para trabajar desde tu celular en el mostrador, el almacén o la calle.",
+      whyItMatters: "Permite atender clientes al instante sin depender de una computadora de escritorio, viendo stock real, precios y crédito disponible en la palma de tu mano.",
+      whenToUse: "Cuando uses el sistema desde un teléfono/tablet o cuando actives el botón flotante 'Modo Celular 📱' desde la PC.",
+      whatIfSkipped: "Tendrías que caminar hasta la computadora de caja para consultar precios, revisar si un cliente tiene deuda o armar un pedido."
+    },
+    glossary: [
+      { term: "Modo Celular / PC", definition: "Botón superior ('PC') o flotante inferior ('Modo Celular 📱') que te permite alternar entre la vista móvil táctil y la vista completa de escritorio." },
+      { term: "Facturar / Pasar a Caja", definition: "Acción directa dentro de un pedido móvil que carga automáticamente el pedido en el POS Mostrador (Facturación POS Caja) para emitir la factura o nota de entrega." },
+      { term: "Dock Inferior Móvil", definition: "Barra fija en la parte inferior del teléfono con acceso rápido a Inicio, Resumen, Preventa, Cobranzas, Almacén y Menú." }
+    ],
+    commonTasks: [
+      {
+        title: "Tarea 1: Activar el Modo Celular y Crear un Pedido de Mostrador o Preventa",
+        objective: "Armar un pedido rápido desde el teléfono validando cliente, almacén y stock disponible.",
+        steps: [
+          "1. Si estás en PC, toca el botón 'Modo Celular 📱' abajo a la derecha (en teléfonos abre automático).",
+          "2. Toca 'Preventa' en la barra inferior (o '+ Nuevo Pedido' en Inicio) y selecciona la pestaña 'Crear Pedido'.",
+          "3. Toca 'Elegir Cliente' para seleccionar al cliente y verificar su límite, saldo CxC y crédito disponible.",
+          "4. Elige Almacén 01 (Factura Fiscal SENIAT) o Almacén 02 (Nota de Entrega) y la condición de pago (Contado o Crédito).",
+          "5. Busca los lubricantes, agrégalos al carrito y presiona guardar/enviar el pedido."
+        ],
+        proTip: "El sistema muestra stock ATP (descontando reservas activas de otros pedidos por 72 horas) para evitar vender mercancía ya comprometida."
+      },
+      {
+        title: "Tarea 2: Facturar Directamente desde el POS Mostrador Móvil",
+        objective: "Convertir un pedido móvil en Factura o Nota de Entrega, o abrir el POS Caja desde el celular.",
+        steps: [
+          "1. Entra a 'Preventa' ➔ 'Mis Pedidos' y abre el detalle del pedido activo.",
+          "2. Presiona el botón 'Facturar / Pasar a Caja' (disponible para usuarios con permiso de facturación).",
+          "3. También puedes abrir 'Menú' ➔ 'Facturación POS Caja' para entrar directo al POS Mostrador desde el móvil.",
+          "4. En el POS, verifica modalidad ('POS Mostrador' para Factura Fiscal Alm. 01 o 'Venta por Oficina' para Nota de Entrega Alm. 02), registra el pago y emite el documento."
+        ],
+        proTip: "Si necesitas una vista más amplia para pagos mixtos complejos, toca el botón 'PC' en la barra superior sin perder tu sesión."
+      }
+    ],
+    mistakesToAvoid: [
+      {
+        mistake: "Intentar facturar un pedido de un cliente que aún está 'En revisión administrativa'",
+        why: "Por política de control interno, todo cliente nuevo debe estar APROBADO antes de poder procesarle pedidos o facturas.",
+        solution: "Solicita la aprobación del cliente desde Gerencia/Administración en la vista de escritorio."
+      }
+    ],
+    components: [
+      { name: "Inicio Móvil (Home)", description: "Panel de bienvenida con Tasa BCV, KPIs rápidos y accesos directos a Resumen, Preventa, CxC e Inventario." },
+      { name: "Preventa & Mis Pedidos", description: "Creación de pedidos ATP 72h, filtros de estado (Activos, Por Vencer, Vencidos, Retenidos, Facturados) y detalle con botón 'Facturar / Pasar a Caja'." },
+      { name: "Facturación POS Caja (Móvil)", description: "Acceso directo al motor SalesPOSView desde el celular para emitir Facturas Fiscales o Notas de Entrega." },
+      { name: "Cobranzas (CxC) & Almacén Móvil", description: "Consulta de cartera morosa, estados de cuenta y stock consolidado Alm 01 + Alm 02 en PDF." }
+    ],
+    modals: [
+      { name: "Detalle de Pedido Móvil", buttonTrigger: "Tocar cualquier pedido en 'Mis Pedidos'", purpose: "Muestra productos, montos USD/Bs., aprobación, anulación, PDF y paso directo a Caja." }
+    ],
+    buttons: [
+      { name: "Facturar / Pasar a Caja", color: "Azul", icon: "ShoppingCart", action: "Carga el pedido seleccionado directamente en Facturación POS Caja." },
+      { name: "PC (Barra Superior)", color: "Gris", icon: "Monitor", action: "Cambia instantáneamente a la versión completa de escritorio." },
+      { name: "Modo Celular 📱", color: "Azul", icon: "Smartphone", action: "Activa la interfaz móvil PWA desde cualquier pantalla de escritorio." }
+    ],
+    bestPractices: [
+      "Instala la app en la pantalla de inicio de tu teléfono ('Agregar a pantalla de inicio') para usarla como PWA a pantalla completa.",
+      "Verifica la Tasa BCV en la barra superior móvil antes de cotizar en Bolívares."
+    ]
   }
 ];
 
@@ -1693,6 +1899,34 @@ export const WORKFLOWS_STEP_BY_STEP = [
       "Paso 3: El sistema se conectará a la base de datos local (127.0.0.1:54321), extraerá las 51 tablas y guardará un archivo JSON sellado con fecha y hora en 'supabase/backups/'.",
       "Paso 4: Confirma que la consola muestre 'Respaldo generado con éxito'. La base de datos queda protegida contra fallos."
     ]
+  },
+  {
+    title: "20. Flujo Completo de POS Mostrador Móvil (Modo Celular PWA — Preventa y Facturación en Caja)",
+    steps: [
+      "Paso 1: Abre SIGNUM MOTORVEN en tu teléfono (o haz clic en 'Modo Celular 📱' desde la PC).",
+      "Paso 2: Toca 'Preventa' en la barra inferior y entra a 'Crear Pedido', o abre 'Menú' ➔ 'Facturación POS Caja' para venta directa en mostrador.",
+      "Paso 3: Selecciona al Cliente (el sistema valida aprobación, límite de crédito y saldo CxC al instante) y elige Almacén 01 (Factura Fiscal) o Almacén 02 (Nota de Entrega).",
+      "Paso 4: Agrega los lubricantes verificando el stock disponible ATP 72h y guarda el pedido.",
+      "Paso 5: En el detalle del pedido, presiona 'Facturar / Pasar a Caja' para abrir el POS Mostrador Móvil, registrar el pago y emitir la Factura o Nota de Entrega."
+    ]
+  },
+  {
+    title: "21. Flujo de Análisis Predictivo y Simulación de Precios (Foresight)",
+    steps: [
+      "Paso 1: Entra a 'Predictibilidad & Alertas' desde el menú lateral o desde el Menú Móvil.",
+      "Paso 2: En 'Radar de Riesgo', revisa las alertas críticas de quiebre de stock y compresión de márgenes.",
+      "Paso 3: Entra a la pestaña 'Márgenes' y usa el Simulador What-If para probar variaciones de costo y margen objetivo.",
+      "Paso 4: Revisa la pestaña 'Flujo de Caja' y descarga el Reporte Predictivo en PDF para gerencia y compras."
+    ]
+  },
+  {
+    title: "22. Flujo de Gestión de Cuentas de Pasivo & Socios (2.02.01.001)",
+    steps: [
+      "Paso 1: Entra a 'Cuentas de Pasivo' en el menú lateral.",
+      "Paso 2: Crea o selecciona la cuenta del socio u otro pasivo (ej. SOC-01).",
+      "Paso 3: Registra el abono (préstamo/aporte recibido) o cargo (pago/reintegro) seleccionando la Caja o Banco real involucrado.",
+      "Paso 4: Verifica el saldo actualizado y genera el reporte PDF del libro auxiliar cuando sea requerido."
+    ]
   }
 ];
 
@@ -1751,5 +1985,17 @@ export const FREQUENTLY_ASKED_QUESTIONS = [
   {
     question: "¿Puedo seguir trabajando si se va el internet en la oficina?",
     answer: "¡Sí! SIGNUM MOTORVEN fue diseñado con tecnología 'Offline-First'. Si se cae el internet, la barra superior cambiará a modo sin conexión, pero tú podrás seguir consultando inventario y creando pedidos. Toda la información se guarda en la memoria local y se sincronizará automáticamente cuando vuelva la conexión."
+  },
+  {
+    question: "¿Cómo uso el POS Mostrador Móvil desde mi teléfono?",
+    answer: "Al abrir SIGNUM MOTORVEN desde un teléfono se activa automáticamente el Modo Celular (también puedes activarlo en PC con el botón 'Modo Celular 📱'). Desde allí puedes crear pedidos en 'Preventa', abrir un pedido y tocar 'Facturar / Pasar a Caja', o ir a 'Menú' ➔ 'Facturación POS Caja' para facturar directamente en Almacén 01 (Fiscal) o Almacén 02 (Nota de Entrega)."
+  },
+  {
+    question: "¿Para qué sirve el módulo 'Predictibilidad & Alertas (Foresight)'?",
+    answer: "Analiza automáticamente tus ventas recientes, stock, cuentas por cobrar y por pagar para anticipar quiebres de inventario, alertar si algún producto bajó del margen mínimo seguro, simular aumentos de precio (What-If) y proyectar el flujo de caja de la empresa."
+  },
+  {
+    question: "¿Qué se registra en 'Cuentas de Pasivo & Socios'?",
+    answer: "Se registran las cuentas por pagar a socios (aportes temporales o préstamos de socios a la empresa) y otros pasivos distintos a proveedores comerciales, manteniendo cada abono o reintegro cuadrado con la Caja o Banco correspondiente."
   }
 ];

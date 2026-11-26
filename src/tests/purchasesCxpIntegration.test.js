@@ -124,6 +124,31 @@ assert.strictEqual(savedFactBs.ivaUsd, 16.00, 'Debe preservar el monto del IVA e
 assert.strictEqual(savedFactBs.moneda, 'BS', 'Debe preservar la moneda de ingreso en Bolívares');
 await deleteSupabaseProfitAccountsPayable(savedFactBs).catch(() => {});
 
+// 4c. Verificando Nota de Entrega sin desglose de IVA (35087.37 -> base 35087.37, iva 0, isFiscal false)
+const savedNeCxp = await saveSupabaseProfitAccountsPayable({
+  id: 'DOC-CP-NE-NOTA DE ENTREGA-17591-J311153659',
+  tipoDoc: 'NE',
+  nroDoc: 'NOTA DE ENTREGA #17591',
+  numeroControl: '17591',
+  provNombre: 'KEYSTONE, C.A. (Planta Barquisimeto)',
+  provRif: 'J-31115365-9',
+  isFiscal: false,
+  exentoIva: true,
+  baseImponibleUsd: 35087.37,
+  ivaUsd: 0,
+  ivaBs: 0,
+  montoNetUsd: 35087.37,
+  saldoUsd: 35087.37,
+  tasa: 918.76,
+  moneda: 'US$'
+});
+assert.strictEqual(savedNeCxp.tipoDoc, 'NE', 'La Nota de Entrega en CxP debe quedar como NE');
+assert.strictEqual(savedNeCxp.isFiscal, false, 'La Nota de Entrega en CxP debe marcar isFiscal: false');
+assert.strictEqual(savedNeCxp.exentoIva, true, 'La Nota de Entrega en CxP debe marcar exentoIva: true');
+assert.strictEqual(Number(savedNeCxp.ivaUsd), 0, 'La Nota de Entrega en CxP no debe desglosar IVA');
+assert.strictEqual(Number(savedNeCxp.baseImponibleUsd), 35087.37, 'La base imponible debe ser igual al monto neto 35087.37');
+await deleteSupabaseProfitAccountsPayable(savedNeCxp).catch(() => {});
+
 // 5. Limpieza del registro de prueba
 console.log('5. Limpiando documento CxP de prueba...');
 await deleteSupabaseProfitAccountsPayable(fullyPaid).catch(() => {});

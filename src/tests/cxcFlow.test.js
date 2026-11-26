@@ -8,9 +8,15 @@ import {
   consolidateClientReceivables,
   reconcileClientsWithRealCxc,
   doesCollectionMatchInvoice,
+  resolveCollectionAppliedAmountForInvoice,
+  sumLinkedCollectionsUsdForInvoice,
   classifyCollectionRateType,
   groupMovementsByRateType,
   summarizeDailyMovementsByCaja,
+  isCxcCreditOrDebitNoteMovement,
+  filterMovementsForDailyCollectionReport,
+  resolveCatalogAccountForMovement,
+  healCorruptedBankToCajaAccount,
   getNextCreditDebitNoteCorrelativo,
   buildCxcCreditDebitNoteResult,
   getCreditDebitNoteKind,
@@ -608,15 +614,19 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     tasa: 914,
     motivo: 'Flete adicional'
   });
-  assert.equal(ndNeRes.createdDebitDoc?.tipoDoc, 'NOTA_ENTREGA');
-  assert.equal(ndNeRes.createdDebitDoc?.ivaUsd, 0);
-  assert.equal(ndNeRes.createdDebitDoc?.saldoUsd, 40);
+  assert.equal(ndNeRes.createdDebitDoc, null);
+  assert.equal(ndNeRes.updatedAffectedDoc?.tipoDoc, 'NOTA_ENTREGA');
+  assert.equal(ndNeRes.updatedAffectedDoc?.ivaUsd, 0);
+  assert.equal(ndNeRes.updatedAffectedDoc?.totBrutoUsd, 540);
+  assert.equal(ndNeRes.updatedAffectedDoc?.totNetoUsd, 540);
+  assert.equal(ndNeRes.updatedAffectedDoc?.saldoUsd, 540);
+  assert.equal(ndNeRes.updatedAffectedDoc?.historialCobros[0]?.formaPago, 'NOTA_DEBITO');
   assert.equal(ndNeRes.clientDebtDeltaUsd, 40);
   assert.equal(ndNeRes.fiscalSaleRecord, null);
   const pdfNd = generateCreditDebitNotePDF({ docData: ndNeRes.notePdfData, config: { tasaDolar: 914 } });
   assert.ok(pdfNd.getNumberOfPages() >= 1);
 
-  // ND fiscal con N° Control manual debe reflejar montos en USD y Bs. y conservar numeroControl
+  // ND fiscal con N° Control manual debe sumar al saldo de la factura afectada, reflejar montos en USD y Bs. y conservar numeroControl
   const ndFiscalRes = buildCxcCreditDebitNoteResult({
     noteType: 'NOTA_DEBITO',
     affectedDoc: fiscalInvoice,
@@ -628,10 +638,12 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     tasa: 915.74,
     motivo: 'Diferencial cambiario'
   });
-  assert.equal(ndFiscalRes.createdDebitDoc?.numeroControl, '00-009876');
-  assert.equal(ndFiscalRes.createdDebitDoc?.totBrutoUsd, 75);
-  assert.equal(ndFiscalRes.createdDebitDoc?.totNetoUsd, 87);
-  assert.equal(ndFiscalRes.createdDebitDoc?.totNetoBs, 79669.38);
+  assert.equal(ndFiscalRes.createdDebitDoc, null);
+  assert.equal(ndFiscalRes.updatedAffectedDoc?.totBrutoUsd, 275);
+  assert.equal(ndFiscalRes.updatedAffectedDoc?.totNetoUsd, 319);
+  assert.equal(ndFiscalRes.updatedAffectedDoc?.saldoUsd, 319);
+  assert.equal(ndFiscalRes.updatedAffectedDoc?.historialCobros[0]?.numeroControl, '00-009876');
+  assert.equal(ndFiscalRes.updatedAffectedDoc?.historialCobros[0]?.montoBs, 79669.38);
   assert.equal(ndFiscalRes.fiscalSaleRecord?.numeroControl, '00-009876');
   assert.equal(ndFiscalRes.notePdfData?.numeroControl, '00-009876');
   assert.equal(ndFiscalRes.isFiscal, true);
@@ -667,8 +679,10 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     motivo: 'Recargo fiscalizado'
   });
   assert.equal(ndOverrideFiscalOnNe.isFiscal, true);
-  assert.equal(ndOverrideFiscalOnNe.createdDebitDoc?.tipoDoc, 'FACTURA');
-  assert.equal(ndOverrideFiscalOnNe.createdDebitDoc?.ivaUsd, 16);
+  assert.equal(ndOverrideFiscalOnNe.createdDebitDoc, null);
+  assert.equal(ndOverrideFiscalOnNe.updatedAffectedDoc?.totNetoUsd, 616);
+  assert.equal(ndOverrideFiscalOnNe.updatedAffectedDoc?.saldoUsd, 616);
+  assert.equal(ndOverrideFiscalOnNe.notePdfData?.ivaUsd, 16);
   assert.equal(ndOverrideFiscalOnNe.fiscalSaleRecord?.numeroControl, '00-001134');
 
   console.log('  ✓ 9. Emisión de Notas de Crédito/Débito en CxC (rebaja/cargo, N/E Sin IVA, SENIAT y PDF) verificada.');
@@ -1022,12 +1036,12 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
     tasa: 917.77
   });
 
-  // Detección uniforme de NC/ND aunque createdDebitDoc porte tipoDoc FACTURA/NOTA_ENTREGA en CxC
+  // Detección uniforme de NC/ND tanto en registro fiscal como en historialCobros del documento afectado
   assert.equal(getCreditDebitNoteKind(ncRes.fiscalSaleRecord), 'NOTA_CREDITO');
-  assert.equal(getCreditDebitNoteKind(ndRes.createdDebitDoc), 'NOTA_DEBITO');
+  assert.equal(getCreditDebitNoteKind(ndRes.updatedAffectedDoc?.historialCobros?.[0]), 'NOTA_DEBITO');
   assert.equal(getCreditDebitNoteKind(ndRes.fiscalSaleRecord), 'NOTA_DEBITO');
-  assert.equal(getCreditDebitNoteKind(ndNeRes.createdDebitDoc), 'NOTA_DEBITO');
-  assert.equal(isCreditOrDebitNoteDoc(ndRes.createdDebitDoc), true);
+  assert.equal(getCreditDebitNoteKind(ndNeRes.updatedAffectedDoc?.historialCobros?.[0]), 'NOTA_DEBITO');
+  assert.equal(isCreditOrDebitNoteDoc(ndRes.fiscalSaleRecord), true);
   assert.equal(isCreditOrDebitNoteDoc(baseInvoice), false);
 
   // Correlativos de Factura, NE y Movimientos CxC no deben contaminarse por NC/ND
@@ -1053,15 +1067,15 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   );
   assert.equal(nextMov, '000002', 'Nota de Crédito NC-000012 en historialCobros no debe consumir correlativos de cobros');
 
-  // Elegibilidad Libro de Ventas SENIAT: admite registro fiscal NOTA_DEBITO pero bloquea envoltorio CxC internalizado como FACTURA
+  // Elegibilidad Libro de Ventas SENIAT: admite registro fiscal NOTA_DEBITO y la factura fiscal afectada
   assert.equal(isFiscalDocEligible(ndRes.fiscalSaleRecord), true);
   assert.equal(isFiscalDocEligible(ncRes.fiscalSaleRecord), true);
-  assert.equal(isFiscalDocEligible(ndRes.createdDebitDoc), false);
+  assert.equal(isFiscalDocEligible(ndRes.updatedAffectedDoc), true);
 
-  // Cuando la ND ya fue saldada en profit_invoices, su registro fiscal paralelo en sales NO debe resucitar deuda al cliente
+  // Cuando la factura afectada (con ND sumada) ya fue saldada en profit_invoices, su registro fiscal paralelo en sales NO debe resucitar deuda al cliente
   const settledNdDoc = {
-    ...ndRes.createdDebitDoc,
-    abonosUsd: ndRes.createdDebitDoc.totNetoUsd,
+    ...ndRes.updatedAffectedDoc,
+    abonosUsd: ndRes.updatedAffectedDoc.totNetoUsd,
     saldoUsd: 0,
     status: 'COBRADA'
   };
@@ -1092,6 +1106,266 @@ console.log('--- INICIANDO PRUEBAS CXC, NO-COLISIÓN FAC/NE Y COBROS ---');
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+// 17. Reporte Diario Impreso de Abonos CxC: excluir Notas de Crédito / Débito de detalle, resumen de tasas y cajas sin sumar a totales
+{
+  const mixedMovs = [
+    {
+      id: 'nc-1',
+      correlativo: 'NC-000343',
+      factNum: '2156',
+      tipoDoc: 'NOTA_CREDITO',
+      formaPago: 'NOTA_CREDITO',
+      accountType: 'NOTA_CREDITO',
+      cuentaId: 'NC-FISCAL',
+      cuentaNombre: 'N/CR #NC-000343',
+      referencia: 'NC-000343',
+      tipoTasa: 'BCV',
+      tasa: 917.77,
+      montoUsd: 36.01,
+      montoBs: 33048.90
+    },
+    {
+      id: 'nc-2',
+      correlativo: '000001',
+      factNum: '2149',
+      tipoDoc: 'FACTURA',
+      formaPago: 'NOTA_CREDITO',
+      accountType: 'NOTA_CREDITO',
+      cuentaId: 'NC-FISCAL',
+      cuentaNombre: 'N/CR #NC-000001',
+      referencia: 'NC-000001',
+      tipoTasa: 'BCV',
+      tasa: 917.77,
+      montoUsd: 13.0,
+      montoBs: 11931.01
+    },
+    {
+      id: 'nd-1',
+      correlativo: 'ND-000002',
+      factNum: 'ND-000002',
+      tipoDoc: 'NOTA_DEBITO',
+      formaPago: 'NOTA_DEBITO',
+      accountType: 'NOTA_DEBITO',
+      cuentaId: 'ND-FISCAL',
+      cuentaNombre: 'N/DB #ND-000002',
+      referencia: 'ND-000002',
+      tipoTasa: 'BCV',
+      tasa: 917.77,
+      montoUsd: 25.0,
+      montoBs: 22944.25
+    },
+    {
+      id: 'pay-1',
+      correlativo: '004200',
+      factNum: '002210',
+      tipoDoc: 'NOTA_ENTREGA',
+      formaPago: 'TRANSFERENCIA',
+      accountType: 'BANCO',
+      cuentaId: 'cta-vzla',
+      cuentaNombre: 'BANCO DE VENEZUELA (01020235320000648080)',
+      referencia: '881234',
+      tipoTasa: 'BCV_EDITABLE',
+      tasa: 918.0,
+      montoUsd: 100.0,
+      montoBs: 91800.0
+    },
+    {
+      id: 'pay-2',
+      correlativo: '004201',
+      factNum: '002211',
+      tipoDoc: 'NOTA_ENTREGA',
+      formaPago: 'EFECTIVO',
+      accountType: 'CAJA',
+      cuentaId: 'caja-usd',
+      cuentaNombre: 'Caja Efectivo $ (Valencia)',
+      referencia: '',
+      tipoTasa: 'USD',
+      monedaPago: 'USD',
+      isDirectCurrency: true,
+      tasa: 0,
+      montoUsd: 50.0,
+      montoBs: 0
+    }
+  ];
+
+  assert.equal(isCxcCreditOrDebitNoteMovement(mixedMovs[0]), true);
+  assert.equal(isCxcCreditOrDebitNoteMovement(mixedMovs[1]), true);
+  assert.equal(isCxcCreditOrDebitNoteMovement(mixedMovs[2]), true);
+  assert.equal(isCxcCreditOrDebitNoteMovement(mixedMovs[3]), false);
+  assert.equal(isCxcCreditOrDebitNoteMovement(mixedMovs[4]), false);
+
+  const printable = filterMovementsForDailyCollectionReport(mixedMovs);
+  assert.equal(printable.length, 2, 'Solo deben permanecer abonos reales, sin Notas de Crédito ni Débito');
+
+  const rateBk = groupMovementsByRateType(printable, { tasaBcv: 917.77 });
+  const cajaBk = summarizeDailyMovementsByCaja(printable);
+
+  assert.equal(rateBk.nonEmptyGroups.some(g => g.id === 'BCV'), false, 'Sin cobros BCV reales, Tasa BCV no debe aparecer en nonEmptyGroups');
+  assert.equal(rateBk.totals.count, 2);
+  assert.equal(rateBk.totals.totalUsd, 150.0, 'Total USD de tasas no debe sumar NC ni ND');
+  assert.equal(rateBk.totals.totalBs, 91800.0, 'Total Bs de tasas no debe sumar NC ni ND');
+
+  assert.equal(cajaBk.rows.some(r => r.cuentaNombre.includes('N/CR') || r.cuentaNombre.includes('N/DB')), false, 'Resumen por Caja/Banco no debe mostrar N/CR ni N/DB');
+  assert.equal(cajaBk.totals.count, 2);
+  assert.equal(cajaBk.totals.totalUsd, 150.0, 'Total USD por cajas debe cuadrar exactamente sin NC ni ND');
+  assert.equal(cajaBk.totals.totalBs, 91800.0, 'Total Bs por cajas debe cuadrar exactamente sin NC ni ND');
+
+  // Día compuesto exclusivamente por NC/ND debe arrojar totales 0 y 0 renglones activos
+  const onlyNotesPrintable = filterMovementsForDailyCollectionReport(mixedMovs.slice(0, 3));
+  assert.equal(onlyNotesPrintable.length, 0);
+  const emptyRateBk = groupMovementsByRateType(onlyNotesPrintable, { tasaBcv: 917.77 });
+  const emptyCajaBk = summarizeDailyMovementsByCaja(onlyNotesPrintable);
+  assert.equal(emptyRateBk.nonEmptyGroups.length, 0);
+  assert.equal(emptyRateBk.totals.totalUsd, 0);
+  assert.equal(emptyRateBk.totals.totalBs, 0);
+  assert.equal(emptyCajaBk.rows.length, 0);
+  assert.equal(emptyCajaBk.totals.totalUsd, 0);
+  assert.equal(emptyCajaBk.totals.totalBs, 0);
+
+  console.log('  ✓ 17. Reporte diario impreso CxC (exclusión NC/ND, sin renglones vacíos, cuadre exacto) verificado.');
+}
+
+// 18. Regresión anti-colisión BANCO:01/04 <-> caja-01/04 y cuadre exacto Divisa Directa <-> Caja
+{
+  const catalog = [
+    { key: 'CAJA:caja-01', id: 'caja-01', rawId: 'caja-01', accountType: 'CAJA', nombre: 'Caja Efectivo $ (Valencia)', moneda: 'USD' },
+    { key: 'CAJA:caja-04', id: 'caja-04', rawId: 'caja-04', accountType: 'CAJA', nombre: 'Caja Zelle', moneda: 'USD' },
+    { key: 'CAJA:caja-05', id: 'caja-05', rawId: 'caja-05', accountType: 'CAJA', nombre: 'Caja USDT (Binance)', moneda: 'USDT' },
+    { key: 'BANCO:01', id: 'CTA-01', rawId: '01', accountType: 'BANCO', nombre: 'BANCO MERCANTIL (01050027311027479197)', moneda: 'BS' },
+    { key: 'BANCO:04', id: 'CTA-04', rawId: '04', accountType: 'BANCO', nombre: 'BANCO PLAZA (01380015460150651694)', moneda: 'BS' }
+  ];
+
+  // Un banco con cuentaId '01' o '04' jamás puede resolver a caja-01 o caja-04
+  const resolvedMercantil = resolveCatalogAccountForMovement({
+    cuentaKey: 'BANCO:01',
+    cuentaId: '01',
+    cuentaNombre: 'BANCO MERCANTIL (01050027311027479197)',
+    accountType: 'BANCO'
+  }, catalog);
+  assert.equal(resolvedMercantil?.key, 'BANCO:01');
+
+  const resolvedPlaza = resolveCatalogAccountForMovement({
+    cuentaId: '04',
+    cuentaNombre: 'BANCO PLAZA (01380015460150651694)',
+    accountType: 'BANCO'
+  }, catalog);
+  assert.equal(resolvedPlaza?.key, 'BANCO:04');
+
+  const resolvedCajaUsd = resolveCatalogAccountForMovement({
+    cuentaId: 'caja-01',
+    cuentaNombre: 'Caja Efectivo $ (Valencia)',
+    accountType: 'CAJA'
+  }, catalog);
+  assert.equal(resolvedCajaUsd?.key, 'CAJA:caja-01');
+
+  // Auto-reparación de registro histórico corrupto BANCO:01 -> caja-01 con Bs > 0
+  const corruptedMercantil = {
+    correlativo: '004145',
+    cuentaKey: 'BANCO:01',
+    cuentaId: 'caja-01',
+    cuentaNombre: 'Caja Efectivo $ (Valencia)',
+    accountType: 'CAJA',
+    tipoTasa: 'PERSONALIZADA',
+    monedaPago: 'BS',
+    montoUsd: 123,
+    montoBs: 112874.24
+  };
+  const healed = healCorruptedBankToCajaAccount(corruptedMercantil, catalog);
+  assert.equal(healed.cuentaId, '01');
+  assert.equal(healed.accountType, 'BANCO');
+  assert.equal(healed.cuentaNombre, 'BANCO MERCANTIL (01050027311027479197)');
+
+  // Registro con tipoTasa='USD' guardado en Caja USDT (Binance) debe alinear a 'USDT'
+  const usdtMislabelled = {
+    tipoDoc: 'NOTA_ENTREGA',
+    factNum: '2022',
+    tipoTasa: 'USD',
+    monedaPago: 'USD',
+    cuentaId: 'caja-05',
+    cuentaNombre: 'Caja USDT (Binance)',
+    montoUsd: 30,
+    montoBs: 0
+  };
+  assert.equal(classifyCollectionRateType(usdtMislabelled, { tasaBcv: 917.77 }), 'USDT');
+
+  // Cobro genuino en Caja Efectivo $ (Valencia) jamás puede quedar bajo tasa Bs ni con montoBs > 0
+  const usdCajaWithWrongRate = {
+    tipoDoc: 'NOTA_ENTREGA',
+    factNum: '2125',
+    tipoTasa: 'PERSONALIZADA',
+    cuentaId: 'caja-01',
+    cuentaNombre: 'Caja Efectivo $ (Valencia)',
+    montoUsd: 50,
+    montoBs: 45888.5
+  };
+  assert.equal(classifyCollectionRateType(usdCajaWithWrongRate, { tasaBcv: 917.77 }), 'USD');
+  const rateCheck = groupMovementsByRateType([healed, usdtMislabelled, usdCajaWithWrongRate], { tasaBcv: 917.77 });
+  const cajaCheck = summarizeDailyMovementsByCaja([healed, usdtMislabelled, usdCajaWithWrongRate]);
+  assert.equal(rateCheck.byType.USD.totalUsd, 50);
+  assert.equal(rateCheck.byType.USD.totalBs, 0);
+  assert.equal(rateCheck.byType.USDT.totalUsd, 30);
+  assert.equal(rateCheck.byType.PERSONALIZADA.totalUsd, 123);
+  assert.equal(cajaCheck.rows.find(r => r.cuentaNombre === 'Caja Efectivo $ (Valencia)')?.totalUsd, 50);
+  assert.equal(cajaCheck.rows.find(r => r.cuentaNombre === 'Caja Efectivo $ (Valencia)')?.totalBs, 0);
+  assert.equal(cajaCheck.rows.find(r => r.cuentaNombre === 'Caja USDT (Binance)')?.totalUsd, 30);
+  assert.equal(cajaCheck.rows.find(r => r.cuentaNombre === 'BANCO MERCANTIL (01050027311027479197)')?.totalUsd, 123);
+  assert.equal(rateCheck.totals.totalUsd, cajaCheck.totals.totalUsd);
+  assert.equal(rateCheck.totals.totalBs, cajaCheck.totals.totalBs);
+
+  console.log('  ✓ 18. Anti-colisión BANCO<->CAJA, auto-reparación y cuadre exacto Divisa Directa <-> Caja verificados.');
+}
+
+// 19. Reconciliación de cobros vinculados (profit_collections + historialCobros) cuando abonosUsd del documento quedó desactualizado
+{
+  const neDoc = {
+    id: 'NE-000501',
+    factNum: 'NE-000501',
+    tipoDoc: 'NOTA_ENTREGA',
+    totNetoUsd: 560,
+    abonosUsd: 300,
+    saldoUsd: 260,
+    historialCobros: [
+      { id: 'hc-57', cobNum: '57', montoUsd: 300, tasa: 914.02 }
+    ]
+  };
+  const cols = [
+    {
+      id: 'cob-98',
+      cobNum: '98',
+      fecha: '2026-11-24',
+      montoUsd: 260,
+      montoBs: 0,
+      tasa: 1,
+      documentosAfectados: [{ numDoc: 'NE-000501', tipoDoc: 'N/E', montoCobradoUsd: 260, montoCobrado: 0 }]
+    },
+    {
+      id: 'cob-57',
+      cobNum: '57',
+      fecha: '2026-11-16',
+      montoUsd: 300,
+      montoBs: 274206,
+      tasa: 914.02,
+      documentosAfectados: [{ numDoc: 'NE-000501', tipoDoc: 'N/E', montoCobradoUsd: 300, montoCobrado: 274206 }]
+    },
+    {
+      id: 'cob-multi',
+      cobNum: '99',
+      fecha: '2026-11-25',
+      montoUsd: 500,
+      tasa: 1,
+      documentosAfectados: [
+        { numDoc: 'NE-000500', tipoDoc: 'N/E', montoCobradoUsd: 400, montoCobrado: 0 },
+        { numDoc: 'NE-000502', tipoDoc: 'N/E', montoCobradoUsd: 100, montoCobrado: 0 }
+      ]
+    }
+  ];
+
+  assert.equal(sumLinkedCollectionsUsdForInvoice(cols, neDoc, 914.02), 560);
+  const multiMatch = resolveCollectionAppliedAmountForInvoice(cols[2], { factNum: 'NE-000502', tipoDoc: 'NOTA_ENTREGA' }, 914.02);
+  assert.equal(multiMatch.usd, 100);
+  console.log('  ✓ 19. Reconciliación de cobros vinculados (560 USD sin duplicar cobNum 57) y cobros multi-documento verificados.');
 }
 
 console.log('--- TODAS LAS PRUEBAS CXC PASARON AL 100% ---');

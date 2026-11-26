@@ -1555,16 +1555,12 @@ export default function SellerOrderPOSView({
                     <UserPlus size={13} /> {userCanApproveClients ? '+ Nuevo Cliente' : 'Solicitar Nuevo Cliente'}
                   </button>
                 )}
-                {(pendingClientRequestsCount > 0 || userCanApproveClients || onSaveClient) && (
+                {!userCanApproveClients && sellerClientRequests.length > 0 && (
                   <button
                     type="button"
                     onClick={() => {
-                      if (!userCanApproveClients && sellerClientRequests.length > 0) {
-                        setPortfolioTab('SOLICITUDES');
-                        setShowClientsPortfolioModal(true);
-                      } else {
-                        setShowClientApprovalsModal(true);
-                      }
+                      setPortfolioTab('SOLICITUDES');
+                      setShowClientsPortfolioModal(true);
                     }}
                     className="btn btn-secondary btn-sm"
                     style={{
@@ -1578,10 +1574,10 @@ export default function SellerOrderPOSView({
                       gap: '5px',
                       fontWeight: 700
                     }}
-                    title={userCanApproveClients ? 'Revisar y aprobar solicitudes de clientes nuevos' : 'Consultar estado de mis solicitudes de clientes'}
+                    title="Consultar estado de mis solicitudes de clientes"
                   >
                     <Clock size={13} />
-                    {userCanApproveClients ? 'Aprobar Clientes' : 'Mis Solicitudes'}
+                    Mis Solicitudes
                     {pendingClientRequestsCount > 0 && (
                       <span style={{
                         background: '#f59e0b',
@@ -2459,7 +2455,7 @@ export default function SellerOrderPOSView({
                         border: '1px solid rgba(245, 158, 11, 0.35)',
                         borderRadius: '6px'
                       }}>
-                        🔒 Requiere Gerencia / Cobranzas
+                        🔒 Requiere Flujo Comercial
                       </span>
                     ) : null}
                   </div>
@@ -3210,7 +3206,7 @@ export default function SellerOrderPOSView({
                   style={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 800 }}
                   onClick={() => {
                     if (!userCanGrantCreditOverride) {
-                      notify.error('Solo Gerencia, Administración o Cobranzas puede autorizar excepciones de crédito.');
+                      notify.error('Solo usuarios con acceso al módulo Flujo Comercial & Pedidos pueden aprobar créditos.');
                       return;
                     }
                     if (!authorizedApproverIds.has(creditOverrideAuthorizer)) {

@@ -1,6 +1,8 @@
 import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
-import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord } from '../utils/cxcUtils.js';
+import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord, isCreditOrDebitNoteDoc } from '../utils/cxcUtils.js';
 import { normalizeProfitCollectionUsd } from './commissionService.js';
+import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
+import { getProductCost } from './pricingService.js';
 import {
   dedupePayablesList,
   normalizeProviderRif,
@@ -107,7 +109,17 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
   const today = todayKey || toDateKey(new Date());
   let alDia = 0;
   let vencida = 0;
+  let venFacturas = 0;
+  let venNotas = 0;
+  let docsVencidosFacturas = 0;
+  let docsVencidosNotas = 0;
   const seenCxcKeys = new Set();
+
+  const isNotaEntregaDoc = (doc) => {
+    const tipo = String(doc?.tipoDoc || doc?.tipo_doc || '').toUpperCase().trim();
+    const num = String(doc?.numeroFactura || doc?.numeroDoc || doc?.numero_doc || doc?.id || '').toUpperCase().trim();
+    return tipo === 'NOTA_ENTREGA' || tipo === 'NE' || num.startsWith('NE-');
+  };
 
   if (Array.isArray(profitInvoices)) {
     dedupeCanonicalDocs(profitInvoices).forEach((f) => {
@@ -126,6 +138,13 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
         alDia += saldo;
       } else {
         vencida += saldo;
+        if (isNotaEntregaDoc(f)) {
+          venNotas += saldo;
+          docsVencidosNotas += 1;
+        } else {
+          venFacturas += saldo;
+          docsVencidosFacturas += 1;
+        }
       }
     });
   }
@@ -150,6 +169,13 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
         alDia += saldo;
       } else {
         vencida += saldo;
+        if (isNotaEntregaDoc(s)) {
+          venNotas += saldo;
+          docsVencidosNotas += 1;
+        } else {
+          venFacturas += saldo;
+          docsVencidosFacturas += 1;
+        }
       }
     });
   }
@@ -161,6 +187,11 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
     cxcDia,
     cxcVen,
     cxcTot,
+    cxcVenFacturas: parseFloat(venFacturas.toFixed(2)),
+    cxcVenNotas: parseFloat(venNotas.toFixed(2)),
+    docsVencidosFacturas,
+    docsVencidosNotas,
+    docsVencidos: docsVencidosFacturas + docsVencidosNotas,
     cxcDiaPct: cxcTot > 0 ? parseFloat(((cxcDia / cxcTot) * 100).toFixed(2)) : 0,
     cxcVenPct: cxcTot > 0 ? parseFloat(((cxcVen / cxcTot) * 100).toFixed(2)) : 0
   };
@@ -271,10 +302,13 @@ export function summarizeCollectionsWindow({
   profitCollections = [],
   tasaBcv = 1,
   todayKey = toDateKey(new Date()),
-  monthPrefix = ''
+  monthPrefix = '',
+  periodFrom = '',
+  periodTo = ''
 } = {}) {
   const safeToday = todayKey || toDateKey(new Date());
   const targetPrefix = monthPrefix || safeToday.substring(0, 7);
+  const hasCustomRange = Boolean(periodFrom && periodTo);
 
   const [ty, tm, td] = safeToday.split('-').map(Number);
   const ayerDate = new Date(ty, (tm || 1) - 1, (td || 1) - 1);
@@ -334,17 +368,32 @@ export function summarizeCollectionsWindow({
 
   const hoyAgg = aggregate(normalized.filter((c) => c.dateKey === safeToday));
   const ayerAgg = aggregate(normalized.filter((c) => c.dateKey === ayerKey));
-  const mesAgg = aggregate(normalized.filter((c) => c.dateKey.startsWith(targetPrefix) && c.dateKey <= safeToday));
+  const mesAgg = aggregate(
+    normalized.filter((c) =>
+      hasCustomRange
+        ? c.dateKey >= periodFrom && c.dateKey <= periodTo
+        : c.dateKey.startsWith(targetPrefix) && c.dateKey <= safeToday
+    )
+  );
 
   const [py, pm] = targetPrefix.split('-').map(Number);
   const diasDelMes = new Date(py || ty, pm || tm, 0).getDate();
   const currentPrefix = safeToday.substring(0, 7);
   let diasTranscurridos = 0;
-  if (targetPrefix === currentPrefix) diasTranscurridos = Number(safeToday.substring(8, 10)) || 1;
-  else if (targetPrefix < currentPrefix) diasTranscurridos = diasDelMes;
+  if (hasCustomRange) {
+    const [fy, fm, fd] = periodFrom.split('-').map(Number);
+    const [ey, em, ed] = periodTo.split('-').map(Number);
+    const d1 = new Date(fy, (fm || 1) - 1, fd || 1);
+    const d2 = new Date(ey, (em || 1) - 1, ed || 1);
+    diasTranscurridos = Math.max(1, Math.round((d2 - d1) / 86400000) + 1);
+  } else if (targetPrefix === currentPrefix) {
+    diasTranscurridos = Number(safeToday.substring(8, 10)) || 1;
+  } else if (targetPrefix < currentPrefix) {
+    diasTranscurridos = diasDelMes;
+  }
 
-  const esMesEnCurso = targetPrefix === currentPrefix;
-  const esFuturo = targetPrefix > currentPrefix;
+  const esMesEnCurso = !hasCustomRange && targetPrefix === currentPrefix;
+  const esFuturo = !hasCustomRange && targetPrefix > currentPrefix;
   const promedioDiarioUsd = diasTranscurridos > 0 ? mesAgg.usd / diasTranscurridos : 0;
 
   return {
@@ -390,10 +439,13 @@ export function isKeystonePayableRecord(doc) {
 export function summarizeKeystonePayables({
   profitAccountsPayable = [],
   tasaKeystone = 1,
-  todayKey = toDateKey(new Date())
+  todayKey = toDateKey(new Date()),
+  periodFrom = '',
+  periodTo = ''
 } = {}) {
   const safeRate = Number(tasaKeystone) > 1 ? Number(tasaKeystone) : 1;
   const safeToday = todayKey || toDateKey(new Date());
+  const hasRange = Boolean(periodFrom && periodTo);
 
   const uniqueDocs = dedupePayablesList(
     Array.isArray(profitAccountsPayable) ? profitAccountsPayable : []
@@ -402,9 +454,11 @@ export function summarizeKeystonePayables({
   let saldoTotalUsd = 0;
   let saldoVigenteUsd = 0;
   let saldoVencidoUsd = 0;
+  let vencenEnPeriodoUsd = 0;
   let documentosPendientes = 0;
   let docsVigentes = 0;
   let docsVencidos = 0;
+  let docsVencenEnPeriodo = 0;
   let documentosTotales = 0;
   const byTypeMap = new Map();
 
@@ -458,6 +512,11 @@ export function summarizeKeystonePayables({
       docsVigentes += 1;
     }
 
+    if (hasRange && fecVencKey && fecVencKey >= periodFrom && fecVencKey <= periodTo) {
+      vencenEnPeriodoUsd += saldoUsd;
+      docsVencenEnPeriodo += 1;
+    }
+
     const tipoDoc = normalizeDocType(doc.tipoDoc ?? doc.tipo_doc);
     const label = DOC_TYPE_LABELS[tipoDoc] || tipoDoc;
     const cur = byTypeMap.get(label) || { label, count: 0, usd: 0 };
@@ -479,11 +538,334 @@ export function summarizeKeystonePayables({
     saldoTotalBs: cleanTotalBs,
     saldoVigenteUsd: cleanVigenteUsd,
     saldoVencidoUsd: cleanVencidoUsd,
+    vencenEnPeriodoUsd: parseFloat(vencenEnPeriodoUsd.toFixed(2)),
     documentosPendientes,
     docsVigentes,
     docsVencidos,
+    docsVencenEnPeriodo,
     documentosTotales,
     vencidoPct,
     desglosePorTipo: Array.from(byTypeMap.values())
+  };
+}
+
+function isExcludedSaleDocType(doc) {
+  const tipo = String(doc?.tipoDoc || doc?.tipo_doc || '').trim().toUpperCase();
+  return (
+    tipo === 'COTIZACION' ||
+    tipo === 'SOLICITUD_CLIENTE' ||
+    isCreditOrDebitNoteDoc(doc)
+  );
+}
+
+function isSyntheticManualItem(item) {
+  const sku = String(item?.articuloId || item?.codigo || item?.id || '').trim().toUpperCase();
+  return sku === 'LUB-MANUAL' || sku === 'NE-DESP';
+}
+
+function resolveItemUnitLiters(item, prod) {
+  if (prod) return resolveProductLitersPerUnit(prod);
+  const sku = String(item?.articuloId || item?.codigo || item?.id || '').trim();
+  const desc = String(item?.descripcion || item?.nombre || '').toLowerCase();
+  const unit = String(item?.unidad || item?.unidadVenta || '').toLowerCase();
+  if (sku === '000003' || desc.includes('granel') || unit === 'litros' || unit === 'litro') {
+    return 1;
+  }
+  const explicitUnitL = Number(
+    item?.litrosUnitarios ??
+    item?.litros_unitarios ??
+    item?.litrosPorUnidad ??
+    item?.litros_por_unidad ??
+    0
+  );
+  if (explicitUnitL > 0 && explicitUnitL !== 19) return explicitUnitL;
+  return 11.35;
+}
+
+function resolveLineItemLitros(item, productsBySku) {
+  if (!item || typeof item !== 'object') return 0;
+  const desc = String(item.descripcion || item.nombre || '').toLowerCase();
+  const sku = String(item.articuloId || item.codigo || item.id || '').trim();
+  if (desc.includes('flete') || desc.includes('servicio') || sku === '101815' || sku === 'GNP001') {
+    return 0;
+  }
+  if (isSyntheticManualItem(item)) {
+    return Number(item.litrosTotales ?? item.litros_totales ?? item.litros ?? 0) || 0;
+  }
+  const prod = productsBySku?.get(sku);
+  const cantidad = Math.max(0, Number(item.cantidad ?? item.qty ?? 0) || 0);
+  const ltsUnit = resolveItemUnitLiters(item, prod);
+  if (cantidad > 0 && ltsUnit > 0) {
+    return Number((cantidad * ltsUnit).toFixed(2));
+  }
+  return Number(item.litrosTotales ?? item.litros_totales ?? item.litros ?? 0) || 0;
+}
+
+/**
+ * Normaliza documentos de facturación combinando `profitInvoices` y `sales` POS sin doble conteo.
+ */
+export function normalizeDashboardSalesDocs({
+  profitInvoices = [],
+  sales = [],
+  products = [],
+  tasaBcv = 1
+} = {}) {
+  const safeRate = Number(tasaBcv) > 1 ? Number(tasaBcv) : 1;
+  const productsBySku = new Map();
+  (products || []).forEach((p) => {
+    const sku = String(p?.codigo || p?.id || '').trim();
+    if (sku) productsBySku.set(sku, p);
+  });
+
+  const isServiceItem = (desc) => {
+    const d = (desc || '').toLowerCase();
+    return d.includes('flete') || d.includes('servicio');
+  };
+
+  const getDocDedupKey = (docObj) => {
+    if (!docObj || typeof docObj !== 'object') return '';
+    return getEraScopedCanonicalDocKey(docObj);
+  };
+
+  const normalizeDocItems = (rawItems = [], tasaDoc = safeRate, headerLitros = 0) => {
+    const mapped = (rawItems || []).map((it) => {
+      const sku = String(it.articuloId || it.codigo || it.id || '').trim();
+      const prod = productsBySku.get(sku);
+      const desc = it.descripcion || it.nombre || prod?.descripcion || prod?.nombre || sku || 'Lubricante';
+      const cantidad = Number(it.cantidad || 0);
+      const litros = resolveLineItemLitros(it, productsBySku);
+      const usdDirect = Number(it.totalUsd ?? it.subtotalUsd ?? 0);
+      const usd = usdDirect > 0
+        ? usdDirect
+        : ((Number(it.totalNeto || 0) || 0) / (tasaDoc > 1 ? tasaDoc : 1)) || (Number(it.precioUsd || 0) * cantidad);
+      return {
+        sku,
+        desc,
+        cantidad,
+        litros,
+        usd,
+        esServicio: isServiceItem(desc)
+      };
+    });
+    if (mapped.length === 1 && isSyntheticManualItem(rawItems[0]) && mapped[0].litros === 0 && headerLitros > 0) {
+      mapped[0].litros = headerLitros;
+    }
+    return mapped;
+  };
+
+  const salesById = new Map();
+  const salesByKey = new Map();
+  (sales || []).forEach((s) => {
+    if (!s || isCxcInvoiceCancelled(s) || isExcludedSaleDocType(s)) return;
+    if (s.id) salesById.set(String(s.id), s);
+    const dk = getDocDedupKey(s);
+    if (dk && !salesByKey.has(dk)) salesByKey.set(dk, s);
+  });
+
+  const seenIds = new Set();
+  const seenDocKeys = new Set();
+  const docs = [];
+
+  (dedupeCanonicalDocs(profitInvoices) || []).forEach((inv) => {
+    if (!inv || isCxcInvoiceCancelled(inv) || isExcludedSaleDocType(inv)) return;
+    const dateKey = toDateKey(inv.fechaEmision || inv.fecEmis || inv.fec_emis || inv.fecha);
+    if (!dateKey) return;
+
+    const idStr = inv.id ? String(inv.id) : '';
+    const dk = getDocDedupKey(inv);
+    if ((idStr && seenIds.has(idStr)) || (dk && seenDocKeys.has(dk))) return;
+    if (idStr) seenIds.add(idStr);
+    if (dk) seenDocKeys.add(dk);
+
+    const usd = Number(inv.totNetoUsd ?? inv.tot_neto_usd ?? inv.totalNetoUsd ?? 0) || 0;
+    const bsRaw = Number(inv.totNetoBs ?? inv.tot_neto_bs ?? 0) || 0;
+    const tasaDoc = Number(inv.tasa) > 1 ? Number(inv.tasa) : safeRate;
+    const headerLitros = Number(inv.totalLitros ?? inv.total_litros ?? 0) || 0;
+
+    const matchingSale = (idStr && salesById.get(idStr)) || (dk && salesByKey.get(dk));
+    const rawItems = (Array.isArray(inv.items) && inv.items.length > 0)
+      ? inv.items
+      : (matchingSale?.items || []);
+    const items = normalizeDocItems(rawItems, tasaDoc, headerLitros);
+    const itemsLitros = Number(items.reduce((acc, it) => acc + it.litros, 0).toFixed(2));
+    const hasRealItems = rawItems.some((it) => it && !isSyntheticManualItem(it));
+
+    docs.push({
+      dateKey,
+      usd,
+      bs: bsRaw > 0 ? bsRaw : usd * safeRate,
+      litros: (hasRealItems && itemsLitros > 0) ? itemsLitros : (headerLitros > 0 ? headerLitros : itemsLitros),
+      cliente: inv.clienteNombre || inv.cliente_nombre || inv.cli_des || inv.clienteId || '',
+      items
+    });
+  });
+
+  (sales || []).forEach((s) => {
+    if (!s || isCxcInvoiceCancelled(s) || isExcludedSaleDocType(s)) return;
+
+    const idStr = s.id ? String(s.id) : '';
+    const dk = getDocDedupKey(s);
+    if ((idStr && seenIds.has(idStr)) || (dk && seenDocKeys.has(dk))) return;
+    if (idStr) seenIds.add(idStr);
+    if (dk) seenDocKeys.add(dk);
+
+    const dateKey = toDateKey(s.fecha || s.fechaEmision || s.fecha_emision);
+    if (!dateKey) return;
+    const usd = Number(s.totalUsd ?? s.total_usd ?? 0) || 0;
+    const bsRaw = Number(s.totalBs ?? s.total_bs ?? 0) || 0;
+    const tasaDoc = Number(s.tasaDolar ?? s.tasa_dolar ?? 0) > 1 ? Number(s.tasaDolar ?? s.tasa_dolar) : safeRate;
+    const headerLitros = Number(s.totalLitros ?? s.total_litros ?? 0) || 0;
+    const rawSaleItems = s.items || [];
+    const items = normalizeDocItems(rawSaleItems, tasaDoc, headerLitros);
+    const itemsLitros = Number(items.reduce((acc, it) => acc + it.litros, 0).toFixed(2));
+    const hasRealSaleItems = rawSaleItems.some((it) => it && !isSyntheticManualItem(it));
+
+    docs.push({
+      dateKey,
+      usd,
+      bs: bsRaw > 0 ? bsRaw : usd * safeRate,
+      litros: (hasRealSaleItems && itemsLitros > 0) ? itemsLitros : (headerLitros > 0 ? headerLitros : itemsLitros),
+      cliente: s.clienteNombre || s.cliente_nombre || s.cliente || '',
+      items
+    });
+  });
+
+  return docs;
+}
+
+/**
+ * Agrega totales de facturación (USD, Bs, litros, cajas, documentos, clientes, SKUs) de una lista normalizada.
+ */
+export function summarizeSalesDocsList(docs = []) {
+  const skuSet = new Set();
+  const clientes = new Set();
+  let usd = 0;
+  let bs = 0;
+  let litros = 0;
+
+  (docs || []).forEach((d) => {
+    usd += d.usd;
+    bs += d.bs;
+    litros += d.litros;
+    if (d.cliente) clientes.add(d.cliente);
+    (d.items || []).forEach((it) => {
+      if (!it.esServicio && it.sku) skuSet.add(it.sku);
+    });
+  });
+
+  return {
+    usd: parseFloat(usd.toFixed(2)),
+    bs: parseFloat(bs.toFixed(2)),
+    litros: parseFloat(litros.toFixed(2)),
+    cajas: parseFloat((litros / 11.35).toFixed(1)),
+    documentos: (docs || []).length,
+    clientes: clientes.size,
+    skus: skuSet.size
+  };
+}
+
+/**
+ * Calcula Ventas del Día (con comparativo ayer) y Acumulado Mensual con proyección y % de meta.
+ */
+export function summarizeSalesWindows({
+  ventasDocsNormalizados = [],
+  todayKey = toDateKey(new Date()),
+  anioActivo = new Date().getFullYear(),
+  ventasMesFilter = '01',
+  metaMensualBase = 20000
+} = {}) {
+  const safeToday = todayKey || toDateKey(new Date());
+  const hoy = summarizeSalesDocsList(ventasDocsNormalizados.filter((d) => d.dateKey === safeToday));
+  const [ty, tm, td] = safeToday.split('-').map(Number);
+  const ayerDate = new Date(ty, (tm || 1) - 1, (td || 1) - 1);
+  const ayerKey = toDateKey(ayerDate);
+  const ayer = ventasDocsNormalizados
+    .filter((d) => d.dateKey === ayerKey)
+    .reduce((acc, d) => ({ usd: acc.usd + d.usd, litros: acc.litros + d.litros }), { usd: 0, litros: 0 });
+
+  const ventasDelDia = {
+    ...hoy,
+    ayerUsd: parseFloat(ayer.usd.toFixed(2)),
+    ayerLitros: parseFloat(ayer.litros.toFixed(2))
+  };
+
+  const prefix = `${anioActivo}-${ventasMesFilter}`;
+  const resumen = summarizeSalesDocsList(
+    ventasDocsNormalizados.filter((d) => d.dateKey.startsWith(prefix) && d.dateKey <= safeToday)
+  );
+  const monthIdx = Number(ventasMesFilter);
+  const diasDelMes = new Date(Number(anioActivo), monthIdx, 0).getDate();
+  const currentPrefix = safeToday.substring(0, 7);
+  let diasTranscurridos = 0;
+  if (prefix === currentPrefix) diasTranscurridos = Number(safeToday.substring(8, 10));
+  else if (prefix < currentPrefix) diasTranscurridos = diasDelMes;
+
+  const esMesEnCurso = prefix === currentPrefix;
+  const promedioDiarioUsd = diasTranscurridos > 0 ? resumen.usd / diasTranscurridos : 0;
+  const promedioDiarioLitros = diasTranscurridos > 0 ? resumen.litros / diasTranscurridos : 0;
+  const meta = Number(metaMensualBase) || 0;
+
+  const ventasAcumuladoMes = {
+    ...resumen,
+    diasDelMes,
+    diasTranscurridos,
+    esMesEnCurso,
+    esFuturo: prefix > currentPrefix,
+    promedioDiarioUsd: parseFloat(promedioDiarioUsd.toFixed(2)),
+    promedioDiarioLitros: parseFloat(promedioDiarioLitros.toFixed(1)),
+    proyeccionLitros: esMesEnCurso ? parseFloat((promedioDiarioLitros * diasDelMes).toFixed(1)) : resumen.litros,
+    proyeccionUsd: esMesEnCurso ? parseFloat((promedioDiarioUsd * diasDelMes).toFixed(2)) : resumen.usd,
+    metaLitros: meta,
+    pctMeta: meta > 0 ? parseFloat(((resumen.litros / meta) * 100).toFixed(1)) : 0
+  };
+
+  return { ventasDelDia, ventasAcumuladoMes };
+}
+
+/**
+ * Resume inventario físico total en litros, valorización en USD y desglose por unidades de medida.
+ */
+export function summarizeInventoryStock(products = []) {
+  let totalStockLts = 0;
+  let valUsd = 0;
+  const breakdown = { Caja: 0, Paila: 0, Tambor: 0, Totem: 0, Litros: 0 };
+
+  (products || []).forEach((p) => {
+    const cant = Number(p?.stock || p?.existencia || 0);
+    const ltsUnidad = resolveProductLitersPerUnit(p);
+    totalStockLts += cant * ltsUnidad;
+
+    const unit = resolveProductUnit(p, 'Caja');
+    if (breakdown[unit] !== undefined) {
+      breakdown[unit] += cant;
+    }
+
+    const hasWhFields =
+      p?.stockAlmacen01 !== undefined ||
+      p?.stock_almacen_01 !== undefined ||
+      p?.stockAlmacen02 !== undefined ||
+      p?.stock_almacen_02 !== undefined;
+    if (hasWhFields) {
+      const stocks = getProductWarehouseStocks(p);
+      valUsd += stocks.stock01 * getProductCost(p, '01') + stocks.stock02 * getProductCost(p, '02');
+    } else {
+      const costo = getProductCost(p) || Number(p?.costo_unitario ?? 0) || 0;
+      valUsd += cant * costo;
+    }
+  });
+
+  const items = [
+    breakdown.Caja > 0 ? `${breakdown.Caja.toLocaleString('es-VE')} ${breakdown.Caja === 1 ? 'Caja' : 'Cajas'}` : null,
+    breakdown.Paila > 0 ? `${breakdown.Paila.toLocaleString('es-VE')} ${breakdown.Paila === 1 ? 'Paila' : 'Pailas'}` : null,
+    breakdown.Tambor > 0 ? `${breakdown.Tambor.toLocaleString('es-VE')} ${breakdown.Tambor === 1 ? 'Tambor' : 'Tambores'}` : null,
+    breakdown.Totem > 0 ? `${breakdown.Totem.toLocaleString('es-VE')} ${breakdown.Totem === 1 ? 'Totem' : 'Totems'}` : null,
+    breakdown.Litros > 0 ? `${breakdown.Litros.toLocaleString('es-VE')} L Granel` : null
+  ].filter(Boolean);
+
+  return {
+    stockTotalLitros: parseFloat(totalStockLts.toFixed(2)),
+    stockValorizadoUsd: parseFloat(valUsd.toFixed(2)),
+    stockBreakdownItems: items,
+    stockBreakdownLabel: items.join(' • ') || '0 Unidades'
   };
 }

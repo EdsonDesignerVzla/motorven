@@ -20,7 +20,9 @@ import {
   Maximize2,
   Minimize2,
   Printer,
-  Camera
+  Camera,
+  Smartphone,
+  Monitor
 } from 'lucide-react';
 import {
   ROLES,
@@ -30,6 +32,9 @@ import {
   normalizeRole,
   ROLE_PERMISSIONS,
   SYSTEM_MODULES,
+  MOBILE_SYSTEM_MODULES,
+  MOBILE_ROLE_PERMISSIONS,
+  getDefaultMobileModulesForUser,
   getUsersList,
   sortUsersByHierarchy,
   syncUsersWithSupabase,
@@ -83,6 +88,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     rol: ROLES.VENTAS,
     departamento: 'VEN',
     modulos: ROLE_PERMISSIONS[ROLES.VENTAS] || ['ventas', 'inventario'],
+    modulosMovil: MOBILE_ROLE_PERMISSIONS[ROLES.VENTAS] || ['dashboard', 'pedidos', 'cxc', 'inventario'],
     avatar: '👩‍💼',
     foto: null,
     password: '123456',
@@ -90,14 +96,20 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     activo: true
   });
 
-  // Dropdown de permisos de módulos
+  // Dropdown de permisos de módulos (PC y Móvil)
   const [showModulesDropdown, setShowModulesDropdown] = useState(false);
+  const [modulesDropdownTab, setModulesDropdownTab] = useState('pc'); // 'pc' | 'movil'
+  const [showMobileModulesDropdown, setShowMobileModulesDropdown] = useState(false);
   const modulesDropdownRef = useRef(null);
+  const mobileModulesDropdownRef = useRef(null);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (modulesDropdownRef.current && !modulesDropdownRef.current.contains(e.target)) {
         setShowModulesDropdown(false);
+      }
+      if (mobileModulesDropdownRef.current && !mobileModulesDropdownRef.current.contains(e.target)) {
+        setShowMobileModulesDropdown(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -168,6 +180,25 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     setFormData(prev => ({
       ...prev,
       modulos: allSelected ? [] : allIds
+    }));
+  };
+
+  const handleToggleMobileModule = (moduleId) => {
+    setFormData(prev => {
+      const current = Array.isArray(prev.modulosMovil) ? prev.modulosMovil : [];
+      const exists = current.includes(moduleId);
+      const updated = exists ? current.filter(m => m !== moduleId) : [...current, moduleId];
+      return { ...prev, modulosMovil: updated };
+    });
+  };
+
+  const handleSelectAllMobileModules = () => {
+    const allIds = MOBILE_SYSTEM_MODULES.map(m => m.id);
+    const current = Array.isArray(formData.modulosMovil) ? formData.modulosMovil : [];
+    const allSelected = allIds.every(id => current.includes(id));
+    setFormData(prev => ({
+      ...prev,
+      modulosMovil: allSelected ? [] : allIds
     }));
   };
 
@@ -444,6 +475,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       rol: defaultRol,
       departamento: 'VEN',
       modulos: ROLE_PERMISSIONS[defaultRol] ? [...ROLE_PERMISSIONS[defaultRol]] : [...(meta.defaultModules || ['ventas', 'inventario'])],
+      modulosMovil: MOBILE_ROLE_PERMISSIONS[defaultRol] ? [...MOBILE_ROLE_PERMISSIONS[defaultRol]] : ['dashboard', 'pedidos', 'cxc', 'inventario'],
       avatar: meta.avatar,
       foto: null,
       password: '123456',
@@ -453,6 +485,8 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     setPhotoSizeInfo(null);
     setShowModalPass(false);
     setShowModulesDropdown(false);
+    setShowMobileModulesDropdown(false);
+    setModulesDropdownTab('pc');
     setShowUserModal(true);
   };
 
@@ -462,6 +496,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     const userModulos = Array.isArray(user.modulos) && user.modulos.length > 0
       ? [...user.modulos]
       : (ROLE_PERMISSIONS[normRol] ? [...ROLE_PERMISSIONS[normRol]] : [...(meta.defaultModules || ['ventas'])]);
+    const userModulosMovil = getDefaultMobileModulesForUser(user);
 
     setFormData({
       ...user,
@@ -472,6 +507,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
       rol: normRol,
       departamento: getUserDepartment(user),
       modulos: userModulos,
+      modulosMovil: userModulosMovil,
       avatar: user.avatar || meta.avatar,
       foto: user.foto || null,
       color: user.color || meta.color,
@@ -483,6 +519,8 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
     setShowPassText(false);
     setShowModalPass(false);
     setShowModulesDropdown(false);
+    setShowMobileModulesDropdown(false);
+    setModulesDropdownTab('pc');
     if (user.foto) {
       const base64Str = user.foto.split(',')[1] || '';
       const kb = ((base64Str.length * 3) / 4 / 1024).toFixed(1);
@@ -1588,13 +1626,15 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                         const mappedRole = deptRoleMap[newDept] || ROLES.VENTAS;
                         const meta = getRoleMeta(mappedRole);
                         const defaultMods = ROLE_PERMISSIONS[mappedRole] ? [...ROLE_PERMISSIONS[mappedRole]] : [...(meta.defaultModules || [])];
+                        const defaultMobileMods = MOBILE_ROLE_PERMISSIONS[mappedRole] ? [...MOBILE_ROLE_PERMISSIONS[mappedRole]] : ['dashboard', 'pedidos', 'cxc', 'inventario'];
 
                         setFormData({
                           ...formData,
                           departamento: newDept,
                           rol: mappedRole,
                           avatar: formData.foto ? formData.avatar : meta.avatar,
-                          modulos: formData.id ? (formData.modulos || defaultMods) : defaultMods
+                          modulos: formData.id ? (formData.modulos || defaultMods) : defaultMods,
+                          modulosMovil: formData.id ? (formData.modulosMovil || defaultMobileMods) : defaultMobileMods
                         });
                       }}
                       style={{ fontSize: '0.85rem', fontWeight: 600, height: '36px' }}
@@ -1608,12 +1648,12 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                     </select>
                   </div>
 
-                  {/* Dropdown de Módulos con Check */}
+                  {/* Dropdown de Módulos con Check (PC + Pestaña Móvil integrada) */}
                   <div className="form-group" style={{ margin: 0, position: 'relative' }} ref={modulesDropdownRef}>
                     <label className="form-label">
-                      <span>Módulos Permitidos *</span>
+                      <span>Módulos Permitidos (PC / Móvil) *</span>
                       <span className="operator-chip-info">
-                        {(formData.modulos || []).length} / {SYSTEM_MODULES.length}
+                        PC {(formData.modulos || []).length}/{SYSTEM_MODULES.length} • 📱 {(formData.modulosMovil || []).length}/{MOBILE_SYSTEM_MODULES.length}
                       </span>
                     </label>
 
@@ -1627,7 +1667,7 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                         justifyContent: 'space-between',
                         gap: '8px',
                         cursor: 'pointer',
-                        fontSize: '0.85rem',
+                        fontSize: '0.83rem',
                         textAlign: 'left',
                         padding: '6px 12px',
                         height: '36px',
@@ -1636,72 +1676,234 @@ export default function UsersManagementView({ currentUser, usersList = [], onUse
                       }}
                     >
                       <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {(formData.modulos || []).length === SYSTEM_MODULES.length
-                          ? `⭐ Todos (${SYSTEM_MODULES.length})`
-                          : (formData.modulos || []).length === 0
-                          ? '⚠️ Ningún módulo'
-                          : `${(formData.modulos || []).length} de ${SYSTEM_MODULES.length} módulos`}
+                        💻 {(formData.modulos || []).length}/{SYSTEM_MODULES.length} PC  •  📱 {(formData.modulosMovil || []).length}/{MOBILE_SYSTEM_MODULES.length} Móvil
                       </span>
                       <ChevronDown size={15} style={{ transform: showModulesDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease', flexShrink: 0, color: '#94a3b8' }} />
                     </button>
 
-                    {/* Menú Desplegable Flotante con Checkboxes */}
+                    {/* Menú Desplegable Flotante con Selector PC / Versión Móvil */}
                     {showModulesDropdown && (
                       <div className="operator-modules-dropdown">
-                        <div className="operator-modules-dropdown-header">
-                          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            Asignar Permisos ({formData.modulos?.length || 0}/{SYSTEM_MODULES.length})
-                          </span>
+                        {/* Pestañas PC vs. Versión Móvil dentro del mismo desplegable */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', padding: '6px', borderBottom: '1px solid rgba(148, 163, 184, 0.16)', background: 'rgba(15, 23, 42, 0.6)' }}>
                           <button
                             type="button"
-                            onClick={handleSelectAllModules}
+                            onClick={() => setModulesDropdownTab('pc')}
                             style={{
-                              background: 'none',
-                              border: 'none',
-                              color: '#38bdf8',
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
+                              padding: '5px 8px',
+                              borderRadius: '6px',
+                              border: modulesDropdownTab === 'pc' ? '1px solid #38bdf8' : '1px solid transparent',
+                              background: modulesDropdownTab === 'pc' ? 'rgba(56, 189, 248, 0.16)' : 'transparent',
+                              color: modulesDropdownTab === 'pc' ? '#38bdf8' : '#94a3b8',
+                              fontSize: '0.71rem',
+                              fontWeight: 800,
                               cursor: 'pointer',
-                              padding: '2px 4px'
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '5px'
                             }}
                           >
-                            {(formData.modulos || []).length === SYSTEM_MODULES.length ? 'Desmarcar todos' : 'Marcar todos'}
+                            <Monitor size={12} />
+                            <span>Versión PC ({(formData.modulos || []).length}/{SYSTEM_MODULES.length})</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setModulesDropdownTab('movil')}
+                            style={{
+                              padding: '5px 8px',
+                              borderRadius: '6px',
+                              border: modulesDropdownTab === 'movil' ? '1px solid #a855f7' : '1px solid transparent',
+                              background: modulesDropdownTab === 'movil' ? 'rgba(168, 85, 247, 0.18)' : 'transparent',
+                              color: modulesDropdownTab === 'movil' ? '#c084fc' : '#94a3b8',
+                              fontSize: '0.71rem',
+                              fontWeight: 800,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '5px'
+                            }}
+                          >
+                            <Smartphone size={12} />
+                            <span>Versión Móvil ({(formData.modulosMovil || []).length}/{MOBILE_SYSTEM_MODULES.length})</span>
                           </button>
                         </div>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                          {SYSTEM_MODULES.map((mod) => {
-                            const isChecked = (formData.modulos || []).includes(mod.id);
-                            return (
-                              <label
-                                key={mod.id}
-                                className={`operator-module-item ${isChecked ? 'selected' : ''}`}
-                                onClick={(e) => {
-                                  if (e.target.tagName !== 'INPUT') {
-                                    e.preventDefault();
-                                    handleToggleModule(mod.id);
-                                  }
+                        {modulesDropdownTab === 'pc' ? (
+                          <>
+                            <div className="operator-modules-dropdown-header">
+                              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Asignar Permisos PC ({formData.modulos?.length || 0}/{SYSTEM_MODULES.length})
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleSelectAllModules}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#38bdf8',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: '2px 4px'
                                 }}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={() => handleToggleModule(mod.id)}
-                                />
-                                <span className="operator-module-label" title={mod.label}>
-                                  {mod.label}
-                                </span>
-                                {isChecked && (
-                                  <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 800, flexShrink: 0, marginLeft: 'auto' }}>
-                                    ✓
-                                  </span>
-                                )}
-                              </label>
-                            );
-                          })}
-                        </div>
+                                {(formData.modulos || []).length === SYSTEM_MODULES.length ? 'Desmarcar todos' : 'Marcar todos'}
+                              </button>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                              {SYSTEM_MODULES.map((mod) => {
+                                const isChecked = (formData.modulos || []).includes(mod.id);
+                                return (
+                                  <label
+                                    key={mod.id}
+                                    className={`operator-module-item ${isChecked ? 'selected' : ''}`}
+                                    onClick={(e) => {
+                                      if (e.target.tagName !== 'INPUT') {
+                                        e.preventDefault();
+                                        handleToggleModule(mod.id);
+                                      }
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => handleToggleModule(mod.id)}
+                                    />
+                                    <span className="operator-module-label" title={mod.label}>
+                                      {mod.label}
+                                    </span>
+                                    {isChecked && (
+                                      <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 800, flexShrink: 0, marginLeft: 'auto' }}>
+                                        ✓
+                                      </span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="operator-modules-dropdown-header">
+                              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Vista Versión Móvil ({formData.modulosMovil?.length || 0}/{MOBILE_SYSTEM_MODULES.length})
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleSelectAllMobileModules}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#c084fc',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: '2px 4px'
+                                }}
+                              >
+                                {(formData.modulosMovil || []).length === MOBILE_SYSTEM_MODULES.length ? 'Desmarcar todos' : 'Marcar todos'}
+                              </button>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                              {MOBILE_SYSTEM_MODULES.map((mod) => {
+                                const isChecked = (formData.modulosMovil || []).includes(mod.id);
+                                return (
+                                  <label
+                                    key={`mob-${mod.id}`}
+                                    className={`operator-module-item ${isChecked ? 'selected' : ''}`}
+                                    onClick={(e) => {
+                                      if (e.target.tagName !== 'INPUT') {
+                                        e.preventDefault();
+                                        handleToggleMobileModule(mod.id);
+                                      }
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => handleToggleMobileModule(mod.id)}
+                                    />
+                                    <span className="operator-module-label" title={mod.badge}>
+                                      📱 {mod.label}
+                                    </span>
+                                    {isChecked && (
+                                      <span style={{ fontSize: '0.72rem', color: '#c084fc', fontWeight: 800, flexShrink: 0, marginLeft: 'auto' }}>
+                                        ✓
+                                      </span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
+                  </div>
+
+                  {/* Selector Directo Dedicado para Vista de Módulos en Versión Móvil */}
+                  <div className="form-group" style={{ gridColumn: '1 / -1', margin: 0, position: 'relative' }} ref={mobileModulesDropdownRef}>
+                    <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <Smartphone size={13} color="#a855f7" />
+                        <span>Vista de Módulos en Versión Móvil (PWA / Celulares) *</span>
+                      </span>
+                      <span className="operator-chip-info" style={{ color: '#c084fc', borderColor: 'rgba(168, 85, 247, 0.35)', background: 'rgba(168, 85, 247, 0.12)' }}>
+                        {(formData.modulosMovil || []).length} / {MOBILE_SYSTEM_MODULES.length} MÓDULOS MÓVILES
+                      </span>
+                    </label>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.45)', border: '1px solid rgba(168, 85, 247, 0.28)' }}>
+                      {MOBILE_SYSTEM_MODULES.map((mod) => {
+                        const isChecked = (formData.modulosMovil || []).includes(mod.id);
+                        return (
+                          <button
+                            key={`pill-mob-${mod.id}`}
+                            type="button"
+                            onClick={() => handleToggleMobileModule(mod.id)}
+                            title={mod.badge}
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: '8px',
+                              fontSize: '0.73rem',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              border: isChecked ? '1px solid #a855f7' : '1px solid rgba(148, 163, 184, 0.22)',
+                              background: isChecked ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.03)',
+                              color: isChecked ? '#e9d5ff' : '#94a3b8',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <span>{isChecked ? '☑' : '☐'}</span>
+                            <span>{mod.label}</span>
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={handleSelectAllMobileModules}
+                        style={{
+                          marginLeft: 'auto',
+                          padding: '4px 9px',
+                          borderRadius: '6px',
+                          border: '1px dashed rgba(168, 85, 247, 0.45)',
+                          background: 'transparent',
+                          color: '#c084fc',
+                          fontSize: '0.70rem',
+                          fontWeight: 800,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {(formData.modulosMovil || []).length === MOBILE_SYSTEM_MODULES.length ? 'Desmarcar móvil' : 'Marcar todos móvil'}
+                      </button>
+                    </div>
                   </div>
 
                   {/* PAR 3: NUEVA CONTRASEÑA Y ESTADO DE LA CUENTA */}

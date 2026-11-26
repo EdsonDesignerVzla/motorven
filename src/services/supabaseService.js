@@ -1260,6 +1260,12 @@ const mapSaleFromDb = (s) => {
   const effectiveTotBs = isNe ? effectiveSubBs : Number(s.total_bs ?? s.totalBs ?? 0);
   const rawCond = String(s.condicion_pago ?? s.condicionPago ?? '').toUpperCase().trim();
   const rawEst = String(s.estado ?? s.status ?? '').toUpperCase().trim();
+  const isAnnulledSale = Boolean(
+    s.anulada ||
+    s.anulado ||
+    ['ANULADA', 'ANULADO', 'VOID'].includes(String(s.status || '').toUpperCase().trim()) ||
+    ['ANULADA', 'ANULADO', 'VOID'].includes(String(s.estado || '').toUpperCase().trim())
+  );
   const isExplicitPaidContado =
     (rawCond === 'CONTADO' && s.metodo_pago !== 'CREDITO' && Number(s.dias_credito ?? s.diasCredito ?? 0) === 0 && rawEst !== 'PENDIENTE') ||
     rawEst === 'PAGADO' ||
@@ -1309,16 +1315,26 @@ const mapSaleFromDb = (s) => {
     totalBs: effectiveTotBs,
     retencionIvaBs: isNe ? 0 : Number(s.retencion_iva_bs ?? s.retencionIvaBs ?? 0),
     comprobanteRetencionIva: s.comprobante_retencion_iva || s.comprobanteRetencionIva || '',
-    saldoUsd: isNe
-      ? (isExplicitPaidContado ? 0 : (s.saldo_usd !== undefined && s.saldo_usd !== null ? Math.min(effectiveTotUsd, Number(s.saldo_usd)) : (isPending ? effectiveTotUsd : 0)))
-      : Number(s.saldo_usd ?? s.saldoUsd ?? (isPending ? effectiveTotUsd : 0)),
-    saldoBs: isNe
-      ? (isExplicitPaidContado ? 0 : (s.saldo_bs !== undefined && s.saldo_bs !== null ? Math.min(effectiveTotBs, Number(s.saldo_bs)) : (isPending ? effectiveTotBs : 0)))
-      : Number(s.saldo_bs ?? s.saldoBs ?? (isPending ? effectiveTotBs : 0)),
+    saldoUsd: isAnnulledSale
+      ? 0
+      : (isNe
+          ? (isExplicitPaidContado ? 0 : (s.saldo_usd !== undefined && s.saldo_usd !== null ? Math.min(effectiveTotUsd, Number(s.saldo_usd)) : (isPending ? effectiveTotUsd : 0)))
+          : Number(s.saldo_usd ?? s.saldoUsd ?? (isPending ? effectiveTotUsd : 0))),
+    saldoBs: isAnnulledSale
+      ? 0
+      : (isNe
+          ? (isExplicitPaidContado ? 0 : (s.saldo_bs !== undefined && s.saldo_bs !== null ? Math.min(effectiveTotBs, Number(s.saldo_bs)) : (isPending ? effectiveTotBs : 0)))
+          : Number(s.saldo_bs ?? s.saldoBs ?? (isPending ? effectiveTotBs : 0))),
     diasCredito: Number(s.dias_credito ?? s.diasCredito ?? 0),
     fechaEmision: s.fecha_emision || s.fechaEmision || s.fecha,
     fechaVencimiento: s.fecha_vencimiento || s.fechaVencimiento || null,
-    estado: s.estado || s.status || 'Procesada',
+    estado: isAnnulledSale ? 'ANULADA' : (s.estado || s.status || 'Procesada'),
+    status: isAnnulledSale ? 'ANULADA' : (s.status || s.estado || 'Procesada'),
+    anulada: isAnnulledSale,
+    anulado: isAnnulledSale,
+    motivoAnulacion: s.motivo_anulacion ?? s.motivoAnulacion ?? '',
+    anuladaPor: s.anulada_por ?? s.anuladaPor ?? '',
+    fechaAnulacion: s.fecha_anulacion ?? s.fechaAnulacion ?? null,
     metodoPago: s.metodo_pago ?? s.metodoPago,
     tipoTasa: normalizeRateType(s.tipo_tasa ?? s.tipoTasa, {
       tipoDoc: resolvedTipoDoc,
@@ -2969,6 +2985,49 @@ export const buildDocTypeChangeWarehouseDeltaLines = (originalDoc, updatedDocDat
 };
 
 /**
+ * Calcula el ajuste neto de inventario por almacén (01/02) al editar una Factura o Nota de Entrega,
+ * contemplando cambios de cantidades, renglones agregados/eliminados y cambios de tipoDoc (01 <-> 02).
+ */
+export const buildInvoiceEditStockDeltaLines = (originalDoc, updatedDocData) => {
+  if (!originalDoc || !updatedDocData) return [];
+  const oldTipo = resolveOutgoingDocType(originalDoc);
+  const newTipo = resolveOutgoingDocType(updatedDocData);
+  const outgoingTypes = new Set(['FACTURA', 'NOTA_ENTREGA', 'NOTA_DEBITO']);
+  if (!outgoingTypes.has(oldTipo) || !outgoingTypes.has(newTipo)) return [];
+
+  const oldWh = oldTipo === 'NOTA_ENTREGA' ? '02' : '01';
+  const newWh = newTipo === 'NOTA_ENTREGA' ? '02' : '01';
+
+  const aggregateBySku = (itemsList) => {
+    const map = new Map();
+    if (!Array.isArray(itemsList)) return map;
+    for (const item of itemsList) {
+      const prodKey = resolveStockItemProductKey(item);
+      const qty = Math.max(0, Number(item?.cantidad ?? item?.qty ?? item?.total_art ?? 0));
+      if (!prodKey || qty <= 0) continue;
+      map.set(prodKey, (map.get(prodKey) || 0) + qty);
+    }
+    return map;
+  };
+
+  const oldMap = aggregateBySku(originalDoc?.items || originalDoc?.renglones);
+  const newMap = aggregateBySku(updatedDocData?.items || updatedDocData?.renglones);
+  const allKeys = new Set([...newMap.keys(), ...oldMap.keys()]);
+  const lines = [];
+
+  for (const prodKey of allKeys) {
+    const oldQty = oldMap.get(prodKey) || 0;
+    const newQty = newMap.get(prodKey) || 0;
+    const delta01 = Number(((oldWh === '01' ? oldQty : 0) - (newWh === '01' ? newQty : 0)).toFixed(4));
+    const delta02 = Number(((oldWh === '02' ? oldQty : 0) - (newWh === '02' ? newQty : 0)).toFixed(4));
+    if (delta01 !== 0 || delta02 !== 0) {
+      lines.push({ codigo: prodKey, delta01, delta02 });
+    }
+  }
+  return lines;
+};
+
+/**
  * Clave idempotente estable para la reversión de inventario al eliminar un documento.
  * Combina tipo (FAC/NE), número limpio y fecha/hora de emisión para que:
  *  - reintentos del mismo borrado (directo o desde la cola offline) compartan la misma clave y
@@ -3003,7 +3062,16 @@ export const buildSaleDeductIdempotencyKey = (doc, fallbackRef = '') => {
     .replace(/^(FAC-|FACT-|NE-|NDE-|N\.E-|fac-|doc-|inv-)/i, '')
     .trim()
     .replace(/^0+(?=\d)/, '');
-  return `sale_${isNe ? 'NE' : 'FAC'}_${cleanNum || 'SN'}_deduct`;
+  const rawDate = src.fechaEmision || src.fecha_emision || src.fecha || src.fec_emis || '';
+  let ts = '';
+  if (rawDate) {
+    const parsed = Date.parse(rawDate);
+    ts = Number.isFinite(parsed)
+      ? new Date(parsed).toISOString().slice(0, 19).replace(/[^0-9]/g, '')
+      : String(rawDate).replace(/[^0-9]/g, '').slice(0, 14);
+  }
+  const orderTag = String(src.pedidoOrigenId || src.pedido_origen_id || '').trim();
+  return `sale_${isNe ? 'NE' : 'FAC'}_${cleanNum || 'SN'}${ts ? `_${ts}` : ''}${orderTag ? `_${orderTag}` : ''}_deduct`;
 };
 
 const adjustSupabaseProductsStockForSale = async (saleRecord, { reverse = false, idempotencyKey = '', skipLocalStoragePatch = false } = {}) => {
@@ -3742,6 +3810,36 @@ export const processSupabaseSale = async (saleData) => {
       };
     };
 
+    // Blindaje anti-doble facturación: verificar estado real de la orden en servidor antes de insertar o descontar stock
+    if (originOrderId && isNetworkOnline()) {
+      try {
+        const { data: srvOrder, error: srvOrdErr } = await withTimeout(
+          supabase
+            .from('orders')
+            .select('id,estado,status,nro_factura,factura_id')
+            .eq('id', originOrderId)
+            .maybeSingle(),
+          4000
+        );
+        if (!srvOrdErr && srvOrder) {
+          const srvOrdState = String(srvOrder.estado || srvOrder.status || '').toUpperCase().trim();
+          if (srvOrdState === 'FACTURADO' || srvOrdState === 'ANULADO' || srvOrdState === 'ANULADA') {
+            const existingRef = srvOrder.nro_factura || srvOrder.factura_id || '';
+            const orderDupErr = new Error(
+              srvOrdState === 'FACTURADO'
+                ? `Este pedido ya fue facturado previamente${existingRef ? ` (${existingRef})` : ''}.`
+                : 'Este pedido se encuentra ANULADO y no puede facturarse.'
+            );
+            orderDupErr.isValidationError = true;
+            orderDupErr.code = 'ORDER_ALREADY_INVOICED';
+            throw orderDupErr;
+          }
+        }
+      } catch (ordCheckErr) {
+        if (ordCheckErr?.isValidationError) throw ordCheckErr;
+      }
+    }
+
     // Insertar venta primero con reintento automático si otro equipo tomó el mismo correlativo (HTTP 409 / 23505),
     // antes de descontar inventario o registrar movimientos en caja/saldo cliente.
     let newSale = buildSaleCandidate(resolvedNumeroDoc, true);
@@ -3997,7 +4095,7 @@ export const processSupabaseSale = async (saleData) => {
 
 // Purchases
 export const getSupabasePurchases = async () => {
-  if (!isSupabaseAvailable) return getStoragePurchases();
+  if (!isSupabaseAvailable) return filterDeletedPurchases(getStoragePurchases());
   try {
     const { data, error } = await withTimeout(
       supabase.from('purchases').select('*').order('fecha', { ascending: false })
@@ -4005,17 +4103,17 @@ export const getSupabasePurchases = async () => {
 
     if (error) {
       if (error) markSupabaseOffline(error, 'getSupabasePurchases');
-      return getStoragePurchases();
+      return filterDeletedPurchases(getStoragePurchases());
     }
     isSupabaseAvailable = true;
-    const mapped = (data || []).map(mapPurchaseFromDb);
+    const mapped = filterDeletedPurchases((data || []).map(mapPurchaseFromDb));
     try {
       localStorage.setItem('sm_purchases_v4_fiscal', JSON.stringify(mapped));
     } catch (_) {}
     return mapped;
   } catch (err) {
     markSupabaseOffline(err, 'getSupabasePurchases');
-    return getStoragePurchases();
+    return filterDeletedPurchases(getStoragePurchases());
   }
 };
 
@@ -4119,6 +4217,7 @@ export const saveSupabasePurchase = async (purchaseData) => {
     return {
       ...localSaved,
       ...mapped,
+      id: mapped?.id || localSaved.id,
       almacen: mapped?.almacen || localSaved.almacen,
       almacenNombre: mapped?.almacenNombre || localSaved.almacenNombre,
       fleteUsd: mapped?.fleteUsd || localSaved.fleteUsd,
@@ -4130,6 +4229,148 @@ export const saveSupabasePurchase = async (purchaseData) => {
     markSupabaseOffline(err, 'saveSupabasePurchase');
     enqueueSyncAction('purchase', 'INSERT', localSaved);
     return localSaved;
+  }
+};
+
+export const PURCHASES_DELETED_KEY = 'sm_deleted_purchases_v1';
+
+const getDeletedPurchaseIds = () => {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(PURCHASES_DELETED_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.map(id => String(id || '').trim()).filter(Boolean) : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+const markPurchaseDeleted = (id) => {
+  const cleanId = String(id || '').trim();
+  if (!cleanId || typeof localStorage === 'undefined') return;
+  try {
+    const list = getDeletedPurchaseIds();
+    if (!list.includes(cleanId)) {
+      list.push(cleanId);
+      localStorage.setItem(PURCHASES_DELETED_KEY, JSON.stringify(list));
+    }
+  } catch (_) {}
+};
+
+export const filterDeletedPurchases = (list = []) => {
+  const delSet = new Set(getDeletedPurchaseIds());
+  if (delSet.size === 0) return Array.isArray(list) ? list : [];
+  return (Array.isArray(list) ? list : []).filter(p => p && !delSet.has(String(p.id || '').trim()));
+};
+
+export const updateSupabasePurchase = async (purchaseId, purchaseData = {}) => {
+  const cleanId = String(purchaseId || purchaseData?.id || '').trim();
+  if (!cleanId) throw new Error('ID de compra inválido para actualizar.');
+  const nowIso = new Date().toISOString();
+  const prevRecord = purchaseData?._prevRecord || getStoragePurchases().find(p => p && String(p.id || '').trim() === cleanId) || null;
+  const { _prevRecord, ...cleanPatch } = purchaseData;
+  const nextPayload = {
+    ...(prevRecord || {}),
+    ...cleanPatch,
+    id: cleanId,
+    updatedAt: nowIso
+  };
+  let updatedLocal = updateStoragePurchase(cleanId, nextPayload) || nextPayload;
+
+  // Ajustar delta de stock por almacén si cambiaron cantidades/ítems
+  if (prevRecord && Array.isArray(nextPayload.items)) {
+    const oldDefAlm = String(prevRecord.almacen || '01').includes('02') ? '02' : '01';
+    const newDefAlm = String(nextPayload.almacen || '01').includes('02') ? '02' : '01';
+    const isOldNc = String(prevRecord.tipoDoc || 'FACTURA').toUpperCase() === 'NOTA_CREDITO';
+    const isNewNc = String(nextPayload.tipoDoc || 'FACTURA').toUpperCase() === 'NOTA_CREDITO';
+    const acc = new Map();
+    const addMap = (items, defAlm, sign) => {
+      for (const it of (Array.isArray(items) ? items : [])) {
+        const code = resolveStockItemProductKey(it);
+        const qty = Number(it?.cantidad || 0);
+        if (!code || !(qty > 0)) continue;
+        const alm = String(it?.almacen || defAlm).includes('02') ? '02' : '01';
+        const prev = acc.get(code) || { codigo: code, delta01: 0, delta02: 0 };
+        if (alm === '01') prev.delta01 += sign * qty;
+        else prev.delta02 += sign * qty;
+        acc.set(code, prev);
+      }
+    };
+    addMap(prevRecord.items, oldDefAlm, isOldNc ? 1 : -1);
+    addMap(nextPayload.items, newDefAlm, isNewNc ? -1 : 1);
+    const deltaLines = Array.from(acc.values())
+      .map(l => ({ codigo: l.codigo, delta01: Number(l.delta01.toFixed(4)), delta02: Number(l.delta02.toFixed(4)) }))
+      .filter(l => l.delta01 !== 0 || l.delta02 !== 0);
+    if (deltaLines.length > 0) {
+      await applyStockDeltaForWarehouseLines(deltaLines, { validateStrict: false });
+    }
+  }
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('purchase', 'UPDATE', updatedLocal);
+    return updatedLocal;
+  }
+
+  try {
+    const dbPayload = mapPurchaseToDb(updatedLocal);
+    const { data: saved, error: err } = await upsertPurchaseRowWithSchemaFallback(dbPayload);
+    if (err) throw err;
+    isSupabaseAvailable = true;
+    const mapped = saved?.id ? mapPurchaseFromDb(saved) : null;
+    return mapped ? { ...updatedLocal, ...mapped, id: mapped.id || updatedLocal.id, updatedAt: updatedLocal.updatedAt } : updatedLocal;
+  } catch (err) {
+    markSupabaseOffline(err, 'updateSupabasePurchase');
+    enqueueSyncAction('purchase', 'UPDATE', updatedLocal);
+    return updatedLocal;
+  }
+};
+
+export const deleteSupabasePurchase = async (purchaseOrId) => {
+  const cleanId = typeof purchaseOrId === 'object' ? String(purchaseOrId?.id || '').trim() : String(purchaseOrId || '').trim();
+  if (!cleanId) return false;
+  const target = (typeof purchaseOrId === 'object' && purchaseOrId)
+    ? purchaseOrId
+    : getStoragePurchases().find(p => p && String(p.id || '').trim() === cleanId);
+
+  markPurchaseDeleted(cleanId);
+
+  if (target && Array.isArray(target.items) && target.items.length > 0 && !target.skipStockAdjustment) {
+    const defAlm = String(target.almacen || '01').includes('02') ? '02' : '01';
+    const isNc = String(target.tipoDoc || 'FACTURA').toUpperCase() === 'NOTA_CREDITO';
+    const revLines = [];
+    for (const it of target.items) {
+      const code = resolveStockItemProductKey(it);
+      const qty = Number(it?.cantidad || 0);
+      if (!code || !(qty > 0)) continue;
+      const alm = String(it?.almacen || defAlm).includes('02') ? '02' : '01';
+      const signed = isNc ? qty : -qty;
+      revLines.push({ codigo: code, delta01: alm === '01' ? signed : 0, delta02: alm === '02' ? signed : 0 });
+    }
+    if (revLines.length > 0) {
+      await applyStockDeltaForWarehouseLines(revLines, { validateStrict: false });
+    }
+  }
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const next = getStoragePurchases().filter(p => p && String(p.id || '').trim() !== cleanId);
+      localStorage.setItem('sm_purchases_v4_fiscal', JSON.stringify(next));
+    }
+  } catch (_) {}
+
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('purchase', 'DELETE', { id: cleanId });
+    return true;
+  }
+
+  try {
+    const { error } = await withTimeout(supabase.from('purchases').delete().eq('id', cleanId), 5000);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    markSupabaseOffline(err, 'deleteSupabasePurchase');
+    enqueueSyncAction('purchase', 'DELETE', { id: cleanId });
+    return true;
   }
 };
 
@@ -5124,6 +5365,446 @@ export const deleteSupabaseSale = async (saleId) => {
     finalizeLocalOfflineDelete();
     return true;
   }
+};
+
+// Anulación con doble seguridad de Factura / Nota de Entrega (conserva registro como ANULADA, devuelve stock, elimina CxC y anula orden vinculada)
+export const annulSupabaseSale = async (saleDoc, { motivo = '', usuario = '' } = {}) => {
+  if (!saleDoc || typeof saleDoc !== 'object') return { ok: false, alreadyAnnulled: false };
+
+  const currentStatusUpper = String(saleDoc.status || saleDoc.estado || '').trim().toUpperCase();
+  if (saleDoc.anulada === true || saleDoc.anulado === true || currentStatusUpper === 'ANULADA' || currentStatusUpper === 'ANULADO') {
+    return { ok: true, alreadyAnnulled: true };
+  }
+
+  const rawId = String(saleDoc.id || '').trim();
+  const rawNum = String(saleDoc.factNum || saleDoc.factura || saleDoc.numeroDoc || saleDoc.numero_doc || saleDoc.id || '').trim();
+  const cleanNum = rawNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+  const cleanId = rawId;
+  const rawTipoInput = String(saleDoc.tipoDoc || saleDoc.tipo_doc || saleDoc.docType || '').toUpperCase().trim();
+  const isTargetNe =
+    rawTipoInput === 'NOTA_ENTREGA' ||
+    rawTipoInput === 'N/E' ||
+    rawTipoInput === 'NE' ||
+    /^(NE-|NDE-)/i.test(cleanId) ||
+    /^(NE-|NDE-)/i.test(rawNum);
+  const targetTipoDoc = isTargetNe ? 'NOTA_ENTREGA' : 'FACTURA';
+  const isTargetLegacy = isLegacyPreNovInvoice(saleDoc);
+  const nowIso = new Date().toISOString();
+  const reasonText = String(motivo || 'Anulada desde Flujo Comercial').trim();
+  const actorText = String(usuario || 'Admin').trim();
+
+  const candidateKeys = getScopedCxcDeleteKeys(saleDoc);
+  const candidateSet = new Set(candidateKeys);
+  const localMatches = getStorageSales().filter(s => {
+    if (!s) return false;
+    const sId = String(s.id || '').trim();
+    const sNum = String(s.numeroDoc || s.factura || s.factNum || '').trim();
+    const sIsNe =
+      String(s.tipoDoc || s.tipo_doc || '').toUpperCase() === 'NOTA_ENTREGA' ||
+      /^(NE-|NDE-)/i.test(sId) ||
+      /^(NE-|NDE-)/i.test(sNum);
+    if (sIsNe !== isTargetNe) return false;
+    const sCleanNum = sNum.replace(/^(FAC-|FACT-|NE-|NDE-|fac-|doc-|inv-)/i, '').trim();
+    return candidateSet.has(sId) || candidateSet.has(sNum) || (!isTargetNe && candidateSet.has(sCleanNum));
+  });
+
+  const applyLocalAnnulment = (skipStock = false) => {
+    const baseSource = localMatches.length > 0 ? localMatches[0] : saleDoc;
+    if (!skipStock && Array.isArray(baseSource.items) && baseSource.items.length > 0) {
+      const revertLines = buildSaleStockDeltaLines(baseSource, { reverse: true });
+      if (revertLines.length > 0) {
+        patchProductsStockInStorage(baseSource, { reverse: true });
+        const revKey = buildSaleRevertIdempotencyKey(baseSource, cleanId || cleanNum);
+        if (!isNetworkOnline()) {
+          enqueueSyncAction('stock_delta', 'UPDATE', {
+            id: revKey,
+            idempotencyKey: revKey,
+            lines: revertLines,
+            validateStrict: false,
+            alreadyAppliedLocally: true
+          });
+        }
+      }
+    }
+
+    const updatedLocal = {
+      ...baseSource,
+      anulada: true,
+      anulado: true,
+      status: 'ANULADA',
+      estado: 'ANULADA',
+      saldoUsd: 0,
+      saldoBs: 0,
+      abonosUsd: 0,
+      abonosBs: 0,
+      saldado: false,
+      motivoAnulacion: reasonText,
+      anuladaPor: actorText,
+      fechaAnulacion: nowIso,
+      updatedAt: nowIso
+    };
+    saveStorageSale(updatedLocal, { skipStockAdjustment: true });
+    broadcastReconcileChange({
+      tableId: 'sales',
+      action: 'RECONCILE',
+      key: updatedLocal.id || updatedLocal.numeroDoc || cleanNum,
+      item: updatedLocal
+    });
+    broadcastReconcileChange({
+      tableId: 'invoices',
+      action: 'RECONCILE',
+      key: updatedLocal.id || updatedLocal.numeroDoc || cleanNum,
+      item: updatedLocal
+    });
+    return updatedLocal;
+  };
+
+  if (!isNetworkOnline()) {
+    const localDoc = applyLocalAnnulment(false);
+    return { ok: true, alreadyAnnulled: false, doc: localDoc };
+  }
+
+  try {
+    const orSalesParts = [];
+    if (cleanId) orSalesParts.push(`id.eq.${cleanId}`);
+    if (cleanNum) {
+      if (isTargetNe) {
+        const neCode = `NE-${cleanNum}`;
+        orSalesParts.push(`id.eq.${neCode}`, `numero_doc.eq.${neCode}`);
+      } else {
+        orSalesParts.push(`numero_doc.eq.${cleanNum}`);
+        if (cleanId !== cleanNum) orSalesParts.push(`id.eq.${cleanNum}`);
+      }
+    }
+    const uniqueOrSalesParts = Array.from(new Set(orSalesParts));
+
+    const orInvParts = [];
+    if (cleanId) orInvParts.push(`id.eq.${cleanId}`);
+    if (cleanNum) {
+      if (isTargetNe) {
+        const neCode = `NE-${cleanNum}`;
+        orInvParts.push(`id.eq.${neCode}`, `fact_num.eq.${neCode}`);
+      } else if (isTargetLegacy) {
+        orInvParts.push(`fact_num.eq.${cleanNum}`, `id.eq.fac-${cleanNum}`, `id.eq.FAC-${cleanNum}`);
+      } else {
+        orInvParts.push(`id.eq.FAC-${cleanNum}`);
+        if (cleanNum.length >= 6) {
+          orInvParts.push(`id.eq.${cleanNum}`, `factNum.eq.${cleanNum}`);
+        }
+      }
+    }
+    const uniqueOrInvParts = Array.from(new Set(orInvParts));
+
+    let foundSales = [];
+    if (uniqueOrSalesParts.length > 0) {
+      const { data: fetchedSales } = await withTimeout(
+        supabase.from('sales').select('*').or(uniqueOrSalesParts.join(',')),
+        6000
+      ).catch(() => ({ data: null }));
+      if (Array.isArray(fetchedSales)) {
+        foundSales = fetchedSales
+          .map(mapSaleFromDb)
+          .filter(s => s && inferCxcDocType(s) === targetTipoDoc);
+      }
+    }
+
+    let invMatches = [];
+    if (uniqueOrInvParts.length > 0) {
+      const { data: fetchedInvMatches } = await withTimeout(
+        supabase.from('profit_invoices').select('*').or(uniqueOrInvParts.join(',')),
+        5000
+      ).catch(() => ({ data: null }));
+      if (Array.isArray(fetchedInvMatches)) {
+        invMatches = fetchedInvMatches.filter(r => r && r.id && isLegacyPreNovInvoice(r) === isTargetLegacy);
+      }
+    }
+
+    const isRecordAnnulled = (r) => Boolean(
+      r && (r.anulada || r.anulado || ['ANULADA', 'ANULADO', 'VOID'].includes(String(r.status || r.estado || '').toUpperCase()))
+    );
+    const isRecordFullySanitized = (r) =>
+      isRecordAnnulled(r) &&
+      String(r.estado || r.status || '').toUpperCase() === 'ANULADA' &&
+      Number(r.saldo_usd ?? r.saldoUsd ?? 0) <= 0.01;
+
+    const alreadyAnnulledOnServer = foundSales.some(isRecordAnnulled) || invMatches.some(isRecordAnnulled);
+    const allSanitizedOnServer =
+      (foundSales.length === 0 || foundSales.every(isRecordFullySanitized)) &&
+      (invMatches.length === 0 || invMatches.every(isRecordFullySanitized));
+
+    if (alreadyAnnulledOnServer && allSanitizedOnServer) {
+      const localDoc = applyLocalAnnulment(true);
+      return { ok: true, alreadyAnnulled: true, doc: localDoc };
+    }
+
+    if (!alreadyAnnulledOnServer) {
+      const revertTargets = foundSales.length > 0
+        ? foundSales
+        : (localMatches.length > 0 ? localMatches : [saleDoc]);
+
+      let stockReverted = false;
+      for (const rec of revertTargets) {
+        if (!stockReverted && Array.isArray(rec.items) && rec.items.length > 0) {
+          await adjustSupabaseProductsStockForSale(rec, { reverse: true });
+          stockReverted = true;
+        }
+
+        const cliId = String(rec.clienteId || rec.cliente_id || saleDoc.clienteId || '').trim();
+        const pendingSaldo = Number(rec.saldoUsd ?? rec.saldo_usd ?? saleDoc.saldoUsd ?? 0) || 0;
+        const isCreditDoc =
+          isCreditPaymentCondition(rec.condicionPago, rec.metodoPago) ||
+          Number(rec.diasCredito || 0) > 0 ||
+          pendingSaldo > 0;
+
+        if (cliId && isCreditDoc && pendingSaldo > 0) {
+          const { data: cData, error: cErr } = await withTimeout(
+            supabase.from('clients').select('saldo_deudor_usd').eq('id', cliId).single(),
+            4000
+          ).catch(() => ({ data: null, error: true }));
+          if (!cErr && cData) {
+            const curDebit = Number(cData.saldo_deudor_usd || 0);
+            const nextDebit = Math.max(0, Number((curDebit - pendingSaldo).toFixed(2)));
+            await withTimeout(
+              supabase.from('clients').update({ saldo_deudor_usd: nextDebit }).eq('id', cliId),
+              4000
+            ).catch(() => {});
+            const localCli = getStorageClients().find(c => c.id === cliId);
+            if (localCli) {
+              saveStorageClient({ ...localCli, saldoDeudorUsd: nextDebit });
+            }
+            broadcastReconcileChange({
+              tableId: 'clients',
+              action: 'RECONCILE',
+              key: cliId,
+              item: { id: cliId, saldoDeudorUsd: nextDebit }
+            });
+          }
+        }
+      }
+    }
+
+    // Actualizar `sales` con estado ANULADA y saldo 0 (con fallback seguro si faltan columnas)
+    if (foundSales.length > 0) {
+      const saleIds = foundSales.map(s => s.id).filter(Boolean);
+      if (saleIds.length > 0) {
+        const salePatch = {
+          anulada: true,
+          anulado: true,
+          status: 'ANULADA',
+          estado: 'ANULADA',
+          saldo_usd: 0,
+          saldo_bs: 0,
+          abonos_usd: 0,
+          motivo_anulacion: reasonText,
+          anulada_por: actorText,
+          fecha_anulacion: nowIso
+        };
+        const { error: salePatchErr } = await withTimeout(
+          supabase.from('sales').update(salePatch).in('id', saleIds),
+          6000
+        ).catch(e => ({ error: e }));
+        if (salePatchErr) {
+          const { error: fallbackSaleErr } = await withTimeout(
+            supabase.from('sales').update({
+              estado: 'ANULADA',
+              saldo_usd: 0,
+              saldo_bs: 0
+            }).in('id', saleIds),
+            6000
+          ).catch(e => ({ error: e }));
+          if (fallbackSaleErr) throw fallbackSaleErr;
+        }
+      }
+    }
+
+    // Actualizar `profit_invoices` con estado ANULADA y saldo 0
+    if (invMatches.length > 0) {
+      const invIds = invMatches.map(i => i.id).filter(Boolean);
+      if (invIds.length > 0) {
+        const invPatch = {
+          anulada: true,
+          anulado: true,
+          status: 'ANULADA',
+          estado: 'ANULADA',
+          saldo_usd: 0,
+          saldo_bs: 0,
+          saldoUsd: 0,
+          saldoBs: 0,
+          abonos_usd: 0,
+          abonosUsd: 0,
+          saldado: false,
+          motivo_anulacion: reasonText,
+          anulada_por: actorText,
+          fecha_anulacion: nowIso
+        };
+        const { error: invPatchErr } = await withTimeout(
+          supabase.from('profit_invoices').update(invPatch).in('id', invIds),
+          6000
+        ).catch(e => ({ error: e }));
+        if (invPatchErr) {
+          const { error: fallbackInvErr } = await withTimeout(
+            supabase.from('profit_invoices').update({
+              anulada: true,
+              status: 'ANULADA',
+              estado: 'ANULADA',
+              saldo_usd: 0,
+              saldo_bs: 0,
+              saldoUsd: 0,
+              saldoBs: 0
+            }).in('id', invIds),
+            6000
+          ).catch(e => ({ error: e }));
+          if (fallbackInvErr) throw fallbackInvErr;
+        }
+      }
+    }
+
+    // Actualizar orden vinculada en Supabase (`orders`) a ANULADO para evitar que quede FACTURADO
+    const ordOrParts = [];
+    if (cleanId) ordOrParts.push(`factura_id.eq.${cleanId}`, `nro_factura.eq.${cleanId}`);
+    if (rawNum && rawNum !== cleanId) ordOrParts.push(`factura_id.eq.${rawNum}`, `nro_factura.eq.${rawNum}`);
+    if (cleanNum && cleanNum !== cleanId && cleanNum !== rawNum) {
+      ordOrParts.push(`factura_id.eq.${cleanNum}`, `nro_factura.eq.${cleanNum}`);
+    }
+    const originOrdId = String(saleDoc.pedidoOrigenId || saleDoc.pedido_origen_id || '').trim();
+    if (originOrdId) ordOrParts.push(`id.eq.${originOrdId}`);
+    if (ordOrParts.length > 0) {
+      await withTimeout(
+        supabase
+          .from('orders')
+          .update({ estado: 'ANULADO', status: 'ANULADO', updated_at: nowIso })
+          .or(Array.from(new Set(ordOrParts)).join(',')),
+        5000
+      ).catch(() => {});
+    }
+
+    const updatedLocal = applyLocalAnnulment(true);
+    isSupabaseAvailable = true;
+    return { ok: true, alreadyAnnulled: alreadyAnnulledOnServer, doc: updatedLocal };
+  } catch (err) {
+    console.warn('[annulSupabaseSale] Error anulando documento:', err?.message || err);
+    markSupabaseOffline(err, 'annulSupabaseSale');
+    const localDoc = applyLocalAnnulment(false);
+    return { ok: true, alreadyAnnulled: false, doc: localDoc };
+  }
+};
+
+export const processCustomerReturnForSale = async ({
+  originalDoc,
+  selectedItems = [],
+  motivo = '',
+  usuario = 'Admin',
+  tasaDolar = 827.73
+} = {}) => {
+  if (!originalDoc || !Array.isArray(selectedItems) || selectedItems.length === 0) {
+    throw new Error('Debe seleccionar al menos un renglón para procesar la devolución.');
+  }
+  const isNe = inferCxcDocType(originalDoc) === 'NOTA_ENTREGA';
+  const targetWh = isNe ? '02' : '01';
+  const factNum = String(originalDoc.factNum || originalDoc.numeroDoc || originalDoc.id || '').trim();
+  const cleanFactNum = factNum.replace(/^(FAC-|FACT-|NE-|NDE-)/i, '').trim();
+  const nowIso = new Date().toISOString();
+  const tasa = Number(tasaDolar || originalDoc.tasaDolar || originalDoc.tasa || 827.73) || 827.73;
+
+  const stockLines = [];
+  let returnSubUsd = 0;
+  let returnLitros = 0;
+  const retItems = selectedItems.map((it) => {
+    const qty = Math.max(0, Number(it.cantidad ?? it.qty ?? 0));
+    const precio = Math.max(0, Number(it.precioUsd ?? it.precio ?? 0));
+    const sub = Number((qty * precio).toFixed(2));
+    const code = resolveStockItemProductKey(it);
+    const lts = Number(it.litros || 0);
+    returnSubUsd = Number((returnSubUsd + sub).toFixed(2));
+    returnLitros = Number((returnLitros + lts).toFixed(2));
+    if (code && qty > 0) {
+      stockLines.push({
+        codigo: code,
+        delta01: targetWh === '01' ? qty : 0,
+        delta02: targetWh === '02' ? qty : 0
+      });
+    }
+    return { ...it, cantidad: qty, precioUsd: precio, subtotalUsd: sub, totalUsd: sub };
+  }).filter(it => it.cantidad > 0);
+
+  if (retItems.length === 0) {
+    throw new Error('Las cantidades a devolver deben ser mayores a cero.');
+  }
+
+  const returnIvaUsd = isNe ? 0 : Number((returnSubUsd * 0.16).toFixed(2));
+  const returnTotalUsd = Number((returnSubUsd + returnIvaUsd).toFixed(2));
+  const returnTotalBs = Number((returnTotalUsd * tasa).toFixed(2));
+
+  if (stockLines.length > 0) {
+    await applyStockDeltaForWarehouseLines(stockLines, { validateStrict: false });
+  }
+
+  const retPayload = {
+    id: `DEV-${Date.now()}`,
+    factNum,
+    documentoAfectado: factNum,
+    tipoDoc: isNe ? 'NOTA_ENTREGA' : 'FACTURA',
+    almacen: targetWh,
+    fecha: nowIso,
+    clienteId: originalDoc.clienteId || originalDoc.cliente_id || '',
+    clienteNombre: originalDoc.clienteNombre || originalDoc.cliente_nombre || '',
+    clienteRif: originalDoc.clienteRif || originalDoc.cliente_rif || '',
+    motivo: String(motivo || 'Devolución de mercancía').trim(),
+    usuario,
+    tasa,
+    totalUsd: returnTotalUsd,
+    totalBs: returnTotalBs,
+    totalLitros: returnLitros,
+    items: retItems
+  };
+
+  const savedReturn = await saveSupabaseProfitCustomerReturn(retPayload).catch(() => retPayload);
+
+  let savedCreditNote = null;
+  if (!isNe) {
+    try {
+      savedCreditNote = await processSupabaseSale({
+        tipoDoc: 'NOTA_CREDITO',
+        documentoAfectado: cleanFactNum || factNum,
+        clienteId: originalDoc.clienteId || originalDoc.cliente_id,
+        clienteNombre: originalDoc.clienteNombre || originalDoc.cliente_nombre,
+        clienteRif: originalDoc.clienteRif || originalDoc.cliente_rif,
+        condicionPago: 'CONTADO',
+        metodoPago: 'NOTA_CREDITO',
+        items: retItems,
+        vendedor: usuario,
+        skipStockAdjustment: true
+      });
+    } catch (_) {}
+  }
+
+  const currentSaldoUsd = Number(originalDoc.saldoUsd ?? originalDoc.saldo_usd ?? 0) || 0;
+  const creditedToDocUsd = Math.min(currentSaldoUsd, returnTotalUsd);
+  const nextSaldoUsd = Math.max(0, Number((currentSaldoUsd - creditedToDocUsd).toFixed(2)));
+  const nextSaldoBs = Number((nextSaldoUsd * tasa).toFixed(2));
+
+  if (creditedToDocUsd > 0 && isNetworkOnline()) {
+    await Promise.all([
+      withTimeout(
+        supabase.from('sales').update({ saldo_usd: nextSaldoUsd, saldo_bs: nextSaldoBs }).eq('id', originalDoc.id),
+        5000
+      ).catch(() => {}),
+      withTimeout(
+        supabase.from('profit_invoices').update({ saldo_usd: nextSaldoUsd, saldo_bs: nextSaldoBs, saldoUsd: nextSaldoUsd, saldoBs: nextSaldoBs }).eq('id', originalDoc.id),
+        5000
+      ).catch(() => {})
+    ]);
+  }
+
+  return {
+    savedReturn,
+    savedCreditNote,
+    creditedToDocUsd,
+    nextSaldoUsd,
+    nextSaldoBs,
+    returnLitros,
+    targetWh
+  };
 };
 
 export const fetchBcvRateDetails = async () => {
@@ -7629,6 +8310,12 @@ export const getSupabaseProfitInvoices = async () => {
       const resolvedTipoDoc = isNePrefix
         ? 'NOTA_ENTREGA'
         : (f.tipo_doc ?? f.tipoDoc ?? 'FACTURA');
+      const isAnnulledInv = Boolean(
+        f.anulada ||
+        f.anulado ||
+        ['ANULADA', 'ANULADO', 'VOID'].includes(String(f.status || '').toUpperCase().trim()) ||
+        ['ANULADA', 'ANULADO', 'VOID'].includes(String(f.estado || '').toUpperCase().trim())
+      );
       return {
         id: f.id,
         factNum: rawFactNum,
@@ -7656,8 +8343,9 @@ export const getSupabaseProfitInvoices = async () => {
       totNetoBs: Number(f.tot_neto_bs ?? f.totNetoBs ?? f.tot_neto ?? f.totalNeto ?? 0),
       abonosUsd: f.abonos_usd !== undefined ? Number(f.abonos_usd) : (f.abonosUsd !== undefined ? Number(f.abonosUsd) : undefined),
       abonosBs: f.abonos_bs !== undefined ? Number(f.abonos_bs) : (f.abonosBs !== undefined ? Number(f.abonosBs) : undefined),
-      saldoUsd: Number(f.saldo_usd ?? f.saldoUsd ?? 0),
+      saldoUsd: isAnnulledInv ? 0 : Number(f.saldo_usd ?? f.saldoUsd ?? 0),
       saldoBs: (() => {
+        if (isAnnulledInv) return 0;
         const sUsd = Number(f.saldo_usd ?? f.saldoUsd ?? 0);
         const st = String(f.status || f.estado || '').toUpperCase().trim();
         if (f.anulada || f.anulado || sUsd <= 0.01 && (st === 'COBRADA' || st === 'COBRADO' || st === 'PAGADA' || st === 'PAGADO' || f.saldo_usd !== undefined)) {
@@ -7673,8 +8361,13 @@ export const getSupabaseProfitInvoices = async () => {
       }),
       tasaPago: Number(f.tasa_pago ?? f.tasaPago ?? f.tasa ?? f.tasa_dolar ?? f.tasaDolar ?? 0),
       monedaPago: f.moneda_pago ?? f.monedaPago ?? (String(f.tipo_tasa ?? f.tipoTasa ?? '').toUpperCase() === 'USD' ? 'USD' : 'BS'),
-      status: f.status,
-      anulada: f.anulada,
+      status: isAnnulledInv ? 'ANULADA' : (f.status ?? f.estado),
+      estado: isAnnulledInv ? 'ANULADA' : (f.estado ?? f.status),
+      anulada: isAnnulledInv,
+      anulado: isAnnulledInv,
+      motivoAnulacion: f.motivo_anulacion ?? f.motivoAnulacion ?? '',
+      anuladaPor: f.anulada_por ?? f.anuladaPor ?? '',
+      fechaAnulacion: f.fecha_anulacion ?? f.fechaAnulacion ?? null,
       formaPago: f.forma_pag ?? f.formaPago,
       totalLitros: Number(f.total_litros ?? f.totalLitros ?? 0),
       totalCajas: Number(f.total_cajas ?? f.totalCajas ?? 0),
@@ -7708,6 +8401,11 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
 
   if (!skipSalesSync && rawNum) {
     const isCreditDoc = Number(cleanPayload.diasCredito || 0) > 0 || String(cleanPayload.condicionPago || '').toUpperCase().includes('CREDITO');
+    const isAnnulledDoc = Boolean(
+      cleanPayload.anulada ||
+      cleanPayload.anulado ||
+      ['ANULADA', 'ANULADO', 'VOID'].includes(String(cleanPayload.status || cleanPayload.estado || '').toUpperCase())
+    );
     const resolvedCtrl = cleanPayload.numeroControl || formatDocumentControlNumber(rawNum, cleanPayload.tipoDoc);
     const resolvedEra = cleanPayload.seriesEra || cleanPayload.series_era || '';
     const salesUpdatePayload = {
@@ -7725,8 +8423,8 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
       subtotal_bs: cleanPayload.totBrutoBs,
       iva_bs: cleanPayload.ivaBs,
       total_bs: cleanPayload.totNetoBs,
-      saldo_usd: cleanPayload.saldoUsd,
-      saldo_bs: cleanPayload.saldoBs,
+      saldo_usd: isAnnulledDoc ? 0 : cleanPayload.saldoUsd,
+      saldo_bs: isAnnulledDoc ? 0 : cleanPayload.saldoBs,
       dias_credito: cleanPayload.diasCredito,
       condicion_pago: cleanPayload.condicionPago || (isCreditDoc ? 'CREDITO' : 'CONTADO'),
       metodo_pago: cleanPayload.metodoPago || (isCreditDoc ? 'CREDITO' : 'EFECTIVO_USD'),
@@ -7734,7 +8432,7 @@ export const pushProfitInvoiceToSupabase = async (payload, { skipSalesSync = fal
       fecha_emision: cleanPayload.fechaEmision,
       fecha_vencimiento: cleanPayload.fechaVencimiento,
       vendedor: cleanPayload.vendedorNombre || cleanPayload.vendedor || '',
-      estado: cleanPayload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE'
+      estado: isAnnulledDoc ? 'ANULADA' : (cleanPayload.saldoUsd <= 0.01 ? 'COBRADA' : 'PENDIENTE')
     };
     if (Array.isArray(cleanPayload.items) && cleanPayload.items.length > 0) {
       salesUpdatePayload.items = cleanPayload.items;
@@ -8163,31 +8861,49 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
  */
 export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData) => {
   if (!updatedDocData) return null;
-  const oldTipo = resolveOutgoingDocType(originalDoc);
-  const newTipo = resolveOutgoingDocType(updatedDocData);
-  const swapLines = buildDocTypeChangeWarehouseDeltaLines(originalDoc, updatedDocData);
-
-  if (swapLines.length > 0) {
+  let effectiveOriginalDoc = originalDoc;
+  if (isNetworkOnline() && originalDoc?.id) {
     try {
-      const editDocKey = String(originalDoc?.id || originalDoc?.factNum || updatedDocData?.id || '').trim();
+      const { data: srvInv } = await withTimeout(
+        supabase.from('profit_invoices').select('id,tipo_doc,tipoDoc,items,updated_at').eq('id', String(originalDoc.id)).maybeSingle(),
+        3500
+      );
+      if (srvInv && Array.isArray(srvInv.items) && srvInv.items.length > 0) {
+        effectiveOriginalDoc = {
+          ...originalDoc,
+          tipoDoc: srvInv.tipo_doc || srvInv.tipoDoc || originalDoc.tipoDoc,
+          items: srvInv.items,
+          updatedAt: srvInv.updated_at || originalDoc.updatedAt
+        };
+      }
+    } catch (_) {}
+  }
+
+  const oldTipo = resolveOutgoingDocType(effectiveOriginalDoc);
+  const newTipo = resolveOutgoingDocType(updatedDocData);
+  const editDeltaLines = buildInvoiceEditStockDeltaLines(effectiveOriginalDoc, updatedDocData);
+
+  if (editDeltaLines.length > 0) {
+    try {
+      const editDocKey = String(effectiveOriginalDoc?.id || effectiveOriginalDoc?.factNum || updatedDocData?.id || '').trim();
       const revToken = String(
-        originalDoc?.updatedAt ||
-        originalDoc?.updated_at ||
-        originalDoc?.fechaSincronizacion ||
-        originalDoc?.fecha_sincronizacion ||
+        effectiveOriginalDoc?.updatedAt ||
+        effectiveOriginalDoc?.updated_at ||
+        effectiveOriginalDoc?.fechaSincronizacion ||
+        effectiveOriginalDoc?.fecha_sincronizacion ||
         Date.now()
       ).trim();
-      const whSwapKey = editDocKey ? `edit_wh_${editDocKey}_${oldTipo}_to_${newTipo}_${revToken}` : '';
-      await applyStockDeltaForWarehouseLines(swapLines, {
+      const whSwapKey = editDocKey ? `edit_inv_${editDocKey}_${oldTipo}_to_${newTipo}_${revToken}` : '';
+      await applyStockDeltaForWarehouseLines(editDeltaLines, {
         validateStrict: false,
         idempotencyKey: whSwapKey
       });
     } catch (whErr) {
-      console.warn('[updateSupabaseInvoiceDocument] Aviso ajustando almacenes al cambiar tipoDoc:', whErr?.message);
+      console.warn('[updateSupabaseInvoiceDocument] Aviso ajustando inventario al editar documento:', whErr?.message);
     }
   }
 
-  const saved = await saveSupabaseProfitInvoice(updatedDocData, { previousDoc: originalDoc });
+  const saved = await saveSupabaseProfitInvoice(updatedDocData, { previousDoc: effectiveOriginalDoc });
   if (!saved) return null;
 
   const oldId = String(originalDoc?.id || '').trim();
@@ -8264,6 +8980,72 @@ export const getSupabaseProfitSuppliers = async () => {
   }
 };
 
+export const saveSupabaseProfitSupplier = async (supplierData) => {
+  if (!supplierData) return null;
+  const provDes = String(supplierData.provDes || supplierData.prov_des || supplierData.nombre || '').trim();
+  const rawRif = String(supplierData.rif || supplierData.coProv || supplierData.co_prov || '').trim().toUpperCase();
+  const cleanCode = rawRif.replace(/[^A-Z0-9]/g, '') || `SUP${Date.now()}`;
+  const id = String(supplierData.id || cleanCode).trim();
+  const nowIso = new Date().toISOString();
+
+  const dbPayload = {
+    id,
+    coProv: cleanCode,
+    co_prov: cleanCode,
+    provDes,
+    prov_des: provDes,
+    rif: rawRif || cleanCode,
+    direccion: String(supplierData.direccion || '').trim(),
+    telefonos: String(supplierData.telefonos || supplierData.telefono || '').trim(),
+    email: String(supplierData.email || '').trim(),
+    diasCredito: Math.max(0, Number(supplierData.diasCredito ?? supplierData.dias_credito ?? 0)),
+    dias_credito: Math.max(0, Number(supplierData.diasCredito ?? supplierData.dias_credito ?? 0)),
+    limiteCredito: Math.max(0, Number(supplierData.limiteCredito ?? supplierData.limite_credito ?? 0)),
+    limite_credito: Math.max(0, Number(supplierData.limiteCredito ?? supplierData.limite_credito ?? 0)),
+    saldoUsd: Number(supplierData.saldoUsd ?? supplierData.saldo_usd ?? 0),
+    saldo_usd: Number(supplierData.saldoUsd ?? supplierData.saldo_usd ?? 0),
+    saldoBs: Number(supplierData.saldoBs ?? supplierData.saldo_bs ?? 0),
+    saldo_bs: Number(supplierData.saldoBs ?? supplierData.saldo_bs ?? 0),
+    inactivo: Boolean(supplierData.inactivo),
+    updated_at: nowIso,
+    updatedAt: nowIso
+  };
+
+  const mapped = {
+    id: dbPayload.id,
+    coProv: dbPayload.coProv,
+    provDes: dbPayload.provDes,
+    rif: dbPayload.rif,
+    direccion: dbPayload.direccion,
+    telefonos: dbPayload.telefonos,
+    email: dbPayload.email,
+    saldoBs: dbPayload.saldoBs,
+    saldoUsd: dbPayload.saldoUsd,
+    limiteCredito: dbPayload.limiteCredito,
+    diasCredito: dbPayload.diasCredito,
+    inactivo: dbPayload.inactivo
+  };
+
+  broadcastReconcileChange({
+    tableId: 'suppliers',
+    action: 'RECONCILE',
+    key: id,
+    item: mapped
+  });
+
+  if (isNetworkOnline()) {
+    const { error } = await runSupabaseQueryWithRetry(
+      () => supabase.from('profit_suppliers').upsert(dbPayload, { onConflict: 'id' }),
+      15000,
+      2
+    );
+    if (error) throw error;
+    isSupabaseAvailable = true;
+  }
+
+  return mapped;
+};
+
 export const getSupabaseProfitPurchases = async () => {
   try {
     const { data, error } = await runSupabaseQueryWithRetry(
@@ -8321,6 +9103,38 @@ export const saveSupabaseProfitPurchase = async (purchaseData) => {
     action: 'INSERT',
     broadcastTableId: 'purchases'
   });
+};
+
+export const deleteSupabaseProfitPurchase = async (purchaseId) => {
+  const cleanId = String(purchaseId || '').trim();
+  if (!cleanId) return false;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem('signum_profit_purchases_v1');
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          localStorage.setItem(
+            'signum_profit_purchases_v1',
+            JSON.stringify(list.filter(p => p && String(p.id || '').trim() !== cleanId))
+          );
+        }
+      }
+    }
+  } catch (_) {}
+  if (!isNetworkOnline() || !isSupabaseAvailable) {
+    enqueueSyncAction('profit_purchase', 'DELETE', { id: cleanId });
+    return true;
+  }
+  try {
+    const { error } = await withTimeout(supabase.from('profit_purchases').delete().eq('id', cleanId), 5000);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    markSupabaseOffline(err, 'deleteSupabaseProfitPurchase');
+    enqueueSyncAction('profit_purchase', 'DELETE', { id: cleanId });
+    return true;
+  }
 };
 
 export const CXP_DELETED_DOCS_KEY = 'signum_cxp_deleted_docs_v1';
@@ -8559,6 +9373,22 @@ const PROFIT_CXP_DB_COLUMNS = [
   'tipoDoc',
   'nro_doc',
   'nroDoc',
+  'numero_control',
+  'numeroControl',
+  'is_fiscal',
+  'isFiscal',
+  'documento_afectado',
+  'documentoAfectado',
+  'exento_iva',
+  'exentoIva',
+  'base_imponible_usd',
+  'baseImponibleUsd',
+  'base_imponible_bs',
+  'baseImponibleBs',
+  'iva_usd',
+  'ivaUsd',
+  'iva_bs',
+  'ivaBs',
   'co_prov',
   'coProv',
   'prov_nombre',
@@ -8595,7 +9425,8 @@ const PROFIT_CXP_DB_COLUMNS = [
   'historialPagos',
   'fecha_sincronizacion',
   'fechaSincronizacion',
-  'updated_at'
+  'updated_at',
+  'updatedAt'
 ];
 
 export const pushProfitAccountsPayableToSupabase = async (payable) => {
@@ -8606,9 +9437,10 @@ export const pushProfitAccountsPayableToSupabase = async (payable) => {
       dbPayload[col] = payable[col];
     }
   }
-  const { error } = await withTimeout(
-    supabase.from('profit_accounts_payable').upsert(dbPayload, { onConflict: 'id' }),
-    8000
+  const { error } = await runSupabaseQueryWithRetry(
+    () => supabase.from('profit_accounts_payable').upsert(dbPayload, { onConflict: 'id' }),
+    15000,
+    2
   );
   if (error) throw error;
   isSupabaseAvailable = true;
@@ -8704,10 +9536,12 @@ export const saveSupabaseProfitAccountsPayable = async (payableData) => {
     item: normalized
   });
 
+  let pendingServerSync = true;
   if (isNetworkOnline()) {
     try {
       await pushProfitAccountsPayableToSupabase(normalized);
       saveCxpLocalEntry(false);
+      pendingServerSync = false;
     } catch (err) {
       console.warn('[saveSupabaseProfitAccountsPayable] Encolando para sincronización posterior:', err.message);
       markSupabaseOffline(err, 'saveSupabaseProfitAccountsPayable');
@@ -8717,7 +9551,7 @@ export const saveSupabaseProfitAccountsPayable = async (payableData) => {
     enqueueSyncAction('profit_accounts_payable', 'UPDATE', normalized);
   }
 
-  return normalized;
+  return { ...normalized, _pendingServerSync: pendingServerSync };
 };
 
 export const deleteProfitAccountsPayableDirect = async (idOrKeys) => {

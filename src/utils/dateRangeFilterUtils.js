@@ -74,6 +74,17 @@ export const isDatePeriodFilterActive = (filter) => {
   return Boolean(filter.exactDate);
 };
 
+/**
+ * Verifica si una fecha es igual o posterior a una fecha de corte YYYY-MM-DD.
+ */
+export const isOnOrAfterDate = (dateInput, minYmd) => {
+  const cleanMin = String(minYmd || '').trim();
+  if (!cleanMin) return true;
+  const ymd = extractLocalYmd(dateInput);
+  if (!ymd) return false;
+  return ymd >= cleanMin;
+};
+
 export const matchesDatePeriodFilter = (dateInput, filter) => {
   if (!isDatePeriodFilterActive(filter)) return true;
   const ymd = extractLocalYmd(dateInput);

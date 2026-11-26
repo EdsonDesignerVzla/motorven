@@ -116,11 +116,73 @@ export const enqueueSyncAction = (entity, action, data) => {
   return newItem;
 };
 
+const PENDING_STORAGE_MAP = {
+  profit_invoice: { key: 'signum_cxc_custom_docs_v1', type: 'object' },
+  profit_invoices: { key: 'signum_cxc_custom_docs_v1', type: 'object' },
+  profit_accounts_payable: { key: 'signum_cxp_custom_docs_v1', type: 'object' },
+  profit_supplier_payment: { key: 'signum_cxp_payments_v1', type: 'array' },
+  profit_payment_order: { key: 'signum_payment_orders_v1', type: 'array' },
+  purchase_requisition: { key: 'signum_purchase_requisitions_v1', type: 'array' },
+  purchase_order: { key: 'signum_purchase_orders_v1', type: 'array' },
+  profit_goods_receipt_note: { key: 'signum_goods_receipt_notes_v1', type: 'array' },
+  profit_warehouse_transfer: { key: 'signum_warehouse_transfers_v1', type: 'array' },
+  profit_inventory_adjustment: { key: 'signum_inventory_adjustments_v1', type: 'array' },
+  profit_customer_return: { key: 'signum_customer_returns_v1', type: 'array' }
+};
+
+/**
+ * Limpia la bandera _pendingServerSync en localStorage para evitar que recoverPendingDocsFromStorage
+ * vuelva a re-encolar documentos ya sincronizados o descartados manualmente.
+ */
+const clearPendingServerSyncInStorage = (entity, data = null) => {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const meta = PENDING_STORAGE_MAP[entity];
+    if (!meta) return;
+    const raw = localStorage.getItem(meta.key);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    const targetId = String(data?.id || data?.factNum || data?.fact_num || data?.numeroDoc || '').trim();
+    const targetNum = String(data?.factNum || data?.fact_num || data?.numeroDoc || '').trim();
+
+    if (meta.type === 'array' && Array.isArray(parsed)) {
+      let changed = false;
+      const next = parsed.map(doc => {
+        if (!doc || !doc._pendingServerSync) return doc;
+        const dId = String(doc.id || '').trim();
+        if (!data || (targetId && dId === targetId)) {
+          changed = true;
+          return { ...doc, _pendingServerSync: false };
+        }
+        return doc;
+      });
+      if (changed) localStorage.setItem(meta.key, JSON.stringify(next));
+    } else if (meta.type === 'object' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      let changed = false;
+      Object.keys(parsed).forEach(k => {
+        const doc = parsed[k];
+        if (!doc || !doc._pendingServerSync) return;
+        const dId = String(doc.id || k || '').trim();
+        const dNum = String(doc.factNum || doc.fact_num || doc.numeroDoc || '').trim();
+        if (!data || (targetId && (k === targetId || dId === targetId)) || (targetNum && dNum === targetNum)) {
+          parsed[k] = { ...doc, _pendingServerSync: false };
+          changed = true;
+        }
+      });
+      if (changed) localStorage.setItem(meta.key, JSON.stringify(parsed));
+    }
+  } catch (_) {}
+};
+
 /**
  * Elimina un elemento de la cola tras sincronizarse con éxito
  */
-export const removeSyncAction = (actionId) => {
+export const removeSyncAction = (actionId, options = {}) => {
   const queue = getSyncQueue();
+  const target = queue.find(item => item.id === actionId);
+  if (target && options.clearPendingFlag) {
+    clearPendingServerSyncInStorage(target.entity, target.data);
+  }
   const updated = queue.filter(item => item.id !== actionId);
   saveSyncQueue(updated);
 };
@@ -135,7 +197,12 @@ export const getPendingSyncCount = () => {
 /**
  * Limpia toda la cola de sincronización (en caso de reset forzado)
  */
-export const clearSyncQueue = () => {
+export const clearSyncQueue = (options = {}) => {
+  if (options.clearPendingFlags) {
+    Object.keys(PENDING_STORAGE_MAP).forEach(entity => {
+      clearPendingServerSyncInStorage(entity, null);
+    });
+  }
   saveSyncQueue([]);
 };
 
@@ -407,7 +474,16 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
           break;
 
         case 'purchase':
-          if (handlers.pushPurchaseToSupabase) {
+          if (item.action === 'DELETE') {
+            if (handlers.deletePurchaseFromSupabaseDirect) {
+              await handlers.deletePurchaseFromSupabaseDirect(item.data?.id);
+              syncSuccess = true;
+            } else if (handlers.supabase?.from && item.data?.id) {
+              const { error } = await handlers.supabase.from('purchases').delete().eq('id', item.data.id);
+              if (error) throw error;
+              syncSuccess = true;
+            }
+          } else if (handlers.pushPurchaseToSupabase) {
             await handlers.pushPurchaseToSupabase(item.data);
             syncSuccess = true;
           }
@@ -771,6 +847,7 @@ export const flushSyncQueue = async (serviceHandlers = null) => {
       }
 
       if (syncSuccess) {
+        clearPendingServerSyncInStorage(item.entity, item.data);
         removeSyncAction(item.id);
         processedCount++;
       }

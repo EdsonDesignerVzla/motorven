@@ -159,13 +159,18 @@ assert.equal(getClientAgreedCreditInfo({ diasCredito: 0, condicionPago: 'CREDITO
 assert.equal(getClientAgreedCreditInfo({ diasCredito: 0, condicionPago: 'CONTADO' }).termKey, 'CONTADO');
 console.log('  ✓ 3. getClientAgreedCreditInfo resuelve correctamente los plazos acordados.');
 
-// 4. RBAC Módulo 3: canUserGrantCreditOverride, canApproveClients y isMasterOrGerencia
+// 4. RBAC Módulo 3: canUserGrantCreditOverride (acceso a 'pedidos'), canApproveClients y isMasterOrGerencia
 assert.equal(canUserGrantCreditOverride({ rol: 'GERENCIA', username: 'gerencia' }), true);
 assert.equal(canUserGrantCreditOverride({ rol: 'ADMINISTRADOR MASTER', username: 'edson designer' }), true);
 assert.equal(canUserGrantCreditOverride({ rol: 'COBRANZA', username: 'rosibelcxc' }), true);
-assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR', username: 'cbecerra' }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR', username: 'cbecerra' }), true);
+assert.equal(canUserGrantCreditOverride({ rol: 'CAJA', username: 'caja' }), true);
+assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR', username: 'cbecerra', modulos: ['ventas', 'cxc'] }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'COMPRAS', username: 'compras1', modulos: ['compras', 'pedidos'] }), true);
 assert.equal(canUserGrantCreditOverride({ rol: 'CHOFER', username: 'chofer1' }), false);
-assert.equal(canUserGrantCreditOverride({ rol: 'CAJA', username: 'caja' }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'COMPRAS', username: 'compras1' }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR', username: 'cbecerra', modulosMovil: ['dashboard', 'cxc'] }, { mobile: true }), false);
+assert.equal(canUserGrantCreditOverride({ rol: 'VENDEDOR', username: 'cbecerra', modulosMovil: ['dashboard', 'pedidos'] }, { mobile: true }), true);
 
 assert.equal(canApproveClients({ rol: 'CAJA', username: 'caja' }), true);
 assert.equal(canApproveClients({ rol: 'COBRANZA', username: 'rosibelcxc' }), true);

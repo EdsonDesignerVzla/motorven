@@ -11,6 +11,7 @@ import {
   extractLocalYmd,
   normalizeDateRange,
   isDatePeriodFilterActive,
+  isOnOrAfterDate,
   matchesDatePeriodFilter,
   formatDatePeriodLabel
 } from '../utils/dateRangeFilterUtils.js';
@@ -123,6 +124,12 @@ console.log('--- INICIANDO PRUEBAS DE FECHA/HORA Y FILTROS DE FACTURAS ---');
   const emptyRange = { mode: 'RANGE', exactDate: '', fromDate: '', toDate: '' };
   assert.equal(isDatePeriodFilterActive(emptyRange), false);
   assert.equal(matchesDatePeriodFilter('2026-01-01', emptyRange), true);
+
+  assert.equal(isOnOrAfterDate('2026-11-09', '2026-11-10'), false, 'Fecha anterior al 10/11 queda excluida');
+  assert.equal(isOnOrAfterDate('2026-11-10', '2026-11-10'), true, 'Fecha exacta 10/11 queda incluida');
+  assert.equal(isOnOrAfterDate('2026-11-21T00:00:00Z', '2026-11-10'), true, 'Fecha posterior en UTC medianoche queda incluida');
+  assert.equal(isOnOrAfterDate('28/9/2026', '2026-11-10'), false, 'Fecha dd/mm/yyyy de septiembre queda excluida');
+  assert.equal(isOnOrAfterDate('', '2026-11-10'), false, 'Fecha vacía queda excluida cuando hay corte');
 
   console.log('  ✓ dateRangeFilterUtils (Fecha Exacta y Por Período) verificado al 100%');
 }

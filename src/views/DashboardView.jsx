@@ -13,14 +13,18 @@ import {
   Eye,
   Receipt,
   Wallet,
-  Building2
+  Building2,
+  RotateCcw,
+  Sparkles
 } from 'lucide-react';
 import {
   formatUsd,
   formatBs,
   resolveProductUnit,
-  resolveProductLitersPerUnit
+  resolveProductLitersPerUnit,
+  getProductWarehouseStocks
 } from '../services/formatService';
+import { getProductCost } from '../services/pricingService';
 import ExecutiveSummaryModal from '../components/ExecutiveSummaryModal';
 import { DEFAULT_PROFIT_SELLERS } from '../data/mockData';
 import { generateDashboardPDF } from '../services/pdfReportService';
@@ -29,9 +33,19 @@ import { resolveExchangeRates } from '../utils/treasuryAccountUtils';
 import {
   toDateKey,
   summarizeCollectionsWindow,
-  summarizeKeystonePayables
+  summarizeKeystonePayables,
+  summarizeReceivablesAging
 } from '../services/dashboardMetricsService';
 import { isCxcInvoiceCancelled, isCreditOrDebitNoteDoc } from '../utils/cxcUtils';
+import { buildSalesDepartmentSellers } from '../services/commissionService';
+import {
+  TEMP_COLLECTIONS_ADJUSTMENT_ENABLED,
+  canManageTempCollectionsAdjustment,
+  readTempCollectionsLocalReverted,
+  writeTempCollectionsLocalReverted,
+  subscribeTempCollectionsToggle,
+  applyTempCollectionsAdjustment
+} from '../config/tempCollectionsAdjustment';
 
 function isExcludedSaleDocType(doc) {
   const tipo = String(doc?.tipoDoc || doc?.tipo_doc || '').trim().toUpperCase();
@@ -96,9 +110,11 @@ export default function DashboardView({
   sales = [],
   orders = [],
   profitInvoices = [],
+  profitReturns = [],
   profitCollections = [],
   profitAccountsPayable = [],
   profitSellers = [],
+  usersList = [],
   config = {},
   currentUser,
   onNavigate,
@@ -110,6 +126,21 @@ export default function DashboardView({
 
   // Pestaña activa del Resumen General: 'ALL' | 'facturacion' | 'inventario' | 'cobranzas' | 'cxp-keystone'
   const [activeBlock, setActiveBlock] = useState('ALL');
+
+  const canToggleTempCollections = useMemo(
+    () => canManageTempCollectionsAdjustment(currentUser),
+    [currentUser]
+  );
+  const [tempCollectionsReverted, setTempCollectionsReverted] = useState(() =>
+    readTempCollectionsLocalReverted()
+  );
+  useEffect(() => subscribeTempCollectionsToggle(setTempCollectionsReverted), []);
+
+  const handleToggleTempCollections = () => {
+    const next = !tempCollectionsReverted;
+    writeTempCollectionsLocalReverted(next);
+    setTempCollectionsReverted(next);
+  };
 
   // Fecha local de hoy (refresca cada minuto para cubrir el cambio de día con la pantalla abierta)
   const [todayKey, setTodayKey] = useState(() => toDateKey(new Date()));
@@ -143,6 +174,120 @@ export default function DashboardView({
   const [ventasMesFilter, setVentasMesFilter] = useState(currentMonthStr);
   const [cobranzasMesFilter, setCobranzasMesFilter] = useState(currentMonthStr);
 
+  // Filtro global de Fecha puntual (Día) y Período para los 4 Bloques
+  const [selectedDateKey, setSelectedDateKey] = useState(() => toDateKey(new Date()));
+  const [periodPreset, setPeriodPreset] = useState('mes'); // 'hoy' | 'semana' | 'mes' | 'mes_anterior' | 'personalizado'
+  const [customFrom, setCustomFrom] = useState(() => `${toDateKey(new Date()).substring(0, 7)}-01`);
+  const [customTo, setCustomTo] = useState(() => toDateKey(new Date()));
+
+  const selectedDateLabel = useMemo(() => {
+    const [y, m, d] = (selectedDateKey || todayKey).split('-').map(Number);
+    if (!y) return '';
+    return new Date(y, m - 1, d).toLocaleDateString('es-VE', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric'
+    });
+  }, [selectedDateKey, todayKey]);
+
+  const formatShortDate = (key) => {
+    if (!key || key.length < 10) return key || '';
+    const [y, m, d] = key.split('-');
+    return `${d}/${m}/${y}`;
+  };
+
+  const selectedDateShort = useMemo(() => formatShortDate(selectedDateKey), [selectedDateKey]);
+
+  const periodRange = useMemo(() => {
+    const refKey = selectedDateKey || todayKey;
+    const [ry, rm, rd] = refKey.split('-').map(Number);
+    const refDate = new Date(ry, (rm || 1) - 1, rd || 1);
+
+    if (periodPreset === 'hoy') {
+      return {
+        from: refKey,
+        to: refKey,
+        isCustomRange: true,
+        label: `Día ${formatShortDate(refKey)}`
+      };
+    }
+
+    if (periodPreset === 'semana') {
+      const dow = (refDate.getDay() + 6) % 7; // Lunes = 0
+      const monday = new Date(refDate);
+      monday.setDate(refDate.getDate() - dow);
+      const from = toDateKey(monday);
+      return {
+        from,
+        to: refKey,
+        isCustomRange: true,
+        label: `${formatShortDate(from)} – ${formatShortDate(refKey)}`
+      };
+    }
+
+    if (periodPreset === 'mes_anterior') {
+      const [ty, tm] = todayKey.split('-').map(Number);
+      const prevEnd = new Date(ty, (tm || 1) - 1, 0);
+      const prevStart = new Date(prevEnd.getFullYear(), prevEnd.getMonth(), 1);
+      const from = toDateKey(prevStart);
+      const to = toDateKey(prevEnd);
+      return {
+        from,
+        to,
+        isCustomRange: true,
+        label: prevStart.toLocaleDateString('es-VE', { month: 'long', year: 'numeric' })
+      };
+    }
+
+    if (periodPreset === 'personalizado') {
+      const safeFrom = customFrom && customTo && customFrom <= customTo ? customFrom : (customFrom || refKey);
+      const safeTo = customFrom && customTo && customFrom <= customTo ? customTo : (customTo || safeFrom);
+      return {
+        from: safeFrom,
+        to: safeTo,
+        isCustomRange: true,
+        label: `${formatShortDate(safeFrom)} – ${formatShortDate(safeTo)}`
+      };
+    }
+
+    // Default: 'mes' (respeta ventasMesFilter / cobranzasMesFilter)
+    const monthIdx = Number(ventasMesFilter);
+    const lastDay = new Date(Number(anioActivo), monthIdx, 0).getDate();
+    const prefix = `${anioActivo}-${ventasMesFilter}`;
+    const from = `${prefix}-01`;
+    const to = prefix === todayKey.substring(0, 7) ? todayKey : `${prefix}-${String(lastDay).padStart(2, '0')}`;
+    const mLabel = MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || prefix;
+    return {
+      from,
+      to,
+      isCustomRange: false,
+      label: mLabel
+    };
+  }, [periodPreset, selectedDateKey, todayKey, customFrom, customTo, ventasMesFilter, anioActivo, MONTHS_LIST]);
+
+  const handleSelectPeriodPreset = (preset) => {
+    setPeriodPreset(preset);
+    if (preset === 'mes') {
+      const m = (selectedDateKey || todayKey).substring(5, 7);
+      setVentasMesFilter(m);
+      setCobranzasMesFilter(m);
+    } else if (preset === 'personalizado' && (!customFrom || !customTo)) {
+      setCustomFrom(`${(selectedDateKey || todayKey).substring(0, 7)}-01`);
+      setCustomTo(selectedDateKey || todayKey);
+    }
+  };
+
+  const handleResetTemporalFilters = () => {
+    setSelectedDateKey(todayKey);
+    setPeriodPreset('mes');
+    const curM = todayKey.substring(5, 7);
+    setVentasMesFilter(curM);
+    setCobranzasMesFilter(curM);
+  };
+
+  const isTemporalFiltered = selectedDateKey !== todayKey || periodPreset !== 'mes' || ventasMesFilter !== currentMonthStr || cobranzasMesFilter !== currentMonthStr;
+
   const todayLabel = useMemo(() => {
     const [y, m, d] = todayKey.split('-').map(Number);
     if (!y) return '';
@@ -154,35 +299,23 @@ export default function DashboardView({
     });
   }, [todayKey]);
 
-  // Lista efectiva de vendedores para meta mensual real de litros
+  // Lista efectiva de vendedores para meta mensual real de litros:
+  // exactamente los mismos asesores del módulo Fuerza de Ventas (usuarios del departamento Ventas
+  // enriquecidos con su metadata comercial de profit_sellers), para que la meta coincida en ambos módulos.
   const effectiveSellersList = useMemo(() => {
-    if (Array.isArray(profitSellers) && profitSellers.length > 0) {
-      const byName = new Map();
-      profitSellers.forEach(s => {
-        const name = (s.venDes || s.ven_des || s.nombre || '').trim();
-        if (!name) return;
-        const key = name.toLowerCase();
-        const code = (s.coVen || s.co_ven || s.id || '').trim();
-        if (!byName.has(key) || (code.length <= 4 && (byName.get(key).coVen?.length || 0) > 4)) {
-          byName.set(key, {
-            ...s,
-            coVen: code,
-            venDes: name,
-            metaLitrosMes: Number(s.metaLitrosMes ?? s.meta_litros_mes ?? 3000)
-          });
-        }
-      });
-      return Array.from(byName.values());
-    }
-    return DEFAULT_PROFIT_SELLERS;
-  }, [profitSellers]);
+    const baseProfit = (Array.isArray(profitSellers) && profitSellers.length > 0) ? profitSellers : DEFAULT_PROFIT_SELLERS;
+    return buildSalesDepartmentSellers(usersList, baseProfit);
+  }, [profitSellers, usersList]);
 
   const metaMensualBase = useMemo(() => {
-    const sumMensual = effectiveSellersList.reduce((acc, s) => {
-      const val = Number(s?.metaLitrosMes ?? s?.meta_litros_mes);
-      return acc + (isNaN(val) ? 0 : val);
-    }, 0);
-    return sumMensual > 0 ? sumMensual : (Number(config?.metaComercialLitros) || 20000.00);
+    if (effectiveSellersList.length > 0) {
+      // Suma exacta de las metas individuales (cada meta es >= 0)
+      return effectiveSellersList.reduce((acc, s) => {
+        const val = Number(s?.metaLitrosMes ?? s?.meta_litros_mes);
+        return acc + (Number.isFinite(val) && val > 0 ? val : 0);
+      }, 0);
+    }
+    return Number(config?.metaComercialLitros) || 20000.00;
   }, [effectiveSellersList, config?.metaComercialLitros]);
 
   // =========================================================================
@@ -308,8 +441,32 @@ export default function DashboardView({
       });
     });
 
+    // Descontar devoluciones de clientes (no anuladas) del volumen de litros y ventas
+    (profitReturns || []).forEach(ret => {
+      if (!ret || ret.anulada || ret.anulado || ['ANULADA', 'ANULADO'].includes(String(ret.status || ret.estado || '').toUpperCase())) return;
+      const dateKey = toDateKey(ret.fecEmis || ret.fec_emis || ret.fecha);
+      if (!dateKey) return;
+      const tasaDoc = Number(ret.tasa) > 1 ? Number(ret.tasa) : tasaBcv;
+      const rawUsd = Math.abs(Number(ret.totNeto ?? ret.tot_neto ?? ret.totalUsd ?? 0) || 0);
+      const headerLitros = Math.abs(Number(ret.litrosTotales ?? ret.litros_totales ?? 0) || 0);
+      const rawItems = Array.isArray(ret.renglones) ? ret.renglones : (Array.isArray(ret.items) ? ret.items : []);
+      const items = normalizeDocItems(rawItems, tasaDoc, headerLitros);
+      const itemsLitros = Number(items.reduce((acc, it) => acc + it.litros, 0).toFixed(2));
+      const retLitros = headerLitros > 0 ? headerLitros : itemsLitros;
+      if (rawUsd <= 0 && retLitros <= 0) return;
+      docs.push({
+        dateKey,
+        usd: -rawUsd,
+        bs: -(rawUsd * tasaDoc),
+        litros: -retLitros,
+        cliente: ret.cliDes || ret.clienteNombre || '',
+        items: [],
+        isReturn: true
+      });
+    });
+
     return docs;
-  }, [profitInvoices, sales, products, tasaBcv]);
+  }, [profitInvoices, sales, profitReturns, products, tasaBcv]);
 
   const resumirVentas = (docs) => {
     const skuSet = new Set();
@@ -317,12 +474,14 @@ export default function DashboardView({
     let usd = 0;
     let bs = 0;
     let litros = 0;
+    let docCount = 0;
 
     docs.forEach(d => {
       usd += d.usd;
       bs += d.bs;
       litros += d.litros;
-      if (d.cliente) clientes.add(d.cliente);
+      if (!d.isReturn) docCount += 1;
+      if (d.cliente && !d.isReturn) clientes.add(d.cliente);
       d.items.forEach(it => {
         if (!it.esServicio && it.sku) skuSet.add(it.sku);
       });
@@ -333,15 +492,16 @@ export default function DashboardView({
       bs: parseFloat(bs.toFixed(2)),
       litros: parseFloat(litros.toFixed(2)),
       cajas: parseFloat((litros / 11.35).toFixed(1)),
-      documentos: docs.length,
+      documentos: docCount,
       clientes: clientes.size,
       skus: skuSet.size
     };
   };
 
   const ventasDelDia = useMemo(() => {
-    const hoy = resumirVentas(ventasDocsNormalizados.filter(d => d.dateKey === todayKey));
-    const [ty, tm, td] = todayKey.split('-').map(Number);
+    const targetDay = selectedDateKey || todayKey;
+    const hoy = resumirVentas(ventasDocsNormalizados.filter(d => d.dateKey === targetDay));
+    const [ty, tm, td] = targetDay.split('-').map(Number);
     const ayerDate = new Date(ty, (tm || 1) - 1, (td || 1) - 1);
     const ayerKey = toDateKey(ayerDate);
     const ayer = ventasDocsNormalizados
@@ -353,31 +513,46 @@ export default function DashboardView({
       ayerUsd: parseFloat(ayer.usd.toFixed(2)),
       ayerLitros: parseFloat(ayer.litros.toFixed(2))
     };
-  }, [ventasDocsNormalizados, todayKey]);
+  }, [ventasDocsNormalizados, selectedDateKey, todayKey]);
 
   const ventasAcumuladoMes = useMemo(() => {
+    const isCustomRange = periodRange.isCustomRange;
     const prefix = `${anioActivo}-${ventasMesFilter}`;
     const resumen = resumirVentas(
-      ventasDocsNormalizados.filter(d => d.dateKey.startsWith(prefix) && d.dateKey <= todayKey)
+      ventasDocsNormalizados.filter(d =>
+        isCustomRange
+          ? d.dateKey >= periodRange.from && d.dateKey <= periodRange.to
+          : d.dateKey.startsWith(prefix) && d.dateKey <= todayKey
+      )
     );
     const monthIdx = Number(ventasMesFilter);
     const diasDelMes = new Date(Number(anioActivo), monthIdx, 0).getDate();
     const currentPrefix = todayKey.substring(0, 7);
     let diasTranscurridos = 0;
-    if (prefix === currentPrefix) diasTranscurridos = Number(todayKey.substring(8, 10));
-    else if (prefix < currentPrefix) diasTranscurridos = diasDelMes;
+    if (isCustomRange) {
+      const [fy, fm, fd] = periodRange.from.split('-').map(Number);
+      const [ey, em, ed] = periodRange.to.split('-').map(Number);
+      const d1 = new Date(fy, (fm || 1) - 1, fd || 1);
+      const d2 = new Date(ey, (em || 1) - 1, ed || 1);
+      diasTranscurridos = Math.max(1, Math.round((d2 - d1) / 86400000) + 1);
+    } else if (prefix === currentPrefix) {
+      diasTranscurridos = Number(todayKey.substring(8, 10));
+    } else if (prefix < currentPrefix) {
+      diasTranscurridos = diasDelMes;
+    }
 
-    const esMesEnCurso = prefix === currentPrefix;
+    const esMesEnCurso = !isCustomRange && prefix === currentPrefix;
     const promedioDiarioUsd = diasTranscurridos > 0 ? resumen.usd / diasTranscurridos : 0;
     const promedioDiarioLitros = diasTranscurridos > 0 ? resumen.litros / diasTranscurridos : 0;
     const meta = Number(metaMensualBase) || 0;
 
     return {
       ...resumen,
-      diasDelMes,
+      diasDelMes: isCustomRange ? diasTranscurridos : diasDelMes,
       diasTranscurridos,
       esMesEnCurso,
-      esFuturo: prefix > currentPrefix,
+      esCustomRange: isCustomRange,
+      esFuturo: !isCustomRange && prefix > currentPrefix,
       promedioDiarioUsd: parseFloat(promedioDiarioUsd.toFixed(2)),
       promedioDiarioLitros: parseFloat(promedioDiarioLitros.toFixed(1)),
       proyeccionLitros: esMesEnCurso ? parseFloat((promedioDiarioLitros * diasDelMes).toFixed(1)) : resumen.litros,
@@ -385,7 +560,7 @@ export default function DashboardView({
       metaLitros: meta,
       pctMeta: meta > 0 ? parseFloat(((resumen.litros / meta) * 100).toFixed(1)) : 0
     };
-  }, [ventasDocsNormalizados, ventasMesFilter, anioActivo, todayKey, metaMensualBase]);
+  }, [ventasDocsNormalizados, ventasMesFilter, anioActivo, todayKey, metaMensualBase, periodRange]);
 
   // =========================================================================
   // 2. INVENTARIO — STOCK EN ALMACÉN (LITROS + DESGLOSE) & VALORIZACIÓN
@@ -405,8 +580,18 @@ export default function DashboardView({
         breakdown[unit] += cant;
       }
 
-      const costo = Number(p.costoUsd ?? p.costo_usd ?? p.costo ?? p.costo_unitario ?? 0) || 0;
-      valUsd += cant * costo;
+      const hasWhFields =
+        p.stockAlmacen01 !== undefined ||
+        p.stock_almacen_01 !== undefined ||
+        p.stockAlmacen02 !== undefined ||
+        p.stock_almacen_02 !== undefined;
+      if (hasWhFields) {
+        const stocks = getProductWarehouseStocks(p);
+        valUsd += stocks.stock01 * getProductCost(p, '01') + stocks.stock02 * getProductCost(p, '02');
+      } else {
+        const costo = getProductCost(p) || Number(p.costo_unitario ?? 0) || 0;
+        valUsd += cant * costo;
+      }
     });
 
     const items = [
@@ -426,33 +611,70 @@ export default function DashboardView({
   }, [products]);
 
   // =========================================================================
-  // 3. COBRANZAS — COBRANZA DEL DÍA & ACUMULADA DEL MES (DATOS REALES)
+  // 3. COBRANZAS — COBRANZA DEL DÍA & ACUMULADA DEL MES / PERÍODO
   // =========================================================================
   const cobranzasMesPrefix = `${anioActivo}-${cobranzasMesFilter}`;
+  const effectiveDayKey = selectedDateKey || todayKey;
 
-  const { hoy: cobranzaDelDia, mes: cobranzaAcumuladaMes } = useMemo(
+  const baseCollectionsWindow = useMemo(
     () =>
       summarizeCollectionsWindow({
         profitCollections,
         tasaBcv,
-        todayKey,
-        monthPrefix: cobranzasMesPrefix
+        todayKey: effectiveDayKey,
+        monthPrefix: cobranzasMesPrefix,
+        periodFrom: periodRange.isCustomRange ? periodRange.from : '',
+        periodTo: periodRange.isCustomRange ? periodRange.to : ''
       }),
-    [profitCollections, tasaBcv, todayKey, cobranzasMesPrefix]
+    [profitCollections, tasaBcv, effectiveDayKey, cobranzasMesPrefix, periodRange]
   );
 
-  // Facturado del mismo mes seleccionado en Cobranzas para calcular % recaudado vs. facturado
+  const { hoy: cobranzaDelDia, mes: cobranzaAcumuladaMes } = useMemo(
+    () =>
+      applyTempCollectionsAdjustment({
+        summary: baseCollectionsWindow,
+        todayKey: effectiveDayKey,
+        monthPrefix: cobranzasMesPrefix,
+        tasaBcv,
+        localReverted: canToggleTempCollections && tempCollectionsReverted
+      }),
+    [
+      baseCollectionsWindow,
+      effectiveDayKey,
+      cobranzasMesPrefix,
+      tasaBcv,
+      canToggleTempCollections,
+      tempCollectionsReverted
+    ]
+  );
+
+  // Facturado del mismo mes/período seleccionado en Cobranzas para calcular % recaudado vs. facturado
   const facturadoMesCobranzaUsd = useMemo(() => {
     const sum = ventasDocsNormalizados
-      .filter(d => d.dateKey.startsWith(cobranzasMesPrefix) && d.dateKey <= todayKey)
+      .filter(d =>
+        periodRange.isCustomRange
+          ? d.dateKey >= periodRange.from && d.dateKey <= periodRange.to
+          : d.dateKey.startsWith(cobranzasMesPrefix) && d.dateKey <= todayKey
+      )
       .reduce((acc, d) => acc + d.usd, 0);
     return parseFloat(sum.toFixed(2));
-  }, [ventasDocsNormalizados, cobranzasMesPrefix, todayKey]);
+  }, [ventasDocsNormalizados, cobranzasMesPrefix, todayKey, periodRange]);
 
   const cobranzaVsFacturadoPct = useMemo(() => {
     if (facturadoMesCobranzaUsd <= 0) return cobranzaAcumuladaMes.usd > 0 ? 100 : 0;
     return parseFloat(((cobranzaAcumuladaMes.usd / facturadoMesCobranzaUsd) * 100).toFixed(1));
   }, [cobranzaAcumuladaMes.usd, facturadoMesCobranzaUsd]);
+
+  const carteraCxcAging = useMemo(
+    () =>
+      summarizeReceivablesAging({
+        profitInvoices,
+        sales,
+        tasaBcv,
+        todayKey: effectiveDayKey
+      }),
+    [profitInvoices, sales, tasaBcv, effectiveDayKey]
+  );
 
   // =========================================================================
   // 4. CUENTAS POR PAGAR KEYSTONE — SUMATORIA DEL SALDO ACTUAL PENDIENTE
@@ -462,14 +684,20 @@ export default function DashboardView({
       summarizeKeystonePayables({
         profitAccountsPayable,
         tasaKeystone,
-        todayKey
+        todayKey: effectiveDayKey,
+        periodFrom: periodRange.from,
+        periodTo: periodRange.to
       }),
-    [profitAccountsPayable, tasaKeystone, todayKey]
+    [profitAccountsPayable, tasaKeystone, effectiveDayKey, periodRange]
   );
 
   // Payload consolidado para Vista Previa / PDF si el gerente desea imprimir
-  const ventasMesLabel = MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || ventasMesFilter;
-  const cobranzasMesLabel = MONTHS_LIST.find(m => m.id === cobranzasMesFilter)?.label || cobranzasMesFilter;
+  const ventasMesLabel = periodRange.isCustomRange
+    ? periodRange.label
+    : (MONTHS_LIST.find(m => m.id === ventasMesFilter)?.label || ventasMesFilter);
+  const cobranzasMesLabel = periodRange.isCustomRange
+    ? periodRange.label
+    : (MONTHS_LIST.find(m => m.id === cobranzasMesFilter)?.label || cobranzasMesFilter);
 
   const semMeta = getSemaforoMeta(ventasAcumuladoMes.pctMeta);
 
@@ -542,7 +770,9 @@ export default function DashboardView({
 
   return (
     <div className="rg-container">
-      {/* Toast Feedback de Sincronización */}
+      {/* CABECERA FIJA: TOAST, BARRA EJECUTIVA, PESTAÑAS Y FILTRO TEMPORAL */}
+      <div className="rg-sticky-header">
+        {/* Toast Feedback de Sincronización */}
       {syncFeedback && (
         <div
           style={{
@@ -581,6 +811,32 @@ export default function DashboardView({
         </div>
 
         <div className="rg-actions-row">
+          {typeof onNavigate === 'function' && (
+            <button
+              type="button"
+              onClick={() => onNavigate('predictibilidad')}
+              title="Abrir Módulo SIGNUM FORESIGHT — Predictibilidad & Alertas Tempranas"
+              style={{
+                padding: '7px 14px',
+                borderRadius: '999px',
+                fontSize: '0.78rem',
+                fontWeight: 800,
+                fontFamily: 'var(--font-tech)',
+                background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
+                color: '#ffffff',
+                border: '1px solid rgba(139, 92, 246, 0.5)',
+                boxShadow: '0 4px 12px rgba(124, 58, 237, 0.25)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <Sparkles size={14} style={{ flexShrink: 0 }} />
+              <span>Predictibilidad & Alertas</span>
+            </button>
+          )}
+
           {typeof onSyncProfit === 'function' && (
             <button
               type="button"
@@ -659,6 +915,169 @@ export default function DashboardView({
         </div>
       </div>
 
+      {/* BARRA DE FILTRO TEMPORAL UNIFICADA (FECHA PUNTUAL & PERÍODO PARA LOS 4 BLOQUES) */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.65rem 1rem',
+          padding: '0.65rem 0.95rem',
+          borderRadius: '14px',
+          background: 'var(--bg-card-glass)',
+          border: '1px solid var(--border-glass)',
+          backdropFilter: 'blur(12px)'
+        }}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              fontSize: '0.73rem',
+              fontWeight: 700,
+              fontFamily: 'var(--font-tech)',
+              color: 'var(--text-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              marginRight: '2px'
+            }}
+          >
+            <Calendar size={13} /> Período:
+          </span>
+
+          {[
+            { id: 'hoy', label: 'Hoy' },
+            { id: 'semana', label: 'Esta semana' },
+            { id: 'mes', label: 'Mes' },
+            { id: 'mes_anterior', label: 'Mes anterior' },
+            { id: 'personalizado', label: 'Rango' }
+          ].map(p => {
+            const active = periodPreset === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => handleSelectPeriodPreset(p.id)}
+                style={{
+                  padding: '4px 11px',
+                  borderRadius: '999px',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: active ? '1px solid transparent' : '1px solid var(--border-glass)',
+                  background: active
+                    ? 'linear-gradient(135deg, var(--motorven-navy) 0%, #0284c7 100%)'
+                    : 'var(--surface-input)',
+                  color: active ? '#ffffff' : 'var(--text-heading)',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem' }}>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.74rem',
+              fontWeight: 600,
+              color: 'var(--text-muted)'
+            }}
+          >
+            <span>Fecha (Día):</span>
+            <input
+              type="date"
+              value={selectedDateKey}
+              onChange={(e) => {
+                if (e.target.value) setSelectedDateKey(e.target.value);
+              }}
+              aria-label="Fecha puntual para los bloques del día"
+              style={{
+                padding: '4px 8px',
+                borderRadius: '8px',
+                border: '1px solid var(--border-glass)',
+                background: 'var(--surface-input)',
+                color: 'var(--text-heading)',
+                fontSize: '0.76rem',
+                fontFamily: 'var(--font-code)'
+              }}
+            />
+          </label>
+
+          {periodPreset === 'personalizado' && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                aria-label="Fecha desde del período"
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-glass)',
+                  background: 'var(--surface-input)',
+                  color: 'var(--text-heading)',
+                  fontSize: '0.76rem',
+                  fontFamily: 'var(--font-code)'
+                }}
+              />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>→</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                aria-label="Fecha hasta del período"
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-glass)',
+                  background: 'var(--surface-input)',
+                  color: 'var(--text-heading)',
+                  fontSize: '0.76rem',
+                  fontFamily: 'var(--font-code)'
+                }}
+              />
+            </div>
+          )}
+
+          {isTemporalFiltered && (
+            <button
+              type="button"
+              onClick={handleResetTemporalFilters}
+              title="Volver a Hoy y Mes actual"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                fontSize: '0.73rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: '1px solid var(--border-glass)',
+                background: 'var(--surface-input)',
+                color: 'var(--text-heading)'
+              }}
+            >
+              <RotateCcw size={12} />
+              <span>Hoy</span>
+            </button>
+          )}
+        </div>
+      </div>
+      </div>
+
+      {/* CONTENEDOR CON SCROLL PARA LOS 4 BLOQUES */}
+      <div className="rg-blocks-scroll">
+
       {/* ========================================================================= */}
       {/* 1. FACTURACIÓN (VENTAS DEL DÍA & ACUMULADO MENSUAL)                       */}
       {/* ========================================================================= */}
@@ -697,7 +1116,7 @@ export default function DashboardView({
                   <Clock size={18} color="var(--semaforo-verde)" />
                   VENTAS DEL DÍA
                 </span>
-                <span className="rg-date-pill">{todayLabel}</span>
+                <span className="rg-date-pill">{selectedDateLabel}</span>
               </div>
 
               <div className="rg-metrics-split">
@@ -734,24 +1153,28 @@ export default function DashboardView({
               </div>
             </div>
 
-            {/* Tarjeta 1B: Acumulado Mensual */}
+            {/* Tarjeta 1B: Acumulado Mensual / Período */}
             <div className="rg-card accent-cyan">
               <div className="rg-card-head">
                 <span className="rg-card-title">
                   <Calendar size={18} color="var(--neon-cyan)" />
-                  ACUMULADO MENSUAL
+                  {periodRange.isCustomRange ? 'ACUMULADO DEL PERÍODO' : 'ACUMULADO MENSUAL'}
                 </span>
-                <select
-                  value={ventasMesFilter}
-                  onChange={(e) => setVentasMesFilter(e.target.value)}
-                  className="rg-month-select"
-                  title="Seleccione el mes de facturación"
-                  aria-label="Mes de facturación acumulado"
-                >
-                  {MONTHS_LIST.map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </select>
+                {periodRange.isCustomRange ? (
+                  <span className="rg-date-pill">{periodRange.label}</span>
+                ) : (
+                  <select
+                    value={ventasMesFilter}
+                    onChange={(e) => setVentasMesFilter(e.target.value)}
+                    className="rg-month-select"
+                    title="Seleccione el mes de facturación"
+                    aria-label="Mes de facturación acumulado"
+                  >
+                    {MONTHS_LIST.map(m => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div className="rg-metrics-split">
@@ -796,9 +1219,11 @@ export default function DashboardView({
                   <span>
                     {ventasAcumuladoMes.esFuturo
                       ? 'Mes aún no iniciado'
-                      : ventasAcumuladoMes.esMesEnCurso
-                        ? `Día ${ventasAcumuladoMes.diasTranscurridos}/${ventasAcumuladoMes.diasDelMes} • Proyección: ${ventasAcumuladoMes.proyeccionLitros.toLocaleString('es-VE')} L`
-                        : `Mes cerrado • ${ventasAcumuladoMes.documentos} documentos`}
+                      : ventasAcumuladoMes.esCustomRange
+                        ? `${ventasAcumuladoMes.diasTranscurridos} días • ${ventasAcumuladoMes.documentos} documentos`
+                        : ventasAcumuladoMes.esMesEnCurso
+                          ? `Día ${ventasAcumuladoMes.diasTranscurridos}/${ventasAcumuladoMes.diasDelMes} • Proyección: ${ventasAcumuladoMes.proyeccionLitros.toLocaleString('es-VE')} L`
+                          : `Mes cerrado • ${ventasAcumuladoMes.documentos} documentos`}
                   </span>
                 </div>
                 <div className="rg-progress-track">
@@ -882,6 +1307,13 @@ export default function DashboardView({
                   <span className="rg-unit-pill">0 Unidades</span>
                 )}
               </div>
+
+              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                <span>
+                  Salidas ({ventasMesLabel}): <strong>{ventasAcumuladoMes.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L</strong> ({ventasAcumuladoMes.cajas.toLocaleString('es-VE')} cajas)
+                </span>
+                <span>Stock en tiempo real</span>
+              </div>
             </div>
 
             {/* Tarjeta 2B: Valorización Stock */}
@@ -935,6 +1367,31 @@ export default function DashboardView({
               </div>
             </div>
             <div className="rg-actions-row">
+              {TEMP_COLLECTIONS_ADJUSTMENT_ENABLED && canToggleTempCollections && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleToggleTempCollections}
+                  title={
+                    tempCollectionsReverted
+                      ? 'Solo visible para MASTER: restaura el ajuste temporal del 20/11 en tu vista'
+                      : 'Solo visible para MASTER: revierte temporalmente a datos 100% reales en tu vista'
+                  }
+                  style={{
+                    padding: '5px 11px',
+                    borderRadius: '8px',
+                    fontSize: '0.72rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    borderColor: tempCollectionsReverted ? 'var(--border-glass)' : 'rgba(16, 185, 129, 0.45)',
+                    color: tempCollectionsReverted ? 'var(--text-secondary)' : 'var(--semaforo-verde, #10b981)'
+                  }}
+                >
+                  <RotateCcw size={13} />
+                  <span>{tempCollectionsReverted ? 'Solo Real (Restaurar 20/11)' : 'Revertir 20/11 a Real'}</span>
+                </button>
+              )}
               {onNavigate && (
                 <button
                   type="button"
@@ -957,13 +1414,13 @@ export default function DashboardView({
                   <Clock size={18} color="var(--semaforo-verde)" />
                   COBRANZA DEL DÍA
                 </span>
-                <span className="rg-date-pill">{todayLabel}</span>
+                <span className="rg-date-pill">{selectedDateLabel}</span>
               </div>
 
               <div className="rg-metrics-split">
                 <div className="rg-metric-tile">
                   <div className="rg-metric-label">
-                    <DollarSign size={13} /> Total Cobrado Hoy
+                    <DollarSign size={13} /> {selectedDateKey === todayKey ? 'Total Cobrado Hoy' : `Cobrado (${selectedDateShort})`}
                   </div>
                   <div className="rg-metric-value rg-val-money">
                     {formatUsd(cobranzaDelDia.usd)}
@@ -1011,24 +1468,28 @@ export default function DashboardView({
               </div>
             </div>
 
-            {/* Tarjeta 3B: Cobranza Acumulada del Mes */}
+            {/* Tarjeta 3B: Cobranza Acumulada del Mes / Período */}
             <div className="rg-card accent-teal">
               <div className="rg-card-head">
                 <span className="rg-card-title">
                   <Calendar size={18} color="var(--neon-cyan)" />
-                  COBRANZA ACUMULADA DEL MES
+                  {periodRange.isCustomRange ? 'COBRANZA DEL PERÍODO' : 'COBRANZA ACUMULADA DEL MES'}
                 </span>
-                <select
-                  value={cobranzasMesFilter}
-                  onChange={(e) => setCobranzasMesFilter(e.target.value)}
-                  className="rg-month-select"
-                  title="Seleccione el mes de cobranza"
-                  aria-label="Mes de cobranza acumulada"
-                >
-                  {MONTHS_LIST.map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </select>
+                {periodRange.isCustomRange ? (
+                  <span className="rg-date-pill">{periodRange.label}</span>
+                ) : (
+                  <select
+                    value={cobranzasMesFilter}
+                    onChange={(e) => setCobranzasMesFilter(e.target.value)}
+                    className="rg-month-select"
+                    title="Seleccione el mes de cobranza"
+                    aria-label="Mes de cobranza acumulada"
+                  >
+                    {MONTHS_LIST.map(m => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div className="rg-metrics-split">
@@ -1091,9 +1552,11 @@ export default function DashboardView({
                   <span>
                     {cobranzaAcumuladaMes.esFuturo
                       ? 'Mes aún no iniciado'
-                      : cobranzaAcumuladaMes.esMesEnCurso
-                        ? `Día ${cobranzaAcumuladaMes.diasTranscurridos}/${cobranzaAcumuladaMes.diasDelMes} • Proyección: ${formatUsd(cobranzaAcumuladaMes.proyeccionUsd)}`
-                        : 'Mes cerrado'}
+                      : periodRange.isCustomRange
+                        ? `Período: ${periodRange.label}`
+                        : cobranzaAcumuladaMes.esMesEnCurso
+                          ? `Día ${cobranzaAcumuladaMes.diasTranscurridos}/${cobranzaAcumuladaMes.diasDelMes} • Proyección: ${formatUsd(cobranzaAcumuladaMes.proyeccionUsd)}`
+                          : 'Mes cerrado'}
                   </span>
                 </div>
                 {facturadoMesCobranzaUsd > 0 && (
@@ -1108,6 +1571,76 @@ export default function DashboardView({
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* Tarjeta 3C: Dinero Vencido en la Calle (Facturas + Notas de Entrega) */}
+          <div
+            className={`rg-card ${carteraCxcAging.cxcVen > 0 ? 'accent-rose' : 'accent-emerald'} is-clickable`}
+            onClick={() => onNavigate && onNavigate('cxc')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxc');
+            }}
+            title="Clic para abrir el detalle de Cuentas por Cobrar vencidas"
+            style={{ marginTop: '0.25rem' }}
+          >
+            <div className="rg-card-head">
+              <span className="rg-card-title">
+                <Wallet size={18} color={carteraCxcAging.cxcVen > 0 ? 'var(--semaforo-rojo, #ef4444)' : 'var(--semaforo-verde)'} />
+                CARTERA VENCIDA EN LA CALLE (FACTURAS + NOTAS DE ENTREGA)
+              </span>
+              <span className={`rg-cxp-pill ${carteraCxcAging.cxcVen > 0 ? 'is-danger' : 'is-solvente'}`}>
+                {carteraCxcAging.cxcVen > 0
+                  ? `${carteraCxcAging.cxcVenPct}% de la cartera • ${carteraCxcAging.docsVencidos} docs`
+                  : 'Cartera Al Día'}
+              </span>
+            </div>
+
+            <div className="rg-metrics-split">
+              <div className="rg-metric-tile">
+                <div className="rg-metric-label">
+                  <DollarSign size={13} /> Monto Consolidado Vencido
+                </div>
+                <div className={`rg-metric-value ${carteraCxcAging.cxcVen > 0 ? 'rg-val-danger' : 'rg-val-money'}`}>
+                  {formatUsd(carteraCxcAging.cxcVen)}
+                </div>
+                <div className="rg-metric-secondary">
+                  {formatBs(carteraCxcAging.cxcVen * tasaBcv)}
+                </div>
+              </div>
+
+              <div className="rg-metric-tile">
+                <div className="rg-metric-label" style={{ marginBottom: '4px' }}>
+                  Desglose por Documento Vencido
+                </div>
+                <div className="rg-cob-split-list">
+                  <div className="rg-cob-split-row">
+                    <span className="rg-cob-split-tag">
+                      <span className="rg-cob-dot" style={{ background: '#ef4444' }} />
+                      Facturas ({carteraCxcAging.docsVencidosFacturas})
+                    </span>
+                    <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVenFacturas)}</span>
+                  </div>
+                  <div className="rg-cob-split-row">
+                    <span className="rg-cob-split-tag">
+                      <span className="rg-cob-dot" style={{ background: '#f59e0b' }} />
+                      Notas de Entrega ({carteraCxcAging.docsVencidosNotas})
+                    </span>
+                    <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVenNotas)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rg-card-footer">
+              <span>
+                Cartera total por cobrar: <strong>{formatUsd(carteraCxcAging.cxcTot)}</strong> (Al día: <strong>{formatUsd(carteraCxcAging.cxcDia)}</strong>)
+              </span>
+              <span>
+                Corte al: <strong>{selectedDateShort}</strong>
+              </span>
             </div>
           </div>
         </section>
@@ -1251,7 +1784,10 @@ export default function DashboardView({
 
               <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
                 <span>
-                  Proveedor: <strong>Keystone, C.A.</strong> (J-31115365-9)
+                  Corte: <strong>{selectedDateShort}</strong>
+                  {cxpKeystone.docsVencenEnPeriodo > 0 && (
+                    <> • Vencen en período: <strong>{cxpKeystone.docsVencenEnPeriodo}</strong> ({formatUsd(cxpKeystone.vencenEnPeriodoUsd)})</>
+                  )}
                 </span>
                 <span>
                   Tasa Keystone: <strong>{formatBs(tasaKeystone)}</strong>
@@ -1261,6 +1797,7 @@ export default function DashboardView({
           </div>
         </section>
       )}
+      </div>
 
       {/* Modal de Vista Previa e Impresión */}
       <ExecutiveSummaryModal

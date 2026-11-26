@@ -79,6 +79,8 @@ db.products = (db.products || [])
     const comprometido = Number(p.comprometido ?? 0);
     const stockMinimo = Number(p.stock_minimo ?? p.stockMinimo ?? 10);
     const costoUsd = Number(p.costo_usd ?? p.costoUsd ?? 0);
+    const costoUsd01 = Number(p.costo_usd_01 ?? p.costoUsd01 ?? costoUsd);
+    const costoUsd02 = Number(p.costo_usd_02 ?? p.costoUsd02 ?? costoUsd);
     const precioUsdDetal = Number(p.precio_usd_detal ?? p.precioUsdDetal ?? 0);
     const precioUsdMayor = Number(p.precio_usd_mayor ?? p.precioUsdMayor ?? precioUsdDetal);
     const normaApi = p.norma_api ?? p.normaApi ?? 'N/A';
@@ -128,6 +130,11 @@ db.products = (db.products || [])
       stock_almacen_02: stockAlm02,
       costo_usd: costoUsd,
       costoUsd,
+      costo: costoUsd,
+      costo_usd_01: costoUsd01,
+      costoUsd01,
+      costo_usd_02: costoUsd02,
+      costoUsd02,
       precio_usd_detal: precioUsdDetal,
       precioUsdDetal,
       precio_usd_mayor: precioUsdMayor,
@@ -861,24 +868,28 @@ db.profit_currencies = (db.profit_currencies || []).map(m => {
 db.purchases = (db.purchases || []).map((p, idx) => {
   const totalUsd = Number(p.total_usd ?? p.totalUsd ?? 0);
   const subtotalUsd = Number(p.subtotal_usd ?? p.base_imponible_usd ?? p.baseImponibleUsd ?? (totalUsd > 0 ? Number((totalUsd / 1.16).toFixed(2)) : 0));
-  const ivaUsd = Number(p.iva_usd ?? p.monto_iva_usd ?? p.montoIvaUsd ?? Number((totalUsd - subtotalUsd).toFixed(2)));
+  const ivaUsd = Number(p.iva_usd ?? p.iva_general_usd ?? p.monto_iva_usd ?? p.montoIvaUsd ?? Number((totalUsd - subtotalUsd).toFixed(2)));
   const totalBs = Number(p.total_bs ?? p.totalBs ?? Number((totalUsd * BCV_RATE).toFixed(2)));
-  const tasaBcv = Number(p.tasa_bcv || p.tasaBcv || (totalUsd > 0 && totalBs > 0 ? Number((totalBs / totalUsd).toFixed(2)) : BCV_RATE));
-  const nroControl = p.nro_control || p.numero_control || p.numeroControl || `00-00582${idx + 1}`;
-  const nroFactura = p.nro_factura || p.numero_factura_proveedor || p.numeroFacturaProveedor || `FAC-PROV-00${idx + 1}`;
+  const tasaBcv = Number(p.tasa_dolar || p.tasa_bcv || p.tasaBcv || (totalUsd > 0 && totalBs > 0 ? Number((totalBs / totalUsd).toFixed(2)) : BCV_RATE));
+  const nroControl = p.nro_control || p.numero_control || p.numeroControl || p.nroControl || `00-00582${idx + 1}`;
+  const nroFactura = p.numero_factura_prov || p.numeroFacturaProv || p.nro_factura || p.nroFactura || p.numero_factura_proveedor || p.numeroFacturaProveedor || `FAC-PROV-00${idx + 1}`;
   const proveedorId = p.proveedor_id || p.proveedorId || 'PROV-001';
   const proveedorNombre = p.proveedor_nombre || p.proveedorNombre || 'KEYSTONE, C.A. (Planta Barquisimeto)';
   const proveedorRif = p.proveedor_rif || p.proveedorRif || 'J-31115365-9';
-  const fechaCompra = p.fecha_compra || p.fecha_emision || p.fechaEmision || '2026-08-01T12:00:00.000Z';
-  const estadoPago = p.estado_pago || p.status || 'Pagada';
+  const fechaCompra = p.fecha || p.fecha_compra || p.fechaCompra || p.fecha_emision || p.fechaEmision || '2026-08-01T12:00:00.000Z';
+  const estadoPago = p.estado_pago || p.estadoPago || p.status || 'Pagada';
   return {
+    ...p,
     id: p.id,
+    fecha: fechaCompra,
     fecha_compra: fechaCompra,
     fechaCompra,
     fecha_emision: fechaCompra,
     fechaEmision: fechaCompra,
     fecha_recepcion: p.fecha_recepcion || p.fechaRecepcion || fechaCompra,
     fechaRecepcion: p.fechaRecepcion || p.fecha_recepcion || fechaCompra,
+    numero_factura_prov: nroFactura,
+    numeroFacturaProv: nroFactura,
     nro_factura: nroFactura,
     nroFactura,
     numero_factura_proveedor: nroFactura,
@@ -909,6 +920,7 @@ db.purchases = (db.purchases || []).map((p, idx) => {
     totalUsd,
     total_bs: totalBs,
     totalBs,
+    tasa_dolar: tasaBcv,
     tasa_bcv: tasaBcv,
     tasaBcv,
     estado_pago: estadoPago,
