@@ -1,7 +1,10 @@
 /**
  * Utilidades puras para filtrado uniforme por Fecha Exacta o Período (Desde - Hasta)
- * en vistas y modales de SIGNUM MOTORVEN.
+ * y fecha de corte global del sistema en SIGNUM MOTORVEN.
  */
+
+export const SYSTEM_START_DATE = '2026-11-01';
+export const SYSTEM_START_MONTH = '2026-11';
 
 export const createDefaultDatePeriodFilter = (initialMode = 'EXACT') => ({
   mode: initialMode === 'RANGE' ? 'RANGE' : 'EXACT',
@@ -30,7 +33,7 @@ export const extractLocalYmd = (dateInput) => {
     return s;
   }
 
-  const utcMidnightMatch = s.match(/^(\d{4}-\d{2}-\d{2})T00:00:00(?:\.000)?(?:Z|\+00:00)$/i);
+  const utcMidnightMatch = s.match(/^(\d{4}-\d{2}-\d{2})T00:00:00(?:\.\d+)?(?:Z|[+-]00:00)?$/i);
   if (utcMidnightMatch) {
     return utcMidnightMatch[1];
   }
@@ -51,6 +54,77 @@ export const extractLocalYmd = (dateInput) => {
 
   const isoPrefix = s.match(/^(\d{4}-\d{2}-\d{2})/);
   return isoPrefix ? isoPrefix[1] : '';
+};
+
+/**
+ * Extrae el valor de fecha principal de cualquier registro transaccional (camelCase o snake_case).
+ */
+export const resolveRecordDateValue = (rec) => {
+  if (!rec || typeof rec !== 'object') return '';
+  const direct = (
+    rec.fechaEmision ??
+    rec.fecha_emision ??
+    rec.fecEmis ??
+    rec.fec_emis ??
+    rec.fechaEmisionIso ??
+    rec.fechaCobro ??
+    rec.fecha_cobro ??
+    rec.fecCob ??
+    rec.fec_cob ??
+    rec.fechaPago ??
+    rec.fecha_pago ??
+    rec.fecPag ??
+    rec.fec_pag ??
+    rec.fec_pago ??
+    rec.fechaCompra ??
+    rec.fecha_compra ??
+    rec.fechaRecepcion ??
+    rec.fecha_recepcion ??
+    rec.fechaCierre ??
+    rec.fecha_cierre ??
+    rec.fechaCreacion ??
+    rec.fecha_creacion ??
+    rec.fecha ??
+    rec.createdAt ??
+    rec.created_at ??
+    rec.updatedAt ??
+    rec.updated_at ??
+    ''
+  );
+  if (direct) return direct;
+  const pf = String(rec.periodoFiscal ?? rec.periodo_fiscal ?? '').trim();
+  const ymDash = pf.match(/^(\d{4})-(\d{2})$/);
+  if (ymDash) return `${ymDash[1]}-${ymDash[2]}-01`;
+  const ymCompact = pf.match(/^(\d{4})(\d{2})$/);
+  if (ymCompact) return `${ymCompact[1]}-${ymCompact[2]}-01`;
+  return '';
+};
+
+/**
+ * Verifica si una fecha es igual o posterior al inicio operativo oficial (01/11/2026).
+ */
+export const isOnOrAfterSystemStart = (dateInput, startYmd = SYSTEM_START_DATE) =>
+  isOnOrAfterDate(dateInput, startYmd);
+
+/**
+ * Filtra una lista de registros manteniendo únicamente los emitidos desde `startYmd` (default 2026-11-01).
+ */
+export const filterRecordsFromSystemStart = (records = [], dateExtractor = null, startYmd = SYSTEM_START_DATE) => {
+  if (!Array.isArray(records) || records.length === 0) return [];
+  return records.filter((rec) => {
+    if (!rec) return false;
+    const rawDate = typeof dateExtractor === 'function' ? dateExtractor(rec) : resolveRecordDateValue(rec);
+    return isOnOrAfterDate(rawDate, startYmd);
+  });
+};
+
+/**
+ * Limita una fecha YYYY-MM-DD al mínimo `startYmd` si es anterior.
+ */
+export const clampDateToSystemStart = (ymd, startYmd = SYSTEM_START_DATE) => {
+  const clean = extractLocalYmd(ymd);
+  if (!clean) return startYmd;
+  return clean < startYmd ? startYmd : clean;
 };
 
 /**

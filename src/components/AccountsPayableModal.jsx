@@ -1842,10 +1842,11 @@ export default function AccountsPayableModal({
 
       if (onDeleteDocument) {
         await onDeleteDocument(p);
+      } else {
+        notify.success(`Documento ${p.tipoDoc} #${p.nroDoc} eliminado de Cuentas por Pagar.`);
       }
 
       soundFX.success();
-      notify.success(`Documento ${p.tipoDoc} #${p.nroDoc} eliminado de Cuentas por Pagar.`);
     } catch (err) {
       if (overrideBackup) {
         setLocalDocOverrides(overrideBackup);
@@ -2914,7 +2915,7 @@ export default function AccountsPayableModal({
                     const isSelectedForPago = pagoDocKey === p.id || pagoDocKey === p.nroDoc;
                     return (
                       <tr
-                        key={p.id || idx}
+                        key={p.id || buildCxpCompositeKey(p) || idx}
                         style={{
                           borderBottom: '1px solid var(--border-glass)',
                           background: isSelectedForPago 
@@ -3189,7 +3190,7 @@ export default function AccountsPayableModal({
                             {/* Botón Eliminar Documento */}
                             <button
                               type="button"
-                              disabled={deletingKey === (p.id || p.nroDoc)}
+                              disabled={deletingKey === String(p.id || buildCxpStableId(p)).trim()}
                               onClick={() => handleDeletePayableRow(p)}
                               className="btn"
                               style={{

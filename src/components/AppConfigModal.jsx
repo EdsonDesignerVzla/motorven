@@ -104,7 +104,10 @@ export default function AppConfigModal({
 
     // Ejercicio & Período Fiscal Anual
     ejercicioFiscalActivo: config?.ejercicioFiscalActivo || 2026,
-    periodoFiscalInicio: config?.periodoFiscalInicio || '2026-01-01',
+    periodoFiscalInicio:
+      (config?.ejercicioFiscalActivo || 2026) <= 2026
+        ? (config?.periodoFiscalInicio && config.periodoFiscalInicio >= '2026-11-01' ? config.periodoFiscalInicio : '2026-11-01')
+        : (config?.periodoFiscalInicio || '2026-11-01'),
     periodoFiscalFin: config?.periodoFiscalFin || '2026-12-31',
     historialEjercicios: Array.isArray(config?.historialEjercicios) && config.historialEjercicios.length > 0
       ? config.historialEjercicios

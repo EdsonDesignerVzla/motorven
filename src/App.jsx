@@ -263,6 +263,7 @@ import {
   commitNotaEntregaCorrelativo,
   isDocBeforeInventoryShieldCutoff
 } from './services/fiscalService';
+import { filterRecordsFromSystemStart } from './utils/dateRangeFilterUtils';
 
 
 function MainApp() {
@@ -485,16 +486,41 @@ function MainApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Directorio oficial de clientes sincronizado en tiempo real con CxC abierta (profitInvoices + sales)
+  // Alcance operativo global: mostrar y calcular exclusivamente desde el 01/11/2026
+  const scopedOrders = useMemo(() => filterRecordsFromSystemStart(orders), [orders]);
+  const scopedSales = useMemo(() => filterRecordsFromSystemStart(sales), [sales]);
+  const scopedProfitInvoices = useMemo(() => filterRecordsFromSystemStart(profitInvoices), [profitInvoices]);
+  const scopedProfitCollections = useMemo(() => filterRecordsFromSystemStart(profitCollections), [profitCollections]);
+  const scopedProfitReturns = useMemo(() => filterRecordsFromSystemStart(profitReturns), [profitReturns]);
+  const scopedPurchases = useMemo(() => filterRecordsFromSystemStart(purchases), [purchases]);
+  const scopedProfitPurchases = useMemo(() => filterRecordsFromSystemStart(profitPurchases), [profitPurchases]);
+  const scopedProfitAccountsPayable = useMemo(() => filterRecordsFromSystemStart(profitAccountsPayable), [profitAccountsPayable]);
+  const scopedProfitSupplierPayments = useMemo(() => filterRecordsFromSystemStart(profitSupplierPayments), [profitSupplierPayments]);
+  const scopedProfitPaymentOrders = useMemo(() => filterRecordsFromSystemStart(profitPaymentOrders), [profitPaymentOrders]);
+  const scopedProfitIslrWithholdings = useMemo(() => filterRecordsFromSystemStart(profitIslrWithholdings), [profitIslrWithholdings]);
+  const scopedPurchaseRequisitions = useMemo(() => filterRecordsFromSystemStart(purchaseRequisitions), [purchaseRequisitions]);
+  const scopedPurchaseOrders = useMemo(() => filterRecordsFromSystemStart(purchaseOrders), [purchaseOrders]);
+  const scopedGoodsReceiptNotes = useMemo(() => filterRecordsFromSystemStart(goodsReceiptNotes), [goodsReceiptNotes]);
+  const scopedCashMovements = useMemo(() => filterRecordsFromSystemStart(cashMovements), [cashMovements]);
+  const scopedFiscalClosures = useMemo(() => filterRecordsFromSystemStart(fiscalClosures), [fiscalClosures]);
+  const scopedProfitInventoryAdjustments = useMemo(() => filterRecordsFromSystemStart(profitInventoryAdjustments), [profitInventoryAdjustments]);
+  const scopedProfitWarehouseTransfers = useMemo(() => filterRecordsFromSystemStart(profitWarehouseTransfers), [profitWarehouseTransfers]);
+  const scopedProfitAuditTrails = useMemo(() => filterRecordsFromSystemStart(profitAuditTrails), [profitAuditTrails]);
+  const scopedCommissionSettlements = useMemo(() => filterRecordsFromSystemStart(commissionSettlements), [commissionSettlements]);
+  const scopedExpenses = useMemo(() => filterRecordsFromSystemStart(expenses), [expenses]);
+  const scopedPayroll = useMemo(() => filterRecordsFromSystemStart(payroll), [payroll]);
+
+  // Directorio oficial de clientes sincronizado en tiempo real con CxC abierta (desde 01/11/2026)
   const syncedClients = useMemo(
     () =>
       reconcileClientsWithRealCxc({
         clients,
-        profitInvoices,
-        sales,
-        tasaBcv: resolveExchangeRates(config).tasaBcv
+        profitInvoices: scopedProfitInvoices,
+        sales: scopedSales,
+        tasaBcv: resolveExchangeRates(config).tasaBcv,
+        forceReconcileEmpty: true
       }).clients,
-    [clients, profitInvoices, sales, config?.tasaDolar]
+    [clients, scopedProfitInvoices, scopedSales, config?.tasaDolar]
   );
 
   const handleOpenOrdersSalesModal = (tab = 'nuevo', order = null) => {
@@ -4106,9 +4132,9 @@ function MainApp() {
     return saved;
   };
 
-  // Actualizar datos de una Factura o Nota de Entrega existente (correlativo, fecha/hora, cliente, montos)
+  // Actualizar datos de una Factura o Nota de Entrega existente (sin afectar inventario)
   const handleUpdateInvoiceDocument = async (originalDoc, updatedDocData) => {
-    const saved = await updateSupabaseInvoiceDocument(originalDoc, updatedDocData);
+    const saved = await updateSupabaseInvoiceDocument(originalDoc, updatedDocData, { skipInventoryAdjustment: true });
     if (!saved) return null;
     const updatedProds = getStorageProducts();
     if (Array.isArray(updatedProds) && updatedProds.length > 0) {
@@ -4973,14 +4999,21 @@ function MainApp() {
     try {
       const isObj = payableOrId && typeof payableOrId === 'object';
       const rawId = isObj ? String(payableOrId?.id || '').trim() : String(payableOrId || '').trim();
-      await deleteSupabaseProfitAccountsPayable(payableOrId);
+      const deleteResult = await deleteSupabaseProfitAccountsPayable(payableOrId);
       setProfitAccountsPayable(prev => (prev || []).filter(p => {
         if (!p) return false;
         if (isObj) return !doesPayableMatchDocument(p, payableOrId);
         return String(p.id || '').trim() !== rawId;
       }));
-      notify.success('Documento de Cuenta por Pagar eliminado con éxito');
-      return true;
+      const docLabel = isObj && (payableOrId.nroDoc || payableOrId.nro_doc)
+        ? `${payableOrId.tipoDoc || payableOrId.tipo_doc || 'DOC'} #${payableOrId.nroDoc || payableOrId.nro_doc}`
+        : 'Documento';
+      if (deleteResult?.pendingSync) {
+        notify.warning(`${docLabel} eliminado solo en este equipo (pendiente por sincronizar: ${deleteResult.error || 'sin conexión'}). Aún puede aparecer en otros equipos hasta sincronizar.`);
+      } else {
+        notify.success(`${docLabel} eliminado de Cuentas por Pagar con éxito`);
+      }
+      return deleteResult;
     } catch (err) {
       console.error('Error eliminando documento CxP:', err);
       notify.error('Error al eliminar el documento de Cuenta por Pagar');
@@ -5525,24 +5558,24 @@ function MainApp() {
         products={products}
         clients={syncedClients}
         suppliers={suppliers}
-        purchases={purchases}
-        cashMovements={cashMovements}
-        fiscalClosures={fiscalClosures}
-        orders={orders}
-        sales={sales}
-        profitInvoices={profitInvoices}
-        profitCollections={profitCollections}
+        purchases={scopedPurchases}
+        cashMovements={scopedCashMovements}
+        fiscalClosures={scopedFiscalClosures}
+        orders={scopedOrders}
+        sales={scopedSales}
+        profitInvoices={scopedProfitInvoices}
+        profitCollections={scopedProfitCollections}
         profitBankAccounts={profitBankAccounts}
         profitCashDesks={profitCashDesks}
-        profitAccountsPayable={profitAccountsPayable}
-        profitSupplierPayments={profitSupplierPayments}
-        profitPurchases={profitPurchases}
+        profitAccountsPayable={scopedProfitAccountsPayable}
+        profitSupplierPayments={scopedProfitSupplierPayments}
+        profitPurchases={scopedProfitPurchases}
         profitSuppliers={profitSuppliers}
         profitIslrConcepts={profitIslrConcepts}
         profitBeneficiaries={profitBeneficiaries}
-        profitPaymentOrders={profitPaymentOrders}
-        profitIslrWithholdings={profitIslrWithholdings}
-        profitReturns={profitReturns}
+        profitPaymentOrders={scopedProfitPaymentOrders}
+        profitIslrWithholdings={scopedProfitIslrWithholdings}
+        profitReturns={scopedProfitReturns}
         profitSellers={profitSellers}
         profitZones={profitZones}
         usersList={usersList}
@@ -5585,10 +5618,10 @@ function MainApp() {
         onUpdateSellerZone={handleUpdateSellerZone}
         onCommissionSettlementsChange={setCommissionSettlements}
         profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
-        profitInventoryAdjustments={profitInventoryAdjustments}
-        commissionSettlements={commissionSettlements}
-        expenses={expenses}
-        payroll={payroll}
+        profitInventoryAdjustments={scopedProfitInventoryAdjustments}
+        commissionSettlements={scopedCommissionSettlements}
+        expenses={scopedExpenses}
+        payroll={scopedPayroll}
         employees={employees}
         onSaveExpense={handleSaveExpense}
         onDeleteExpense={handleDeleteExpense}
@@ -5600,7 +5633,7 @@ function MainApp() {
         onSavePartnerPayableAccount={handleSavePartnerPayableAccount}
         onDeletePartnerPayableAccount={handleDeletePartnerPayableAccount}
         onAdjustPartnerPayableBalance={handleAdjustPartnerPayableBalance}
-        profitAuditTrails={profitAuditTrails}
+        profitAuditTrails={scopedProfitAuditTrails}
         onLogout={handleLogout}
       />
     );
@@ -5627,7 +5660,7 @@ function MainApp() {
         onOpenAccountsPayableModal={() => setActiveTab('cxp')}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={handleToggleSidebar}
-        orders={orders}
+        orders={scopedOrders}
       />
 
       <div className="main-wrapper">
@@ -5654,26 +5687,26 @@ function MainApp() {
           clientsCount={syncedClients?.length || 631}
           products={products}
           clients={syncedClients}
-          sales={sales}
-          orders={orders}
+          sales={scopedSales}
+          orders={scopedOrders}
           suppliers={suppliers}
-          cashMovements={cashMovements}
+          cashMovements={scopedCashMovements}
         />
 
         <main className="content-body">
           {activeTab === 'dashboard' && canAccessModule(currentUser?.rol, 'dashboard', currentUser) && (
             <DashboardView
               products={products}
-              sales={sales}
+              sales={scopedSales}
               clients={syncedClients}
-              orders={orders}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              profitCollections={profitCollections}
+              orders={scopedOrders}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
+              profitCollections={scopedProfitCollections}
               profitBankAccounts={profitBankAccounts}
-              profitAccountsPayable={profitAccountsPayable}
-              profitSupplierPayments={profitSupplierPayments}
-              profitPurchases={profitPurchases}
+              profitAccountsPayable={scopedProfitAccountsPayable}
+              profitSupplierPayments={scopedProfitSupplierPayments}
+              profitPurchases={scopedProfitPurchases}
               profitSellers={profitSellers}
               usersList={usersList}
               config={config}
@@ -5695,11 +5728,11 @@ function MainApp() {
               <SellerOrderPOSView
                 products={products}
                 clients={syncedClients}
-                orders={orders}
-                profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-                profitCollections={profitCollections}
-                sales={sales}
+                orders={scopedOrders}
+                profitInvoices={scopedProfitInvoices}
+                profitReturns={scopedProfitReturns}
+                profitCollections={scopedProfitCollections}
+                sales={scopedSales}
                 profitSellers={profitSellers}
                 config={config}
                 profitZones={profitZones}
@@ -5717,16 +5750,16 @@ function MainApp() {
             <ModuleErrorBoundary moduleName="Predictibilidad & Foresight">
               <PredictiveAnalyticsView
                 products={products}
-                sales={sales}
-                orders={orders}
-                purchases={purchases}
-                profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-                profitAccountsPayable={profitAccountsPayable}
+                sales={scopedSales}
+                orders={scopedOrders}
+                purchases={scopedPurchases}
+                profitInvoices={scopedProfitInvoices}
+                profitReturns={scopedProfitReturns}
+                profitAccountsPayable={scopedProfitAccountsPayable}
                 profitBankAccounts={profitBankAccounts}
                 profitCashDesks={profitCashDesks}
-                expenses={expenses}
-                payroll={payroll}
+                expenses={scopedExpenses}
+                payroll={scopedPayroll}
                 config={config}
                 onNavigate={(tab) => setActiveTab(tab)}
               />
@@ -5735,16 +5768,16 @@ function MainApp() {
 
           {activeTab === 'pedidos' && canAccessModule(currentUser?.rol, 'pedidos', currentUser) && (
             <OrdersSalesModal
-              orders={orders}
+              orders={scopedOrders}
               clients={syncedClients}
               products={products}
               config={config}
               profitZones={profitZones}
               profitTransports={profitTransports}
               profitSellers={profitSellers}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              sales={sales}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
+              sales={scopedSales}
               onSaveOrder={handleSaveOrder}
               onUpdateOrderStatus={handleUpdateOrderStatus}
               onProcessSale={handleProcessSale}
@@ -5752,7 +5785,6 @@ function MainApp() {
               onDeleteSale={handleDeleteSale}
               onAnnulSale={handleAnnulSale}
               onProcessCustomerReturn={handleProcessCustomerReturn}
-              profitReturns={profitReturns}
               onSyncProfit={handleSyncProfit}
               onSaveClient={handleSaveClient}
               onDeleteClient={handleDeleteClient}
@@ -5771,15 +5803,14 @@ function MainApp() {
             <InventoryView
               products={products}
               config={config}
-              inventoryAdjustments={profitInventoryAdjustments}
-              warehouseTransfers={profitWarehouseTransfers}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              sales={sales}
-              purchases={purchases}
-              profitPurchases={profitPurchases}
-              goodsReceiptNotes={goodsReceiptNotes}
-              profitReturns={profitReturns}
+              inventoryAdjustments={scopedProfitInventoryAdjustments}
+              warehouseTransfers={scopedProfitWarehouseTransfers}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
+              sales={scopedSales}
+              purchases={scopedPurchases}
+              profitPurchases={scopedProfitPurchases}
+              goodsReceiptNotes={scopedGoodsReceiptNotes}
               profitSuppliers={profitSuppliers}
               onSyncProfit={handleSyncProfit}
               onSaveProduct={handleSaveProduct}
@@ -5798,15 +5829,14 @@ function MainApp() {
             <SalesPOSView
               products={products}
               clients={syncedClients}
-              orders={orders}
-              sales={sales}
+              orders={scopedOrders}
+              sales={scopedSales}
               profitSellers={profitSellers}
               profitZones={profitZones}
               config={config}
-              profitReturns={profitReturns}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              profitCollections={profitCollections}
+              profitReturns={scopedProfitReturns}
+              profitInvoices={scopedProfitInvoices}
+              profitCollections={scopedProfitCollections}
               onSyncProfit={handleSyncProfit}
               onProcessSale={handleProcessSale}
               onSaveClient={handleSaveClient}
@@ -5828,12 +5858,13 @@ function MainApp() {
               <SellersView
                 profitSellers={profitSellers}
                 usersList={usersList}
-                profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-                profitCollections={profitCollections}
+                products={products}
+                profitInvoices={scopedProfitInvoices}
+                profitReturns={scopedProfitReturns}
+                profitCollections={scopedProfitCollections}
                 profitBankAccounts={profitBankAccounts}
                 clients={syncedClients}
-                orders={orders}
+                orders={scopedOrders}
                 config={config}
                 onSyncProfit={handleSyncProfit}
                 onUpdateSellerTarget={handleUpdateSellerTarget}
@@ -5853,23 +5884,22 @@ function MainApp() {
           {activeTab === 'rentabilidad' && canAccessModule(currentUser?.rol, 'rentabilidad', currentUser) && (
             <ProfitabilityView
               products={products}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              sales={sales}
-              profitPurchases={profitPurchases}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
+              sales={scopedSales}
+              profitPurchases={scopedProfitPurchases}
               profitSellers={profitSellers}
               profitTransports={profitTransports}
               profitZones={profitZones}
-              profitReturns={profitReturns}
-              profitInventoryAdjustments={profitInventoryAdjustments}
-              profitIslrWithholdings={profitIslrWithholdings}
+              profitInventoryAdjustments={scopedProfitInventoryAdjustments}
+              profitIslrWithholdings={scopedProfitIslrWithholdings}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               profitCashDesks={profitCashDesks}
               profitBankAccounts={profitBankAccounts}
-              cashMovements={cashMovements}
-              commissionSettlements={commissionSettlements}
-              expenses={expenses}
-              payroll={payroll}
+              cashMovements={scopedCashMovements}
+              commissionSettlements={scopedCommissionSettlements}
+              expenses={scopedExpenses}
+              payroll={scopedPayroll}
               employees={employees}
               clients={syncedClients}
               config={config}
@@ -5889,15 +5919,15 @@ function MainApp() {
             <PurchasesView
               products={products}
               suppliers={suppliers}
-              purchases={purchases}
+              purchases={scopedPurchases}
               config={config}
               onSaveProduct={handleSaveProduct}
               onRegisterPurchase={handleRegisterPurchase}
-        onUpdatePurchase={handleUpdatePurchase}
-        onDeletePurchase={handleDeletePurchase}
-              purchaseRequisitions={purchaseRequisitions}
-              purchaseOrders={purchaseOrders}
-              goodsReceiptNotes={goodsReceiptNotes}
+              onUpdatePurchase={handleUpdatePurchase}
+              onDeletePurchase={handleDeletePurchase}
+              purchaseRequisitions={scopedPurchaseRequisitions}
+              purchaseOrders={scopedPurchaseOrders}
+              goodsReceiptNotes={scopedGoodsReceiptNotes}
               onSaveRequisition={handleSavePurchaseRequisition}
               onSavePurchaseOrder={handleSavePurchaseOrder}
               onSaveGoodsReceipt={handleSaveGoodsReceiptNote}
@@ -5905,16 +5935,16 @@ function MainApp() {
               onOpenCxpModule={() => setActiveTab('cxp')}
               currentUser={currentUser}
               profitSuppliers={profitSuppliers}
-              profitPurchases={profitPurchases}
-              profitAccountsPayable={profitAccountsPayable}
-              profitSupplierPayments={profitSupplierPayments}
+              profitPurchases={scopedProfitPurchases}
+              profitAccountsPayable={scopedProfitAccountsPayable}
+              profitSupplierPayments={scopedProfitSupplierPayments}
               profitIslrConcepts={profitIslrConcepts}
               profitBeneficiaries={profitBeneficiaries}
-              profitPaymentOrders={profitPaymentOrders}
-              profitIslrWithholdings={profitIslrWithholdings}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              sales={sales}
+              profitPaymentOrders={scopedProfitPaymentOrders}
+              profitIslrWithholdings={scopedProfitIslrWithholdings}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
+              sales={scopedSales}
               onSyncProfit={handleSyncProfit}
             />
           )}
@@ -5924,7 +5954,7 @@ function MainApp() {
             <CashBankModal
               cashDesks={profitCashDesks}
               bankAccounts={profitBankAccounts}
-              cashMovements={cashMovements}
+              cashMovements={scopedCashMovements}
               profitIncomeExpenseAccounts={profitIncomeExpenseAccounts}
               onAddMovement={handleAddCashMovement}
               onUpdateMovement={handleUpdateCashMovement}
@@ -5943,9 +5973,9 @@ function MainApp() {
           {/* MÓDULO 8.1: CUENTAS POR COBRAR (CXC) & AGING */}
           {activeTab === 'cxc' && canAccessModule(currentUser?.rol, 'cxc', currentUser) && (
             <AccountsReceivableModal
-              invoices={sales}
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
+              invoices={scopedSales}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
               products={products}
               clients={syncedClients}
               sellers={profitSellers}
@@ -5953,14 +5983,13 @@ function MainApp() {
               profitZones={profitZones}
               bankAccounts={profitBankAccounts}
               cashDesks={profitCashDesks}
-              collections={profitCollections}
+              collections={scopedProfitCollections}
               config={config}
               currentUser={currentUser}
               onOpenCollectionIntelligence={() => setShowDebtCollectionModal(true)}
               onDeleteSale={handleDeleteSale}
               onAnnulSale={handleAnnulSale}
               onProcessCustomerReturn={handleProcessCustomerReturn}
-              profitReturns={profitReturns}
               onSaveDocument={handleSaveCxcDocument}
               onRegisterCollection={handleRegisterCxcCollection}
               onUpdateCollection={handleUpdateCxcCollection}
@@ -5978,14 +6007,14 @@ function MainApp() {
           {/* MÓDULO 8.2: CUENTAS POR PAGAR (CXP) & PROVEEDORES */}
           {activeTab === 'cxp' && canAccessModule(currentUser?.rol, 'cxp', currentUser) && (
             <AccountsPayableModal
-              accountsPayable={profitAccountsPayable}
-              profitAccountsPayable={profitAccountsPayable}
+              accountsPayable={scopedProfitAccountsPayable}
+              profitAccountsPayable={scopedProfitAccountsPayable}
               suppliers={profitSuppliers}
               profitSuppliers={profitSuppliers}
               bankAccounts={profitBankAccounts}
               cashDesks={profitCashDesks}
               partnerPayableAccounts={partnerPayableAccounts}
-              supplierPayments={profitSupplierPayments}
+              supplierPayments={scopedProfitSupplierPayments}
               config={config}
               currentUser={currentUser}
               onRegisterPayment={handleRegisterCxpPayment}
@@ -6002,9 +6031,9 @@ function MainApp() {
               onSavePartnerPayableAccount={handleSavePartnerPayableAccount}
               onDeletePartnerPayableAccount={handleDeletePartnerPayableAccount}
               onAdjustPartnerPayableBalance={handleAdjustPartnerPayableBalance}
-              accountsPayable={profitAccountsPayable}
-              profitAccountsPayable={profitAccountsPayable}
-              supplierPayments={profitSupplierPayments}
+              accountsPayable={scopedProfitAccountsPayable}
+              profitAccountsPayable={scopedProfitAccountsPayable}
+              supplierPayments={scopedProfitSupplierPayments}
               cashDesks={profitCashDesks}
               bankAccounts={profitBankAccounts}
               onDeleteCashMovement={handleDeleteCashMovement}
@@ -6016,36 +6045,36 @@ function MainApp() {
 
           {activeTab === 'reportes' && canAccessModule(currentUser?.rol, 'reportes', currentUser) && (
             <TaxReportsView
-              sales={sales}
-              purchases={purchases}
+              sales={scopedSales}
+              purchases={scopedPurchases}
               suppliers={suppliers}
               profitSuppliers={profitSuppliers}
-              fiscalClosures={fiscalClosures}
+              fiscalClosures={scopedFiscalClosures}
               onExecuteCierreZ={handleExecuteCierreZ}
               config={config}
               currentUser={currentUser}
               profitIslrConcepts={profitIslrConcepts}
               profitBeneficiaries={profitBeneficiaries}
-              profitPaymentOrders={profitPaymentOrders}
-              profitIslrWithholdings={profitIslrWithholdings}
-              profitAccountsPayable={profitAccountsPayable}
-              profitPurchases={profitPurchases}
+              profitPaymentOrders={scopedProfitPaymentOrders}
+              profitIslrWithholdings={scopedProfitIslrWithholdings}
+              profitAccountsPayable={scopedProfitAccountsPayable}
+              profitPurchases={scopedProfitPurchases}
               onSyncProfit={handleSyncProfit}
             />
           )}
 
           {activeTab === 'auditoria' && canAccessModule(currentUser?.rol, 'auditoria', currentUser) && (
             <AuditLedgerView
-              profitInvoices={profitInvoices}
-              profitReturns={profitReturns}
-              profitCollections={profitCollections}
-              profitPurchases={profitPurchases}
-              profitSupplierPayments={profitSupplierPayments}
+              profitInvoices={scopedProfitInvoices}
+              profitReturns={scopedProfitReturns}
+              profitCollections={scopedProfitCollections}
+              profitPurchases={scopedProfitPurchases}
+              profitSupplierPayments={scopedProfitSupplierPayments}
               profitBankAccounts={profitBankAccounts}
               profitCashDesks={profitCashDesks}
               cashDesks={profitCashDesks}
-              profitAuditTrails={profitAuditTrails}
-              cashMovements={cashMovements}
+              profitAuditTrails={scopedProfitAuditTrails}
+              cashMovements={scopedCashMovements}
               usersList={usersList}
               config={config}
               onSyncProfit={handleSyncProfit}
@@ -6150,7 +6179,7 @@ function MainApp() {
         <DebtCollectionIntelligenceModal
           isOpen={showDebtCollectionModal}
           onClose={() => setShowDebtCollectionModal(false)}
-          profitInvoices={profitInvoices}
+          profitInvoices={scopedProfitInvoices}
           clients={syncedClients}
           profitSellers={profitSellers}
           profitBankAccounts={profitBankAccounts}

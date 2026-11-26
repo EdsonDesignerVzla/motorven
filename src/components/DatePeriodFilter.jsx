@@ -1,6 +1,6 @@
 import React from 'react';
 import { Calendar, X } from 'lucide-react';
-import { createDefaultDatePeriodFilter, isDatePeriodFilterActive } from '../utils/dateRangeFilterUtils';
+import { createDefaultDatePeriodFilter, isDatePeriodFilterActive, SYSTEM_START_DATE } from '../utils/dateRangeFilterUtils';
 
 /**
  * Control reutilizable de filtro por Fecha Exacta o Período (Desde / Hasta).
@@ -12,6 +12,7 @@ export default function DatePeriodFilter({
   label = '',
   compact = false,
   stacked = false,
+  minDate = SYSTEM_START_DATE,
   style = {}
 }) {
   const safeVal = value && typeof value === 'object' ? value : createDefaultDatePeriodFilter('EXACT');
@@ -120,6 +121,7 @@ export default function DatePeriodFilter({
           {activeMode === 'EXACT' ? (
             <input
               type="date"
+              min={minDate || undefined}
               value={safeVal.exactDate || ''}
               onChange={(e) => emit({ exactDate: e.target.value })}
               style={{ ...dateInputStyle, flex: 1, minWidth: 0 }}
@@ -129,6 +131,7 @@ export default function DatePeriodFilter({
             <>
               <input
                 type="date"
+                min={minDate || undefined}
                 value={safeVal.fromDate || ''}
                 onChange={(e) => emit({ fromDate: e.target.value })}
                 style={{ ...dateInputStyle, flex: 1, minWidth: 0 }}
@@ -137,6 +140,7 @@ export default function DatePeriodFilter({
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>a</span>
               <input
                 type="date"
+                min={minDate || undefined}
                 value={safeVal.toDate || ''}
                 onChange={(e) => emit({ toDate: e.target.value })}
                 style={{ ...dateInputStyle, flex: 1, minWidth: 0 }}
@@ -173,6 +177,7 @@ export default function DatePeriodFilter({
       {activeMode === 'EXACT' ? (
         <input
           type="date"
+          min={minDate || undefined}
           value={safeVal.exactDate || ''}
           onChange={(e) => emit({ exactDate: e.target.value })}
           style={dateInputStyle}
@@ -182,6 +187,7 @@ export default function DatePeriodFilter({
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
           <input
             type="date"
+            min={minDate || undefined}
             value={safeVal.fromDate || ''}
             onChange={(e) => emit({ fromDate: e.target.value })}
             style={dateInputStyle}
@@ -190,6 +196,7 @@ export default function DatePeriodFilter({
           <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>a</span>
           <input
             type="date"
+            min={minDate || undefined}
             value={safeVal.toDate || ''}
             onChange={(e) => emit({ toDate: e.target.value })}
             style={dateInputStyle}

@@ -8859,8 +8859,9 @@ export const saveSupabaseProfitInvoice = async (docData, options = {}) => {
  * Actualiza los datos de una Factura o Nota de Entrega existente (correlativo, fecha/hora de emisión,
  * cliente, vendedor, montos, condición de pago, etc.) sin revertir inventario si cambia el correlativo.
  */
-export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData) => {
+export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData, options = {}) => {
   if (!updatedDocData) return null;
+  const { skipInventoryAdjustment = false } = options || {};
   let effectiveOriginalDoc = originalDoc;
   if (isNetworkOnline() && originalDoc?.id) {
     try {
@@ -8879,27 +8880,29 @@ export const updateSupabaseInvoiceDocument = async (originalDoc, updatedDocData)
     } catch (_) {}
   }
 
-  const oldTipo = resolveOutgoingDocType(effectiveOriginalDoc);
-  const newTipo = resolveOutgoingDocType(updatedDocData);
-  const editDeltaLines = buildInvoiceEditStockDeltaLines(effectiveOriginalDoc, updatedDocData);
+  if (!skipInventoryAdjustment) {
+    const oldTipo = resolveOutgoingDocType(effectiveOriginalDoc);
+    const newTipo = resolveOutgoingDocType(updatedDocData);
+    const editDeltaLines = buildInvoiceEditStockDeltaLines(effectiveOriginalDoc, updatedDocData);
 
-  if (editDeltaLines.length > 0) {
-    try {
-      const editDocKey = String(effectiveOriginalDoc?.id || effectiveOriginalDoc?.factNum || updatedDocData?.id || '').trim();
-      const revToken = String(
-        effectiveOriginalDoc?.updatedAt ||
-        effectiveOriginalDoc?.updated_at ||
-        effectiveOriginalDoc?.fechaSincronizacion ||
-        effectiveOriginalDoc?.fecha_sincronizacion ||
-        Date.now()
-      ).trim();
-      const whSwapKey = editDocKey ? `edit_inv_${editDocKey}_${oldTipo}_to_${newTipo}_${revToken}` : '';
-      await applyStockDeltaForWarehouseLines(editDeltaLines, {
-        validateStrict: false,
-        idempotencyKey: whSwapKey
-      });
-    } catch (whErr) {
-      console.warn('[updateSupabaseInvoiceDocument] Aviso ajustando inventario al editar documento:', whErr?.message);
+    if (editDeltaLines.length > 0) {
+      try {
+        const editDocKey = String(effectiveOriginalDoc?.id || effectiveOriginalDoc?.factNum || updatedDocData?.id || '').trim();
+        const revToken = String(
+          effectiveOriginalDoc?.updatedAt ||
+          effectiveOriginalDoc?.updated_at ||
+          effectiveOriginalDoc?.fechaSincronizacion ||
+          effectiveOriginalDoc?.fecha_sincronizacion ||
+          Date.now()
+        ).trim();
+        const whSwapKey = editDocKey ? `edit_inv_${editDocKey}_${oldTipo}_to_${newTipo}_${revToken}` : '';
+        await applyStockDeltaForWarehouseLines(editDeltaLines, {
+          validateStrict: false,
+          idempotencyKey: whSwapKey
+        });
+      } catch (whErr) {
+        console.warn('[updateSupabaseInvoiceDocument] Aviso ajustando inventario al editar documento:', whErr?.message);
+      }
     }
   }
 
@@ -9628,18 +9631,40 @@ export const deleteSupabaseProfitAccountsPayable = async (payableIdOrDoc) => {
     key: primaryKey
   });
 
+  let synced = false;
+  let syncError = '';
+  const deletePayload = {
+    id: primaryKey,
+    keys: keysToDelete,
+    ...(payableIdOrDoc && typeof payableIdOrDoc === 'object'
+      ? {
+          nroDoc: payableIdOrDoc.nroDoc ?? payableIdOrDoc.nro_doc,
+          tipoDoc: payableIdOrDoc.tipoDoc ?? payableIdOrDoc.tipo_doc,
+          coProv: payableIdOrDoc.coProv ?? payableIdOrDoc.co_prov ?? payableIdOrDoc.provRif ?? payableIdOrDoc.prov_rif
+        }
+      : {})
+  };
+
   if (isNetworkOnline()) {
     try {
-      await deleteProfitAccountsPayableDirect({ id: primaryKey, keys: keysToDelete });
+      await deleteProfitAccountsPayableDirect(deletePayload);
+      synced = true;
     } catch (err) {
-      console.warn('[deleteSupabaseProfitAccountsPayable] Encolando borrado para sincronización posterior:', err.message);
+      syncError = err?.message || 'Error de red o servidor';
+      console.warn('[deleteSupabaseProfitAccountsPayable] Encolando borrado para sincronización posterior:', syncError);
       markSupabaseOffline(err, 'deleteSupabaseProfitAccountsPayable');
-      enqueueSyncAction('profit_accounts_payable', 'DELETE', { id: primaryKey, keys: keysToDelete });
+      enqueueSyncAction('profit_accounts_payable', 'DELETE', deletePayload);
     }
   } else {
-    enqueueSyncAction('profit_accounts_payable', 'DELETE', { id: primaryKey, keys: keysToDelete });
+    syncError = 'Sin conexión';
+    enqueueSyncAction('profit_accounts_payable', 'DELETE', deletePayload);
   }
-  return true;
+  return {
+    deleted: true,
+    synced,
+    pendingSync: !synced,
+    ...(syncError ? { error: syncError } : {})
+  };
 };
 
 export const getSupabaseProfitSupplierPayments = async () => {

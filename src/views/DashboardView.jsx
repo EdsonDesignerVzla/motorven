@@ -37,6 +37,7 @@ import {
   summarizeReceivablesAging
 } from '../services/dashboardMetricsService';
 import { isCxcInvoiceCancelled, isCreditOrDebitNoteDoc } from '../utils/cxcUtils';
+import { SYSTEM_START_DATE, clampDateToSystemStart } from '../utils/dateRangeFilterUtils';
 import { buildSalesDepartmentSellers } from '../services/commissionService';
 import {
   TEMP_COLLECTIONS_ADJUSTMENT_ENABLED,
@@ -155,30 +156,36 @@ export default function DashboardView({
   const { tasaBcv, tasaKeystone } = useMemo(() => resolveExchangeRates(config), [config]);
   const anioActivo = config?.ejercicioFiscalActivo || new Date().getFullYear();
 
-  const MONTHS_LIST = useMemo(() => [
-    { id: '01', label: `Enero ${anioActivo}`, short: 'Ene' },
-    { id: '02', label: `Febrero ${anioActivo}`, short: 'Feb' },
-    { id: '03', label: `Marzo ${anioActivo}`, short: 'Mar' },
-    { id: '04', label: `Abril ${anioActivo}`, short: 'Abr' },
-    { id: '05', label: `Mayo ${anioActivo}`, short: 'May' },
-    { id: '06', label: `Junio ${anioActivo}`, short: 'Jun' },
-    { id: '07', label: `Julio ${anioActivo}`, short: 'Jul' },
-    { id: '08', label: `Agosto ${anioActivo}`, short: 'Ago' },
-    { id: '09', label: `Septiembre ${anioActivo}`, short: 'Sep' },
-    { id: '10', label: `Octubre ${anioActivo}`, short: 'Oct' },
-    { id: '11', label: `Noviembre ${anioActivo}`, short: 'Nov' },
-    { id: '12', label: `Diciembre ${anioActivo}`, short: 'Dic' }
-  ], [anioActivo]);
+  const MONTHS_LIST = useMemo(() => {
+    const all = [
+      { id: '01', label: `Enero ${anioActivo}`, short: 'Ene' },
+      { id: '02', label: `Febrero ${anioActivo}`, short: 'Feb' },
+      { id: '03', label: `Marzo ${anioActivo}`, short: 'Mar' },
+      { id: '04', label: `Abril ${anioActivo}`, short: 'Abr' },
+      { id: '05', label: `Mayo ${anioActivo}`, short: 'May' },
+      { id: '06', label: `Junio ${anioActivo}`, short: 'Jun' },
+      { id: '07', label: `Julio ${anioActivo}`, short: 'Jul' },
+      { id: '08', label: `Agosto ${anioActivo}`, short: 'Ago' },
+      { id: '09', label: `Septiembre ${anioActivo}`, short: 'Sep' },
+      { id: '10', label: `Octubre ${anioActivo}`, short: 'Oct' },
+      { id: '11', label: `Noviembre ${anioActivo}`, short: 'Nov' },
+      { id: '12', label: `Diciembre ${anioActivo}`, short: 'Dic' }
+    ];
+    return Number(anioActivo) <= 2026 ? all.filter(m => Number(m.id) >= 11) : all;
+  }, [anioActivo]);
 
-  const currentMonthStr = useMemo(() => String(new Date().getMonth() + 1).padStart(2, '0'), []);
+  const currentMonthStr = useMemo(() => {
+    const m = String(new Date().getMonth() + 1).padStart(2, '0');
+    return Number(anioActivo) <= 2026 && Number(m) < 11 ? '11' : m;
+  }, [anioActivo]);
   const [ventasMesFilter, setVentasMesFilter] = useState(currentMonthStr);
   const [cobranzasMesFilter, setCobranzasMesFilter] = useState(currentMonthStr);
 
-  // Filtro global de Fecha puntual (Día) y Período para los 4 Bloques
-  const [selectedDateKey, setSelectedDateKey] = useState(() => toDateKey(new Date()));
+  // Filtro global de Fecha puntual (Día) y Período para los 4 Bloques (desde 01/11/2026)
+  const [selectedDateKey, setSelectedDateKey] = useState(() => clampDateToSystemStart(toDateKey(new Date())));
   const [periodPreset, setPeriodPreset] = useState('mes'); // 'hoy' | 'semana' | 'mes' | 'mes_anterior' | 'personalizado'
-  const [customFrom, setCustomFrom] = useState(() => `${toDateKey(new Date()).substring(0, 7)}-01`);
-  const [customTo, setCustomTo] = useState(() => toDateKey(new Date()));
+  const [customFrom, setCustomFrom] = useState(() => clampDateToSystemStart(`${toDateKey(new Date()).substring(0, 7)}-01`));
+  const [customTo, setCustomTo] = useState(() => clampDateToSystemStart(toDateKey(new Date())));
 
   const selectedDateLabel = useMemo(() => {
     const [y, m, d] = (selectedDateKey || todayKey).split('-').map(Number);
@@ -200,7 +207,7 @@ export default function DashboardView({
   const selectedDateShort = useMemo(() => formatShortDate(selectedDateKey), [selectedDateKey]);
 
   const periodRange = useMemo(() => {
-    const refKey = selectedDateKey || todayKey;
+    const refKey = clampDateToSystemStart(selectedDateKey || todayKey);
     const [ry, rm, rd] = refKey.split('-').map(Number);
     const refDate = new Date(ry, (rm || 1) - 1, rd || 1);
 
@@ -217,7 +224,7 @@ export default function DashboardView({
       const dow = (refDate.getDay() + 6) % 7; // Lunes = 0
       const monday = new Date(refDate);
       monday.setDate(refDate.getDate() - dow);
-      const from = toDateKey(monday);
+      const from = clampDateToSystemStart(toDateKey(monday));
       return {
         from,
         to: refKey,
@@ -230,8 +237,8 @@ export default function DashboardView({
       const [ty, tm] = todayKey.split('-').map(Number);
       const prevEnd = new Date(ty, (tm || 1) - 1, 0);
       const prevStart = new Date(prevEnd.getFullYear(), prevEnd.getMonth(), 1);
-      const from = toDateKey(prevStart);
-      const to = toDateKey(prevEnd);
+      const from = clampDateToSystemStart(toDateKey(prevStart));
+      const to = clampDateToSystemStart(toDateKey(prevEnd));
       return {
         from,
         to,
@@ -241,8 +248,10 @@ export default function DashboardView({
     }
 
     if (periodPreset === 'personalizado') {
-      const safeFrom = customFrom && customTo && customFrom <= customTo ? customFrom : (customFrom || refKey);
-      const safeTo = customFrom && customTo && customFrom <= customTo ? customTo : (customTo || safeFrom);
+      const clampedFrom = customFrom ? clampDateToSystemStart(customFrom) : '';
+      const clampedTo = customTo ? clampDateToSystemStart(customTo) : '';
+      const safeFrom = clampedFrom && clampedTo && clampedFrom <= clampedTo ? clampedFrom : (clampedFrom || refKey);
+      const safeTo = clampedFrom && clampedTo && clampedFrom <= clampedTo ? clampedTo : (clampedTo || safeFrom);
       return {
         from: safeFrom,
         to: safeTo,
@@ -670,10 +679,11 @@ export default function DashboardView({
       summarizeReceivablesAging({
         profitInvoices,
         sales,
+        profitCollections,
         tasaBcv,
         todayKey: effectiveDayKey
       }),
-    [profitInvoices, sales, tasaBcv, effectiveDayKey]
+    [profitInvoices, sales, profitCollections, tasaBcv, effectiveDayKey]
   );
 
   // =========================================================================
@@ -952,7 +962,7 @@ export default function DashboardView({
             { id: 'hoy', label: 'Hoy' },
             { id: 'semana', label: 'Esta semana' },
             { id: 'mes', label: 'Mes' },
-            { id: 'mes_anterior', label: 'Mes anterior' },
+            ...(todayKey.substring(0, 7) > '2026-11' ? [{ id: 'mes_anterior', label: 'Mes anterior' }] : []),
             { id: 'personalizado', label: 'Rango' }
           ].map(p => {
             const active = periodPreset === p.id;
@@ -995,9 +1005,10 @@ export default function DashboardView({
             <span>Fecha (Día):</span>
             <input
               type="date"
+              min={SYSTEM_START_DATE}
               value={selectedDateKey}
               onChange={(e) => {
-                if (e.target.value) setSelectedDateKey(e.target.value);
+                if (e.target.value) setSelectedDateKey(clampDateToSystemStart(e.target.value));
               }}
               aria-label="Fecha puntual para los bloques del día"
               style={{
@@ -1016,8 +1027,9 @@ export default function DashboardView({
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
               <input
                 type="date"
+                min={SYSTEM_START_DATE}
                 value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
+                onChange={(e) => setCustomFrom(clampDateToSystemStart(e.target.value))}
                 aria-label="Fecha desde del período"
                 style={{
                   padding: '4px 8px',
@@ -1032,8 +1044,9 @@ export default function DashboardView({
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>→</span>
               <input
                 type="date"
+                min={SYSTEM_START_DATE}
                 value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
+                onChange={(e) => setCustomTo(clampDateToSystemStart(e.target.value))}
                 aria-label="Fecha hasta del período"
                 style={{
                   padding: '4px 8px',

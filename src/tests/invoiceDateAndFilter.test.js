@@ -7,14 +7,20 @@ import {
   formatDateVe
 } from '../services/creditPolicyService.js';
 import {
+  SYSTEM_START_DATE,
+  SYSTEM_START_MONTH,
   createDefaultDatePeriodFilter,
   extractLocalYmd,
   normalizeDateRange,
   isDatePeriodFilterActive,
   isOnOrAfterDate,
+  isOnOrAfterSystemStart,
+  filterRecordsFromSystemStart,
+  clampDateToSystemStart,
   matchesDatePeriodFilter,
   formatDatePeriodLabel
 } from '../utils/dateRangeFilterUtils.js';
+import { reconcileClientsWithRealCxc } from '../utils/cxcUtils.js';
 
 console.log('--- INICIANDO PRUEBAS DE FECHA/HORA Y FILTROS DE FACTURAS ---');
 
@@ -132,6 +138,54 @@ console.log('--- INICIANDO PRUEBAS DE FECHA/HORA Y FILTROS DE FACTURAS ---');
   assert.equal(isOnOrAfterDate('', '2026-11-10'), false, 'Fecha vacía queda excluida cuando hay corte');
 
   console.log('  ✓ dateRangeFilterUtils (Fecha Exacta y Por Período) verificado al 100%');
+}
+
+// 6. Corte global del sistema a partir del 01/11/2026 (SYSTEM_START_DATE)
+{
+  assert.equal(SYSTEM_START_DATE, '2026-11-01');
+  assert.equal(SYSTEM_START_MONTH, '2026-11');
+
+  assert.equal(isOnOrAfterSystemStart('2026-10-31'), false, '31/10/2026 debe quedar excluido');
+  assert.equal(isOnOrAfterSystemStart('31/10/2026'), false, '31/10/2026 DD/MM/YYYY debe quedar excluido');
+  assert.equal(isOnOrAfterSystemStart('2026-10-31T23:59:59.000Z'), false, '31/10/2026 UTC debe quedar excluido');
+  assert.equal(isOnOrAfterSystemStart('2026-11-01'), true, '01/11/2026 debe quedar incluido');
+  assert.equal(isOnOrAfterSystemStart('2026-11-01T00:00:00.000Z'), true, '01/11/2026 medianoche UTC debe quedar incluido');
+  assert.equal(isOnOrAfterSystemStart('01/11/2026'), true, '01/11/2026 DD/MM/YYYY debe quedar incluido');
+  assert.equal(isOnOrAfterSystemStart(''), false, 'Sin fecha debe quedar excluido');
+
+  assert.equal(clampDateToSystemStart('2026-09-15'), '2026-11-01');
+  assert.equal(clampDateToSystemStart('2026-11-18'), '2026-11-18');
+  assert.equal(clampDateToSystemStart(''), '2026-11-01');
+
+  const mixedRecords = [
+    { id: 'old-inv', fechaEmision: '2026-10-31' },
+    { id: 'old-col', fec_cob: '2026-08-15T00:00:00.000Z' },
+    { id: 'old-pay', fec_pago: '2026-10-20' },
+    { id: 'old-islr', periodoFiscal: '202610' },
+    { id: 'nov01-inv', fechaEmision: '2026-11-01T00:00:00.000Z' },
+    { id: 'nov05-pay', fec_pago: '2026-11-05' },
+    { id: 'nov10-pur', fechaCompra: '2026-11-10' },
+    { id: 'nov-islr', periodoFiscal: '2026-11' }
+  ];
+  const filtered = filterRecordsFromSystemStart(mixedRecords);
+  assert.deepEqual(
+    filtered.map(r => r.id),
+    ['nov01-inv', 'nov05-pay', 'nov10-pur', 'nov-islr'],
+    'Solo registros >= 2026-11-01 deben permanecer visibles/calculables'
+  );
+
+  // Reconciliación forzada cuando todas las facturas eran previas a Nov 2026
+  const reconciled = reconcileClientsWithRealCxc({
+    clients: [{ id: 'CLI-1', nombre: 'Cliente Viejo', rif: 'J-11111111-1', saldoDeudorUsd: 500 }],
+    profitInvoices: [],
+    sales: [],
+    tasaBcv: 900,
+    forceReconcileEmpty: true
+  });
+  assert.equal(reconciled.clients[0].saldoDeudorUsd, 0, 'Saldo previo a Nov debe quedar en 0 al reconciliar corte');
+  assert.equal(reconciled.clients[0]._saldoSyncedFromCxc, true);
+
+  console.log('  ✓ Corte global desde 01/11/2026 y reconciliación CxC verificados al 100%');
 }
 
 console.log('--- TODAS LAS PRUEBAS DE FECHA/HORA DE FACTURAS PASARON AL 100% ---');

@@ -656,12 +656,14 @@ export function reconcileClientsWithRealCxc({
   profitInvoices = [],
   sales = [],
   tasaBcv = 1,
-  todayKey
+  todayKey,
+  forceReconcileEmpty = false
 } = {}) {
   const list = Array.isArray(clients) ? clients : [];
   const today = todayKey || toCxcDateKey(new Date());
   const safeRate = Number(tasaBcv) > 0 ? Number(tasaBcv) : 0;
   const hasReceivableSources =
+    forceReconcileEmpty ||
     (Array.isArray(profitInvoices) && profitInvoices.length > 0) ||
     (Array.isArray(sales) && sales.length > 0);
 

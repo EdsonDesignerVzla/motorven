@@ -63,14 +63,21 @@ export default function PredictiveAnalyticsView({
   const [simCostDeltaPct, setSimCostDeltaPct] = useState(10);
   const [simTargetMarginPct, setSimTargetMarginPct] = useState(25);
 
+  // Ventana efectiva desde el 01/11/2026 (máximo 30 días hacia atrás)
+  const effectiveLookbackDays = useMemo(() => {
+    const startMs = new Date('2026-11-01T00:00:00').getTime();
+    const daysSinceStart = Math.max(1, Math.floor((Date.now() - startMs) / (24 * 60 * 60 * 1000)) + 1);
+    return Math.min(30, daysSinceStart);
+  }, []);
+
   // 1. Cálculos del Motor Predictivo
   const stockoutProjections = useMemo(() => {
     return calculateStockoutProjections(products, sales, orders, {
       leadTimeDays: 7,
       targetCoverageDays: horizonDays,
-      lookbackDays: 30
+      lookbackDays: effectiveLookbackDays
     });
-  }, [products, sales, orders, horizonDays]);
+  }, [products, sales, orders, horizonDays, effectiveLookbackDays]);
 
   const marginAnalysis = useMemo(() => {
     return analyzeMarginCompression(products, {
@@ -78,16 +85,18 @@ export default function PredictiveAnalyticsView({
     });
   }, [products, minSafeMargin]);
 
-  // Run-rate diario de ventas para el flujo de caja
+  // Run-rate diario de ventas para el flujo de caja (desde 01/11/2026)
   const salesRunRateDaily = useMemo(() => {
-    let totalSales30d = 0;
-    const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    let totalSalesWindow = 0;
+    const startCutoff = new Date('2026-11-01T00:00:00').getTime();
+    const lookbackCutoff = Date.now() - (effectiveLookbackDays * 24 * 60 * 60 * 1000);
+    const cutoff = Math.max(startCutoff, lookbackCutoff);
     (sales || []).forEach(s => {
       const d = new Date(s.fecha || s.fec_emis || 0).getTime();
-      if (d >= cutoff) totalSales30d += Number(s.totalUsd || s.totalNeto || 0);
+      if (d >= cutoff) totalSalesWindow += Number(s.totalUsd || s.totalNeto || 0);
     });
-    return totalSales30d / 30;
-  }, [sales]);
+    return totalSalesWindow / effectiveLookbackDays;
+  }, [sales, effectiveLookbackDays]);
 
   const cashflowForecast = useMemo(() => {
     return forecastCashflow({

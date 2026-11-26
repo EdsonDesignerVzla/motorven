@@ -99,8 +99,8 @@ export default function MobileDashboardView({
   const { tasaBcv, tasaKeystone } = useMemo(() => resolveExchangeRates(config), [config]);
   const anioActivo = config?.ejercicioFiscalActivo || new Date().getFullYear();
 
-  const MONTHS_LIST = useMemo(
-    () => [
+  const MONTHS_LIST = useMemo(() => {
+    const all = [
       { id: '01', label: `Enero ${anioActivo}`, short: 'Ene' },
       { id: '02', label: `Febrero ${anioActivo}`, short: 'Feb' },
       { id: '03', label: `Marzo ${anioActivo}`, short: 'Mar' },
@@ -113,11 +113,14 @@ export default function MobileDashboardView({
       { id: '10', label: `Octubre ${anioActivo}`, short: 'Oct' },
       { id: '11', label: `Noviembre ${anioActivo}`, short: 'Nov' },
       { id: '12', label: `Diciembre ${anioActivo}`, short: 'Dic' }
-    ],
-    [anioActivo]
-  );
+    ];
+    return Number(anioActivo) <= 2026 ? all.filter((m) => Number(m.id) >= 11) : all;
+  }, [anioActivo]);
 
-  const currentMonthStr = useMemo(() => String(new Date().getMonth() + 1).padStart(2, '0'), []);
+  const currentMonthStr = useMemo(() => {
+    const m = String(new Date().getMonth() + 1).padStart(2, '0');
+    return Number(anioActivo) <= 2026 && Number(m) < 11 ? '11' : m;
+  }, [anioActivo]);
   const [ventasMesFilter, setVentasMesFilter] = useState(currentMonthStr);
   const [cobranzasMesFilter, setCobranzasMesFilter] = useState(currentMonthStr);
 
@@ -235,10 +238,12 @@ export default function MobileDashboardView({
 
   // 5. RADAR PREDICTIVO & ALERTAS TEMPRANAS (SIGNUM FORESIGHT)
   const predictiveSummary = useMemo(() => {
+    const startMs = new Date('2026-11-01T00:00:00').getTime();
+    const effectiveLookbackDays = Math.min(30, Math.max(1, Math.floor((Date.now() - startMs) / (24 * 60 * 60 * 1000)) + 1));
     const stockoutProjections = calculateStockoutProjections(products, sales, orders, {
       leadTimeDays: 7,
       targetCoverageDays: 30,
-      lookbackDays: 30
+      lookbackDays: effectiveLookbackDays
     });
     const marginAnalysis = analyzeMarginCompression(products, {
       minSafeMarginPct: 18

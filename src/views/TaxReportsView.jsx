@@ -37,6 +37,7 @@ import {
 import FiscalTicketModal from '../components/FiscalTicketModal';
 import IslrWithholdingModal from '../components/IslrWithholdingModal';
 import { generateTaxReportPDF, generateSeniatRetentionVoucherPDF, generateAnnualArcRetentionPDF } from '../services/pdfReportService';
+import { SYSTEM_START_MONTH, filterRecordsFromSystemStart } from '../utils/dateRangeFilterUtils';
 
 export default function TaxReportsView({
   sales = [],
@@ -62,7 +63,8 @@ export default function TaxReportsView({
   const [seniatExportFeedback, setSeniatExportFeedback] = useState(null);
   const [mesFiltro, setMesFiltro] = useState(() => {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return ym < SYSTEM_START_MONTH ? SYSTEM_START_MONTH : ym;
   });
 
   // Modales de Cierres Fiscales
@@ -72,9 +74,9 @@ export default function TaxReportsView({
   const [isClosingZ, setIsClosingZ] = useState(false);
   const [zConfirmCheck, setZConfirmCheck] = useState(false);
 
-  // Filtrado estricto por mes seleccionado y documentos fiscales válidos (excluye NE/Cotizaciones y fechas nulas)
+  // Filtrado estricto por mes seleccionado (>= 2026-11) y documentos fiscales válidos
   const filteredSales = useMemo(() => {
-    return dedupeCanonicalDocs(sales || []).filter(s => {
+    return dedupeCanonicalDocs(filterRecordsFromSystemStart(sales || [])).filter(s => {
       if (!s || !s.fecha || !isFiscalDocEligible(s)) return false;
       return String(s.fecha).slice(0, 7) === mesFiltro;
     });
@@ -142,7 +144,7 @@ export default function TaxReportsView({
   }, [purchases, profitPurchases, safeConfig.tasaDolar]);
 
   const filteredPurchases = useMemo(() => {
-    return unifiedPurchases.filter(p => {
+    return filterRecordsFromSystemStart(unifiedPurchases).filter(p => {
       const f = p?.fecha || p?.fechaEmision || p?.fechaCompra || '';
       if (!f) return false;
       return String(f).slice(0, 7) === mesFiltro;
@@ -150,7 +152,7 @@ export default function TaxReportsView({
   }, [unifiedPurchases, mesFiltro]);
 
   const filteredIslrWithholdings = useMemo(() => {
-    return (profitIslrWithholdings || []).filter(w => {
+    return filterRecordsFromSystemStart(profitIslrWithholdings || []).filter(w => {
       if (!w) return false;
       if (w.periodoFiscal) {
         return String(w.periodoFiscal).replace(/[^0-9]/g, '') === mesFiltro.replace('-', '');
@@ -593,9 +595,13 @@ export default function TaxReportsView({
             <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Período Impositivo:</span>
             <input
               type="month"
+              min={SYSTEM_START_MONTH}
               className="form-control"
               value={mesFiltro}
-              onChange={(e) => setMesFiltro(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setMesFiltro(val && val < SYSTEM_START_MONTH ? SYSTEM_START_MONTH : val);
+              }}
               style={{ width: '160px', padding: '6px 10px', fontSize: '0.9rem' }}
             />
           </div>

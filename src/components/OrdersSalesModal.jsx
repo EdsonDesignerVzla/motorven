@@ -85,7 +85,7 @@ import CxcInvoiceCreationModal from './CxcInvoiceCreationModal';
 import ClientsDirectoryModal from './ClientsDirectoryModal';
 import { saveSupabaseProfitInvoice, saveSupabaseNotification, updateSupabaseInvoiceDocument, isCxcEntryDeleted, sanitizeCxcDeletedDocsStorage } from '../services/supabaseService';
 import DatePeriodFilter from './DatePeriodFilter';
-import { createDefaultDatePeriodFilter, isDatePeriodFilterActive, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
+import { createDefaultDatePeriodFilter, isDatePeriodFilterActive, matchesDatePeriodFilter, SYSTEM_START_DATE, isOnOrAfterSystemStart, clampDateToSystemStart } from '../utils/dateRangeFilterUtils';
 
 const normalizeSearchText = (val) =>
   String(val || '')
@@ -2137,19 +2137,23 @@ export default function OrdersSalesModal({
     };
   };
 
-  // Abrir modal de edición de datos de Factura o Nota de Entrega (solo roles administrativos)
+  // Abrir modal de edición de datos de Factura o Nota de Entrega (solo roles administrativos, desde 01/11/2026)
   const handleOpenEditInvoice = (inv) => {
     if (!inv) return;
     if (!isAdmin) {
       notify.error('Solo usuarios administrativos (Gerencia / Master / Administración / TI) pueden editar facturas emitidas.');
       return;
     }
-    const correlativo = formatInvoiceCorrelativo(inv);
-    const tipoDocNorm = resolveInvoiceTipoDoc(inv);
-    const isCredit = checkIsCredit(inv);
     const dateInfo = parseInvoiceDateInfo(inv);
     const emitDateObj = dateInfo.date || new Date();
     const fechaEmisionDate = dateInfo.isoDateOnly || toLocalYmd(emitDateObj);
+    if (!isOnOrAfterSystemStart(fechaEmisionDate)) {
+      notify.warning('Solo se permite editar Facturas y Notas de Entrega emitidas a partir del 01/11/2026.');
+      return;
+    }
+    const correlativo = formatInvoiceCorrelativo(inv);
+    const tipoDocNorm = resolveInvoiceTipoDoc(inv);
+    const isCredit = checkIsCredit(inv);
     const hh = String(emitDateObj.getHours()).padStart(2, '0');
     const mm = String(emitDateObj.getMinutes()).padStart(2, '0');
     const ss = String(emitDateObj.getSeconds()).padStart(2, '0');
@@ -2215,7 +2219,7 @@ export default function OrdersSalesModal({
     });
   };
 
-  // Guardar cambios editados de Factura o Nota de Entrega (solo datos administrativos y conversión segura; ítems/cantidades bloqueados)
+  // Guardar cambios editados de Factura o Nota de Entrega (desde 01/11/2026; sin afectar inventario)
   const handleSaveEditedInvoice = async (e) => {
     if (e?.preventDefault) e.preventDefault();
     if (!isAdmin) {
@@ -2223,6 +2227,11 @@ export default function OrdersSalesModal({
       return;
     }
     if (!editingInvoice || isSavingEditedInvoice) return;
+
+    if (!isOnOrAfterSystemStart(editingInvoice.fechaEmisionDate)) {
+      notify.error('La fecha de emisión debe ser igual o posterior al 01/11/2026.');
+      return;
+    }
 
     const cleanNumDigits = String(editingInvoice.numeroDoc || '').replace(/[^0-9]/g, '');
     const cleanNum = cleanNumDigits ? cleanNumDigits.slice(-6).padStart(6, '0') : String(editingInvoice.numeroDoc || '').trim();
@@ -2295,11 +2304,9 @@ export default function OrdersSalesModal({
     const newId = collision.newId;
     const resolvedSeriesEra = collision.seriesEra || '';
 
-    const sourceLockedItems = Array.isArray(editingInvoice._lockedOriginalItems) && editingInvoice._lockedOriginalItems.length > 0
-      ? editingInvoice._lockedOriginalItems
-      : (editingInvoice.items || []);
+    const sourceItems = Array.isArray(editingInvoice.items) ? editingInvoice.items : [];
 
-    const cleanItems = sourceLockedItems.map((it) => {
+    const cleanItems = sourceItems.map((it) => {
       const cant = Math.max(0, Number(it.cantidad) || 0);
       const precio = Math.max(0, Number(it.precioUsd) || 0);
       const sub = Number((cant * precio).toFixed(2));
@@ -2311,20 +2318,6 @@ export default function OrdersSalesModal({
         totalUsd: sub
       };
     });
-
-    if (origTipo !== targetTipo && cleanItems.length > 0) {
-      const targetWhCheck = validateWarehouseStockForDocument({
-        items: cleanItems,
-        products: safeProducts,
-        tipoDoc: targetTipo,
-        almacen: targetTipo === 'NOTA_ENTREGA' ? '02' : '01',
-        modalidadVenta: targetTipo === 'NOTA_ENTREGA' ? 'OFICINA' : 'MOSTRADOR'
-      });
-      if (!targetWhCheck.isValid) {
-        notify.error(`No se puede cambiar a ${targetTipo === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura Fiscal'}: ${targetWhCheck.message}`);
-        return;
-      }
-    }
 
     const rawEditedControl = String(editingInvoice.numeroControl || '').trim();
     const resolvedNumeroControl = targetTipo === 'NOTA_ENTREGA'
@@ -2383,10 +2376,13 @@ export default function OrdersSalesModal({
 
     try {
       setIsSavingEditedInvoice(true);
-      const saver = onUpdateInvoiceDocument || updateSupabaseInvoiceDocument;
-      await saver(orig, updatedPayload);
+      if (onUpdateInvoiceDocument) {
+        await onUpdateInvoiceDocument(orig, updatedPayload);
+      } else {
+        await updateSupabaseInvoiceDocument(orig, updatedPayload, { skipInventoryAdjustment: true });
+      }
       notify.success(
-        `${targetTipo === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${cleanNum} actualizada correctamente`
+        `${targetTipo === 'NOTA_ENTREGA' ? 'Nota de Entrega' : 'Factura'} #${cleanNum} actualizada correctamente (sin afectar inventario)`
       );
       setEditingInvoice(null);
     } catch (err) {
@@ -7816,10 +7812,11 @@ export default function OrdersSalesModal({
                           <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Fecha de Emisión</label>
                           <input
                             type="date"
+                            min={SYSTEM_START_DATE}
                             className="form-control"
                             value={editingInvoice.fechaEmisionDate}
                             onChange={(e) => {
-                              const newDate = e.target.value;
+                              const newDate = clampDateToSystemStart(e.target.value);
                               setEditingInvoice(prev => ({
                                 ...prev,
                                 fechaEmisionDate: newDate,
@@ -8260,58 +8257,130 @@ export default function OrdersSalesModal({
                       </div>
                     </div>
 
-                    {/* 4. Renglones / Artículos (Solo Lectura — bloqueado para evitar descuadres) */}
+                    {/* 4. Renglones / Artículos (Editables sin afectar inventario) */}
                     <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '0.95rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem', gap: '8px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase' }}>
-                          4. Renglones ({(editingInvoice.items || []).length}) — Solo Lectura
+                          4. Renglones ({(editingInvoice.items || []).length})
                         </span>
-                        <span style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.12)', color: '#f59e0b', fontSize: '0.7rem', fontWeight: 700 }}>
-                          🔒 Productos y cantidades bloqueados (use Anular o Devolución)
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.4)', background: 'rgba(16,185,129,0.12)', color: '#10b981', fontSize: '0.7rem', fontWeight: 700 }}>
+                            Edición libre (sin afectar inventario)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingInvoice(prev => {
+                                const firstProd = safeProducts[0];
+                                const nextItems = [
+                                  ...(prev.items || []),
+                                  {
+                                    id: `ITEM-${Date.now()}`,
+                                    articuloId: firstProd?.codigo || firstProd?.id || '',
+                                    codigo: firstProd?.codigo || firstProd?.id || '',
+                                    descripcion: firstProd?.descripcion || firstProd?.nombre || 'Lubricante Motorven',
+                                    cantidad: 1,
+                                    precioUsd: Number(getProductWholesalePrice(firstProd) || 0),
+                                    subtotalUsd: Number(getProductWholesalePrice(firstProd) || 0),
+                                    litros: Number(resolveProductLitersPerUnit(firstProd) || 0)
+                                  }
+                                ];
+                                return applyRecalculatedEditingInvoice(prev, nextItems, prev.tipoDoc);
+                              });
+                            }}
+                            style={{ padding: '3px 9px', borderRadius: '6px', border: '1px solid rgba(56,189,248,0.4)', background: 'rgba(56,189,248,0.14)', color: '#38bdf8', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            <Plus size={12} /> Agregar Renglón
+                          </button>
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '170px', overflowY: 'auto' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '190px', overflowY: 'auto' }}>
                         {(editingInvoice.items || []).map((it, rIdx) => (
-                          <div key={it.id || rIdx} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 70px 85px 85px', gap: '6px', alignItems: 'center', opacity: 0.85 }}>
+                          <div key={it.id || rIdx} style={{ display: 'grid', gridTemplateColumns: '95px 1fr 70px 85px 80px 30px', gap: '6px', alignItems: 'center' }}>
                             <input
                               type="text"
                               className="form-control"
                               value={it.codigo || it.articuloId || ''}
-                              readOnly
-                              disabled
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditingInvoice(prev => {
+                                  const nextItems = (prev.items || []).map((row, idx) =>
+                                    idx === rIdx ? { ...row, codigo: val, articuloId: val } : row
+                                  );
+                                  return applyRecalculatedEditingInvoice(prev, nextItems, prev.tipoDoc);
+                                });
+                              }}
                               placeholder="Código"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px', cursor: 'not-allowed' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px' }}
                             />
                             <input
                               type="text"
                               className="form-control"
                               value={it.descripcion || ''}
-                              readOnly
-                              disabled
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditingInvoice(prev => {
+                                  const nextItems = (prev.items || []).map((row, idx) =>
+                                    idx === rIdx ? { ...row, descripcion: val } : row
+                                  );
+                                  return { ...prev, items: nextItems };
+                                });
+                              }}
                               placeholder="Descripción"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px', cursor: 'not-allowed' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px' }}
                             />
                             <input
                               type="number"
+                              min="0"
+                              step="0.01"
                               className="form-control"
                               value={it.cantidad}
-                              readOnly
-                              disabled
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditingInvoice(prev => {
+                                  const nextItems = (prev.items || []).map((row, idx) =>
+                                    idx === rIdx ? { ...row, cantidad: val } : row
+                                  );
+                                  return applyRecalculatedEditingInvoice(prev, nextItems, prev.tipoDoc);
+                                });
+                              }}
                               placeholder="Cant"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right', cursor: 'not-allowed' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
                             />
                             <input
                               type="number"
+                              min="0"
+                              step="0.01"
                               className="form-control"
                               value={it.precioUsd}
-                              readOnly
-                              disabled
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditingInvoice(prev => {
+                                  const nextItems = (prev.items || []).map((row, idx) =>
+                                    idx === rIdx ? { ...row, precioUsd: val } : row
+                                  );
+                                  return applyRecalculatedEditingInvoice(prev, nextItems, prev.tipoDoc);
+                                });
+                              }}
                               placeholder="Precio $"
-                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right', cursor: 'not-allowed' }}
+                              style={{ fontSize: '0.74rem', padding: '4px 6px', textAlign: 'right' }}
                             />
                             <div style={{ fontSize: '0.76rem', fontWeight: 700, textAlign: 'right', color: 'var(--semaforo-verde)' }}>
                               {formatUsd((Number(it.cantidad) || 0) * (Number(it.precioUsd) || 0))}
                             </div>
+                            <button
+                              type="button"
+                              title="Eliminar renglón"
+                              onClick={() => {
+                                setEditingInvoice(prev => {
+                                  const nextItems = (prev.items || []).filter((_, idx) => idx !== rIdx);
+                                  return applyRecalculatedEditingInvoice(prev, nextItems, prev.tipoDoc);
+                                });
+                              }}
+                              style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.12)', color: '#ef4444', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
                           </div>
                         ))}
                       </div>

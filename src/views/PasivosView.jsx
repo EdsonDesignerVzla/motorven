@@ -50,6 +50,7 @@ import {
   computePasivosDashboardMetrics,
   PASIVO_SUBGROUP_LABELS
 } from '../utils/liabilityAccountUtils';
+import { filterRecordsFromSystemStart } from '../utils/dateRangeFilterUtils';
 
 const getNextCorrelativeCode = (items = [], prefix = 'SOC') => {
   let maxNum = 0;
@@ -93,12 +94,17 @@ export default function PasivosView({
   // --- Estado de Otras Cuentas de Pasivo (Plan 2.x) ---
   const [otherLiabilityAccounts, setOtherLiabilityAccounts] = useState(() => loadOtherLiabilityAccounts());
 
-  // --- Movimientos Manuales de Pasivo Socio ---
-  const [manualMovements, setManualMovements] = useState(() => loadPartnerLiabilityMovements());
+  // --- Movimientos Manuales de Pasivo Socio (desde 01/11/2026) ---
+  const [manualMovements, setManualMovements] = useState(() => filterRecordsFromSystemStart(loadPartnerLiabilityMovements()));
 
   const effectiveAccountsPayable = useMemo(
-    () => (Array.isArray(profitAccountsPayable) && profitAccountsPayable.length > 0 ? profitAccountsPayable : accountsPayable),
+    () => filterRecordsFromSystemStart(Array.isArray(profitAccountsPayable) && profitAccountsPayable.length > 0 ? profitAccountsPayable : accountsPayable),
     [profitAccountsPayable, accountsPayable]
+  );
+
+  const scopedSupplierPayments = useMemo(
+    () => filterRecordsFromSystemStart(supplierPayments),
+    [supplierPayments]
   );
 
   const metrics = useMemo(
@@ -107,20 +113,20 @@ export default function PasivosView({
         partnerAccounts: effectivePartnerAccounts,
         otherLiabilityAccounts,
         accountsPayable: effectiveAccountsPayable,
-        supplierPayments,
+        supplierPayments: scopedSupplierPayments,
         config
       }),
-    [effectivePartnerAccounts, otherLiabilityAccounts, effectiveAccountsPayable, supplierPayments, config]
+    [effectivePartnerAccounts, otherLiabilityAccounts, effectiveAccountsPayable, scopedSupplierPayments, config]
   );
 
   const unifiedMovements = useMemo(
     () =>
       buildUnifiedPartnerMovementsLedger({
         partnerAccounts: effectivePartnerAccounts,
-        manualMovements,
-        supplierPayments
+        manualMovements: filterRecordsFromSystemStart(manualMovements),
+        supplierPayments: scopedSupplierPayments
       }),
-    [effectivePartnerAccounts, manualMovements, supplierPayments]
+    [effectivePartnerAccounts, manualMovements, scopedSupplierPayments]
   );
 
   const planPasivosRows = useMemo(() => getOfficialPlanDeCuentasPasivos(), []);

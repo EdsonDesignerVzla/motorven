@@ -116,7 +116,7 @@ export default function SellerCommissionModal({
   const currentYear = new Date().getFullYear();
   const getMesLabel = (id) => {
     const map = {
-      'ALL': `Cierre Anual ${currentYear} (Acumulado)`,
+      'ALL': currentYear <= 2026 ? `Acumulado ${currentYear} (Desde 01/11)` : `Cierre Anual ${currentYear} (Acumulado)`,
       '01': `Enero ${currentYear}`, '02': `Febrero ${currentYear}`, '03': `Marzo ${currentYear}`,
       '04': `Abril ${currentYear}`, '05': `Mayo ${currentYear}`, '06': `Junio ${currentYear}`,
       '07': `Julio ${currentYear}`, '08': `Agosto ${currentYear}`, '09': `Septiembre ${currentYear}`,
@@ -298,17 +298,23 @@ export default function SellerCommissionModal({
                 onChange={(e) => setSelectedMes(e.target.value)}
                 style={{ fontSize: '0.85rem', fontWeight: 700 }}
               >
-                <option value="ALL">Cierre Anual {currentYear} (Acumulado)</option>
-                <option value="01">Enero {currentYear}</option>
-                <option value="02">Febrero {currentYear}</option>
-                <option value="03">Marzo {currentYear}</option>
-                <option value="04">Abril {currentYear}</option>
-                <option value="05">Mayo {currentYear}</option>
-                <option value="06">Junio {currentYear}</option>
-                <option value="07">Julio {currentYear}</option>
-                <option value="08">Agosto {currentYear}</option>
-                <option value="09">Septiembre {currentYear}</option>
-                <option value="10">Octubre {currentYear}</option>
+                <option value="ALL">
+                  {currentYear <= 2026 ? `Acumulado ${currentYear} (Desde 01/11)` : `Cierre Anual ${currentYear} (Acumulado)`}
+                </option>
+                {currentYear > 2026 && (
+                  <>
+                    <option value="01">Enero {currentYear}</option>
+                    <option value="02">Febrero {currentYear}</option>
+                    <option value="03">Marzo {currentYear}</option>
+                    <option value="04">Abril {currentYear}</option>
+                    <option value="05">Mayo {currentYear}</option>
+                    <option value="06">Junio {currentYear}</option>
+                    <option value="07">Julio {currentYear}</option>
+                    <option value="08">Agosto {currentYear}</option>
+                    <option value="09">Septiembre {currentYear}</option>
+                    <option value="10">Octubre {currentYear}</option>
+                  </>
+                )}
                 <option value="11">Noviembre {currentYear}</option>
                 <option value="12">Diciembre {currentYear}</option>
               </select>

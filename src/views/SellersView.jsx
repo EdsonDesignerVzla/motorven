@@ -41,6 +41,7 @@ import {
 import { formatUsd, formatBs, formatUnitVe } from '../services/formatService';
 import SellerDetailModal from '../components/SellerDetailModal';
 import SellerCommissionModal from '../components/SellerCommissionModal';
+import SellerSkuLitrosModal from '../components/SellerSkuLitrosModal';
 import DebtCollectionIntelligenceModal from '../components/DebtCollectionIntelligenceModal';
 import SellerAvatar from '../components/SellerAvatar';
 import { isMasterOrGerencia } from '../services/authService';
@@ -64,6 +65,7 @@ import {
 } from '../services/commissionService';
 import { useNotification } from '../context/NotificationContext';
 import { dedupeCanonicalDocs } from '../services/fiscalService';
+import { filterRecordsFromSystemStart } from '../utils/dateRangeFilterUtils';
 
 function extractMonthNumber(dateVal) {
   if (!dateVal) return '';
@@ -110,17 +112,24 @@ const BASE_MONTH_NAMES = [
 ];
 
 const MONTHS_LIST = [
-  { id: 'ALL', label: `Cierre Anual ${CURRENT_YEAR} (Acumulado)`, short: `Año ${CURRENT_YEAR}` },
-  ...BASE_MONTH_NAMES.map(([id, full, short]) => ({
-    id,
-    label: `${full} ${CURRENT_YEAR}${id === CURRENT_MONTH_NUM ? ' (Actual)' : ''}`,
-    short
-  }))
+  {
+    id: 'ALL',
+    label: CURRENT_YEAR <= 2026 ? `Acumulado ${CURRENT_YEAR} (Desde 01/11)` : `Cierre Anual ${CURRENT_YEAR} (Acumulado)`,
+    short: CURRENT_YEAR <= 2026 ? 'Desde Nov 2026' : `Año ${CURRENT_YEAR}`
+  },
+  ...BASE_MONTH_NAMES
+    .filter(([id]) => (CURRENT_YEAR <= 2026 ? Number(id) >= 11 : true))
+    .map(([id, full, short]) => ({
+      id,
+      label: `${full} ${CURRENT_YEAR}${id === CURRENT_MONTH_NUM ? ' (Actual)' : ''}`,
+      short
+    }))
 ];
 
 export default function SellersView({
   profitSellers = [],
   usersList = [],
+  products = [],
   profitInvoices = [],
   profitReturns = [],
   profitCollections = [],
@@ -147,6 +156,7 @@ export default function SellersView({
   const [selectedZoneFilter, setSelectedZoneFilter] = useState('ALL');
   const [selectedSeller, setSelectedSeller] = useState(null);
   const [commissionSeller, setCommissionSeller] = useState(null);
+  const [skuLitrosSeller, setSkuLitrosSeller] = useState(null);
   const [showDebtCollectionModal, setShowDebtCollectionModal] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [settlements, setSettlements] = useState([]);
@@ -178,13 +188,13 @@ export default function SellersView({
   const [confirmDeleteZoneKey, setConfirmDeleteZoneKey] = useState(null);
   const [zoneManagerError, setZoneManagerError] = useState('');
 
-  // Cargar liquidaciones guardadas (Supabase + respaldo local)
+  // Cargar liquidaciones guardadas (Supabase + respaldo local) desde el 01/11/2026
   useEffect(() => {
     let active = true;
-    setSettlements(getCommissionSettlements());
+    setSettlements(filterRecordsFromSystemStart(getCommissionSettlements()));
     getSupabaseCommissionSettlements()
       .then((list) => {
-        if (active && Array.isArray(list)) setSettlements(list);
+        if (active && Array.isArray(list)) setSettlements(filterRecordsFromSystemStart(list));
       })
       .catch(() => {});
     return () => { active = false; };
@@ -245,6 +255,15 @@ export default function SellersView({
     });
   }, [normalizedCollectionsAll, selectedMonth]);
 
+  const productsBySku = useMemo(() => {
+    const map = new Map();
+    (products || []).forEach(p => {
+      const sku = String(p?.codigo || p?.id || '').trim();
+      if (sku) map.set(sku, p);
+    });
+    return map;
+  }, [products]);
+
   // Consolidated seller performance metrics
   const sellersPerformance = useMemo(() => {
     const tasaBcv = Number(config?.tasaDolar) || 827.73;
@@ -267,8 +286,8 @@ export default function SellersView({
       const retUsd = sReturns.reduce((acc, r) => acc + Math.abs(Number(r?.totNeto ?? r?.tot_neto ?? 0) || 0), 0);
       const retBs = sReturns.reduce((acc, r) => acc + Math.abs((Number(r?.totNeto ?? r?.tot_neto ?? 0) || 0) * (Number(r?.tasa) > 1 ? Number(r.tasa) : tasaBcv)), 0);
 
-      const totalLitros = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + resolveInvoiceLitros(f), 0) - retLitros).toFixed(2)));
-      const totalCajas = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + resolveInvoiceCajas(f), 0) - (retLitros / 11.35)).toFixed(1)));
+      const totalLitros = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + resolveInvoiceLitros(f, productsBySku), 0) - retLitros).toFixed(2)));
+      const totalCajas = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + resolveInvoiceCajas(f, productsBySku), 0) - (retLitros / 11.35)).toFixed(1)));
       const totalVentasUsd = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0) - retUsd).toFixed(2)));
       const totalVentasBs = Math.max(0, Number((sInvoices.reduce((acc, f) => acc + (Number(f?.totNetoBs) || 0), 0) - retBs).toFixed(2)));
       const totalSaldoUsd = sInvoices.reduce((acc, f) => acc + (Number(f?.saldoUsd) || 0), 0);
@@ -323,7 +342,7 @@ export default function SellersView({
         comisionEstimadaBs: commissionSummary.totalComisionBs
       };
     }).sort((a, b) => b.totalLitros - a.totalLitros);
-  }, [effectiveSellers, filteredProfitInvoices, filteredProfitCollections, profitReturns, normalizedCollectionsAll, clients, orders, profitZones, selectedMonth, activeMonthsCount, config?.tasaDolar]);
+  }, [effectiveSellers, filteredProfitInvoices, filteredProfitCollections, profitReturns, normalizedCollectionsAll, clients, orders, profitZones, selectedMonth, activeMonthsCount, config?.tasaDolar, productsBySku]);
 
   // KPIs Generales
   const kpis = useMemo(() => {
@@ -336,6 +355,18 @@ export default function SellersView({
     const totalMetaGlobal = sellersPerformance.reduce((acc, s) => acc + (Number(s.metaLitrosMes) || 0), 0);
     const cumplimientoGlobalPct = totalMetaGlobal > 0 ? parseFloat(((totalLitrosGlobal / totalMetaGlobal) * 100).toFixed(1)) : 0;
     const efectividadCobranzaGlobalPct = totalVentasUsdGlobal > 0 ? parseFloat(((totalCobradoUsdGlobal / totalVentasUsdGlobal) * 100).toFixed(1)) : 0;
+
+    // Documentos y cobros sin asesor activo asignado (para conciliación 100% con Resumen General)
+    const unassignedInvs = (filteredProfitInvoices || []).filter(
+      f => !(effectiveSellers || []).some(s => matchesSeller(s, f))
+    );
+    const unassignedCols = (filteredProfitCollections || []).filter(
+      c => !(effectiveSellers || []).some(s => matchesSeller(s, c))
+    );
+    const unassignedInvsCount = unassignedInvs.length;
+    const unassignedUsd = Number(unassignedInvs.reduce((acc, f) => acc + (Number(f?.totNetoUsd) || 0), 0).toFixed(2));
+    const unassignedLitros = Number(unassignedInvs.reduce((acc, f) => acc + resolveInvoiceLitros(f, productsBySku), 0).toFixed(2));
+    const unassignedCobradoUsd = Number(unassignedCols.reduce((acc, c) => acc + normalizeProfitCollectionUsd(c), 0).toFixed(2));
 
     const topSeller = sellersPerformance[0] || null;
 
@@ -350,9 +381,14 @@ export default function SellersView({
       totalMetaGlobal,
       cumplimientoGlobalPct,
       efectividadCobranzaGlobalPct,
+      unassignedInvsCount,
+      unassignedUsd,
+      unassignedLitros,
+      unassignedColsCount: unassignedCols.length,
+      unassignedCobradoUsd,
       topSeller
     };
-  }, [sellersPerformance]);
+  }, [sellersPerformance, filteredProfitInvoices, filteredProfitCollections, effectiveSellers, productsBySku]);
 
   const filteredSellers = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
@@ -700,7 +736,7 @@ export default function SellersView({
       isDestructive: true
     });
     if (confirmed) {
-      const updated = await deleteSupabaseCommissionSettlement(id);
+      const updated = filterRecordsFromSystemStart(await deleteSupabaseCommissionSettlement(id));
       setSettlements(updated);
       if (onCommissionSettlementsChange) onCommissionSettlementsChange(updated);
       notify.success(`Liquidación ${id} anulada correctamente`);
@@ -709,11 +745,11 @@ export default function SellersView({
 
   const handleSettlementSaved = async () => {
     try {
-      const list = await getSupabaseCommissionSettlements();
+      const list = filterRecordsFromSystemStart(await getSupabaseCommissionSettlements());
       setSettlements(list);
       if (onCommissionSettlementsChange) onCommissionSettlementsChange(list);
     } catch {
-      const localList = getCommissionSettlements();
+      const localList = filterRecordsFromSystemStart(getCommissionSettlements());
       setSettlements(localList);
       if (onCommissionSettlementsChange) onCommissionSettlementsChange(localList);
     }
@@ -894,6 +930,11 @@ export default function SellersView({
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
             ≈ {formatUnitVe(kpis.totalCajasGlobal, 2)} Cajas Totales
+            {kpis.unassignedLitros > 0 && (
+              <span title="Litros en documentos sin asesor activo asignado">
+                {' '}• +{formatUnitVe(kpis.unassignedLitros, 2)} L sin asesor
+              </span>
+            )}
           </div>
         </div>
 
@@ -909,6 +950,11 @@ export default function SellersView({
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--semaforo-verde)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
             Cobrado: <strong>{formatUsd(kpis.totalCobradoUsdGlobal)}</strong> (Saldo: {formatUsd(kpis.totalSaldoUsdGlobal)})
+            {(kpis.unassignedUsd > 0 || kpis.unassignedCobradoUsd > 0) && (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '2px' }}>
+                Sin asesor activo: +{formatUsd(kpis.unassignedUsd)} ({kpis.unassignedInvsCount} docs) • Cobro +{formatUsd(kpis.unassignedCobradoUsd)}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1274,6 +1320,22 @@ export default function SellersView({
                               style={{ padding: '4px 8px', fontSize: '0.75rem' }}
                             >
                               <Eye size={13} />
+                            </button>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSkuLitrosSeller(seller);
+                              }}
+                              title="Ver ventas por SKU en litros, presentación y meta"
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '0.75rem',
+                                color: 'var(--motorven-navy-light)',
+                                borderColor: 'rgba(0, 43, 122, 0.25)'
+                              }}
+                            >
+                              <Droplet size={13} />
                             </button>
                             <button
                               className="btn btn-primary"
@@ -1979,6 +2041,25 @@ export default function SellersView({
           onPhotoUpdated={handlePhotoUpdated}
           onUpdateSellerZone={onUpdateSellerZone}
           onSaveProfitZone={onSaveProfitZone}
+        />
+      )}
+
+      {/* MODAL VENTAS POR SKU EN LITROS, PRESENTACIÓN Y META */}
+      {skuLitrosSeller && (
+        <SellerSkuLitrosModal
+          seller={skuLitrosSeller}
+          onClose={() => setSkuLitrosSeller(null)}
+          invoices={filteredProfitInvoices}
+          returns={(profitReturns || []).filter((r) => {
+            if (selectedMonth === 'ALL') return true;
+            const raw = r?.fecEmis || r?.fec_emis || r?.fecha || '';
+            return !raw || extractMonthNumber(raw) === selectedMonth;
+          })}
+          products={products}
+          periodLabel={MONTHS_LIST.find((m) => m.id === selectedMonth)?.label || ''}
+          config={config}
+          currentUser={currentUser}
+          onPhotoUpdated={handlePhotoUpdated}
         />
       )}
 

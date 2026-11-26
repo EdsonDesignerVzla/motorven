@@ -53,9 +53,9 @@ import {
 } from '../services/pdfReportService';
 import { useNotification } from '../context/NotificationContext';
 import DatePeriodFilter from '../components/DatePeriodFilter';
-import { createDefaultDatePeriodFilter, isOnOrAfterDate, matchesDatePeriodFilter } from '../utils/dateRangeFilterUtils';
+import { createDefaultDatePeriodFilter, isOnOrAfterDate, matchesDatePeriodFilter, SYSTEM_START_DATE } from '../utils/dateRangeFilterUtils';
 
-const PURCHASES_START_DATE = '2026-11-10';
+const PURCHASES_START_DATE = SYSTEM_START_DATE;
 
 export default function PurchasesView({
   products = [],
@@ -244,7 +244,7 @@ export default function PurchasesView({
     ? purchases
     : localPurchases;
 
-  // En este módulo partimos exclusivamente desde el 10/11/2026
+  // En este módulo partimos exclusivamente desde el 01/11/2026
   const scopedDisplayPurchases = useMemo(
     () => (displayPurchases || []).filter(p => p && isOnOrAfterDate(p.fecha || p.fechaEmision || p.fec_emis, PURCHASES_START_DATE)),
     [displayPurchases]
@@ -258,7 +258,7 @@ export default function PurchasesView({
     [profitAccountsPayable]
   );
   const scopedSupplierPayments = useMemo(
-    () => (profitSupplierPayments || []).filter(p => p && isOnOrAfterDate(p.fecha || p.fec_cob || p.fechaPago, PURCHASES_START_DATE)),
+    () => (profitSupplierPayments || []).filter(p => p && isOnOrAfterDate(p.fecha || p.fec_cob || p.fechaPago || p.fec_pago, PURCHASES_START_DATE)),
     [profitSupplierPayments]
   );
   const scopedPaymentOrders = useMemo(
@@ -1093,7 +1093,7 @@ export default function PurchasesView({
               <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span>Gestión integral de compras y proveedores conforme a SENIAT</span>
                 <span className="badge badge-info" style={{ fontSize: '0.68rem', fontWeight: 700 }}>
-                  Desde 10/11/2026
+                  Desde 01/11/2026
                 </span>
               </p>
             </div>
@@ -3502,7 +3502,7 @@ export default function PurchasesView({
         products={products}
         profitInvoices={profitInvoices}
         sales={sales}
-        profitPurchases={profitPurchases}
+        profitPurchases={scopedProfitPurchases}
         profitSuppliers={profitSuppliers}
         config={config}
         tasaBcv={config?.tasaDolar || 827.73}

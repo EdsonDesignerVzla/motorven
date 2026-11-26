@@ -1185,6 +1185,193 @@ export function generateSellersPDF({ sellers = [], config = {}, currentUser = nu
     return base.doc;
   }
 
+export function generateSellerSkuLitrosPDF({
+  seller,
+  summary,
+  periodLabel = '',
+  config = {},
+  currentUser = null
+}) {
+  const sellerName = seller?.venDes || seller?.nombre || 'Asesor Comercial';
+  const sellerCode = seller?.coVen || seller?.co_ven || seller?.id || 'VEN';
+  const base = createBaseReport({
+    title: `VENTAS POR SKU EN LITROS — ${String(sellerName).toUpperCase()}`,
+    subtitle: `Cód: ${sellerCode}${periodLabel ? ` • Período: ${periodLabel}` : ''} • Desglose por Presentación, Meta Alcanzada y Consolidado en Litros`,
+    moduleCode: 'VEN',
+    currentUser,
+    config
+  });
+
+  const safeSummary = summary || {
+    skus: [],
+    presentaciones: [],
+    litrosFacturados: 0,
+    litrosDevueltos: 0,
+    litrosConsolidados: 0,
+    totalUnidades: 0,
+    metaLitros: 3000,
+    porcentajeMeta: 0,
+    litrosRestantesMeta: 3000,
+    litrosExcedenteMeta: 0,
+    facturasCount: 0
+  };
+
+  const metaReached = safeSummary.porcentajeMeta >= 100;
+
+  const cards = [
+    {
+      label: 'Consolidado en Litros',
+      value: `${formatUnitVe(safeSummary.litrosConsolidados)} L`,
+      subtext: `≈ ${formatUnitVe(safeSummary.litrosConsolidados / 11.35, 1)} Cajas Eq. (${safeSummary.facturasCount} doc.)`,
+      color: COLORS.navy
+    },
+    {
+      label: 'Meta Alcanzada',
+      value: `${safeSummary.porcentajeMeta}%`,
+      subtext: `Meta: ${formatUnitVe(safeSummary.metaLitros, 0)} L | ${metaReached ? `Exc: +${formatUnitVe(safeSummary.litrosExcedenteMeta)} L` : `Faltan: ${formatUnitVe(safeSummary.litrosRestantesMeta)} L`}`,
+      color: metaReached ? COLORS.emerald : COLORS.amber
+    },
+    {
+      label: 'SKUs & Unidades',
+      value: `${safeSummary.skus.length} SKUs`,
+      subtext: `${formatUnitVe(safeSummary.totalUnidades, 0)} uds • ${safeSummary.presentaciones.length} presentaciones`,
+      color: COLORS.cyan
+    }
+  ];
+
+  let currentY = addSummaryCards(base.doc, base.startY, cards, base.tableWidth, base.startX);
+
+  if (safeSummary.litrosDevueltos > 0) {
+    currentY = addAnalyticalBox(
+      base.doc,
+      currentY,
+      'AJUSTE POR DEVOLUCIONES DEL PERÍODO',
+      `Facturado bruto por SKUs: ${formatUnitVe(safeSummary.litrosFacturados)} L | Devoluciones: -${formatUnitVe(safeSummary.litrosDevueltos)} L | Consolidado neto: ${formatUnitVe(safeSummary.litrosConsolidados)} L.`,
+      base.tableWidth,
+      base.startX
+    );
+  }
+
+  if (safeSummary.presentaciones.length > 0) {
+    autoTable(base.doc, {
+      startY: currentY,
+      margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+      tableWidth: base.tableWidth,
+      head: [['PRESENTACIÓN', 'SKUs', 'UNIDADES', 'LITROS CONSOLIDADOS', '% DEL TOTAL', '% DE META']],
+      body: safeSummary.presentaciones.map((p) => [
+        p.presentacion,
+        String(p.skusCount),
+        formatUnitVe(p.cantidad, p.cantidad % 1 === 0 ? 0 : 2),
+        `${formatUnitVe(p.litros)} L`,
+        `${p.pctTotalLitros}%`,
+        `${p.pctMeta}%`
+      ]),
+      theme: 'grid',
+      headStyles: {
+        fillColor: COLORS.navy,
+        textColor: [255, 255, 255],
+        fontSize: 6.8,
+        fontStyle: 'bold',
+        cellPadding: 1.5
+      },
+      styles: {
+        fontSize: 6.5,
+        cellPadding: 1.4,
+        textColor: COLORS.dark
+      },
+      alternateRowStyles: { fillColor: COLORS.lightBg },
+      columnStyles: {
+        0: { fontStyle: 'bold' },
+        1: { halign: 'center', cellWidth: 16 },
+        2: { halign: 'right', cellWidth: 24 },
+        3: { halign: 'right', fontStyle: 'bold', cellWidth: 36 },
+        4: { halign: 'right', cellWidth: 24 },
+        5: { halign: 'right', fontStyle: 'bold', cellWidth: 24 }
+      }
+    });
+    currentY = (base.doc.lastAutoTable?.finalY || currentY + 20) + 4;
+  }
+
+  const skuRows = safeSummary.skus.map((r) => [
+    r.sku,
+    r.descripcion,
+    r.presentacion,
+    `${formatUnitVe(r.litrosPorUnidad)} L`,
+    formatUnitVe(r.cantidad, r.cantidad % 1 === 0 ? 0 : 2),
+    `${formatUnitVe(r.litros)} L`,
+    `${r.pctTotalLitros}%`,
+    `${r.pctMeta}%`
+  ]);
+
+  autoTable(base.doc, {
+    startY: currentY,
+    margin: { top: 22, left: base.startX, right: base.startX, bottom: 26 },
+    tableWidth: base.tableWidth,
+    head: [['SKU', 'PRODUCTO / DESCRIPCIÓN', 'PRESENTACIÓN', 'L/U', 'CANTIDAD', 'LITROS', '% TOTAL', '% META']],
+    body: skuRows.length > 0 ? skuRows : [['-', 'Sin ventas registradas en el período', '-', '0 L', '0', '0,00 L', '0%', '0%']],
+    theme: 'grid',
+    headStyles: {
+      fillColor: COLORS.navy,
+      textColor: [255, 255, 255],
+      fontSize: 6.6,
+      fontStyle: 'bold',
+      cellPadding: 1.5
+    },
+    styles: {
+      fontSize: 6.2,
+      cellPadding: 1.35,
+      textColor: COLORS.dark
+    },
+    alternateRowStyles: { fillColor: COLORS.lightBg },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 20 },
+      1: { cellWidth: 56 },
+      2: { halign: 'center', cellWidth: 22 },
+      3: { halign: 'right', cellWidth: 15 },
+      4: { halign: 'right', cellWidth: 18 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 23 },
+      6: { halign: 'right', cellWidth: 13 },
+      7: { halign: 'right', fontStyle: 'bold', cellWidth: 12.9 }
+    }
+  });
+
+  const finalY = base.doc.lastAutoTable?.finalY || currentY + 30;
+  addGrandTotalBox(
+    base.doc,
+    finalY + 3.5,
+    [
+      {
+        label: 'CONSOLIDADO EN LITROS',
+        value: `${formatUnitVe(safeSummary.litrosConsolidados)} L`,
+        subtext: `${formatUnitVe(safeSummary.totalUnidades, 0)} unidades vendidas`,
+        color: COLORS.navy
+      },
+      {
+        label: 'META ALCANZADA',
+        value: `${safeSummary.porcentajeMeta}%`,
+        subtext: `Meta: ${formatUnitVe(safeSummary.metaLitros, 0)} L`,
+        color: metaReached ? COLORS.emerald : COLORS.amber
+      },
+      {
+        label: 'DIVERSIDAD DE SKUs',
+        value: `${safeSummary.skus.length} SKUs`,
+        subtext: `${safeSummary.presentaciones.length} presentaciones`,
+        color: COLORS.emerald
+      }
+    ],
+    base.tableWidth,
+    base.startX
+  );
+
+  const safeCode = String(sellerCode).replace(/[^a-zA-Z0-9_-]/g, '');
+  finalizeAndSave(
+    base.doc,
+    `Ventas_SKU_Litros_${safeCode}_${new Date().toISOString().slice(0, 10)}.pdf`,
+    currentUser
+  );
+  return base.doc;
+}
+
 // =========================================================================
 // 2. REPORTE DE RENTABILIDAD & BI (PRIORITARIO - CARTA VERTICAL)
 // =========================================================================

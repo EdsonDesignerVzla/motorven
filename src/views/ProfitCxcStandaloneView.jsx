@@ -42,6 +42,7 @@ import { formatUsd, formatBs } from '../services/formatService';
 import { getNextInvoiceCorrelativo, getNextNotaEntregaCorrelativo } from '../services/fiscalService';
 import { generateAccountsReceivablePDF } from '../services/pdfReportService';
 import { isCxcInvoiceCancelled, inferCxcDocType, getCxcScopedDocKey } from '../utils/cxcUtils';
+import { filterRecordsFromSystemStart, SYSTEM_START_DATE } from '../utils/dateRangeFilterUtils';
 import { resolveRateMeta, resolveRecordRateType, resolveEffectiveRateNumber, isDirectCurrencyRateType, RATE_TYPE_META } from '../utils/rateClassificationUtils';
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
@@ -206,7 +207,7 @@ const inferDocType = (raw) => {
 
 export default function ProfitCxcStandaloneView() {
   const [config, setConfig] = useState(REAL_CONFIG);
-  const [profitInvoices, setProfitInvoices] = useState(REAL_PROFIT_INVOICES);
+  const [profitInvoices, setProfitInvoices] = useState(() => filterRecordsFromSystemStart(REAL_PROFIT_INVOICES));
   const [sales, setSales] = useState([]);
   const [clients, setClients] = useState(REAL_CLIENTS);
   const [sellers, setSellers] = useState(REAL_PROFIT_SELLERS);
@@ -263,8 +264,8 @@ export default function ProfitCxcStandaloneView() {
           getSupabaseProfitSellers().catch(() => null)
         ]);
         if (cfgData) setConfig(cfgData);
-        if (Array.isArray(invData) && invData.length > 0) setProfitInvoices(invData);
-        if (Array.isArray(salesData)) setSales(salesData);
+        if (Array.isArray(invData) && invData.length > 0) setProfitInvoices(filterRecordsFromSystemStart(invData));
+        if (Array.isArray(salesData)) setSales(filterRecordsFromSystemStart(salesData));
         if (Array.isArray(cliData) && cliData.length > 0) setClients(cliData);
         if (Array.isArray(selData) && selData.length > 0) setSellers(selData);
         setLastSyncTime(new Date().toLocaleTimeString('es-VE'));
@@ -1880,6 +1881,7 @@ export default function ProfitCxcStandaloneView() {
               Desde:
               <input
                 type="date"
+                min={SYSTEM_START_DATE}
                 value={dateFrom}
                 onChange={(e) => setDateFrom(e.target.value)}
               />
@@ -1888,6 +1890,7 @@ export default function ProfitCxcStandaloneView() {
               Hasta:
               <input
                 type="date"
+                min={SYSTEM_START_DATE}
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
               />

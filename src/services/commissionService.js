@@ -14,7 +14,7 @@
  *     * > 21 días vencidos:    0%
  */
 
-import { round2 } from './formatService.js';
+import { round2, resolveProductLitersPerUnit } from './formatService.js';
 
 export const MOTORVEN_COMMISSION_TIERS = {
   TIER_0_7: {
@@ -172,6 +172,9 @@ export function matchesSeller(seller, fieldOrDoc) {
 
   // 2. Coincidencia por nombre completo normalizado (evitar falsos positivos si hay código distinto explícito)
   if (targetName) {
+    for (const n of nameCandidates) {
+      if (n && n === targetName && targetName.length >= 6) return true;
+    }
     const hasExplicitDifferentCode =
       Boolean(targetCode) &&
       codeCandidates.some((c) => c && c.length <= 6 && c !== targetCode);
@@ -233,7 +236,7 @@ function isSyntheticCommissionItem(it) {
   return sku === 'LUB-MANUAL' || sku === 'NE-DESP';
 }
 
-function resolveCommissionItemLitros(it) {
+function resolveCommissionItemLitros(it, productsBySku = null) {
   if (!it || typeof it !== 'object') return 0;
   const desc = String(it.descripcion || it.nombre || '').toLowerCase();
   const sku = String(it.articuloId || it.codigo || it.id || '').trim();
@@ -243,24 +246,33 @@ function resolveCommissionItemLitros(it) {
   if (isSyntheticCommissionItem(it)) {
     return Number(it.litrosTotales ?? it.litros_totales ?? it.litros ?? 0) || 0;
   }
+  const prod = productsBySku?.get(sku);
   const qty = Math.max(0, Number(it.cantidad ?? it.qty ?? 0) || 0);
+  if (prod) {
+    const prodLpu = resolveProductLitersPerUnit(prod);
+    if (qty > 0 && prodLpu > 0) return round2(qty * prodLpu);
+  }
   const unit = String(it.unidad || it.unidadVenta || '').toLowerCase();
   const isGranel = sku === '000003' || desc.includes('granel') || unit === 'litros' || unit === 'litro';
   if (isGranel) return round2(qty);
   const explicitUnitL = Number(it.litrosUnitarios ?? it.litros_unitarios ?? it.litrosPorUnidad ?? it.litros_por_unidad ?? 0);
   const unitL = (explicitUnitL > 0 && explicitUnitL !== 19)
     ? explicitUnitL
-    : (desc.includes('paila') || unit === 'paila' ? 19 : (desc.includes('tambor') || unit === 'tambor' ? 208 : 11.35));
+    : (desc.includes('totem') || unit === 'totem'
+        ? 1000
+        : (desc.includes('paila') || unit === 'paila'
+            ? 19
+            : (desc.includes('tambor') || unit === 'tambor' ? 208 : 11.35)));
   if (qty > 0 && unitL > 0) return round2(qty * unitL);
   return round2(Number(it.litrosTotales ?? it.litros_totales ?? it.litros ?? 0) || 0);
 }
 
-export function resolveInvoiceLitros(inv) {
+export function resolveInvoiceLitros(inv, productsBySku = null) {
   if (!inv || typeof inv !== 'object') return 0;
   const headerLitros = Number(inv.totalLitros ?? inv.total_litros ?? 0);
   if (Array.isArray(inv.items) && inv.items.length > 0) {
     const hasRealItems = inv.items.some(it => it && !isSyntheticCommissionItem(it));
-    const sum = inv.items.reduce((acc, it) => acc + resolveCommissionItemLitros(it), 0);
+    const sum = inv.items.reduce((acc, it) => acc + resolveCommissionItemLitros(it, productsBySku), 0);
     if (hasRealItems && sum > 0) return round2(sum);
     if (headerLitros > 0) return round2(headerLitros);
     return round2(sum);
@@ -269,12 +281,12 @@ export function resolveInvoiceLitros(inv) {
   return 0;
 }
 
-export function resolveInvoiceCajas(inv) {
+export function resolveInvoiceCajas(inv, productsBySku = null) {
   if (!inv || typeof inv !== 'object') return 0;
   if (Array.isArray(inv.items) && inv.items.length > 0) {
     const hasRealItems = inv.items.some(it => it && !isSyntheticCommissionItem(it));
     if (hasRealItems) {
-      const litros = resolveInvoiceLitros(inv);
+      const litros = resolveInvoiceLitros(inv, productsBySku);
       if (litros > 0) return round2(litros / 11.35);
     }
   }

@@ -1,5 +1,13 @@
 import { getEraScopedCanonicalDocKey, dedupeCanonicalDocs } from './fiscalService.js';
-import { isCxcInvoiceCancelled, isCxcInvoiceSettled, isCreditSaleRecord, isCreditOrDebitNoteDoc } from '../utils/cxcUtils.js';
+import {
+  isCxcInvoiceCancelled,
+  isCxcInvoiceSettled,
+  isCreditSaleRecord,
+  isCreditOrDebitNoteDoc,
+  buildCollectionsByDocDigitsIndex,
+  sumLinkedCollectionsUsdForInvoice,
+  normalizeRefDigits
+} from '../utils/cxcUtils.js';
 import { normalizeProfitCollectionUsd } from './commissionService.js';
 import { resolveProductUnit, resolveProductLitersPerUnit, getProductWarehouseStocks } from './formatService.js';
 import { getProductCost } from './pricingService.js';
@@ -105,7 +113,7 @@ export function summarizePendingOrders(orders = []) {
 /**
  * Resume cartera CxC al día vs vencida usando clave canónica, fecha local VE y plazos de crédito completos.
  */
-export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tasaBcv = 1, todayKey = toDateKey(new Date()) } = {}) {
+export function summarizeReceivablesAging({ profitInvoices = [], sales = [], profitCollections = [], tasaBcv = 1, todayKey = toDateKey(new Date()) } = {}) {
   const today = todayKey || toDateKey(new Date());
   let alDia = 0;
   let vencida = 0;
@@ -114,11 +122,53 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
   let docsVencidosFacturas = 0;
   let docsVencidosNotas = 0;
   const seenCxcKeys = new Set();
+  const collectionsByDigitsIndex = buildCollectionsByDocDigitsIndex(profitCollections);
 
   const isNotaEntregaDoc = (doc) => {
     const tipo = String(doc?.tipoDoc || doc?.tipo_doc || '').toUpperCase().trim();
     const num = String(doc?.numeroFactura || doc?.numeroDoc || doc?.numero_doc || doc?.id || '').toUpperCase().trim();
     return tipo === 'NOTA_ENTREGA' || tipo === 'NE' || num.startsWith('NE-');
+  };
+
+  const resolveEffectiveDueKey = (doc) => {
+    const fEmisRaw = doc.fechaEmision || doc.fecEmis || doc.fec_emis || doc.fecha || '';
+    const fEmis = toDateKey(fEmisRaw);
+    const fVencRaw = doc.fechaVencimiento || doc.fecVenc || doc.fec_venc || doc.fechaVenc || '';
+    let fVenc = toDateKey(fVencRaw) || fVencRaw;
+    const explicitDias = Number(doc.diasCredito ?? doc.dias_credito ?? 0);
+    // Paridad con CxC: si fec_venc === fec_emis y no hay días de crédito > 0, aplicar 15 días estándar
+    if (fEmis && (!fVenc || fVenc === fEmis) && !(explicitDias > 0)) {
+      const [y, m, d] = fEmis.split('-').map(Number);
+      if (y && m && d) {
+        const dt = new Date(y, m - 1, d + 15);
+        fVenc = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      }
+    }
+    return fVenc;
+  };
+
+  const resolveEffectiveSaldo = (doc, rawSaldo, isNE) => {
+    if (!Array.isArray(profitCollections) || profitCollections.length === 0) return rawSaldo;
+    const rawNeto = Number(doc.totNetoUsd ?? doc.tot_neto_usd ?? doc.totalUsd ?? doc.total_usd ?? 0) || 0;
+    const rawBruto = Number(doc.totBrutoUsd ?? doc.tot_bruto_usd ?? 0) || 0;
+    const montoFacturaUsd = isNE && rawBruto > 0 && rawBruto < rawNeto ? rawBruto : rawNeto;
+    if (montoFacturaUsd <= 0) return rawSaldo;
+    const factNum = String(doc.factNum || doc.fact_num || doc.factura || doc.numeroFactura || doc.numeroDoc || doc.numero_doc || doc.id || '').trim();
+    const invDigits = normalizeRefDigits(factNum);
+    const candidateCols = invDigits ? (collectionsByDigitsIndex.get(invDigits) || []) : [];
+    const linkedCobrosUsd = sumLinkedCollectionsUsdForInvoice(
+      candidateCols,
+      { ...doc, factNum, tipoDoc: isNE ? 'NOTA_ENTREGA' : (doc.tipoDoc || doc.tipo_doc || 'FACTURA') },
+      tasaBcv
+    );
+    if (linkedCobrosUsd <= 0.01) return rawSaldo;
+    const rawAbonosField = doc.abonosUsd ?? doc.abonos_usd;
+    const baseAbonos = (rawAbonosField !== undefined && rawAbonosField !== null && !isNaN(Number(rawAbonosField)))
+      ? Math.max(0, Number(rawAbonosField))
+      : Math.max(0, montoFacturaUsd - rawSaldo);
+    const effectiveAbonos = Math.min(montoFacturaUsd, Math.max(baseAbonos, linkedCobrosUsd));
+    const effectiveSaldo = Math.max(0, parseFloat((montoFacturaUsd - effectiveAbonos).toFixed(2)));
+    return Math.min(rawSaldo, effectiveSaldo);
   };
 
   if (Array.isArray(profitInvoices)) {
@@ -127,18 +177,21 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
       const ck = getEraScopedCanonicalDocKey(f);
       if (ck) seenCxcKeys.add(ck);
       if (isCxcInvoiceSettled(f)) return;
-      let saldo = Number(f.saldoUsd ?? f.saldo_usd ?? 0);
-      if (saldo <= 0.01 && (f.saldoBs ?? f.saldo_bs) && tasaBcv > 0) {
-        saldo = Number(f.saldoBs ?? f.saldo_bs) / tasaBcv;
+      let rawSaldo = Number(f.saldoUsd ?? f.saldo_usd ?? 0);
+      if (rawSaldo <= 0.01 && (f.saldoBs ?? f.saldo_bs) && tasaBcv > 0) {
+        rawSaldo = Number(f.saldoBs ?? f.saldo_bs) / tasaBcv;
       }
+      if (rawSaldo <= 0.01) return;
+      const isNE = isNotaEntregaDoc(f);
+      const saldo = resolveEffectiveSaldo(f, rawSaldo, isNE);
       if (saldo <= 0.01) return;
-      const fVencRaw = f.fechaVencimiento || f.fecVenc || f.fec_venc || '';
-      const fVenc = toDateKey(fVencRaw) || fVencRaw;
-      if (!fVenc || fVenc >= today) {
+      const fVenc = resolveEffectiveDueKey(f);
+      const customVenc = Number(f.diasVencidoCustom ?? f.dias_vencido_custom ?? 0) > 0;
+      if (!customVenc && (!fVenc || fVenc >= today)) {
         alDia += saldo;
       } else {
         vencida += saldo;
-        if (isNotaEntregaDoc(f)) {
+        if (isNE) {
           venNotas += saldo;
           docsVencidosNotas += 1;
         } else {
@@ -161,15 +214,18 @@ export function summarizeReceivablesAging({ profitInvoices = [], sales = [], tas
       const statusUpper = String(s.estado || s.status || '').toUpperCase().trim();
       const explicitSaldo = Number(s.saldoPendiente ?? s.saldoUsd ?? s.saldo_usd ?? 0);
       if (!isCreditSaleRecord(s) && statusUpper !== 'PENDIENTE' && explicitSaldo <= 0.01) return;
-      const saldo = Number(s.saldoPendiente ?? s.saldoUsd ?? s.saldo_usd ?? (s.totalUsd && !s.pagado ? s.totalUsd : 0));
+      const rawSaldo = Number(s.saldoPendiente ?? s.saldoUsd ?? s.saldo_usd ?? (s.totalUsd && !s.pagado ? s.totalUsd : 0));
+      if (rawSaldo <= 0.01) return;
+      const isNE = isNotaEntregaDoc(s);
+      const saldo = resolveEffectiveSaldo(s, rawSaldo, isNE);
       if (saldo <= 0.01) return;
-      const fVencRaw = s.fechaVencimiento || s.fechaVenc || '';
-      const fVenc = toDateKey(fVencRaw) || fVencRaw;
-      if (!fVenc || fVenc >= today) {
+      const fVenc = resolveEffectiveDueKey(s);
+      const customVenc = Number(s.diasVencidoCustom ?? s.dias_vencido_custom ?? 0) > 0;
+      if (!customVenc && (!fVenc || fVenc >= today)) {
         alDia += saldo;
       } else {
         vencida += saldo;
-        if (isNotaEntregaDoc(s)) {
+        if (isNE) {
           venNotas += saldo;
           docsVencidosNotas += 1;
         } else {

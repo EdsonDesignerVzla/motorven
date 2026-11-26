@@ -816,6 +816,21 @@ try {
     'updateSupabaseInvoiceDocument debe sumar 1 cuando pasa de 4 a 3'
   );
 
+  // 7) Con skipInventoryAdjustment: true, editar cantidades o tipoDoc NO debe modificar el inventario
+  const stockBeforeNoInvEdit = Number(getProducts().find(p => p.codigo === 'TEST-SKU-01')?.stockAlmacen01 ?? 0);
+  const savedNoInvEdit = await updateSupabaseInvoiceDocument(
+    { ...origDocEdit, items: [{ codigo: 'TEST-SKU-01', cantidad: 3, precioUsd: 10 }] },
+    { ...origDocEdit, tipoDoc: 'NOTA_ENTREGA', items: [{ codigo: 'TEST-SKU-01', cantidad: 10, precioUsd: 12 }] },
+    { skipInventoryAdjustment: true }
+  );
+  const stockAfterNoInvEdit = Number(getProducts().find(p => p.codigo === 'TEST-SKU-01')?.stockAlmacen01 ?? 0);
+  assert.strictEqual(
+    stockAfterNoInvEdit,
+    stockBeforeNoInvEdit,
+    'Con skipInventoryAdjustment: true, editar factura/NE no debe modificar el inventario'
+  );
+  assert.strictEqual(savedNoInvEdit?.tipoDoc, 'NOTA_ENTREGA');
+
   // 14. Regresión edición de precio unitario en Nota de Entrega multi-renglón (60.26 -> 60.29 => 35087.37)
   const neInit = await saveSupabasePurchase({
     id: 'COMP-TEST-17591',

@@ -81,6 +81,23 @@ assert.equal(aging.cxcVen, 250);
 assert.equal(aging.cxcTot, 450);
 console.log('  ✓ 4. Resumen de cartera CxC (plazos N_DIAS, exclusión COBRADA con saldoBs residual y deduplicación) verificado.');
 
+// 4b. Paridad CxC: fec_venc === fec_emis usa 15 días estándar y descuenta cobros vinculados en profitCollections
+const agingParity = summarizeReceivablesAging({
+  profitInvoices: [
+    { id: 'NE-002280', factNum: 'NE-002280', tipoDoc: 'NOTA_ENTREGA', fechaEmision: '2026-11-23', fechaVencimiento: '2026-11-23', totNetoUsd: 82, saldoUsd: 82 },
+    { id: 'NE-002225', factNum: 'NE-002225', tipoDoc: 'NOTA_ENTREGA', fechaEmision: '2026-11-13', fechaVencimiento: '2026-11-20', totNetoUsd: 82, saldoUsd: 82 }
+  ],
+  profitCollections: [
+    { id: 'cob-1', cobNum: '004175', fecha: '2026-11-13', montoUsd: 63, documentosAfectados: [{ numDoc: 'NE-002225', montoUsd: 63 }] }
+  ],
+  tasaBcv: 924.35,
+  todayKey: '2026-11-26'
+});
+assert.equal(agingParity.cxcDia, 82);
+assert.equal(agingParity.cxcVen, 19);
+assert.equal(agingParity.docsVencidosNotas, 1);
+console.log('  ✓ 4b. Paridad CxC (fec_venc === fec_emis -> 15 días y cruce de profitCollections) verificada.');
+
 // 5. Anti-colisión de vendedores con códigos cortos (OF, CM)
 const oficinaSeller = { coVen: 'OF', venDes: 'Oficina Principal' };
 const carlosSeller = { coVen: 'CM', venDes: 'Carlos Mendez' };
