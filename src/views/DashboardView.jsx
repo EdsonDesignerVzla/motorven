@@ -15,7 +15,12 @@ import {
   Wallet,
   Building2,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  TrendingUp,
+  TrendingDown,
+  AlertTriangle,
+  Target,
+  Layers
 } from 'lucide-react';
 import {
   formatUsd,
@@ -778,1038 +783,1069 @@ export default function DashboardView({
     }
   };
 
+  const ventasDiaDeltaPct = useMemo(() => {
+    if (!(ventasDelDia.ayerUsd > 0)) return null;
+    return parseFloat((((ventasDelDia.usd - ventasDelDia.ayerUsd) / ventasDelDia.ayerUsd) * 100).toFixed(1));
+  }, [ventasDelDia.usd, ventasDelDia.ayerUsd]);
+
+  const cobranzaDiaDeltaPct = useMemo(() => {
+    if (!(cobranzaDelDia.ayerUsd > 0)) return null;
+    return parseFloat((((cobranzaDelDia.usd - cobranzaDelDia.ayerUsd) / cobranzaDelDia.ayerUsd) * 100).toFixed(1));
+  }, [cobranzaDelDia.usd, cobranzaDelDia.ayerUsd]);
+
+  const cobDiaDivisasShare = useMemo(() => {
+    const tot = (cobranzaDelDia.divisasUsd || 0) + (cobranzaDelDia.bsUsd || 0);
+    return tot > 0 ? Math.min(100, Math.max(0, Math.round((cobranzaDelDia.divisasUsd / tot) * 100))) : 50;
+  }, [cobranzaDelDia.divisasUsd, cobranzaDelDia.bsUsd]);
+
+  const cobMesDivisasShare = useMemo(() => {
+    const tot = (cobranzaAcumuladaMes.divisasUsd || 0) + (cobranzaAcumuladaMes.bsUsd || 0);
+    return tot > 0 ? Math.min(100, Math.max(0, Math.round((cobranzaAcumuladaMes.divisasUsd / tot) * 100))) : 50;
+  }, [cobranzaAcumuladaMes.divisasUsd, cobranzaAcumuladaMes.bsUsd]);
+
+  const costoPromedioLitroUsd = useMemo(
+    () => (stockTotalLitros > 0 ? stockValorizadoUsd / stockTotalLitros : 0),
+    [stockValorizadoUsd, stockTotalLitros]
+  );
+
   return (
     <div className="rg-container">
-      {/* CABECERA FIJA: TOAST, BARRA EJECUTIVA, PESTAÑAS Y FILTRO TEMPORAL */}
+      {/* CABECERA FIJA UNIFICADA: TOAST + DOCK DE MANDO EJECUTIVO */}
       <div className="rg-sticky-header">
-        {/* Toast Feedback de Sincronización */}
-      {syncFeedback && (
-        <div
-          style={{
-            padding: '10px 16px',
-            borderRadius: '12px',
-            background: 'var(--semaforo-verde-bg)',
-            border: '1px solid var(--semaforo-verde)',
-            color: 'var(--semaforo-verde)',
-            fontSize: '0.84rem',
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px'
-          }}
-        >
-          <CheckCircle2 size={16} />
-          <span>{syncFeedback}</span>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* CABECERA EJECUTIVA: RESUMEN GENERAL + FILTRO RÁPIDO DE LOS 3 APARTADOS     */}
-      {/* ========================================================================= */}
-      <div className="rg-topbar">
-        <div className="rg-title-wrap">
-          <div className="rg-title-icon">
-            <LayoutDashboard size={22} />
+        {syncFeedback && (
+          <div className="rg-sync-toast" role="status">
+            <CheckCircle2 size={16} />
+            <span>{syncFeedback}</span>
           </div>
-          <div>
-            <h1 className="rg-main-title">RESUMEN GENERAL</h1>
-            <div className="rg-date-subtitle">
-              <Calendar size={13} />
-              <span>{todayLabel}</span>
+        )}
+
+        <header className="rg-command-shell">
+          {/* Fila Superior: Identidad del Módulo + Tasas Activas + Acciones */}
+          <div className="rg-topbar">
+            <div className="rg-title-wrap">
+              <div className="rg-title-icon">
+                <LayoutDashboard size={21} />
+              </div>
+              <div className="rg-title-stack">
+                <div className="rg-eyebrow-row">
+                  <span className="rg-eyebrow-tag">DIRECCIÓN & SÍNTESIS FINANCIERA</span>
+                  <span className="rg-live-dot-badge">
+                    <span className="rg-live-dot" />
+                    TIEMPO REAL
+                  </span>
+                </div>
+                <div className="rg-heading-inline">
+                  <h1 className="rg-main-title">RESUMEN GENERAL</h1>
+                  <div className="rg-date-subtitle">
+                    <Calendar size={13} />
+                    <span>{todayLabel}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <div className="rg-actions-row">
-          {typeof onNavigate === 'function' && (
-            <button
-              type="button"
-              onClick={() => onNavigate('predictibilidad')}
-              title="Abrir Módulo SIGNUM FORESIGHT — Predictibilidad & Alertas Tempranas"
-              style={{
-                padding: '7px 14px',
-                borderRadius: '999px',
-                fontSize: '0.78rem',
-                fontWeight: 800,
-                fontFamily: 'var(--font-tech)',
-                background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
-                color: '#ffffff',
-                border: '1px solid rgba(139, 92, 246, 0.5)',
-                boxShadow: '0 4px 12px rgba(124, 58, 237, 0.25)',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <Sparkles size={14} style={{ flexShrink: 0 }} />
-              <span>Predictibilidad & Alertas</span>
-            </button>
-          )}
+            <div className="rg-actions-row">
+              {typeof onNavigate === 'function' && (
+                <button
+                  type="button"
+                  className="rg-btn-foresight"
+                  onClick={() => onNavigate('predictibilidad')}
+                  title="Abrir Módulo SIGNUM FORESIGHT — Predictibilidad & Alertas Tempranas"
+                >
+                  <Sparkles size={14} style={{ flexShrink: 0 }} />
+                  <span>Predictibilidad & Alertas</span>
+                </button>
+              )}
 
-          {typeof onSyncProfit === 'function' && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleManualSync}
-              disabled={isSyncing}
-              title="Sincronizar datos en tiempo real desde Profit / Supabase"
-              style={{
-                padding: '7px 14px',
-                borderRadius: '999px',
-                fontSize: '0.78rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <RefreshCw size={14} style={{ flexShrink: 0, animation: isSyncing ? 'spin 1s linear infinite' : 'none' }} />
-              <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
-            </button>
-          )}
+              {typeof onSyncProfit === 'function' && (
+                <button
+                  type="button"
+                  className="rg-btn-toolbar"
+                  onClick={handleManualSync}
+                  disabled={isSyncing}
+                  title="Sincronizar datos en tiempo real desde Profit / Supabase"
+                >
+                  <RefreshCw size={14} style={{ flexShrink: 0, animation: isSyncing ? 'spin 1s linear infinite' : 'none' }} />
+                  <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+                </button>
+              )}
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setShowPrintModal(true)}
-            title="Abrir vista previa del Resumen General"
-            style={{
-              padding: '7px 14px',
-              borderRadius: '999px',
-              fontSize: '0.78rem',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <Eye size={14} style={{ flexShrink: 0 }} />
-            <span>Vista Previa</span>
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-print-report"
-            onClick={() => handlePrintReport('ALL')}
-            title="Descargar Resumen General en PDF"
-            style={{
-              padding: '7px 14px',
-              borderRadius: '999px',
-              fontSize: '0.78rem'
-            }}
-          >
-            <Printer size={14} style={{ flexShrink: 0 }} />
-            <span>Imprimir PDF</span>
-          </button>
-        </div>
-      </div>
-
-      {/* SELECTOR RÁPIDO DE LOS 4 APARTADOS */}
-      <div className="rg-tabs-row">
-        <div className="rg-tabs-pills">
-          {[
-            { id: 'ALL', label: 'Todos los Apartados', tone: 'tone-all' },
-            { id: 'facturacion', label: '1. Facturación', tone: 'tone-facturacion' },
-            { id: 'inventario', label: '2. Inventario', tone: 'tone-inventario' },
-            { id: 'cobranzas', label: '3. Cobranzas', tone: 'tone-cobranzas' },
-            { id: 'cxp-keystone', label: '4. CxP Keystone', tone: 'tone-cxp-keystone' }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveBlock(tab.id)}
-              className={`rg-tab-pill ${tab.tone}${activeBlock === tab.id ? ' is-active' : ''}`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* BARRA DE FILTRO TEMPORAL UNIFICADA (FECHA PUNTUAL & PERÍODO PARA LOS 4 BLOQUES) */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '0.65rem 1rem',
-          padding: '0.65rem 0.95rem',
-          borderRadius: '14px',
-          background: 'var(--bg-card-glass)',
-          border: '1px solid var(--border-glass)',
-          backdropFilter: 'blur(12px)'
-        }}
-      >
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem' }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              fontSize: '0.73rem',
-              fontWeight: 700,
-              fontFamily: 'var(--font-tech)',
-              color: 'var(--text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              marginRight: '2px'
-            }}
-          >
-            <Calendar size={13} /> Período:
-          </span>
-
-          {[
-            { id: 'hoy', label: 'Hoy' },
-            { id: 'semana', label: 'Esta semana' },
-            { id: 'mes', label: 'Mes' },
-            ...(todayKey.substring(0, 7) > '2026-11' ? [{ id: 'mes_anterior', label: 'Mes anterior' }] : []),
-            { id: 'personalizado', label: 'Rango' }
-          ].map(p => {
-            const active = periodPreset === p.id;
-            return (
               <button
-                key={p.id}
                 type="button"
-                onClick={() => handleSelectPeriodPreset(p.id)}
-                style={{
-                  padding: '4px 11px',
-                  borderRadius: '999px',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  border: active ? '1px solid transparent' : '1px solid var(--border-glass)',
-                  background: active
-                    ? 'linear-gradient(135deg, var(--motorven-navy) 0%, #0284c7 100%)'
-                    : 'var(--surface-input)',
-                  color: active ? '#ffffff' : 'var(--text-heading)',
-                  transition: 'all 0.15s ease'
-                }}
+                className="rg-btn-toolbar"
+                onClick={() => setShowPrintModal(true)}
+                title="Abrir vista previa del Resumen General"
               >
-                {p.label}
+                <Eye size={14} style={{ flexShrink: 0 }} />
+                <span>Vista Previa</span>
               </button>
-            );
-          })}
-        </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem' }}>
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '0.74rem',
-              fontWeight: 600,
-              color: 'var(--text-muted)'
-            }}
-          >
-            <span>Fecha (Día):</span>
-            <input
-              type="date"
-              min={SYSTEM_START_DATE}
-              value={selectedDateKey}
-              onChange={(e) => {
-                if (e.target.value) setSelectedDateKey(clampDateToSystemStart(e.target.value));
-              }}
-              aria-label="Fecha puntual para los bloques del día"
-              style={{
-                padding: '4px 8px',
-                borderRadius: '8px',
-                border: '1px solid var(--border-glass)',
-                background: 'var(--surface-input)',
-                color: 'var(--text-heading)',
-                fontSize: '0.76rem',
-                fontFamily: 'var(--font-code)'
-              }}
-            />
-          </label>
-
-          {periodPreset === 'personalizado' && (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-              <input
-                type="date"
-                min={SYSTEM_START_DATE}
-                value={customFrom}
-                onChange={(e) => setCustomFrom(clampDateToSystemStart(e.target.value))}
-                aria-label="Fecha desde del período"
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border-glass)',
-                  background: 'var(--surface-input)',
-                  color: 'var(--text-heading)',
-                  fontSize: '0.76rem',
-                  fontFamily: 'var(--font-code)'
-                }}
-              />
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>→</span>
-              <input
-                type="date"
-                min={SYSTEM_START_DATE}
-                value={customTo}
-                onChange={(e) => setCustomTo(clampDateToSystemStart(e.target.value))}
-                aria-label="Fecha hasta del período"
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border-glass)',
-                  background: 'var(--surface-input)',
-                  color: 'var(--text-heading)',
-                  fontSize: '0.76rem',
-                  fontFamily: 'var(--font-code)'
-                }}
-              />
+              <button
+                type="button"
+                className="btn btn-print-report rg-btn-pdf"
+                onClick={() => handlePrintReport('ALL')}
+                title="Descargar Resumen General en PDF"
+              >
+                <Printer size={14} style={{ flexShrink: 0 }} />
+                <span>Imprimir PDF</span>
+              </button>
             </div>
-          )}
+          </div>
 
-          {isTemporalFiltered && (
-            <button
-              type="button"
-              onClick={handleResetTemporalFilters}
-              title="Volver a Hoy y Mes actual"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '4px 10px',
-                borderRadius: '999px',
-                fontSize: '0.73rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                border: '1px solid var(--border-glass)',
-                background: 'var(--surface-input)',
-                color: 'var(--text-heading)'
-              }}
-            >
-              <RotateCcw size={12} />
-              <span>Hoy</span>
-            </button>
-          )}
-        </div>
-      </div>
+          {/* Fila Inferior Unificada: Navegación por Apartados + Filtro Temporal */}
+          <div className="rg-control-bar">
+            <div className="rg-segmented-tabs" role="tablist" aria-label="Apartados del Resumen General">
+              {[
+                { id: 'ALL', code: 'ALL', label: 'Vista Consolidada', tone: 'tone-all' },
+                { id: 'facturacion', code: '01', label: 'Facturación', tone: 'tone-facturacion' },
+                { id: 'inventario', code: '02', label: 'Inventario', tone: 'tone-inventario' },
+                { id: 'cobranzas', code: '03', label: 'Cobranzas', tone: 'tone-cobranzas' },
+                { id: 'cxp-keystone', code: '04', label: 'CxP Keystone', tone: 'tone-cxp-keystone' }
+              ].map(tab => {
+                const isActive = activeBlock === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => setActiveBlock(tab.id)}
+                    className={`rg-tab-pill ${tab.tone}${isActive ? ' is-active' : ''}`}
+                  >
+                    {tab.id !== 'ALL' && <span className="rg-tab-index">{tab.code}</span>}
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="rg-temporal-capsule">
+              <div className="rg-period-group">
+                <span className="rg-filter-label">
+                  <Calendar size={12} />
+                  Período
+                </span>
+                <div className="rg-period-pills">
+                  {[
+                    { id: 'hoy', label: 'Hoy' },
+                    { id: 'semana', label: 'Semana' },
+                    { id: 'mes', label: 'Mes' },
+                    ...(todayKey.substring(0, 7) > '2026-11' ? [{ id: 'mes_anterior', label: 'Mes ant.' }] : []),
+                    { id: 'personalizado', label: 'Rango' }
+                  ].map(p => {
+                    const active = periodPreset === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSelectPeriodPreset(p.id)}
+                        className={`rg-period-btn${active ? ' is-active' : ''}`}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rg-temporal-divider" />
+
+              <div className="rg-date-inputs-group">
+                <label className="rg-date-field">
+                  <span className="rg-date-field-label">Corte Día</span>
+                  <input
+                    type="date"
+                    min={SYSTEM_START_DATE}
+                    value={selectedDateKey}
+                    onChange={(e) => {
+                      if (e.target.value) setSelectedDateKey(clampDateToSystemStart(e.target.value));
+                    }}
+                    aria-label="Fecha puntual para los bloques del día"
+                    className="rg-date-input"
+                  />
+                </label>
+
+                {periodPreset === 'personalizado' && (
+                  <div className="rg-range-fields">
+                    <input
+                      type="date"
+                      min={SYSTEM_START_DATE}
+                      value={customFrom}
+                      onChange={(e) => setCustomFrom(clampDateToSystemStart(e.target.value))}
+                      aria-label="Fecha desde del período"
+                      className="rg-date-input"
+                    />
+                    <span className="rg-range-sep">→</span>
+                    <input
+                      type="date"
+                      min={SYSTEM_START_DATE}
+                      value={customTo}
+                      onChange={(e) => setCustomTo(clampDateToSystemStart(e.target.value))}
+                      aria-label="Fecha hasta del período"
+                      className="rg-date-input"
+                    />
+                  </div>
+                )}
+
+                {isTemporalFiltered && (
+                  <button
+                    type="button"
+                    onClick={handleResetTemporalFilters}
+                    title="Volver a Hoy y Mes actual"
+                    className="rg-reset-date-btn"
+                  >
+                    <RotateCcw size={12} />
+                    <span>Hoy</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </header>
       </div>
 
       {/* CONTENEDOR CON SCROLL PARA LOS 4 BLOQUES */}
       <div className="rg-blocks-scroll">
-
-      {/* ========================================================================= */}
-      {/* 1. FACTURACIÓN (VENTAS DEL DÍA & ACUMULADO MENSUAL)                       */}
-      {/* ========================================================================= */}
-      {(activeBlock === 'ALL' || activeBlock === 'facturacion') && (
-        <section className="rg-section" aria-label="Facturación">
-          <div className="rg-section-header tone-facturacion">
-            <div className="rg-section-title-group">
-              <div className="rg-section-badge-icon tone-facturacion">
-                <Receipt size={19} />
-              </div>
-              <div>
-                <h2 className="rg-section-title tone-facturacion">1. FACTURACIÓN</h2>
-                <div className="rg-section-sub">Facturación del día y acumulado mensual en dólares y litros</div>
-              </div>
-            </div>
-            <div className="rg-actions-row">
-              {onNavigate && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => onNavigate('ventas')}
-                  style={{ padding: '5px 12px', borderRadius: '8px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <span>Ir a Ventas POS</span>
-                  <ArrowUpRight size={14} />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="rg-grid-2">
-            {/* Tarjeta 1A: Ventas del Día */}
-            <div className="rg-card accent-emerald">
-              <div className="rg-card-head">
-                <span className="rg-card-title">
-                  <Clock size={18} color="var(--semaforo-verde)" />
-                  VENTAS DEL DÍA
-                </span>
-                <span className="rg-date-pill">{selectedDateLabel}</span>
-              </div>
-
-              <div className="rg-metrics-split">
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">
-                    <DollarSign size={13} /> Monto Facturado
-                  </div>
-                  <div className="rg-metric-value rg-val-money">
-                    {formatUsd(ventasDelDia.usd)}
-                  </div>
-                  <div className="rg-metric-secondary">{formatBs(ventasDelDia.bs)}</div>
+        {/* ========================================================================= */}
+        {/* 1. FACTURACIÓN (VENTAS DEL DÍA & ACUMULADO MENSUAL)                       */}
+        {/* ========================================================================= */}
+        {(activeBlock === 'ALL' || activeBlock === 'facturacion') && (
+          <section className="rg-section" aria-label="Facturación">
+            <div className="rg-section-header tone-facturacion">
+              <div className="rg-section-title-group">
+                <div className="rg-section-badge-icon tone-facturacion">
+                  <Receipt size={18} />
                 </div>
-
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">
-                    <Droplet size={13} /> Lubricantes Vendidos
+                <div>
+                  <div className="rg-section-kicker-row">
+                    <span className="rg-section-index tone-facturacion">MÓDULO 01</span>
+                    <h2 className="rg-section-title">FACTURACIÓN COMERCIAL</h2>
                   </div>
-                  <div className="rg-metric-value rg-val-volume">
-                    {ventasDelDia.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
-                  </div>
-                  <div className="rg-metric-gold">
-                    ({ventasDelDia.cajas.toLocaleString('es-VE')} cajas)
-                  </div>
+                  <div className="rg-section-sub">Facturación neta del día y acumulado en divisas, bolívares y litraje</div>
                 </div>
               </div>
-
-              <div className="rg-card-footer">
-                <span>
-                  <strong>{ventasDelDia.documentos}</strong> documentos • <strong>{ventasDelDia.clientes}</strong> clientes • <strong>{ventasDelDia.skus}</strong> SKUs
-                </span>
-                <span title="Comparativo contra el día anterior">
-                  Ayer: <strong>{formatUsd(ventasDelDia.ayerUsd)}</strong> / {ventasDelDia.ayerLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
-                </span>
-              </div>
-            </div>
-
-            {/* Tarjeta 1B: Acumulado Mensual / Período */}
-            <div className="rg-card accent-cyan">
-              <div className="rg-card-head">
-                <span className="rg-card-title">
-                  <Calendar size={18} color="var(--neon-cyan)" />
-                  {periodRange.isCustomRange ? 'ACUMULADO DEL PERÍODO' : 'ACUMULADO MENSUAL'}
-                </span>
-                {periodRange.isCustomRange ? (
-                  <span className="rg-date-pill">{periodRange.label}</span>
-                ) : (
-                  <select
-                    value={ventasMesFilter}
-                    onChange={(e) => setVentasMesFilter(e.target.value)}
-                    className="rg-month-select"
-                    title="Seleccione el mes de facturación"
-                    aria-label="Mes de facturación acumulado"
+              <div className="rg-actions-row">
+                {onNavigate && (
+                  <button
+                    type="button"
+                    className="rg-module-link-btn"
+                    onClick={() => onNavigate('ventas')}
                   >
-                    {MONTHS_LIST.map(m => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </select>
+                    <span>Ir a Ventas POS</span>
+                    <ArrowUpRight size={14} />
+                  </button>
                 )}
               </div>
-
-              <div className="rg-metrics-split">
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">
-                    <DollarSign size={13} /> Monto Acumulado
-                  </div>
-                  <div className="rg-metric-value rg-val-money">
-                    {formatUsd(ventasAcumuladoMes.usd)}
-                  </div>
-                  <div className="rg-metric-secondary">{formatBs(ventasAcumuladoMes.bs)}</div>
-                  <div className="rg-metric-note">
-                    Prom. diario: {formatUsd(ventasAcumuladoMes.promedioDiarioUsd)}
-                  </div>
-                </div>
-
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">
-                    <Droplet size={13} /> Lubricantes Acumulados
-                  </div>
-                  <div className="rg-metric-value rg-val-volume">
-                    {ventasAcumuladoMes.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
-                  </div>
-                  <div className="rg-metric-gold">
-                    ({ventasAcumuladoMes.cajas.toLocaleString('es-VE')} cajas)
-                  </div>
-                  <div className="rg-metric-note">
-                    Prom. diario: {ventasAcumuladoMes.promedioDiarioLitros.toLocaleString('es-VE')} L
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div className="rg-card-footer" style={{ paddingTop: '0.55rem' }}>
-                  <span>
-                    Meta mes: <strong>{ventasAcumuladoMes.metaLitros.toLocaleString('es-VE')} L</strong>
-                    {' '}•{' '}
-                    <strong style={{ color: getSemaforoMeta(ventasAcumuladoMes.pctMeta).color }}>
-                      {ventasAcumuladoMes.pctMeta}%
-                    </strong>
-                  </span>
-                  <span>
-                    {ventasAcumuladoMes.esFuturo
-                      ? 'Mes aún no iniciado'
-                      : ventasAcumuladoMes.esCustomRange
-                        ? `${ventasAcumuladoMes.diasTranscurridos} días • ${ventasAcumuladoMes.documentos} documentos`
-                        : ventasAcumuladoMes.esMesEnCurso
-                          ? `Día ${ventasAcumuladoMes.diasTranscurridos}/${ventasAcumuladoMes.diasDelMes} • Proyección: ${ventasAcumuladoMes.proyeccionLitros.toLocaleString('es-VE')} L`
-                          : `Mes cerrado • ${ventasAcumuladoMes.documentos} documentos`}
-                  </span>
-                </div>
-                <div className="rg-progress-track">
-                  <div
-                    className="rg-progress-fill"
-                    style={{
-                      width: `${Math.min(ventasAcumuladoMes.pctMeta, 100)}%`,
-                      background: getSemaforoMeta(ventasAcumuladoMes.pctMeta).color
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 2. INVENTARIO (STOCK EN ALMACÉN & VALORIZACIÓN STOCK)                     */}
-      {/* ========================================================================= */}
-      {(activeBlock === 'ALL' || activeBlock === 'inventario') && (
-        <section className="rg-section" aria-label="Inventario">
-          <div className="rg-section-header tone-inventario">
-            <div className="rg-section-title-group">
-              <div className="rg-section-badge-icon tone-inventario">
-                <Package size={19} />
-              </div>
-              <div>
-                <h2 className="rg-section-title tone-inventario">2. INVENTARIO</h2>
-                <div className="rg-section-sub">Existencia física total en litros y valorización actual del almacén</div>
-              </div>
-            </div>
-            <div className="rg-actions-row">
-              {onNavigate && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => onNavigate('inventario')}
-                  style={{ padding: '5px 12px', borderRadius: '8px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <span>Ir a Inventario</span>
-                  <ArrowUpRight size={14} />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="rg-grid-2">
-            {/* Tarjeta 2A: Stock en Almacén */}
-            <div
-              className="rg-card accent-violet is-clickable"
-              onClick={() => onNavigate && onNavigate('inventario')}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('inventario');
-              }}
-              title={`Stock en Almacén: ${stockBreakdownLabel}`}
-            >
-              <div className="rg-inv-hero-row">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.1rem', minWidth: 0 }}>
-                  <div className="rg-inv-icon-box tone-violet">
-                    <Package size={28} />
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div className="rg-metric-label">Stock en Almacén</div>
-                    <div className="rg-metric-value is-hero rg-val-stock" style={{ marginTop: '4px' }}>
-                      {stockTotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
-                    </div>
-                  </div>
-                </div>
-                <ArrowUpRight size={22} color="var(--text-muted)" style={{ flexShrink: 0 }} />
-              </div>
-
-              <div className="rg-unit-pills" title={stockBreakdownLabel}>
-                {stockBreakdownItems.length > 0 ? (
-                  stockBreakdownItems.map(item => (
-                    <span key={item} className="rg-unit-pill">{item}</span>
-                  ))
-                ) : (
-                  <span className="rg-unit-pill">0 Unidades</span>
-                )}
-              </div>
-
-              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
-                <span>
-                  Salidas ({ventasMesLabel}): <strong>{ventasAcumuladoMes.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L</strong> ({ventasAcumuladoMes.cajas.toLocaleString('es-VE')} cajas)
-                </span>
-                <span>Stock en tiempo real</span>
-              </div>
             </div>
 
-            {/* Tarjeta 2B: Valorización Stock */}
-            <div
-              className="rg-card accent-emerald is-clickable"
-              onClick={() => onNavigate && onNavigate('inventario')}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('inventario');
-              }}
-              title="Clic para ver valoración de existencias en Inventario"
-            >
-              <div className="rg-inv-hero-row">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.1rem', minWidth: 0 }}>
-                  <div className="rg-inv-icon-box tone-emerald">
-                    <DollarSign size={28} />
+            <div className="rg-grid-2">
+              {/* Tarjeta 1A: Ventas del Día */}
+              <div className="rg-card accent-emerald">
+                <div className="rg-card-head">
+                  <div className="rg-card-title-wrap">
+                    <span className="rg-card-mini-icon tone-emerald">
+                      <Clock size={15} />
+                    </span>
+                    <span className="rg-card-title">VENTAS DEL DÍA</span>
                   </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div className="rg-metric-label">Valorización Stock</div>
-                    <div className="rg-metric-value is-hero rg-val-money" style={{ marginTop: '4px' }}>
-                      {formatUsd(stockValorizadoUsd)}
-                    </div>
-                  </div>
-                </div>
-                <ArrowUpRight size={22} color="var(--semaforo-verde)" style={{ flexShrink: 0 }} />
-              </div>
-
-              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
-                <span><strong>Costo reposición total</strong></span>
-                <span>{formatBs(stockValorizadoUsd * tasaBcv)}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 3. COBRANZAS (COBRANZA DEL DÍA & ACUMULADA DEL MES)                       */}
-      {/* ========================================================================= */}
-      {(activeBlock === 'ALL' || activeBlock === 'cobranzas') && (
-        <section className="rg-section" aria-label="Cobranzas">
-          <div className="rg-section-header tone-cobranzas">
-            <div className="rg-section-title-group">
-              <div className="rg-section-badge-icon tone-cobranzas">
-                <Wallet size={19} />
-              </div>
-              <div>
-                <h2 className="rg-section-title tone-cobranzas">3. COBRANZAS</h2>
-                <div className="rg-section-sub">Recaudación real del día y cobranza acumulada del mes</div>
-              </div>
-            </div>
-            <div className="rg-actions-row">
-              {TEMP_COLLECTIONS_ADJUSTMENT_ENABLED && canToggleTempCollections && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={handleToggleTempCollections}
-                  title={
-                    tempCollectionsReverted
-                      ? 'Solo visible para MASTER: restaura el ajuste temporal del 20/11 en tu vista'
-                      : 'Solo visible para MASTER: revierte temporalmente a datos 100% reales en tu vista'
-                  }
-                  style={{
-                    padding: '5px 11px',
-                    borderRadius: '8px',
-                    fontSize: '0.72rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    borderColor: tempCollectionsReverted ? 'var(--border-glass)' : 'rgba(16, 185, 129, 0.45)',
-                    color: tempCollectionsReverted ? 'var(--text-secondary)' : 'var(--semaforo-verde, #10b981)'
-                  }}
-                >
-                  <RotateCcw size={13} />
-                  <span>{tempCollectionsReverted ? 'Solo Real (Restaurar 20/11)' : 'Revertir 20/11 a Real'}</span>
-                </button>
-              )}
-              {onNavigate && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => onNavigate('cxc')}
-                  style={{ padding: '5px 12px', borderRadius: '8px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <span>Ir a Cobranzas CxC</span>
-                  <ArrowUpRight size={14} />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="rg-grid-2">
-            {/* Tarjeta 3A: Cobranza del Día */}
-            <div className="rg-card accent-emerald">
-              <div className="rg-card-head">
-                <span className="rg-card-title">
-                  <Clock size={18} color="var(--semaforo-verde)" />
-                  COBRANZA DEL DÍA
-                </span>
-                <span className="rg-date-pill">{selectedDateLabel}</span>
-              </div>
-
-              <div className="rg-metrics-split">
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">
-                    <DollarSign size={13} /> {selectedDateKey === todayKey ? 'Total Cobrado Hoy' : `Cobrado (${selectedDateShort})`}
-                  </div>
-                  <div className="rg-metric-value rg-val-money">
-                    {formatUsd(cobranzaDelDia.usd)}
-                  </div>
-                  <div className="rg-metric-secondary">
-                    {formatBs(cobranzaDelDia.bsEquiv)}
-                  </div>
+                  <span className="rg-date-pill">{selectedDateLabel}</span>
                 </div>
 
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label" style={{ marginBottom: '4px' }}>
-                    Composición del Día
-                  </div>
-                  <div className="rg-cob-split-list">
-                    <div className="rg-cob-split-row">
-                      <span className="rg-cob-split-tag">
-                        <span className="rg-cob-dot" style={{ background: '#10b981' }} />
-                        Divisas
+                <div className="rg-metrics-split">
+                  <div className="rg-metric-tile tile-emerald">
+                    <div className="rg-metric-label-row">
+                      <span className="rg-metric-label">
+                        <DollarSign size={13} /> Monto Facturado
                       </span>
-                      <span className="rg-cob-split-amt">{formatUsd(cobranzaDelDia.divisasUsd)}</span>
+                      {ventasDiaDeltaPct !== null && (
+                        <span className={`rg-delta-pill ${ventasDiaDeltaPct >= 0 ? 'is-up' : 'is-down'}`}>
+                          {ventasDiaDeltaPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                          {ventasDiaDeltaPct >= 0 ? `+${ventasDiaDeltaPct}%` : `${ventasDiaDeltaPct}%`}
+                        </span>
+                      )}
                     </div>
-                    <div className="rg-cob-split-row">
-                      <span className="rg-cob-split-tag">
-                        <span className="rg-cob-dot" style={{ background: '#0284c7' }} />
-                        Bolívares
-                      </span>
-                      <div style={{ textAlign: 'right' }}>
-                        <div className="rg-cob-split-amt">{formatUsd(cobranzaDelDia.bsUsd)}</div>
-                        {cobranzaDelDia.bsReal > 0 && (
-                          <div className="rg-cob-split-sub">{formatBs(cobranzaDelDia.bsReal)}</div>
-                        )}
-                      </div>
+                    <div className="rg-metric-value rg-val-money">
+                      {formatUsd(ventasDelDia.usd)}
                     </div>
+                    <div className="rg-metric-secondary">{formatBs(ventasDelDia.bs)}</div>
                   </div>
-                </div>
-              </div>
 
-              <div className="rg-card-footer">
-                <span>
-                  <strong>{cobranzaDelDia.recibos}</strong> {cobranzaDelDia.recibos === 1 ? 'recibo' : 'recibos'} • <strong>{cobranzaDelDia.clientes}</strong> {cobranzaDelDia.clientes === 1 ? 'cliente' : 'clientes'}
-                </span>
-                <span title="Comparativo contra la cobranza de ayer">
-                  Ayer: <strong>{formatUsd(cobranzaDelDia.ayerUsd)}</strong> ({cobranzaDelDia.ayerRecibos} rec.)
-                </span>
-              </div>
-            </div>
-
-            {/* Tarjeta 3B: Cobranza Acumulada del Mes / Período */}
-            <div className="rg-card accent-teal">
-              <div className="rg-card-head">
-                <span className="rg-card-title">
-                  <Calendar size={18} color="var(--neon-cyan)" />
-                  {periodRange.isCustomRange ? 'COBRANZA DEL PERÍODO' : 'COBRANZA ACUMULADA DEL MES'}
-                </span>
-                {periodRange.isCustomRange ? (
-                  <span className="rg-date-pill">{periodRange.label}</span>
-                ) : (
-                  <select
-                    value={cobranzasMesFilter}
-                    onChange={(e) => setCobranzasMesFilter(e.target.value)}
-                    className="rg-month-select"
-                    title="Seleccione el mes de cobranza"
-                    aria-label="Mes de cobranza acumulada"
-                  >
-                    {MONTHS_LIST.map(m => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              <div className="rg-metrics-split">
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">
-                    <DollarSign size={13} /> Cobrado en {cobranzasMesLabel}
-                  </div>
-                  <div className="rg-metric-value rg-val-money">
-                    {formatUsd(cobranzaAcumuladaMes.usd)}
-                  </div>
-                  <div className="rg-metric-secondary">
-                    {formatBs(cobranzaAcumuladaMes.bsEquiv)}
-                  </div>
-                  <div className="rg-metric-note">
-                    Prom. diario: {formatUsd(cobranzaAcumuladaMes.promedioDiarioUsd)}
-                  </div>
-                </div>
-
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label" style={{ marginBottom: '4px' }}>
-                    Composición del Mes
-                  </div>
-                  <div className="rg-cob-split-list">
-                    <div className="rg-cob-split-row">
-                      <span className="rg-cob-split-tag">
-                        <span className="rg-cob-dot" style={{ background: '#10b981' }} />
-                        Divisas
-                      </span>
-                      <span className="rg-cob-split-amt">{formatUsd(cobranzaAcumuladaMes.divisasUsd)}</span>
+                  <div className="rg-metric-tile tile-cyan">
+                    <div className="rg-metric-label">
+                      <Droplet size={13} /> Lubricantes Vendidos
                     </div>
-                    <div className="rg-cob-split-row">
-                      <span className="rg-cob-split-tag">
-                        <span className="rg-cob-dot" style={{ background: '#0284c7' }} />
-                        Bolívares
-                      </span>
-                      <div style={{ textAlign: 'right' }}>
-                        <div className="rg-cob-split-amt">{formatUsd(cobranzaAcumuladaMes.bsUsd)}</div>
-                        {cobranzaAcumuladaMes.bsReal > 0 && (
-                          <div className="rg-cob-split-sub">{formatBs(cobranzaAcumuladaMes.bsReal)}</div>
-                        )}
-                      </div>
+                    <div className="rg-metric-value rg-val-volume">
+                      {ventasDelDia.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} <small className="rg-unit-suffix">L</small>
+                    </div>
+                    <div className="rg-metric-gold">
+                      Equiv. {ventasDelDia.cajas.toLocaleString('es-VE')} cajas
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div>
-                <div className="rg-card-footer" style={{ paddingTop: '0.55rem' }}>
-                  <span>
-                    <strong>{cobranzaAcumuladaMes.recibos}</strong> recibos • <strong>{cobranzaAcumuladaMes.clientes}</strong> clientes
-                    {facturadoMesCobranzaUsd > 0 && (
-                      <>
-                        {' '}• Cobrado vs. Fact.:{' '}
-                        <strong style={{ color: getSemaforoMeta(cobranzaVsFacturadoPct).color }}>
-                          {cobranzaVsFacturadoPct}%
-                        </strong>
-                      </>
-                    )}
-                  </span>
-                  <span>
-                    {cobranzaAcumuladaMes.esFuturo
-                      ? 'Mes aún no iniciado'
-                      : periodRange.isCustomRange
-                        ? `Período: ${periodRange.label}`
-                        : cobranzaAcumuladaMes.esMesEnCurso
-                          ? `Día ${cobranzaAcumuladaMes.diasTranscurridos}/${cobranzaAcumuladaMes.diasDelMes} • Proyección: ${formatUsd(cobranzaAcumuladaMes.proyeccionUsd)}`
-                          : 'Mes cerrado'}
+                <div className="rg-card-footer">
+                  <div className="rg-stat-chips">
+                    <span className="rg-stat-chip"><strong>{ventasDelDia.documentos}</strong> docs</span>
+                    <span className="rg-stat-chip"><strong>{ventasDelDia.clientes}</strong> clientes</span>
+                    <span className="rg-stat-chip"><strong>{ventasDelDia.skus}</strong> SKUs</span>
+                  </div>
+                  <span className="rg-compare-text" title="Comparativo contra el día anterior">
+                    Día ant.: <strong>{formatUsd(ventasDelDia.ayerUsd)}</strong> · {ventasDelDia.ayerLitros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L
                   </span>
                 </div>
-                {facturadoMesCobranzaUsd > 0 && (
+              </div>
+
+              {/* Tarjeta 1B: Acumulado Mensual / Período */}
+              <div className="rg-card accent-cyan">
+                <div className="rg-card-head">
+                  <div className="rg-card-title-wrap">
+                    <span className="rg-card-mini-icon tone-cyan">
+                      <Calendar size={15} />
+                    </span>
+                    <span className="rg-card-title">
+                      {periodRange.isCustomRange ? 'ACUMULADO DEL PERÍODO' : 'ACUMULADO MENSUAL'}
+                    </span>
+                  </div>
+                  {periodRange.isCustomRange ? (
+                    <span className="rg-date-pill">{periodRange.label}</span>
+                  ) : (
+                    <select
+                      value={ventasMesFilter}
+                      onChange={(e) => setVentasMesFilter(e.target.value)}
+                      className="rg-month-select"
+                      title="Seleccione el mes de facturación"
+                      aria-label="Mes de facturación acumulado"
+                    >
+                      {MONTHS_LIST.map(m => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="rg-metrics-split">
+                  <div className="rg-metric-tile tile-emerald">
+                    <div className="rg-metric-label">
+                      <DollarSign size={13} /> Monto Acumulado
+                    </div>
+                    <div className="rg-metric-value rg-val-money">
+                      {formatUsd(ventasAcumuladoMes.usd)}
+                    </div>
+                    <div className="rg-metric-secondary">{formatBs(ventasAcumuladoMes.bs)}</div>
+                    <div className="rg-metric-note">
+                      Prom. diario: <strong>{formatUsd(ventasAcumuladoMes.promedioDiarioUsd)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="rg-metric-tile tile-cyan">
+                    <div className="rg-metric-label">
+                      <Droplet size={13} /> Lubricantes Acumulados
+                    </div>
+                    <div className="rg-metric-value rg-val-volume">
+                      {ventasAcumuladoMes.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} <small className="rg-unit-suffix">L</small>
+                    </div>
+                    <div className="rg-metric-gold">
+                      Equiv. {ventasAcumuladoMes.cajas.toLocaleString('es-VE')} cajas
+                    </div>
+                    <div className="rg-metric-note">
+                      Prom. diario: <strong>{ventasAcumuladoMes.promedioDiarioLitros.toLocaleString('es-VE')} L</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rg-goal-box">
+                  <div className="rg-goal-header">
+                    <span className="rg-goal-label">
+                      <Target size={13} />
+                      Meta mensual: <strong>{ventasAcumuladoMes.metaLitros.toLocaleString('es-VE')} L</strong>
+                      <span
+                        className="rg-goal-pct-badge"
+                        style={{
+                          color: semMeta.color,
+                          borderColor: semMeta.color
+                        }}
+                      >
+                        {ventasAcumuladoMes.pctMeta}%
+                      </span>
+                    </span>
+                    <span className="rg-compare-text">
+                      {ventasAcumuladoMes.esFuturo
+                        ? 'Mes aún no iniciado'
+                        : ventasAcumuladoMes.esCustomRange
+                          ? `${ventasAcumuladoMes.diasTranscurridos} días • ${ventasAcumuladoMes.documentos} documentos`
+                          : ventasAcumuladoMes.esMesEnCurso
+                            ? `Día ${ventasAcumuladoMes.diasTranscurridos}/${ventasAcumuladoMes.diasDelMes} • Proy.: ${ventasAcumuladoMes.proyeccionLitros.toLocaleString('es-VE')} L`
+                            : `Mes cerrado • ${ventasAcumuladoMes.documentos} documentos`}
+                    </span>
+                  </div>
                   <div className="rg-progress-track">
                     <div
                       className="rg-progress-fill"
                       style={{
-                        width: `${Math.min(cobranzaVsFacturadoPct, 100)}%`,
-                        background: getSemaforoMeta(cobranzaVsFacturadoPct).color
+                        width: `${Math.min(ventasAcumuladoMes.pctMeta, 100)}%`,
+                        background: semMeta.color
                       }}
                     />
                   </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ========================================================================= */}
+        {/* 2. INVENTARIO (STOCK EN ALMACÉN & VALORIZACIÓN STOCK)                     */}
+        {/* ========================================================================= */}
+        {(activeBlock === 'ALL' || activeBlock === 'inventario') && (
+          <section className="rg-section" aria-label="Inventario">
+            <div className="rg-section-header tone-inventario">
+              <div className="rg-section-title-group">
+                <div className="rg-section-badge-icon tone-inventario">
+                  <Package size={18} />
+                </div>
+                <div>
+                  <div className="rg-section-kicker-row">
+                    <span className="rg-section-index tone-inventario">MÓDULO 02</span>
+                    <h2 className="rg-section-title">INVENTARIO & VALORIZACIÓN</h2>
+                  </div>
+                  <div className="rg-section-sub">Existencia física consolidada en litros, presentaciones y costo de reposición</div>
+                </div>
+              </div>
+              <div className="rg-actions-row">
+                {onNavigate && (
+                  <button
+                    type="button"
+                    className="rg-module-link-btn"
+                    onClick={() => onNavigate('inventario')}
+                  >
+                    <span>Ir a Inventario</span>
+                    <ArrowUpRight size={14} />
+                  </button>
                 )}
               </div>
             </div>
-          </div>
 
-          {/* Tarjeta 3C: Dinero Vencido en la Calle (Facturas + Notas de Entrega) */}
-          <div
-            className={`rg-card ${carteraCxcAging.cxcVen > 0 ? 'accent-rose' : 'accent-emerald'} is-clickable`}
-            onClick={() => onNavigate && onNavigate('cxc')}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxc');
-            }}
-            title="Clic para abrir el detalle de Cuentas por Cobrar vencidas"
-            style={{ marginTop: '0.25rem' }}
-          >
-            <div className="rg-card-head">
-              <span className="rg-card-title">
-                <Wallet size={18} color={carteraCxcAging.cxcVen > 0 ? 'var(--semaforo-rojo, #ef4444)' : 'var(--semaforo-verde)'} />
-                CARTERA VENCIDA EN LA CALLE (FACTURAS + NOTAS DE ENTREGA)
-              </span>
-              <span className={`rg-cxp-pill ${carteraCxcAging.cxcVen > 0 ? 'is-danger' : 'is-solvente'}`}>
-                {carteraCxcAging.cxcVen > 0
-                  ? `${carteraCxcAging.cxcVenPct}% de la cartera • ${carteraCxcAging.docsVencidos} docs`
-                  : 'Cartera Al Día'}
-              </span>
-            </div>
+            <div className="rg-grid-2">
+              {/* Tarjeta 2A: Stock en Almacén */}
+              <div
+                className="rg-card accent-violet is-clickable"
+                onClick={() => onNavigate && onNavigate('inventario')}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('inventario');
+                }}
+                title={`Stock en Almacén: ${stockBreakdownLabel}`}
+              >
+                <div className="rg-inv-hero-row">
+                  <div className="rg-inv-hero-main">
+                    <div className="rg-inv-icon-box tone-violet">
+                      <Package size={24} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="rg-metric-label">
+                        <Layers size={13} /> Stock Consolidado en Almacén
+                      </div>
+                      <div className="rg-metric-value is-hero rg-val-stock">
+                        {stockTotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small className="rg-unit-suffix">L</small>
+                      </div>
+                    </div>
+                  </div>
+                  <span className="rg-card-arrow">
+                    <ArrowUpRight size={18} />
+                  </span>
+                </div>
 
-            <div className="rg-metrics-split">
-              <div className="rg-metric-tile">
-                <div className="rg-metric-label">
-                  <DollarSign size={13} /> Monto Consolidado Vencido
+                <div className="rg-unit-pills" title={stockBreakdownLabel}>
+                  {stockBreakdownItems.length > 0 ? (
+                    stockBreakdownItems.map(item => (
+                      <span key={item} className="rg-unit-pill">
+                        <span className="rg-unit-pill-dot" />
+                        {item}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="rg-unit-pill">0 Unidades</span>
+                  )}
                 </div>
-                <div className={`rg-metric-value ${carteraCxcAging.cxcVen > 0 ? 'rg-val-danger' : 'rg-val-money'}`}>
-                  {formatUsd(carteraCxcAging.cxcVen)}
-                </div>
-                <div className="rg-metric-secondary">
-                  {formatBs(carteraCxcAging.cxcVen * tasaBcv)}
+
+                <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                  <span>
+                    Salidas ({ventasMesLabel}): <strong>{ventasAcumuladoMes.litros.toLocaleString('es-VE', { maximumFractionDigits: 1 })} L</strong> ({ventasAcumuladoMes.cajas.toLocaleString('es-VE')} cajas)
+                  </span>
+                  <span className="rg-status-inline">
+                    <span className="rg-live-dot" />
+                    Almacén 01 / 02
+                  </span>
                 </div>
               </div>
 
-              <div className="rg-metric-tile">
-                <div className="rg-metric-label" style={{ marginBottom: '4px' }}>
-                  Desglose por Documento Vencido
+              {/* Tarjeta 2B: Valorización Stock */}
+              <div
+                className="rg-card accent-emerald is-clickable"
+                onClick={() => onNavigate && onNavigate('inventario')}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('inventario');
+                }}
+                title="Clic para ver valoración de existencias en Inventario"
+              >
+                <div className="rg-inv-hero-row">
+                  <div className="rg-inv-hero-main">
+                    <div className="rg-inv-icon-box tone-emerald">
+                      <DollarSign size={24} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="rg-metric-label">Valorización de Existencias</div>
+                      <div className="rg-metric-value is-hero rg-val-money">
+                        {formatUsd(stockValorizadoUsd)}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="rg-card-arrow">
+                    <ArrowUpRight size={18} />
+                  </span>
                 </div>
-                <div className="rg-cob-split-list">
-                  <div className="rg-cob-split-row">
-                    <span className="rg-cob-split-tag">
-                      <span className="rg-cob-dot" style={{ background: '#ef4444' }} />
-                      Facturas ({carteraCxcAging.docsVencidosFacturas})
+
+                <div className="rg-inv-Subgrid">
+                  <div className="rg-inv-mini-stat">
+                    <span className="rg-inv-mini-label">Equivalente BCV</span>
+                    <span className="rg-inv-mini-val">{formatBs(stockValorizadoUsd * tasaBcv)}</span>
+                  </div>
+                  <div className="rg-inv-mini-stat">
+                    <span className="rg-inv-mini-label">Costo Prom. Ponderado</span>
+                    <span className="rg-inv-mini-val">{formatUsd(costoPromedioLitroUsd)} / L</span>
+                  </div>
+                </div>
+
+                <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                  <span><strong>Costo de reposición auditado</strong></span>
+                  <span>Tasa BCV: <strong>{formatBs(tasaBcv)}</strong></span>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ========================================================================= */}
+        {/* 3. COBRANZAS (COBRANZA DEL DÍA, ACUMULADA & CARTERA VENCIDA)              */}
+        {/* ========================================================================= */}
+        {(activeBlock === 'ALL' || activeBlock === 'cobranzas') && (
+          <section className="rg-section" aria-label="Cobranzas">
+            <div className="rg-section-header tone-cobranzas">
+              <div className="rg-section-title-group">
+                <div className="rg-section-badge-icon tone-cobranzas">
+                  <Wallet size={18} />
+                </div>
+                <div>
+                  <div className="rg-section-kicker-row">
+                    <span className="rg-section-index tone-cobranzas">MÓDULO 03</span>
+                    <h2 className="rg-section-title">TESORERÍA & COBRANZAS CXC</h2>
+                  </div>
+                  <div className="rg-section-sub">Recaudación efectiva en divisas y bolívares, más monitoreo de cartera vencida</div>
+                </div>
+              </div>
+              <div className="rg-actions-row">
+                {TEMP_COLLECTIONS_ADJUSTMENT_ENABLED && canToggleTempCollections && (
+                  <button
+                    type="button"
+                    className="rg-module-link-btn"
+                    onClick={handleToggleTempCollections}
+                    title={
+                      tempCollectionsReverted
+                        ? 'Solo visible para MASTER: restaura el ajuste temporal del 20/11 en tu vista'
+                        : 'Solo visible para MASTER: revierte temporalmente a datos 100% reales en tu vista'
+                    }
+                    style={{
+                      borderColor: tempCollectionsReverted ? 'var(--border-glass)' : 'rgba(16, 185, 129, 0.45)',
+                      color: tempCollectionsReverted ? 'var(--text-secondary)' : 'var(--semaforo-verde, #10b981)'
+                    }}
+                  >
+                    <RotateCcw size={13} />
+                    <span>{tempCollectionsReverted ? 'Solo Real (Restaurar 20/11)' : 'Revertir 20/11 a Real'}</span>
+                  </button>
+                )}
+                {onNavigate && (
+                  <button
+                    type="button"
+                    className="rg-module-link-btn"
+                    onClick={() => onNavigate('cxc')}
+                  >
+                    <span>Ir a Cobranzas CxC</span>
+                    <ArrowUpRight size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="rg-grid-2">
+              {/* Tarjeta 3A: Cobranza del Día */}
+              <div className="rg-card accent-emerald">
+                <div className="rg-card-head">
+                  <div className="rg-card-title-wrap">
+                    <span className="rg-card-mini-icon tone-emerald">
+                      <Clock size={15} />
                     </span>
-                    <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVenFacturas)}</span>
+                    <span className="rg-card-title">COBRANZA DEL DÍA</span>
                   </div>
-                  <div className="rg-cob-split-row">
-                    <span className="rg-cob-split-tag">
-                      <span className="rg-cob-dot" style={{ background: '#f59e0b' }} />
-                      Notas de Entrega ({carteraCxcAging.docsVencidosNotas})
-                    </span>
-                    <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVenNotas)}</span>
-                  </div>
+                  <span className="rg-date-pill">{selectedDateLabel}</span>
                 </div>
-              </div>
-            </div>
 
-            <div className="rg-card-footer">
-              <span>
-                Cartera total por cobrar: <strong>{formatUsd(carteraCxcAging.cxcTot)}</strong> (Al día: <strong>{formatUsd(carteraCxcAging.cxcDia)}</strong>)
-              </span>
-              <span>
-                Corte al: <strong>{selectedDateShort}</strong>
-              </span>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 4. CUENTAS POR PAGAR KEYSTONE (SUMATORIA DEL SALDO ACTUAL PENDIENTE)      */}
-      {/* ========================================================================= */}
-      {(activeBlock === 'ALL' || activeBlock === 'cxp-keystone') && (
-        <section className="rg-section" aria-label="Cuentas por Pagar Keystone">
-          <div className="rg-section-header tone-cxp-keystone">
-            <div className="rg-section-title-group">
-              <div className="rg-section-badge-icon tone-cxp-keystone">
-                <Building2 size={19} />
-              </div>
-              <div>
-                <h2 className="rg-section-title tone-cxp-keystone">4. CUENTAS POR PAGAR KEYSTONE</h2>
-                <div className="rg-section-sub">Sumatoria actual de todas las cuentas por pagar pendientes a Keystone, C.A.</div>
-              </div>
-            </div>
-            <div className="rg-actions-row">
-              {onNavigate && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => onNavigate('cxp')}
-                  style={{ padding: '5px 12px', borderRadius: '8px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <span>Ir a Cuentas por Pagar</span>
-                  <ArrowUpRight size={14} />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="rg-grid-2">
-            {/* Tarjeta 4A: Saldo Actual Total CxP Keystone */}
-            <div
-              className="rg-card accent-amber is-clickable"
-              onClick={() => onNavigate && onNavigate('cxp')}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxp');
-              }}
-              title="Clic para abrir el detalle de Cuentas por Pagar a Keystone"
-            >
-              <div className="rg-inv-hero-row">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.1rem', minWidth: 0 }}>
-                  <div className="rg-inv-icon-box tone-amber">
-                    <Building2 size={28} />
+                <div className="rg-metrics-split">
+                  <div className="rg-metric-tile tile-emerald">
+                    <div className="rg-metric-label-row">
+                      <span className="rg-metric-label">
+                        <DollarSign size={13} /> {selectedDateKey === todayKey ? 'Total Cobrado Hoy' : `Cobrado (${selectedDateShort})`}
+                      </span>
+                      {cobranzaDiaDeltaPct !== null && (
+                        <span className={`rg-delta-pill ${cobranzaDiaDeltaPct >= 0 ? 'is-up' : 'is-down'}`}>
+                          {cobranzaDiaDeltaPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                          {cobranzaDiaDeltaPct >= 0 ? `+${cobranzaDiaDeltaPct}%` : `${cobranzaDiaDeltaPct}%`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="rg-metric-value rg-val-money">
+                      {formatUsd(cobranzaDelDia.usd)}
+                    </div>
+                    <div className="rg-metric-secondary">
+                      {formatBs(cobranzaDelDia.bsEquiv)}
+                    </div>
                   </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div className="rg-metric-label">Saldo Actual Por Pagar • Keystone</div>
-                    <div
-                      className={`rg-metric-value is-hero ${cxpKeystone.saldoTotalUsd > 0 ? 'rg-val-payable' : 'rg-val-money'}`}
-                      style={{ marginTop: '4px' }}
-                    >
-                      {formatUsd(cxpKeystone.saldoTotalUsd)}
+
+                  <div className="rg-metric-tile tile-cyan">
+                    <div className="rg-metric-label-row">
+                      <span className="rg-metric-label">Composición del Día</span>
+                      <span className="rg-split-ratio-label">{cobDiaDivisasShare}% USD · {100 - cobDiaDivisasShare}% Bs</span>
+                    </div>
+                    <div className="rg-dual-bar">
+                      <div className="rg-dual-bar-seg is-usd" style={{ width: `${cobDiaDivisasShare}%` }} />
+                      <div className="rg-dual-bar-seg is-bs" style={{ width: `${100 - cobDiaDivisasShare}%` }} />
+                    </div>
+                    <div className="rg-cob-split-list">
+                      <div className="rg-cob-split-row">
+                        <span className="rg-cob-split-tag">
+                          <span className="rg-cob-dot" style={{ background: '#10b981' }} />
+                          Divisas
+                        </span>
+                        <span className="rg-cob-split-amt">{formatUsd(cobranzaDelDia.divisasUsd)}</span>
+                      </div>
+                      <div className="rg-cob-split-row">
+                        <span className="rg-cob-split-tag">
+                          <span className="rg-cob-dot" style={{ background: '#0284c7' }} />
+                          Bolívares
+                        </span>
+                        <div style={{ textAlign: 'right' }}>
+                          <div className="rg-cob-split-amt">{formatUsd(cobranzaDelDia.bsUsd)}</div>
+                          {cobranzaDelDia.bsReal > 0 && (
+                            <div className="rg-cob-split-sub">{formatBs(cobranzaDelDia.bsReal)}</div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-                <ArrowUpRight size={22} color="var(--text-muted)" style={{ flexShrink: 0 }} />
-              </div>
 
-              <div className="rg-unit-pills">
-                {cxpKeystone.desglosePorTipo.length > 0 ? (
-                  cxpKeystone.desglosePorTipo.map(item => (
-                    <span key={item.label} className="rg-cxp-pill">
-                      {item.count} {item.label} • {formatUsd(item.usd)}
+                <div className="rg-card-footer">
+                  <div className="rg-stat-chips">
+                    <span className="rg-stat-chip">
+                      <strong>{cobranzaDelDia.recibos}</strong> {cobranzaDelDia.recibos === 1 ? 'recibo' : 'recibos'}
                     </span>
-                  ))
-                ) : (
-                  <span className="rg-cxp-pill is-solvente">Solvente • Sin saldo pendiente</span>
-                )}
+                    <span className="rg-stat-chip">
+                      <strong>{cobranzaDelDia.clientes}</strong> {cobranzaDelDia.clientes === 1 ? 'cliente' : 'clientes'}
+                    </span>
+                  </div>
+                  <span className="rg-compare-text" title="Comparativo contra la cobranza de ayer">
+                    Día ant.: <strong>{formatUsd(cobranzaDelDia.ayerUsd)}</strong> ({cobranzaDelDia.ayerRecibos} rec.)
+                  </span>
+                </div>
               </div>
 
-              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
-                <span>
-                  <strong>{cxpKeystone.documentosPendientes}</strong>{' '}
-                  {cxpKeystone.documentosPendientes === 1 ? 'cuenta pendiente' : 'cuentas pendientes'}
-                </span>
-                <span>{formatBs(cxpKeystone.saldoTotalBs)}</span>
+              {/* Tarjeta 3B: Cobranza Acumulada del Mes / Período */}
+              <div className="rg-card accent-teal">
+                <div className="rg-card-head">
+                  <div className="rg-card-title-wrap">
+                    <span className="rg-card-mini-icon tone-cyan">
+                      <Calendar size={15} />
+                    </span>
+                    <span className="rg-card-title">
+                      {periodRange.isCustomRange ? 'COBRANZA DEL PERÍODO' : 'COBRANZA ACUMULADA'}
+                    </span>
+                  </div>
+                  {periodRange.isCustomRange ? (
+                    <span className="rg-date-pill">{periodRange.label}</span>
+                  ) : (
+                    <select
+                      value={cobranzasMesFilter}
+                      onChange={(e) => setCobranzasMesFilter(e.target.value)}
+                      className="rg-month-select"
+                      title="Seleccione el mes de cobranza"
+                      aria-label="Mes de cobranza acumulada"
+                    >
+                      {MONTHS_LIST.map(m => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="rg-metrics-split">
+                  <div className="rg-metric-tile tile-emerald">
+                    <div className="rg-metric-label">
+                      <DollarSign size={13} /> Cobrado ({cobranzasMesLabel})
+                    </div>
+                    <div className="rg-metric-value rg-val-money">
+                      {formatUsd(cobranzaAcumuladaMes.usd)}
+                    </div>
+                    <div className="rg-metric-secondary">
+                      {formatBs(cobranzaAcumuladaMes.bsEquiv)}
+                    </div>
+                    <div className="rg-metric-note">
+                      Prom. diario: <strong>{formatUsd(cobranzaAcumuladaMes.promedioDiarioUsd)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="rg-metric-tile tile-cyan">
+                    <div className="rg-metric-label-row">
+                      <span className="rg-metric-label">Mix del Mes</span>
+                      <span className="rg-split-ratio-label">{cobMesDivisasShare}% USD · {100 - cobMesDivisasShare}% Bs</span>
+                    </div>
+                    <div className="rg-dual-bar">
+                      <div className="rg-dual-bar-seg is-usd" style={{ width: `${cobMesDivisasShare}%` }} />
+                      <div className="rg-dual-bar-seg is-bs" style={{ width: `${100 - cobMesDivisasShare}%` }} />
+                    </div>
+                    <div className="rg-cob-split-list">
+                      <div className="rg-cob-split-row">
+                        <span className="rg-cob-split-tag">
+                          <span className="rg-cob-dot" style={{ background: '#10b981' }} />
+                          Divisas
+                        </span>
+                        <span className="rg-cob-split-amt">{formatUsd(cobranzaAcumuladaMes.divisasUsd)}</span>
+                      </div>
+                      <div className="rg-cob-split-row">
+                        <span className="rg-cob-split-tag">
+                          <span className="rg-cob-dot" style={{ background: '#0284c7' }} />
+                          Bolívares
+                        </span>
+                        <div style={{ textAlign: 'right' }}>
+                          <div className="rg-cob-split-amt">{formatUsd(cobranzaAcumuladaMes.bsUsd)}</div>
+                          {cobranzaAcumuladaMes.bsReal > 0 && (
+                            <div className="rg-cob-split-sub">{formatBs(cobranzaAcumuladaMes.bsReal)}</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rg-goal-box">
+                  <div className="rg-goal-header">
+                    <span className="rg-goal-label">
+                      <strong>{cobranzaAcumuladaMes.recibos}</strong> recibos · <strong>{cobranzaAcumuladaMes.clientes}</strong> clientes
+                      {facturadoMesCobranzaUsd > 0 && (
+                        <>
+                          {' '}· Recaudado vs. Fact.:
+                          <span
+                            className="rg-goal-pct-badge"
+                            style={{
+                              color: getSemaforoMeta(cobranzaVsFacturadoPct).color,
+                              borderColor: getSemaforoMeta(cobranzaVsFacturadoPct).color
+                            }}
+                          >
+                            {cobranzaVsFacturadoPct}%
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    <span className="rg-compare-text">
+                      {cobranzaAcumuladaMes.esFuturo
+                        ? 'Mes aún no iniciado'
+                        : periodRange.isCustomRange
+                          ? `Período: ${periodRange.label}`
+                          : cobranzaAcumuladaMes.esMesEnCurso
+                            ? `Día ${cobranzaAcumuladaMes.diasTranscurridos}/${cobranzaAcumuladaMes.diasDelMes} • Proy.: ${formatUsd(cobranzaAcumuladaMes.proyeccionUsd)}`
+                            : 'Mes cerrado'}
+                    </span>
+                  </div>
+                  {facturadoMesCobranzaUsd > 0 && (
+                    <div className="rg-progress-track">
+                      <div
+                        className="rg-progress-fill"
+                        style={{
+                          width: `${Math.min(cobranzaVsFacturadoPct, 100)}%`,
+                          background: getSemaforoMeta(cobranzaVsFacturadoPct).color
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Tarjeta 4B: Desglose Vigente vs. Vencido */}
+            {/* Tarjeta 3C: Cartera Vencida en la Calle (Facturas + Notas de Entrega) */}
             <div
-              className={`rg-card ${cxpKeystone.saldoVencidoUsd > 0 ? 'accent-rose' : 'accent-amber'} is-clickable`}
-              onClick={() => onNavigate && onNavigate('cxp')}
+              className={`rg-card ${carteraCxcAging.cxcVen > 0 ? 'accent-rose' : 'accent-emerald'} is-clickable`}
+              onClick={() => onNavigate && onNavigate('cxc')}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxp');
+                if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxc');
               }}
-              title="Desglose de cartera pendiente por vencer y vencida con Keystone, C.A."
+              title="Clic para abrir el detalle de Cuentas por Cobrar vencidas"
             >
               <div className="rg-card-head">
-                <span className="rg-card-title">
-                  <DollarSign size={18} color={cxpKeystone.saldoVencidoUsd > 0 ? 'var(--semaforo-rojo, #ef4444)' : '#f59e0b'} />
-                  ESTADO DEL SALDO KEYSTONE
-                </span>
-                <span
-                  className={`rg-cxp-pill ${
-                    cxpKeystone.saldoTotalUsd <= 0
-                      ? 'is-solvente'
-                      : cxpKeystone.saldoVencidoUsd > 0
-                        ? 'is-danger'
-                        : ''
-                  }`}
-                >
-                  {cxpKeystone.saldoTotalUsd <= 0
-                    ? 'Solvente'
-                    : cxpKeystone.saldoVencidoUsd > 0
-                      ? `${cxpKeystone.vencidoPct}% Vencido`
-                      : 'Al Día'}
+                <div className="rg-card-title-wrap">
+                  <span className={`rg-card-mini-icon ${carteraCxcAging.cxcVen > 0 ? 'tone-rose' : 'tone-emerald'}`}>
+                    {carteraCxcAging.cxcVen > 0 ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+                  </span>
+                  <span className="rg-card-title">
+                    CARTERA VENCIDA EN LA CALLE (FACTURAS + NOTAS DE ENTREGA)
+                  </span>
+                </div>
+                <span className={`rg-cxp-pill ${carteraCxcAging.cxcVen > 0 ? 'is-danger' : 'is-solvente'}`}>
+                  {carteraCxcAging.cxcVen > 0
+                    ? `${carteraCxcAging.cxcVenPct}% de la cartera • ${carteraCxcAging.docsVencidos} docs`
+                    : 'Cartera Al Día'}
                 </span>
               </div>
 
-              <div className="rg-metrics-split">
-                <div className="rg-metric-tile">
-                  <div className="rg-metric-label">Por Vencer (Vigente)</div>
-                  <div className="rg-metric-value rg-val-money">
-                    {formatUsd(cxpKeystone.saldoVigenteUsd)}
+              <div className="rg-aging-grid">
+                <div className="rg-metric-tile tile-rose">
+                  <div className="rg-metric-label">
+                    <DollarSign size={13} /> Monto Consolidado Vencido
                   </div>
-                  <div className="rg-metric-note">
-                    {cxpKeystone.docsVigentes} {cxpKeystone.docsVigentes === 1 ? 'documento' : 'documentos'}
+                  <div className={`rg-metric-value ${carteraCxcAging.cxcVen > 0 ? 'rg-val-danger' : 'rg-val-money'}`}>
+                    {formatUsd(carteraCxcAging.cxcVen)}
+                  </div>
+                  <div className="rg-metric-secondary">
+                    {formatBs(carteraCxcAging.cxcVen * tasaBcv)}
                   </div>
                 </div>
 
                 <div className="rg-metric-tile">
-                  <div className="rg-metric-label">Vencido (En Mora)</div>
-                  <div className={`rg-metric-value ${cxpKeystone.saldoVencidoUsd > 0 ? 'rg-val-danger' : 'rg-val-stock'}`}>
-                    {formatUsd(cxpKeystone.saldoVencidoUsd)}
+                  <div className="rg-metric-label-row">
+                    <span className="rg-metric-label">Salud de Cartera Total</span>
+                    <span className="rg-split-ratio-label">{formatUsd(carteraCxcAging.cxcTot)}</span>
                   </div>
-                  <div className="rg-metric-note">
-                    {cxpKeystone.docsVencidos} {cxpKeystone.docsVencidos === 1 ? 'documento' : 'documentos'}
+                  <div className="rg-dual-bar">
+                    <div
+                      className="rg-dual-bar-seg is-usd"
+                      style={{ width: `${Math.max(0, 100 - (carteraCxcAging.cxcVenPct || 0))}%` }}
+                    />
+                    <div
+                      className="rg-dual-bar-seg is-danger"
+                      style={{ width: `${Math.min(100, carteraCxcAging.cxcVenPct || 0)}%` }}
+                    />
+                  </div>
+                  <div className="rg-cob-split-list">
+                    <div className="rg-cob-split-row">
+                      <span className="rg-cob-split-tag">
+                        <span className="rg-cob-dot" style={{ background: '#10b981' }} />
+                        Vigente (Al Día)
+                      </span>
+                      <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcDia)}</span>
+                    </div>
+                    <div className="rg-cob-split-row">
+                      <span className="rg-cob-split-tag">
+                        <span className="rg-cob-dot" style={{ background: '#ef4444' }} />
+                        En Mora
+                      </span>
+                      <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVen)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rg-metric-tile">
+                  <div className="rg-metric-label" style={{ marginBottom: '4px' }}>
+                    Desglose por Documento Vencido
+                  </div>
+                  <div className="rg-cob-split-list">
+                    <div className="rg-cob-split-row">
+                      <span className="rg-cob-split-tag">
+                        <span className="rg-cob-dot" style={{ background: '#ef4444' }} />
+                        Facturas ({carteraCxcAging.docsVencidosFacturas})
+                      </span>
+                      <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVenFacturas)}</span>
+                    </div>
+                    <div className="rg-cob-split-row">
+                      <span className="rg-cob-split-tag">
+                        <span className="rg-cob-dot" style={{ background: '#f59e0b' }} />
+                        Notas Entrega ({carteraCxcAging.docsVencidosNotas})
+                      </span>
+                      <span className="rg-cob-split-amt">{formatUsd(carteraCxcAging.cxcVenNotas)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+              <div className="rg-card-footer">
                 <span>
-                  Corte: <strong>{selectedDateShort}</strong>
-                  {cxpKeystone.docsVencenEnPeriodo > 0 && (
-                    <> • Vencen en período: <strong>{cxpKeystone.docsVencenEnPeriodo}</strong> ({formatUsd(cxpKeystone.vencenEnPeriodoUsd)})</>
-                  )}
+                  Cartera total activa: <strong>{formatUsd(carteraCxcAging.cxcTot)}</strong> · Solvente: <strong>{formatUsd(carteraCxcAging.cxcDia)}</strong>
                 </span>
                 <span>
-                  Tasa Keystone: <strong>{formatBs(tasaKeystone)}</strong>
+                  Fecha de corte: <strong>{selectedDateShort}</strong>
                 </span>
               </div>
             </div>
-          </div>
-        </section>
-      )}
+          </section>
+        )}
+
+        {/* ========================================================================= */}
+        {/* 4. CUENTAS POR PAGAR KEYSTONE (SUMATORIA DEL SALDO ACTUAL PENDIENTE)      */}
+        {/* ========================================================================= */}
+        {(activeBlock === 'ALL' || activeBlock === 'cxp-keystone') && (
+          <section className="rg-section" aria-label="Cuentas por Pagar Keystone">
+            <div className="rg-section-header tone-cxp-keystone">
+              <div className="rg-section-title-group">
+                <div className="rg-section-badge-icon tone-cxp-keystone">
+                  <Building2 size={18} />
+                </div>
+                <div>
+                  <div className="rg-section-kicker-row">
+                    <span className="rg-section-index tone-cxp-keystone">MÓDULO 04</span>
+                    <h2 className="rg-section-title">CUENTAS POR PAGAR • KEYSTONE, C.A.</h2>
+                  </div>
+                  <div className="rg-section-sub">Obligaciones comerciales vigentes y vencidas con proveedor matriz Oilstone</div>
+                </div>
+              </div>
+              <div className="rg-actions-row">
+                {onNavigate && (
+                  <button
+                    type="button"
+                    className="rg-module-link-btn"
+                    onClick={() => onNavigate('cxp')}
+                  >
+                    <span>Ir a Cuentas por Pagar</span>
+                    <ArrowUpRight size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="rg-grid-2">
+              {/* Tarjeta 4A: Saldo Actual Total CxP Keystone */}
+              <div
+                className="rg-card accent-amber is-clickable"
+                onClick={() => onNavigate && onNavigate('cxp')}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxp');
+                }}
+                title="Clic para abrir el detalle de Cuentas por Pagar a Keystone"
+              >
+                <div className="rg-inv-hero-row">
+                  <div className="rg-inv-hero-main">
+                    <div className="rg-inv-icon-box tone-amber">
+                      <Building2 size={24} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="rg-metric-label">Saldo Actual Por Pagar • Keystone</div>
+                      <div
+                        className={`rg-metric-value is-hero ${cxpKeystone.saldoTotalUsd > 0 ? 'rg-val-payable' : 'rg-val-money'}`}
+                      >
+                        {formatUsd(cxpKeystone.saldoTotalUsd)}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="rg-card-arrow">
+                    <ArrowUpRight size={18} />
+                  </span>
+                </div>
+
+                <div className="rg-unit-pills">
+                  {cxpKeystone.desglosePorTipo.length > 0 ? (
+                    cxpKeystone.desglosePorTipo.map(item => (
+                      <span key={item.label} className="rg-cxp-pill">
+                        {item.count} {item.label} • {formatUsd(item.usd)}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="rg-cxp-pill is-solvente">Solvente • Sin saldo pendiente</span>
+                  )}
+                </div>
+
+                <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                  <span>
+                    <strong>{cxpKeystone.documentosPendientes}</strong>{' '}
+                    {cxpKeystone.documentosPendientes === 1 ? 'cuenta pendiente' : 'cuentas pendientes'}
+                  </span>
+                  <span>Equiv.: <strong>{formatBs(cxpKeystone.saldoTotalBs)}</strong></span>
+                </div>
+              </div>
+
+              {/* Tarjeta 4B: Desglose Vigente vs. Vencido */}
+              <div
+                className={`rg-card ${cxpKeystone.saldoVencidoUsd > 0 ? 'accent-rose' : 'accent-amber'} is-clickable`}
+                onClick={() => onNavigate && onNavigate('cxp')}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && onNavigate) onNavigate('cxp');
+                }}
+                title="Desglose de cartera pendiente por vencer y vencida con Keystone, C.A."
+              >
+                <div className="rg-card-head">
+                  <div className="rg-card-title-wrap">
+                    <span className={`rg-card-mini-icon ${cxpKeystone.saldoVencidoUsd > 0 ? 'tone-rose' : 'tone-amber'}`}>
+                      <DollarSign size={15} />
+                    </span>
+                    <span className="rg-card-title">ESTADO DEL SALDO KEYSTONE</span>
+                  </div>
+                  <span
+                    className={`rg-cxp-pill ${
+                      cxpKeystone.saldoTotalUsd <= 0
+                        ? 'is-solvente'
+                        : cxpKeystone.saldoVencidoUsd > 0
+                          ? 'is-danger'
+                          : ''
+                    }`}
+                  >
+                    {cxpKeystone.saldoTotalUsd <= 0
+                      ? 'Solvente'
+                      : cxpKeystone.saldoVencidoUsd > 0
+                        ? `${cxpKeystone.vencidoPct}% Vencido`
+                        : 'Al Día'}
+                  </span>
+                </div>
+
+                <div className="rg-metrics-split">
+                  <div className="rg-metric-tile tile-emerald">
+                    <div className="rg-metric-label">Por Vencer (Vigente)</div>
+                    <div className="rg-metric-value rg-val-money">
+                      {formatUsd(cxpKeystone.saldoVigenteUsd)}
+                    </div>
+                    <div className="rg-metric-note">
+                      <strong>{cxpKeystone.docsVigentes}</strong> {cxpKeystone.docsVigentes === 1 ? 'documento' : 'documentos'}
+                    </div>
+                  </div>
+
+                  <div className={`rg-metric-tile ${cxpKeystone.saldoVencidoUsd > 0 ? 'tile-rose' : ''}`}>
+                    <div className="rg-metric-label">Vencido (En Mora)</div>
+                    <div className={`rg-metric-value ${cxpKeystone.saldoVencidoUsd > 0 ? 'rg-val-danger' : 'rg-val-stock'}`}>
+                      {formatUsd(cxpKeystone.saldoVencidoUsd)}
+                    </div>
+                    <div className="rg-metric-note">
+                      <strong>{cxpKeystone.docsVencidos}</strong> {cxpKeystone.docsVencidos === 1 ? 'documento' : 'documentos'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rg-card-footer" style={{ marginTop: 'auto' }}>
+                  <span>
+                    Corte: <strong>{selectedDateShort}</strong>
+                    {cxpKeystone.docsVencenEnPeriodo > 0 && (
+                      <> · Vencen en período: <strong>{cxpKeystone.docsVencenEnPeriodo}</strong> ({formatUsd(cxpKeystone.vencenEnPeriodoUsd)})</>
+                    )}
+                  </span>
+                  <span>
+                    Tasa Keystone: <strong>{formatBs(tasaKeystone)}</strong>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
       </div>
 
       {/* Modal de Vista Previa e Impresión */}

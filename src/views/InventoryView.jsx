@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Package,
   Plus,
@@ -26,7 +26,10 @@ import {
   ClipboardList,
   Check,
   RotateCcw,
-  Download
+  Download,
+  ChevronUp,
+  ChevronDown,
+  ArrowUpRight
 } from 'lucide-react';
 import { formatUsd, formatBs, formatUnitVe, resolveProductUnit, resolveProductLitersPerUnit, PRODUCT_UNITS_LIST, getProductWarehouseStocks } from '../services/formatService';
 import { getProductRetailPrice, getProductWholesalePrice, getProductCost } from '../services/pricingService';
@@ -705,6 +708,53 @@ export default function InventoryView({
 
   const [uploadingImage, setUploadingImage] = useState(false);
   const [savingStatus, setSavingStatus] = useState(null);
+  const [showKpis, setShowKpis] = useState(true);
+  const topScrollRef = useRef(null);
+  const tableScrollRef = useRef(null);
+  const [tableScrollWidth, setTableScrollWidth] = useState(0);
+  const [hasHorizontalOverflow, setHasHorizontalOverflow] = useState(false);
+
+  useEffect(() => {
+    const el = tableScrollRef.current;
+    if (!el) return undefined;
+
+    const updateMetrics = () => {
+      const sw = el.scrollWidth || 0;
+      const cw = el.clientWidth || 0;
+      setTableScrollWidth(sw);
+      setHasHorizontalOverflow(sw > cw + 1);
+    };
+
+    updateMetrics();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateMetrics) : null;
+    if (ro) {
+      ro.observe(el);
+      if (el.firstElementChild) ro.observe(el.firstElementChild);
+    }
+    window.addEventListener('resize', updateMetrics);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', updateMetrics);
+    };
+  }, [filteredProducts.length, selectedWarehouse, canSeeCosts, showKpis]);
+
+  const handleTopScroll = () => {
+    const top = topScrollRef.current;
+    const body = tableScrollRef.current;
+    if (!top || !body) return;
+    if (Math.abs(body.scrollLeft - top.scrollLeft) >= 1) {
+      body.scrollLeft = top.scrollLeft;
+    }
+  };
+
+  const handleTableScroll = () => {
+    const top = topScrollRef.current;
+    const body = tableScrollRef.current;
+    if (!top || !body) return;
+    if (Math.abs(top.scrollLeft - body.scrollLeft) >= 1) {
+      top.scrollLeft = body.scrollLeft;
+    }
+  };
 
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
@@ -835,96 +885,90 @@ export default function InventoryView({
     }
   };
 
+  const semaforoTotalCount = Math.max(
+    1,
+    (inventoryKpis.countCriticos || 0) + (inventoryKpis.countReorden || 0) + (inventoryKpis.countOptimos || 0)
+  );
+  const semaforoPctCrit = Math.round(((inventoryKpis.countCriticos || 0) / semaforoTotalCount) * 100);
+  const semaforoPctReo = Math.round(((inventoryKpis.countReorden || 0) / semaforoTotalCount) * 100);
+  const semaforoPctOpt = Math.max(0, 100 - semaforoPctCrit - semaforoPctReo);
+
   return (
     <div className="inventory-view-shell">
-      {/* Encabezado del Módulo */}
-      <div className="page-header-responsive" style={{ marginBottom: '0.85rem', flexShrink: 0 }}>
-        <div>
-          <h1 style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
-            <Droplet size={28} color="var(--neon-cyan)" /> Catálogo de Lubricantes & Matriz de Inventario
-          </h1>
-          <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: '4px 0 0 0' }}>
-            Control con semáforo inteligente ROP (🟢 Óptimo | 🟡 Reorden | 🔴 Crítico) • Oilstone ® / Grupo Motorven
-          </p>
+      {/* Encabezado Compacto del Módulo */}
+      <div className="inv-header-bar">
+        <div className="inv-header-title-group">
+          <div className="inv-header-icon">
+            <Droplet size={20} />
+          </div>
+          <div>
+            <h1 className="inv-header-title">Catálogo de Lubricantes & Matriz de Inventario</h1>
+            <p className="inv-header-sub">
+              Control inteligente ROP (Óptimo · Reorden · Crítico) • Oilstone ® / Grupo Motorven
+            </p>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          {/* BOTÓN MATRIZ DE REORDEN */}
+        <div className="inv-header-actions">
           <button
-            className="btn btn-secondary"
+            type="button"
+            className="inv-act-btn is-rop"
             onClick={() => setShowReorderModal(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              background: 'linear-gradient(135deg, rgba(230, 0, 18, 0.15), rgba(0, 43, 122, 0.25))',
-              border: '1px solid rgba(230, 0, 18, 0.4)',
-              color: '#f87171',
-              fontWeight: 700
-            }}
             title="Matriz predictiva de reorden ROP y pronóstico de quiebre de inventario para pedidos a planta"
           >
-            <Sliders size={16} color="var(--motorven-red)" /> Matriz Reorden & Quiebres
+            <Sliders size={14} />
+            <span>Matriz ROP</span>
           </button>
 
-          {/* BOTÓN KARDEX */}
           <button
-            className="btn btn-secondary"
+            type="button"
+            className="inv-act-btn is-kardex"
             onClick={() => setShowKardexModal(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(0, 43, 122, 0.25))',
-              border: '1px solid rgba(245, 158, 11, 0.4)',
-              color: '#fbbf24',
-              fontWeight: 700
-            }}
             title="Ver Kardex Físico, Mermas, Ajustes y Traslados sincronizados desde Supabase"
           >
-            <BarChart2 size={16} /> Kardex & Mermas ({inventoryAdjustments.filter(a => !isDocumentAnnulled(a)).length + warehouseTransfers.filter(t => !isDocumentAnnulled(t)).length})
+            <BarChart2 size={14} />
+            <span>
+              Kardex ({inventoryAdjustments.filter(a => !isDocumentAnnulled(a)).length + warehouseTransfers.filter(t => !isDocumentAnnulled(t)).length})
+            </span>
           </button>
 
-          {/* BOTÓN EXPORTAR CSV */}
           <button
-            className="btn btn-secondary"
+            type="button"
+            className="inv-act-btn"
             onClick={handleExportCsv}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem' }}
             title="Exportar inventario detallado en tiempo real a CSV / Excel"
           >
-            <FileSpreadsheet size={15} color="#0284c7" /> Exportar CSV de inventario detallado en tiempo real
+            <FileSpreadsheet size={14} color="#0284c7" />
+            <span>Exportar CSV</span>
           </button>
 
-          {/* BOTÓN HOJA DE TOMA FÍSICA */}
           <button
-            className="btn btn-secondary"
-            onClick={() => {
-              setShowPhysicalTakeModal(true);
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem' }}
+            type="button"
+            className="inv-act-btn"
+            onClick={() => setShowPhysicalTakeModal(true)}
             title="Abrir hoja de toma física y conteo de inventario"
           >
-            <ClipboardList size={15} color="#38bdf8" /> Hoja de Toma Física
+            <ClipboardList size={14} color="#38bdf8" />
+            <span>Toma Física</span>
           </button>
 
           {canManage ? (
             <button
-              className="btn btn-secondary"
+              type="button"
+              className="inv-act-btn"
               onClick={() => handleOpenModal(null, isSpecificWarehouse ? normSelW : '01')}
-              style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
               title={isSpecificWarehouse ? `Cargar nuevo producto en Almacén ${normSelW}` : 'Cargar nuevo producto en inventario'}
             >
-              <Plus size={16} /> Cargar Nuevo Lubricante
+              <Plus size={14} />
+              <span>Nuevo Lubricante</span>
             </button>
           ) : (
-            <div style={{ fontSize: '0.8rem', background: 'rgba(14, 165, 233, 0.12)', color: '#38bdf8', padding: '0.45rem 0.85rem', borderRadius: '8px', border: '1px solid rgba(14, 165, 233, 0.25)', fontWeight: 600 }}>
-              👁️ Catálogo Comercial
-            </div>
+            <span className="inv-readonly-pill">Catálogo Comercial</span>
           )}
 
-          {/* BOTÓN IMPRIMIR REPORTE (ALINEADO A LA DERECHA, ROJO MOTORVEN) */}
           <button
-            className="btn btn-print-report"
+            type="button"
+            className="btn btn-print-report inv-print-btn"
             onClick={() => generateInventoryPDF({
               products: filteredProducts,
               config,
@@ -937,382 +981,282 @@ export default function InventoryView({
                 ? '02: ALMACÉN CENTRAL / BÓVEDA (Notas de Entrega)'
                 : 'Todos los Almacenes (Consolidado: Alm 01 + Alm 02)'
             })}
-            style={{ marginLeft: 'auto' }}
             title="Descargar Reporte Oficial de Inventario y Valorización en PDF"
           >
-            <Printer size={15} color="#ffffff" /> Imprimir Reporte
+            <Printer size={14} color="#ffffff" />
+            <span>Imprimir PDF</span>
           </button>
         </div>
       </div>
 
-      {/* KPI METRIC CARDS DE INVENTARIO */}
-      <div className="inventory-kpi-grid">
-        {/* KPI 1: VOLUMEN TOTAL (CONSOLIDADO: SUMA DE LOS DOS ALMACENES) */}
-        <div
-          className="kpi-card-modern"
-          onClick={() => setSelectedWarehouse('TODOS')}
-          style={{
-            background: 'var(--bg-card)',
-            border: selectedWarehouse === 'TODOS' ? '1px solid var(--neon-cyan)' : '1px solid var(--border-glass)',
-            borderRadius: '14px',
-            padding: '1.15rem',
-            minWidth: 0,
-            cursor: 'pointer',
-            boxShadow: selectedWarehouse === 'TODOS' ? '0 0 14px rgba(6, 182, 212, 0.18)' : 'none',
-            transition: 'all 0.25s ease'
-          }}
-          title="Ver Consolidado de ambos almacenes (Suma Alm 01 + Alm 02)"
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-              Volumen en Bodega
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Oilstone ®</span>
-              <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                Σ Alm 01 + 02
+      {/* KPI STRIP COMPACTA SIN ESPACIOS MUERTOS */}
+      {showKpis && (
+        <div className="inventory-kpi-grid inv-kpi-compact-grid">
+          {/* KPI 1: VOLUMEN EN BODEGA */}
+          <div
+            className={`inv-kpi-card tone-cyan${selectedWarehouse === 'TODOS' ? ' is-selected' : ''}`}
+            onClick={() => setSelectedWarehouse('TODOS')}
+            title="Ver Consolidado de ambos almacenes (Suma Alm 01 + Alm 02)"
+          >
+            <div className="inv-kpi-top">
+              <span className="inv-kpi-label">Volumen en Bodega</span>
+              <span className="inv-kpi-badge tone-cyan">Σ Alm 01 + 02 • {inventoryKpis.totalSkus} SKUs</span>
+            </div>
+            <div className="inv-kpi-val tone-cyan">
+              {inventoryKpis.totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>L</small>
+            </div>
+            <div className="inv-kpi-chips">
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.breakdownByUnit?.Litros || 0}</strong> Lts</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.breakdownByUnit?.Caja || 0}</strong> Cajas</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.breakdownByUnit?.Paila || 0}</strong> Pailas</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.breakdownByUnit?.Tambor || 0}</strong> Tamb.</span>
+              {(inventoryKpis.breakdownByUnit?.Totem || 0) > 0 && (
+                <span className="inv-kpi-chip"><strong>{inventoryKpis.breakdownByUnit.Totem}</strong> Totem</span>
+              )}
+            </div>
+          </div>
+
+          {/* KPI 2: ALMACÉN 01 */}
+          <div
+            className={`inv-kpi-card tone-blue${selectedWarehouse === '01' ? ' is-selected' : ''}`}
+            onClick={() => setSelectedWarehouse('01')}
+            title="Clic para filtrar por 01: Almacén Principal (Facturación Fiscal)"
+          >
+            <div className="inv-kpi-top">
+              <span className="inv-kpi-label">01: Alm. Principal</span>
+              <span className="inv-kpi-badge tone-blue">Facturas Fiscales · {inventoryKpis.alm01TotalSkus} SKUs</span>
+            </div>
+            <div className="inv-kpi-val-row">
+              <span className="inv-kpi-val tone-blue">
+                {inventoryKpis.alm01TotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>L</small>
               </span>
+              {canSeeCosts && (
+                <span className="inv-kpi-money-tag">{formatUsd(inventoryKpis.alm01TotalValorUsd)}</span>
+              )}
+            </div>
+            <div className="inv-kpi-chips">
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm01BreakdownByUnit?.Litros || 0}</strong> Lts</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm01BreakdownByUnit?.Caja || 0}</strong> Cajas</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm01BreakdownByUnit?.Paila || 0}</strong> Pailas</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm01BreakdownByUnit?.Tambor || 0}</strong> Tamb.</span>
             </div>
           </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--motorven-navy-light)', fontFamily: 'var(--font-tech)' }}>
-            {inventoryKpis.totalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
-          </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px', lineHeight: 1.35 }}>
-            <span>💧 <strong>{inventoryKpis.breakdownByUnit?.Litros || 0}</strong> Litros <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Litros || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 📦 <strong>{inventoryKpis.breakdownByUnit?.Caja || 0}</strong> Cajas <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Caja || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 🪣 <strong>{inventoryKpis.breakdownByUnit?.Paila || 0}</strong> Pailas <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Paila || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 🛢️ <strong>{inventoryKpis.breakdownByUnit?.Tambor || 0}</strong> Tambor <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Tambor || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            {(inventoryKpis.breakdownByUnit?.Totem || 0) > 0 && (
-              <span>• 🏗️ <strong>{inventoryKpis.breakdownByUnit.Totem}</strong> Totem <span style={{ color: 'var(--motorven-navy-light)', fontWeight: 600 }}>({(inventoryKpis.breakdownLitersByUnit?.Totem || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            )}
-          </div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', opacity: 0.9, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>({inventoryKpis.totalSkus} SKUs totales)</span>
-            <span style={{ color: 'var(--neon-cyan)', fontWeight: 700 }}>Total Consolidado</span>
-          </div>
-        </div>
 
-        {/* KPI 2: ALMACÉN 01 - PRINCIPAL / MOSTRADOR (FACTURAS FISCALES SENIAT) */}
-        <div
-          className="kpi-card-modern"
-          onClick={() => setSelectedWarehouse('01')}
-          style={{
-            background: 'linear-gradient(135deg, rgba(0, 43, 122, 0.16) 0%, rgba(2, 132, 199, 0.10) 100%)',
-            border: selectedWarehouse === '01' ? '1px solid #38bdf8' : '1px solid rgba(2, 132, 199, 0.35)',
-            borderRadius: '14px',
-            padding: '1.15rem',
-            minWidth: 0,
-            cursor: 'pointer',
-            boxShadow: selectedWarehouse === '01' ? '0 0 16px rgba(56, 189, 248, 0.28)' : 'none',
-            transition: 'all 0.25s ease'
-          }}
-          title="Clic para filtrar por 01: Almacén Principal (Facturación Fiscal)"
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              🏢 01: Alm. Principal
-            </span>
-            <span style={{ fontSize: '0.65rem', background: 'rgba(2, 132, 199, 0.22)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.45)', padding: '2px 7px', borderRadius: '12px', fontWeight: 800 }}>
-              🧾 Facturas Fiscales
-            </span>
-          </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-tech)' }}>
-            {inventoryKpis.alm01TotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
-          </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px', lineHeight: 1.35 }}>
-            <span>💧 <strong>{inventoryKpis.alm01BreakdownByUnit?.Litros || 0}</strong> Lts <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Litros || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 📦 <strong>{inventoryKpis.alm01BreakdownByUnit?.Caja || 0}</strong> Cajas <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Caja || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 🪣 <strong>{inventoryKpis.alm01BreakdownByUnit?.Paila || 0}</strong> Pailas <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Paila || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 🛢️ <strong>{inventoryKpis.alm01BreakdownByUnit?.Tambor || 0}</strong> Tambor <span style={{ color: '#38bdf8', fontWeight: 600 }}>({(inventoryKpis.alm01BreakdownLitersByUnit?.Tambor || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-          </div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>({inventoryKpis.alm01TotalSkus} SKUs en mostrador)</span>
-            <span style={{ color: 'var(--motorven-gold)', fontWeight: 700 }}>{formatUsd(inventoryKpis.alm01TotalValorUsd)}</span>
-          </div>
-        </div>
-
-        {/* KPI 3: ALMACÉN 02 - CENTRAL / BÓVEDA (NOTAS DE ENTREGA) */}
-        <div
-          className="kpi-card-modern"
-          onClick={() => setSelectedWarehouse('02')}
-          style={{
-            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(0, 43, 122, 0.10) 100%)',
-            border: selectedWarehouse === '02' ? '1px solid var(--motorven-emerald)' : '1px solid rgba(16, 185, 129, 0.35)',
-            borderRadius: '14px',
-            padding: '1.15rem',
-            minWidth: 0,
-            cursor: 'pointer',
-            boxShadow: selectedWarehouse === '02' ? '0 0 16px rgba(16, 185, 129, 0.28)' : 'none',
-            transition: 'all 0.25s ease'
-          }}
-          title="Clic para filtrar por 02: Almacén Central / Bóveda (Notas de Entrega)"
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--motorven-emerald)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              🏛️ 02: Alm. Central
-            </span>
-            <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.22)', color: 'var(--motorven-emerald)', border: '1px solid rgba(16, 185, 129, 0.45)', padding: '2px 7px', borderRadius: '12px', fontWeight: 800 }}>
-              🚚 Notas de Entrega
-            </span>
-          </div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--motorven-emerald)', fontFamily: 'var(--font-tech)' }}>
-            {inventoryKpis.alm02TotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L
-          </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px', lineHeight: 1.35 }}>
-            <span>💧 <strong>{inventoryKpis.alm02BreakdownByUnit?.Litros || 0}</strong> Lts <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Litros || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 📦 <strong>{inventoryKpis.alm02BreakdownByUnit?.Caja || 0}</strong> Cajas <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Caja || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 🪣 <strong>{inventoryKpis.alm02BreakdownByUnit?.Paila || 0}</strong> Pailas <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Paila || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-            <span>• 🛢️ <strong>{inventoryKpis.alm02BreakdownByUnit?.Tambor || 0}</strong> Tambor <span style={{ color: 'var(--motorven-emerald)', fontWeight: 600 }}>({(inventoryKpis.alm02BreakdownLitersByUnit?.Tambor || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L)</span></span>
-          </div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>({inventoryKpis.alm02TotalSkus} SKUs en bóveda)</span>
-            <span style={{ color: 'var(--motorven-gold)', fontWeight: 700 }}>{formatUsd(inventoryKpis.alm02TotalValorUsd)}</span>
-          </div>
-        </div>
-
-        {/* KPI 4: VALORIZACIÓN */}
-        {canSeeCosts && (
-          <div className="kpi-card-modern" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: '14px', padding: '1.15rem', minWidth: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                Valorización de Inventario
+          {/* KPI 3: ALMACÉN 02 */}
+          <div
+            className={`inv-kpi-card tone-emerald${selectedWarehouse === '02' ? ' is-selected' : ''}`}
+            onClick={() => setSelectedWarehouse('02')}
+            title="Clic para filtrar por 02: Almacén Central / Bóveda (Notas de Entrega)"
+          >
+            <div className="inv-kpi-top">
+              <span className="inv-kpi-label">02: Alm. Central</span>
+              <span className="inv-kpi-badge tone-emerald">Notas Entrega · {inventoryKpis.alm02TotalSkus} SKUs</span>
+            </div>
+            <div className="inv-kpi-val-row">
+              <span className="inv-kpi-val tone-emerald">
+                {inventoryKpis.alm02TotalLitros.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>L</small>
               </span>
-              <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>Costo Almacén</span>
+              {canSeeCosts && (
+                <span className="inv-kpi-money-tag">{formatUsd(inventoryKpis.alm02TotalValorUsd)}</span>
+              )}
             </div>
-            <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-main)', fontFamily: 'var(--font-tech)' }}>
-              {formatUsd(inventoryKpis.totalValorUsd)}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--motorven-gold)', fontFamily: 'var(--font-code)', marginTop: '2px' }}>
-              {formatBs(inventoryKpis.totalValorBs)}
-            </div>
-            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-code)', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>🏢 01: <strong style={{ color: '#38bdf8' }}>{formatUsd(inventoryKpis.alm01TotalValorUsd)}</strong></span>
-              <span>🏛️ 02: <strong style={{ color: 'var(--motorven-emerald)' }}>{formatUsd(inventoryKpis.alm02TotalValorUsd)}</strong></span>
+            <div className="inv-kpi-chips">
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm02BreakdownByUnit?.Litros || 0}</strong> Lts</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm02BreakdownByUnit?.Caja || 0}</strong> Cajas</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm02BreakdownByUnit?.Paila || 0}</strong> Pailas</span>
+              <span className="inv-kpi-chip"><strong>{inventoryKpis.alm02BreakdownByUnit?.Tambor || 0}</strong> Tamb.</span>
             </div>
           </div>
-        )}
 
-        {/* KPI 5: SALUD DEL SEMÁFORO */}
-        <div className="kpi-card-modern" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: '14px', padding: '1.15rem', minWidth: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-              Salud del Stock (Semáforo)
-            </span>
-            <span className="badge badge-warning" style={{ fontSize: '0.65rem' }}>Rotación ROP</span>
-          </div>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setSemaforoFilter(semaforoFilter === 'rojo' ? 'TODOS' : 'rojo')}
-              style={{
-                background: semaforoFilter === 'rojo' ? 'var(--motorven-red)' : 'rgba(230, 0, 18, 0.12)',
-                color: semaforoFilter === 'rojo' ? '#fff' : 'var(--motorven-red)',
-                border: '1px solid rgba(230, 0, 18, 0.3)',
-                borderRadius: '8px',
-                padding: '4px 8px',
-                fontSize: '0.75rem',
-                fontWeight: 800,
-                cursor: 'pointer'
-              }}
-              title="Filtrar lubricantes en Stock Crítico"
-            >
-              🔴 {inventoryKpis.countCriticos} Críticos
-            </button>
-            <button
-              onClick={() => setSemaforoFilter(semaforoFilter === 'amarillo' ? 'TODOS' : 'amarillo')}
-              style={{
-                background: semaforoFilter === 'amarillo' ? '#ca8a04' : 'rgba(245, 158, 11, 0.12)',
-                color: semaforoFilter === 'amarillo' ? '#fff' : 'var(--motorven-gold)',
-                border: '1px solid rgba(245, 158, 11, 0.3)',
-                borderRadius: '8px',
-                padding: '4px 8px',
-                fontSize: '0.75rem',
-                fontWeight: 800,
-                cursor: 'pointer'
-              }}
-              title="Filtrar lubricantes en Punto de Reorden"
-            >
-              🟡 {inventoryKpis.countReorden} Reorden
-            </button>
-            <button
-              onClick={() => setSemaforoFilter(semaforoFilter === 'verde' ? 'TODOS' : 'verde')}
-              style={{
-                background: semaforoFilter === 'verde' ? 'var(--semaforo-verde)' : 'rgba(16, 185, 129, 0.12)',
-                color: semaforoFilter === 'verde' ? '#fff' : 'var(--semaforo-verde)',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                borderRadius: '8px',
-                padding: '4px 8px',
-                fontSize: '0.75rem',
-                fontWeight: 800,
-                cursor: 'pointer'
-              }}
-              title="Filtrar lubricantes en Nivel Óptimo"
-            >
-              🟢 {inventoryKpis.countOptimos} Óptimos
-            </button>
-          </div>
-        </div>
-
-        {/* KPI 4: ACCESO RÁPIDO PEDIDOS A PLANTA */}
-        <div
-          className="kpi-card-modern"
-          onClick={() => setShowReorderModal(true)}
-          style={{
-            background: 'linear-gradient(135deg, rgba(0, 43, 122, 0.15) 0%, rgba(2, 132, 199, 0.12) 100%)',
-            border: '1px solid rgba(2, 132, 199, 0.35)',
-            borderRadius: '14px',
-            padding: '1.15rem',
-            cursor: 'pointer',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            minWidth: 0
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--motorven-navy-light)', textTransform: 'uppercase' }}>
-              Pedidos a Planta
-            </span>
-            <Sliders size={16} color="var(--motorven-navy-light)" />
-          </div>
-          <div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
-              Matriz ROP Activa
+          {/* KPI 4: VALORIZACIÓN */}
+          {canSeeCosts && (
+            <div className="inv-kpi-card tone-gold">
+              <div className="inv-kpi-top">
+                <span className="inv-kpi-label">Valorización Total</span>
+                <span className="inv-kpi-badge tone-emerald">Costo Almacén</span>
+              </div>
+              <div className="inv-kpi-val-row">
+                <span className="inv-kpi-val tone-heading">{formatUsd(inventoryKpis.totalValorUsd)}</span>
+                <span className="inv-kpi-bs">{formatBs(inventoryKpis.totalValorBs)}</span>
+              </div>
+              <div className="inv-kpi-chips">
+                <span className="inv-kpi-chip">01: <strong style={{ color: '#38bdf8' }}>{formatUsd(inventoryKpis.alm01TotalValorUsd)}</strong></span>
+                <span className="inv-kpi-chip">02: <strong style={{ color: 'var(--motorven-emerald)' }}>{formatUsd(inventoryKpis.alm02TotalValorUsd)}</strong></span>
+              </div>
             </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              {inventoryKpis.countCriticos + inventoryKpis.countReorden > 0
-                ? `🚨 ${inventoryKpis.countCriticos + inventoryKpis.countReorden} SKUs requieren reposición`
-                : '✅ Cobertura adecuada'}
+          )}
+
+          {/* KPI 5: SALUD DEL SEMÁFORO */}
+          <div className="inv-kpi-card tone-amber">
+            <div className="inv-kpi-top">
+              <span className="inv-kpi-label">Salud del Stock</span>
+              <span className="inv-kpi-badge tone-amber">Rotación ROP</span>
             </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Filtros & Barra de Búsqueda */}
-      <div className="card" style={{ padding: '0.85rem 1.15rem', marginBottom: '0.85rem', borderRadius: '12px', border: '1px solid var(--border-glass)', width: '100%', minWidth: 0, flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div className="search-wrapper" style={{ flex: 1, minWidth: 'min(100%, 280px)', maxWidth: '480px' }}>
-            <Search size={16} />
-            <input
-              type="text"
-              className="form-control"
-              style={{ fontSize: '0.84rem', height: '38px' }}
-              placeholder="Buscar por Código, Viscosidad (20W-50, 10W-30), Marca o Descripción..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            {/* Filtro por Almacén Supabase */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Warehouse size={16} color="var(--neon-cyan)" />
-              <select
-                className="form-control filter-select"
-                value={selectedWarehouse}
-                onChange={(e) => setSelectedWarehouse(e.target.value)}
-                style={{ width: '235px', height: '38px', fontSize: '0.82rem' }}
-              >
-                <option value="TODOS">Todos los Almacenes (Σ Consolidado)</option>
-                {activeWarehouses.map((w) => {
-                  const code = String(w.coAlm || w.id).replace(/^ALM-/, '');
-                  const tag = code === '01' ? ' (Facturas Fiscales)' : code === '02' ? ' (Notas de Entrega)' : '';
-                  return (
-                    <option key={w.id || w.coAlm} value={w.coAlm}>
-                      {w.coAlm} - {w.desAlm}{tag}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Filter size={16} color="var(--motorven-gold)" />
-              <select
-                className="form-control filter-select"
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                style={{ width: '220px', height: '38px', fontSize: '0.82rem' }}
-              >
-                {categories.map((cat) => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
-            </div>
-
-            {semaforoFilter !== 'TODOS' && (
+            <div className="inv-semaforo-pills">
               <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setSemaforoFilter('TODOS')}
-                style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                type="button"
+                onClick={() => setSemaforoFilter(semaforoFilter === 'rojo' ? 'TODOS' : 'rojo')}
+                className={`inv-sem-btn is-red${semaforoFilter === 'rojo' ? ' is-active' : ''}`}
+                title="Filtrar lubricantes en Stock Crítico"
               >
-                <X size={13} /> Quitar Filtro Semáforo ({semaforoFilter})
+                <span className="inv-sem-dot is-red" />
+                <strong>{inventoryKpis.countCriticos}</strong> Críticos
               </button>
-            )}
+              <button
+                type="button"
+                onClick={() => setSemaforoFilter(semaforoFilter === 'amarillo' ? 'TODOS' : 'amarillo')}
+                className={`inv-sem-btn is-amber${semaforoFilter === 'amarillo' ? ' is-active' : ''}`}
+                title="Filtrar lubricantes en Punto de Reorden"
+              >
+                <span className="inv-sem-dot is-amber" />
+                <strong>{inventoryKpis.countReorden}</strong> Reorden
+              </button>
+              <button
+                type="button"
+                onClick={() => setSemaforoFilter(semaforoFilter === 'verde' ? 'TODOS' : 'verde')}
+                className={`inv-sem-btn is-green${semaforoFilter === 'verde' ? ' is-active' : ''}`}
+                title="Filtrar lubricantes en Nivel Óptimo"
+              >
+                <span className="inv-sem-dot is-green" />
+                <strong>{inventoryKpis.countOptimos}</strong> Óptimos
+              </button>
+            </div>
+            <div className="inv-sem-bar" aria-hidden="true">
+              <span className="is-red" style={{ width: `${semaforoPctCrit}%` }} />
+              <span className="is-amber" style={{ width: `${semaforoPctReo}%` }} />
+              <span className="is-green" style={{ width: `${semaforoPctOpt}%` }} />
+            </div>
+          </div>
+
+          {/* KPI 6: PEDIDOS A PLANTA */}
+          <div
+            className="inv-kpi-card tone-indigo is-clickable"
+            onClick={() => setShowReorderModal(true)}
+            title="Abrir Matriz ROP de Pedidos a Planta"
+          >
+            <div className="inv-kpi-top">
+              <span className="inv-kpi-label">Pedidos a Planta</span>
+              <span className="inv-kpi-badge tone-blue">Matriz ROP Activa</span>
+            </div>
+            <div className="inv-kpi-val-row">
+              <span className="inv-kpi-val tone-heading" style={{ fontSize: '1.12rem' }}>
+                {inventoryKpis.countCriticos + inventoryKpis.countReorden > 0
+                  ? `${inventoryKpis.countCriticos + inventoryKpis.countReorden} SKUs por reponer`
+                  : 'Cobertura Óptima'}
+              </span>
+              <span className="inv-rop-link">
+                Abrir <ArrowUpRight size={13} />
+              </span>
+            </div>
+            <div className="inv-kpi-chips">
+              <span className="inv-kpi-chip">
+                {inventoryKpis.countCriticos} críticos · {inventoryKpis.countReorden} en reorden
+              </span>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Chips de Almacenes Independientes */}
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-            Almacenes:
-          </span>
+      {/* Barra Unificada de Búsqueda, Almacenes y Filtros (1 sola fila compacta) */}
+      <div className="inv-filter-bar">
+        <div className="search-wrapper inv-search-box">
+          <Search size={15} />
+          <input
+            type="text"
+            className="form-control"
+            placeholder="Buscar código, viscosidad (20W-50, 10W-30), marca..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        <div className="inv-wh-pills" role="group" aria-label="Filtro por almacén">
           <button
             type="button"
             onClick={() => setSelectedWarehouse('TODOS')}
-            style={{
-              fontSize: '0.72rem',
-              padding: '3px 9px',
-              borderRadius: '20px',
-              border: selectedWarehouse === 'TODOS' ? '1px solid var(--neon-cyan)' : '1px solid var(--border-glass)',
-              background: selectedWarehouse === 'TODOS' ? 'rgba(6, 182, 212, 0.18)' : 'var(--bg-card)',
-              color: selectedWarehouse === 'TODOS' ? 'var(--neon-cyan)' : 'var(--text-muted)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              fontWeight: 600
-            }}
+            className={`inv-wh-pill${selectedWarehouse === 'TODOS' ? ' is-active tone-cyan' : ''}`}
           >
-            Σ Todos (Consolidado: Alm 01 + Alm 02)
+            Σ Todos
           </button>
           {activeWarehouses.map((w) => {
             const isSelected = selectedWarehouse === w.coAlm;
-            const isAlm01 = String(w.coAlm).replace(/^ALM-/, '') === '01';
-            const isAlm02 = String(w.coAlm).replace(/^ALM-/, '') === '02';
-            const activeColor = isAlm01 ? '#38bdf8' : isAlm02 ? 'var(--motorven-emerald)' : 'var(--neon-cyan)';
-            const activeBg = isAlm01 ? 'rgba(2, 132, 199, 0.2)' : isAlm02 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(6, 182, 212, 0.15)';
-            const subLabel = isAlm01 ? ' • 🧾 Facturas Fiscales' : isAlm02 ? ' • 🚚 Notas de Entrega' : '';
+            const code = String(w.coAlm).replace(/^ALM-/, '');
+            const isAlm01 = code === '01';
+            const isAlm02 = code === '02';
+            const shortLabel = isAlm01 ? '01 Principal (Fiscal)' : isAlm02 ? '02 Central (Notas)' : `${w.coAlm}: ${w.desAlm}`;
+            const toneClass = isAlm01 ? 'tone-blue' : isAlm02 ? 'tone-emerald' : 'tone-cyan';
 
             return (
               <button
                 key={w.coAlm}
                 type="button"
                 onClick={() => setSelectedWarehouse(isSelected ? 'TODOS' : w.coAlm)}
-                style={{
-                  fontSize: '0.72rem',
-                  padding: '3px 10px',
-                  borderRadius: '20px',
-                  border: isSelected ? `1px solid ${activeColor}` : '1px solid var(--border-glass)',
-                  background: isSelected ? activeBg : 'var(--bg-card)',
-                  color: isSelected ? activeColor : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  fontWeight: isSelected ? 700 : 500
-                }}
+                className={`inv-wh-pill${isSelected ? ` is-active ${toneClass}` : ''}`}
               >
-                <Warehouse size={12} /> {w.coAlm}: {w.desAlm}{subLabel}
+                <Warehouse size={12} />
+                <span>{shortLabel}</span>
               </button>
             );
           })}
         </div>
+
+        <div className="inv-filter-right">
+          <div className="inv-cat-select-wrap">
+            <Filter size={14} color="var(--motorven-gold)" />
+            <select
+              className="form-control filter-select inv-cat-select"
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              aria-label="Filtrar por categoría"
+            >
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+
+          {semaforoFilter !== 'TODOS' && (
+            <button
+              type="button"
+              className="inv-clear-sem-btn"
+              onClick={() => setSemaforoFilter('TODOS')}
+            >
+              <X size={12} />
+              <span>Semáforo: {semaforoFilter}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="inv-toggle-kpi-btn"
+            onClick={() => setShowKpis(v => !v)}
+            title={showKpis ? 'Ocultar tarjetas KPI para ver más filas' : 'Mostrar tarjetas KPI'}
+          >
+            {showKpis ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            <span>{showKpis ? 'Ocultar KPIs' : 'Ver KPIs'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Tabla de Productos con Semáforo */}
-      <div className="card table-card-wrapper" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--border-glass)', borderRadius: '14px', width: '100%', minWidth: 0, maxWidth: '100%' }}>
-        <div className="table-container" style={{ width: '100%', maxWidth: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <table className="custom-table table-wide" style={{ fontSize: '0.8rem', width: '100%' }}>
+      {/* Tabla de Productos con Semáforo (Máximo Espacio de Visualización) */}
+      <div className="card table-card-wrapper inv-table-card" style={{ padding: 0, overflow: 'hidden', borderRadius: '14px', width: '100%', minWidth: 0, maxWidth: '100%' }}>
+        {hasHorizontalOverflow && (
+          <div
+            ref={topScrollRef}
+            onScroll={handleTopScroll}
+            className="inv-top-hscroll"
+            aria-label="Desplazamiento horizontal superior de la tabla"
+          >
+            <div style={{ width: `${tableScrollWidth}px`, height: '1px' }} />
+          </div>
+        )}
+        <div
+          ref={tableScrollRef}
+          onScroll={handleTableScroll}
+          className="table-container"
+          style={{ width: '100%', maxWidth: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
+        >
+          <table className="custom-table table-wide inv-products-table" style={{ fontSize: '0.8rem', width: '100%' }}>
             <thead>
               <tr>
                 <th style={{ width: '88px' }}>Semáforo</th>
@@ -1391,15 +1335,15 @@ export default function InventoryView({
                         <div style={{ fontSize: '0.725rem', color: 'var(--motorven-gold)' }}>OEM: {p.oem || 'N/A'}</div>
                       </td>
                       <td>
-                        <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{p.descripcion}</div>
-                        <div style={{ fontSize: '0.725rem', color: 'var(--neon-cyan)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                          <Droplet size={12} /> Viscosidad: <strong>{p.viscosidad || 'N/A'}</strong>
+                        <div style={{ fontWeight: 700, fontSize: '0.86rem' }}>{p.descripcion}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--neon-cyan)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                          <Droplet size={12} style={{ flexShrink: 0 }} /> Viscosidad: <strong>{p.viscosidad || 'N/A'}</strong>
                         </div>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span className="badge badge-info" style={{ fontSize: '0.68rem' }}>{p.marca}</span>
-                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{resolveProductUnit(p, 'Caja')}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
+                          <span className="badge badge-info" style={{ fontSize: '0.66rem', whiteSpace: 'nowrap' }}>{p.marca}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{resolveProductUnit(p, 'Caja')}</span>
                         </div>
                         <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

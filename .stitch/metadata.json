@@ -100,6 +100,12 @@
       "deviceType": "MOBILE",
       "htmlPath": ".stitch/designs/mobile-inventario-consolidado.html",
       "screenshotPath": ".stitch/designs/mobile-inventario-consolidado.jpg"
+    },
+    "desktop-resumen-general": {
+      "id": "desktop-resumen-general-v2",
+      "title": "SIGNUM MOTORVEN • Resumen General Ejecutivo (Bento Desktop)",
+      "deviceType": "DESKTOP",
+      "htmlPath": ".stitch/designs/desktop-resumen-general.html"
     }
   }
 }

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SIGNUM MOTORVEN • Resumen General Ejecutivo (Desktop Bento)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&family=Orbitron:wght@700;800;900&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            navy: '#002b7a',
+            crimson: '#e60012',
+            canvas: '#060913',
+            card: '#0c1427',
+            cyan: '#38bdf8',
+            emerald: '#10b981',
+            amber: '#f59e0b'
+          },
+          fontFamily: {
+            tech: ['Orbitron', 'sans-serif'],
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="bg-canvas text-slate-100 font-sans min-h-screen p-6">
+  <!-- Stitch Desktop Reference: SIGNUM MOTORVEN Resumen General -->
+  <div class="max-w-[1480px] mx-auto space-y-5">
+    <!-- Unified Command Dock -->
+    <header class="rounded-2xl bg-card/90 border border-slate-800/90 shadow-2xl overflow-hidden">
+      <div class="px-5 py-4 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80">
+        <div class="flex items-center gap-3.5">
+          <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-navy to-sky-600 flex items-center justify-center shadow-lg shadow-sky-900/30 font-tech font-black text-sm">SM</div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-mono text-[10px] uppercase tracking-widest text-cyan font-bold">Dirección & Síntesis Financiera</span>
+              <span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-mono text-[10px] font-bold">EN LÍNEA</span>
+            </div>
+            <h1 class="font-tech text-lg font-black tracking-wider text-white">RESUMEN GENERAL</h1>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="px-3.5 py-2 rounded-xl bg-indigo-600/20 border border-indigo-400/40 text-indigo-200 font-semibold text-xs">Predictibilidad & Alertas</button>
+          <button class="px-3.5 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-200 font-semibold text-xs">Sincronizar</button>
+          <button class="px-3.5 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-200 font-semibold text-xs">Vista Previa</button>
+          <button class="px-4 py-2 rounded-xl bg-gradient-to-r from-crimson to-red-800 text-white font-bold text-xs shadow-lg shadow-red-950/50">Imprimir PDF</button>
+        </div>
+      </div>
+      <div class="px-5 py-2.5 bg-slate-950/50 flex flex-wrap items-center justify-between gap-3">
+        <nav class="flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-slate-800">
+          <span class="px-3 py-1.5 rounded-lg bg-navy text-white text-xs font-bold">Todos</span>
+          <span class="px-3 py-1.5 rounded-lg text-slate-400 text-xs font-semibold">01 Facturación</span>
+          <span class="px-3 py-1.5 rounded-lg text-slate-400 text-xs font-semibold">02 Inventario</span>
+          <span class="px-3 py-1.5 rounded-lg text-slate-400 text-xs font-semibold">03 Cobranzas</span>
+          <span class="px-3 py-1.5 rounded-lg text-slate-400 text-xs font-semibold">04 CxP Keystone</span>
+        </nav>
+        <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+          <span>PERÍODO: Hoy | Semana | <strong class="text-cyan">Mes</strong> | Rango</span>
+          <span class="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-200">26/11/2026</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 4-Pillar Executive Telemetry Strip -->
+    <section class="grid grid-cols-4 gap-4">
+      <div class="p-4 rounded-2xl bg-card/90 border border-slate-800/90">
+        <div class="text-[11px] font-mono uppercase text-slate-400">01 • Facturación Mes</div>
+        <div class="mt-1.5 font-mono text-2xl font-extrabold text-emerald-400">$104,993.09</div>
+        <div class="mt-1 text-xs font-mono text-slate-400">15.055,8 L • Meta 62.7%</div>
+      </div>
+      <div class="p-4 rounded-2xl bg-card/90 border border-slate-800/90">
+        <div class="text-[11px] font-mono uppercase text-slate-400">02 • Stock Físico</div>
+        <div class="mt-1.5 font-mono text-2xl font-extrabold text-white">14.828,15 L</div>
+        <div class="mt-1 text-xs font-mono text-cyan">Valorizado: $70,438.51</div>
+      </div>
+      <div class="p-4 rounded-2xl bg-card/90 border border-slate-800/90">
+        <div class="text-[11px] font-mono uppercase text-slate-400">03 • Cobranza Mes</div>
+        <div class="mt-1.5 font-mono text-2xl font-extrabold text-emerald-400">$89,420.00</div>
+        <div class="mt-1 text-xs font-mono text-slate-400">Efectividad: 85.2%</div>
+      </div>
+      <div class="p-4 rounded-2xl bg-card/90 border border-slate-800/90">
+        <div class="text-[11px] font-mono uppercase text-slate-400">04 • CxP Keystone</div>
+        <div class="mt-1.5 font-mono text-2xl font-extrabold text-amber">$32,150.00</div>
+        <div class="mt-1 text-xs font-mono text-slate-400">Tasa Key: Bs. 1.011,73</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
